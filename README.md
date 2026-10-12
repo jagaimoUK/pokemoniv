@@ -27,3 +27,7 @@ Then send `POST /mcp` with the Authorization header. Requests with missing or in
 - The underlying web backend fetches live PvPoke data and requires outgoing internet access.
 - Check compatibility, source legitimacy, and PvPoke terms of use before deploying automations at scale.
 - Before using for rankings, manually verify level/CP and at least one battle rating for every unique shield scenario.
+
+## Auth0 OAuth integration (experimental)
+
+See `AUTH0_SETUP.md` for how to configure Auth0 and Railway safely. The existing API key remains usable for testing.
