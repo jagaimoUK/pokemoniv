@@ -160,7 +160,7 @@ class Handler(BaseHTTPRequestHandler):
                          '/.well-known/oauth-protected-resource/mcp') and AUTH0_ENABLED:
             self.respond(200, {
                 'resource': MCP_URL,
-                'authorization_servers': [AUTH0_ISSUER.rstrip('/')],
+                'authorization_servers': [AUTH0_ISSUER],
                 'scopes_supported': [OAUTH_SCOPE] if OAUTH_SCOPE else []
             })
             return
