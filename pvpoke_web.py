@@ -1,0 +1,414 @@
+#!/usr/bin/env python3
+"""Local-only, mobile-friendly PvPoke Matrix launcher for Termux.
+
+Requires pvpoke_batch_v2.py in the same folder and websocket-client for running.
+Starts a local HTTP server on 127.0.0.1:8765, never exposed to a LAN.
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+from collections import deque
+from datetime import datetime
+import io
+import json
+import os
+from pathlib import Path
+import secrets
+import subprocess
+import sys
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse
+
+import pvpoke_batch_v2 as engine
+
+HOST = '127.0.0.1'
+PORT = 8765
+HOME = Path.home()
+ROOT = (HOME / 'storage' / 'downloads') if (HOME / 'storage' / 'downloads').exists() else HOME
+WORK = ROOT / 'pvpoke_automation_web'
+CAND = WORK / 'candidates.csv'
+OPPS = WORK / 'opponents.csv'
+LAST_CONFIG = WORK / 'last_input.json'
+LATEST_ZIP = WORK / 'pvpoke_results_latest.zip'
+MAX_CAND = 150
+MAX_OPPS = 80
+PRESETS = [
+    ('マリルリ', 'azumarill', 'BUBBLE', 'ICE_BEAM', 'PLAY_ROUGH'),
+    ('オーダイル', 'feraligatr', 'SHADOW_CLAW', 'HYDRO_CANNON', 'ICE_BEAM'),
+    ('ドオー', 'clodsire', 'POISON_STING', 'EARTHQUAKE', 'STONE_EDGE'),
+    ('デカヌチャン', 'tinkaton', 'FAIRY_WIND', 'GIGATON_HAMMER', 'BULLDOZE'),
+    ('ガラルサニーゴ', 'corsola_galarian', 'ASTONISH', 'NIGHT_SHADE', 'POWER_GEM'),
+    ('カラマネロ', 'malamar', 'PSYWAVE', 'FOUL_PLAY', 'SUPERPOWER'),
+    ('ヌオー', 'quagsire', 'MUD_SHOT', 'AQUA_TAIL', 'STONE_EDGE'),
+    ('チルタリス', 'altaria', 'DRAGON_BREATH', 'SKY_ATTACK', 'MOONBLAST'),
+]
+
+# Status data is process-local; output ZIP survives server restarts.
+TOKEN = secrets.token_urlsafe(32)
+LOCK = threading.RLock()
+STATUS = {
+    'state': 'idle', 'message': '入力を準備してね', 'logs': deque(maxlen=120),
+    'exit_code': None, 'started_at': None, 'finished_at': None,
+}
+CATALOG = {'ready': False, 'error': None, 'species': {}, 'presets': [], 'timestamp': None}
+
+
+def configure_engine():
+    """Keep existing engine and game data, but isolate web inputs/output from previous tests."""
+    engine.DIR = WORK
+    engine.OUT = WORK / 'results'
+    engine.CAND = CAND
+    engine.OPPS = OPPS
+    # Reuse already fetched game data to avoid unnecessary network transfers.
+    engine.DATA = ROOT / 'pvpoke_automation' / 'game_data'
+    WORK.mkdir(parents=True, exist_ok=True)
+
+
+def load_catalog():
+    try:
+        configure_engine()
+        gm, cpms, species = engine.game_data()
+        payload = {
+            sid: {
+                'fastMoves': p.get('fastMoves', []),
+                'chargedMoves': p.get('chargedMoves', []),
+            }
+            for sid, p in species.items()
+        }
+        presets = []
+        for ja, sid, fast, c1, c2 in PRESETS:
+            p = payload.get(sid)
+            if not p:
+                continue
+            if fast not in p['fastMoves'] or c1 not in p['chargedMoves'] or c2 not in p['chargedMoves']:
+                # Never silently substitute a different move set.
+                continue
+            presets.append({'name': ja, 'species': sid,
+                            'fast': fast, 'charged1': c1, 'charged2': c2})
+        with LOCK:
+            CATALOG.update({'ready': True, 'error': None, 'species': payload,
+                            'presets': presets, 'timestamp': gm.get('timestamp')})
+    except Exception as exc:
+        with LOCK:
+            CATALOG.update({'ready': False, 'error': str(exc)})
+
+
+def parse_ivs(raw):
+    if not isinstance(raw, str):
+        raise ValueError('個体値リストがありません')
+    lines = [s.strip() for s in raw.replace('，', ',').replace('、', ',').splitlines() if s.strip()]
+    if not lines or len(lines) > MAX_CAND:
+        raise ValueError(f'自分の個体値は1〜{MAX_CAND}体で入力してください')
+    result, seen = [], set()
+    for n, line in enumerate(lines, 1):
+        parts = line.split(',')
+        if len(parts) != 3 or any(not s.strip().isdigit() for s in parts):
+            raise ValueError(f'{n}行目は「0,15,15」の形式で入力してください')
+        iv = tuple(int(s.strip()) for s in parts)
+        if any(not 0 <= v <= 15 for v in iv):
+            raise ValueError(f'{n}行目: 個体値は0〜15です')
+        if iv in seen:
+            raise ValueError(f'{n}行目: 同じ個体値 {iv} が重複しています')
+        seen.add(iv)
+        result.append(iv)
+    return result
+
+
+def normalize_pokemon(row, species, label):
+    if not isinstance(row, dict):
+        raise ValueError(f'{label}の内容が正しくありません')
+    sid = str(row.get('species') or '').strip().lower()
+    p = species.get(sid)
+    if not p:
+        raise ValueError(f'{label}: ポケモンID「{sid}」が見つかりません')
+    moves = [str(row.get(key) or '').strip().upper() for key in ('fast', 'charged1', 'charged2')]
+    if moves[0] not in p['fastMoves']:
+        raise ValueError(f'{label}: 通常技 {moves[0]} は選択できません')
+    if any(m not in p['chargedMoves'] for m in moves[1:]) or moves[1] == moves[2]:
+        raise ValueError(f'{label}: ゲージ技2つを別々に正しく選択してください')
+    return [sid, *moves]
+
+
+def prepare_payload(payload):
+    with LOCK:
+        if not CATALOG['ready']:
+            raise ValueError('ゲームデータがまだ読み込まれていません')
+        catalog = CATALOG['species']
+    if not isinstance(payload, dict):
+        raise ValueError('入力形式が正しくありません')
+    species = normalize_pokemon(payload.get('candidate'), catalog, '自分のポケモン')
+    ivs = parse_ivs(payload.get('ivs'))
+    opponents = payload.get('opponents')
+    if not isinstance(opponents, list) or not 1 <= len(opponents) <= MAX_OPPS:
+        raise ValueError(f'対戦相手を1〜{MAX_OPPS}体登録してください')
+    crows = [species + list(iv) for iv in ivs]
+    orows = []
+    for i, row in enumerate(opponents, 1):
+        mons = normalize_pokemon(row, catalog, f'相手{i}体目')
+        try:
+            iv = [int(row[k]) for k in ('atk','def','hp')]
+        except (TypeError, ValueError, KeyError) as exc:
+            raise ValueError(f'相手{i}体目: 個体値は0〜15の整数で指定してください') from exc
+        if any(v < 0 or v > 15 for v in iv):
+            raise ValueError(f'相手{i}体目: 個体値は0〜15です')
+        orows.append(mons + iv)
+    scenario = str(payload.get('shields') or 'all')
+    if scenario not in engine.SCENARIOS:
+        raise ValueError('シールド条件が正しくありません')
+    # The actual CP/level calculation is performed by the same PvPoke engine as the run.
+    _, cpms, full_species = engine.game_data()
+    cdict = [dict(zip(engine.HEADER, row)) for row in crows]
+    odict = [dict(zip(engine.HEADER, row)) for row in orows]
+    cand_prepared = engine.optimize(cdict, full_species, cpms, 'candidates.csv')
+    opp_prepared = engine.optimize(odict, full_species, cpms, 'opponents.csv')
+    cleaned = {
+        'candidate': dict(zip(engine.HEADER[:4], species)),
+        'ivs': '\n'.join(','.join(map(str, iv)) for iv in ivs),
+        'opponents': [dict(zip(engine.HEADER, row)) for row in orows],
+        'shields': scenario,
+    }
+    preview = {
+        'candidates': [{'ivs': f'{p["atk"]}/{p["def"]}/{p["hp"]}',
+                        'level': p['level'], 'cp': p['cp']} for p in cand_prepared],
+        'opponents': [{'species':p['species'], 'ivs':f'{p["atk"]}/{p["def"]}/{p["hp"]}',
+                       'level':p['level'], 'cp':p['cp']} for p in opp_prepared],
+        'battles': len(crows) * len(orows) * len(engine.SCENARIOS[scenario]),
+        'candidate_count': len(crows), 'opponent_count': len(orows),
+    }
+    return cleaned, crows, orows, preview
+
+
+def save_input(cleaned, crows, orows):
+    WORK.mkdir(parents=True, exist_ok=True)
+    for path, rows in ((CAND, crows), (OPPS, orows)):
+        tmp = path.with_suffix('.csv.tmp')
+        with tmp.open('w', encoding='utf-8', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(engine.HEADER)
+            writer.writerows(rows)
+        tmp.replace(path)
+    tmp = LAST_CONFIG.with_suffix('.json.tmp')
+    tmp.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), encoding='utf-8')
+    tmp.replace(LAST_CONFIG)
+
+
+def worker(shields):
+    configure_engine()
+    print('準備: 自分/相手の個体値をCP1500以下に調整', flush=True)
+    engine.run(shield_set=shields)
+    print('DONE:', LATEST_ZIP, flush=True)
+
+
+def background_run(shields):
+    command = [sys.executable, str(Path(__file__).resolve()), '--worker', shields]
+    try:
+        p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True, bufsize=1, cwd=str(HOME))
+        for line in p.stdout:
+            line = line.rstrip('\r\n')
+            if not line:
+                continue
+            with LOCK:
+                STATUS['logs'].append(line)
+                STATUS['message'] = line[-180:]
+        code = p.wait()
+        with LOCK:
+            STATUS['exit_code'] = code
+            STATUS['state'] = 'done' if code == 0 and LATEST_ZIP.exists() else 'error'
+            STATUS['finished_at'] = datetime.now().isoformat(timespec='seconds')
+            STATUS['message'] = 'ZIPが完成しました' if STATUS['state']=='done' else '計算が中断されました。ログを確認してね'
+    except Exception as exc:
+        with LOCK:
+            STATUS['logs'].append(f'ERROR: {exc}')
+            STATUS['state'] = 'error'
+            STATUS['message'] = str(exc)
+            STATUS['finished_at'] = datetime.now().isoformat(timespec='seconds')
+
+
+HTML = r'''<!DOCTYPE html>
+<html lang="ja"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>PvPoke 個体値シミュレーター</title>
+<style>
+:root{font-family:system-ui,-apple-system,"Noto Sans JP",sans-serif;color-scheme:dark;--bg:#101827;--card:#1b2738;--line:#34455c;--txt:#edf5ff;--sub:#a4b6cb;--blue:#69b8ff;--accent:#96debf}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(155deg,#13263c 0%,#101827 43%,#101827 100%);color:var(--txt);line-height:1.5}main{max-width:830px;margin:auto;padding:18px 14px 70px}
+header{margin:5px 0 25px}.eyebrow{font-size:12px;letter-spacing:.15em;color:var(--accent);font-weight:700}h1{font-size:clamp(23px,5vw,34px);letter-spacing:-.025em;margin:5px 0 6px}h2{font-size:19px;margin:0 0 8px}p{margin:4px 0 12px;color:var(--sub)}.tiny{font-size:12px}.steps{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}.step{border:1px solid var(--line);padding:6px 10px;border-radius:20px;color:var(--sub);font-size:12px}.step.current{color:var(--accent);border-color:#518876}
+.card{background:var(--card);border:1px solid var(--line);border-radius:17px;padding:17px;margin-bottom:14px;box-shadow:0 8px 24px #05091015}.head{display:flex;align-items:center;gap:9px;margin-bottom:12px}.num{width:26px;height:26px;background:#284b69;color:#a7dcff;border-radius:9px;display:grid;place-items:center;font-weight:750;font-size:13px}
+label{display:block;font-size:13px;color:#d0ddec;font-weight:650;margin:10px 0 5px}input,textarea,select{width:100%;min-height:43px;border:1px solid #4b627c;border-radius:10px;background:#121d2d;color:var(--txt);padding:10px 11px;font:inherit;font-size:14px;outline:0}input:focus,textarea:focus,select:focus{border-color:var(--blue);box-shadow:0 0 0 2px #69b8ff33}textarea{font-family:ui-monospace,monospace;resize:vertical;line-height:1.75;min-height:118px}.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}.three{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.opponent{padding:12px;border:1px solid #40536c;border-radius:13px;margin-bottom:10px;background:#152134}.rowtop{display:flex;align-items:center;justify-content:space-between;gap:8px}.muted{color:var(--sub);font-size:12px}button,.download{border:1px solid #6c9ac4;color:#fff;background:#285780;border-radius:11px;padding:11px 15px;font:inherit;font-weight:700;cursor:pointer;text-decoration:none;display:inline-block;text-align:center}button:hover,.download:hover{filter:brightness(1.08)}button:disabled{opacity:.5;cursor:not-allowed}.outline{background:transparent;border-color:#516b86}.danger{background:transparent;border-color:#72555f;color:#f7c1c4}.primary{background:#2774b9;border:1px solid #408fd6;padding:14px 17px}.actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:15px}.actions>*{flex:1}.download{background:#24765b;border-color:#5caf86}details{margin-top:14px}summary{color:var(--blue);cursor:pointer}pre{background:#0b1220;border:1px solid #2d4058;border-radius:10px;color:#cde7fb;white-space:pre-wrap;word-break:break-word;font-size:12px;padding:13px;min-height:54px;max-height:315px;overflow:auto}.message{border-radius:10px;padding:11px 13px;margin:12px 0;font-size:14px;background:#23384c}.message.error{background:#552a32;color:#ffe4e5}.message.good{background:#214538;color:#d0ffe7}.stat{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.stat div{border:1px solid var(--line);padding:10px;border-radius:10px;text-align:center}.stat b{display:block;font-size:20px}.stat small{color:var(--sub)}[hidden]{display:none!important}footer{font-size:12px;color:var(--sub);padding:0 8px}
+@media(max-width:520px){.two{grid-template-columns:1fr}.three{gap:6px}.card{padding:14px}.three label{font-size:12px}.actions>*{flex-basis:100%}}
+</style></head><body><main>
+<header><div class="eyebrow">LOCAL PVP SIMULATOR</div><h1>PvPoke 個体値一括計算</h1><p>スマホの画面で個体値を入力 → CP調整 → 6条件計算 → ZIP保存。採点はChatGPTで行うよ。</p>
+<div class="steps"><span class="step current">1. ポケモン</span><span class="step">2. 個体値</span><span class="step">3. 対戦相手</span><span class="step">4. 計算</span></div></header>
+<div id="notice" class="message">PvPokeのゲームデータを読み込んでいるよ…</div>
+<section class="card"><div class="head"><div class="num">1</div><h2>自分のポケモン</h2></div>
+<label for="preset">よく使うポケモンから選ぶ</label><select id="preset"><option value="">読み込み中…</option></select>
+<label for="species">PvPokeの英語ID（直接入力も可能）</label><input id="species" list="species-list" value="azumarill" autocomplete="off"/><datalist id="species-list"></datalist>
+<label>技構成</label><div class="three"><div><label for="fast">通常技</label><select id="fast"></select></div><div><label for="charged1">ゲージ技①</label><select id="charged1"></select></div><div><label for="charged2">ゲージ技②</label><select id="charged2"></select></div></div></section>
+<section class="card"><div class="head"><div class="num">2</div><h2>個体値を貼り付け</h2></div><p class="tiny">攻撃,防御,HP の順。1行1体、最大150体。重複している個体値はエラーとして表示するよ。</p><textarea id="ivs" spellcheck="false" placeholder="0,15,15&#10;1,15,14&#10;0,14,15">0,15,15&#10;1,15,14</textarea></section>
+<section class="card"><div class="head"><div class="num">3</div><h2>対戦相手</h2></div><p class="tiny">1行につき1体。種類・技・個体値をそれぞれ変更できるよ。最大80体。</p><div id="opponents"></div>
+<div class="two"><select id="add-preset" aria-label="追加する対戦相手"><option value="">相手を選ぶ</option></select><button type="button" id="addOpp">＋ 対戦相手を追加</button></div></section>
+<section class="card"><div class="head"><div class="num">4</div><h2>計算する</h2></div><label for="shields">シールド条件</label><select id="shields"><option value="all">全6条件（同数3＋不利3）</option><option value="equal">同数3条件だけ（0-0 / 1-1 / 2-2）</option><option value="disadvantage">不利3条件だけ（0-1 / 0-2 / 1-2）</option></select>
+<div class="actions"><button id="preview" class="outline">① CP・対戦数を確認</button><button id="run" class="primary">② 計算してZIPを作成</button></div>
+<div id="previewPanel" hidden><div id="previewStats" class="stat"></div><details><summary>CP調整後のレベルを見る</summary><pre id="previewDetail"></pre></details></div><div id="statusMessage" class="message" hidden></div><pre id="logs" hidden></pre>
+<div class="actions"><a id="download" class="download" href="/download" hidden>完成したZIPを保存</a></div></section>
+<footer>この画面は端末の 127.0.0.1 だけで公開されるよ。PvPokeの計算結果をCSV化するツールで、勝敗や個体値の最終評価はChatGPTで確認してね。CP上限1500、Lv上限50。</footer></main>
+<script>
+'use strict';
+const TOKEN='__TOKEN__'; let catalog={};let presets=[]; let busy=false;
+const el=id=>document.getElementById(id);
+function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function notice(s,cl=''){let x=el('notice');x.textContent=s;x.className='message '+cl;}
+function options(select,vals,selected){select.replaceChildren();for(const value of vals){const o=document.createElement('option');o.value=value;o.textContent=value;select.append(o);}if(vals.includes(selected))select.value=selected;}
+function setMoves(sid, sels, desired={}){const p=catalog[sid]||{fastMoves:[],chargedMoves:[]};const f=p.fastMoves,c=p.chargedMoves;options(sels[0],f,desired.fast);options(sels[1],c,desired.charged1);options(sels[2],c,desired.charged2);if(sels[2].value===sels[1].value&&c.length>1)sels[2].value=c.find(v=>v!==sels[1].value);}
+function setCandidate(row={}){if(row.species)el('species').value=row.species;setMoves(el('species').value,[el('fast'),el('charged1'),el('charged2')],row);el('preset').value=el('species').value;}
+function getPreset(id){return presets.find(p=>p.species===id)||null;}
+function addOpponent(row={}){const sid=row.species||(presets[0]&&presets[0].species)||'clodsire';const base=getPreset(sid)||{species:sid};const o={...base,...row};const div=document.createElement('div');div.className='opponent';div.innerHTML=`<div class="rowtop"><b>対戦相手 <span class="idx"></span></b><button type="button" class="danger remove">削除</button></div><label>ポケモン（PvPoke ID）</label><input class="opp-species" list="species-list" value="${esc(sid)}" autocomplete="off"/><div class="three"><div><label>通常技</label><select class="opp-fast"></select></div><div><label>ゲージ技①</label><select class="opp-c1"></select></div><div><label>ゲージ技②</label><select class="opp-c2"></select></div></div><div class="three"><div><label>攻撃</label><input type="number" min="0" max="15" step="1" class="opp-atk" value="${esc(o.atk??0)}"/></div><div><label>防御</label><input type="number" min="0" max="15" step="1" class="opp-def" value="${esc(o.def??15)}"/></div><div><label>HP</label><input type="number" min="0" max="15" step="1" class="opp-hp" value="${esc(o.hp??15)}"/></div></div>`;
+const sels=[div.querySelector('.opp-fast'),div.querySelector('.opp-c1'),div.querySelector('.opp-c2')];setMoves(sid,sels,o);
+div.querySelector('.opp-species').addEventListener('change',e=>{let p=getPreset(e.target.value)||{};setMoves(e.target.value,sels,p);});div.querySelector('.remove').onclick=()=>{div.remove();renumber();};el('opponents').append(div);renumber();}
+function renumber(){[...el('opponents').children].forEach((d,i)=>d.querySelector('.idx').textContent=String(i+1));}
+function gather(){return {candidate:{species:el('species').value.trim(),fast:el('fast').value,charged1:el('charged1').value,charged2:el('charged2').value},ivs:el('ivs').value,shields:el('shields').value,opponents:[...el('opponents').children].map(div=>({species:div.querySelector('.opp-species').value.trim(),fast:div.querySelector('.opp-fast').value,charged1:div.querySelector('.opp-c1').value,charged2:div.querySelector('.opp-c2').value,atk:div.querySelector('.opp-atk').value,def:div.querySelector('.opp-def').value,hp:div.querySelector('.opp-hp').value}))};}
+async function api(path,data){const args=data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-PvPoke-Token':TOKEN},body:JSON.stringify(data)};const r=await fetch(path,args);const obj=await r.json();if(!r.ok)throw Error(obj.error||'通信エラー');return obj;}
+function status(s,kind=''){const x=el('statusMessage');x.hidden=false;x.textContent=s;x.className='message '+kind;}
+async function ready(){try{const data=await api('/api/catalog');if(!data.ready){notice(data.error?'データ取得エラー: '+data.error:'ゲームデータを読み込んでいるよ。数秒待ってね。',data.error?'error':'');setTimeout(ready,data.error?8000:1500);return;}catalog=data.species;presets=data.presets;
+const names=Object.keys(catalog).sort();let dl=el('species-list');dl.replaceChildren();for(const sid of names){let o=document.createElement('option');o.value=sid;dl.append(o);}
+const selectOptions=ps=>[...ps.map(p=>({id:p.species,label:p.name+' ('+p.species+')'}))];for(const id of ['preset','add-preset']){let x=el(id);x.replaceChildren();if(id==='add-preset'){const o=document.createElement('option');o.value='';o.textContent='対戦相手を選ぶ';x.append(o);}for(let p of selectOptions(presets)){const o=document.createElement('option');o.value=p.id;o.textContent=p.label;x.append(o);}}
+let cfg=data.saved;if(cfg){setCandidate(cfg.candidate);el('ivs').value=cfg.ivs;el('shields').value=cfg.shields||'all';for(const o of cfg.opponents)addOpponent(o);}else{const p=getPreset('azumarill')||presets[0];if(p)setCandidate(p);addOpponent(getPreset('clodsire')||presets[0]);}if(presets.length)el('add-preset').value=presets[0].species;notice('準備OK。個体値や相手を確認して計算できるよ。','good');
+}catch(e){notice('接続確認: '+e.message,'error');setTimeout(ready,5000);}}
+el('preset').addEventListener('change',e=>{const p=getPreset(e.target.value);if(p)setCandidate(p);});el('species').addEventListener('change',e=>setCandidate({species:e.target.value}));
+el('addOpp').addEventListener('click',()=>{if(el('opponents').children.length>=80){status('対戦相手は最大80体だよ','error');return;}addOpponent(getPreset(el('add-preset').value)||{species:el('add-preset').value});});
+function showPreview(p){el('previewPanel').hidden=false;const stats=[['自分',p.candidate_count+'体'],['相手',p.opponent_count+'体'],['合計',p.battles+'対戦']];el('previewStats').innerHTML=stats.map(v=>`<div><b>${esc(v[1])}</b><small>${esc(v[0])}</small></div>`).join('');el('previewDetail').textContent=p.candidates.map(v=>v.ivs+' → Lv'+v.level+' CP'+v.cp).join('\n')+'\n--- 相手 ---\n'+p.opponents.map(v=>v.species+' '+v.ivs+' → Lv'+v.level+' CP'+v.cp).join('\n');}
+function disableButtons(on){for(const id of ['preview','run','addOpp'])el(id).disabled=on;}
+el('preview').onclick=async()=>{if(busy)return;disableButtons(true);status('CPとレベルを計算しているよ…');try{const r=await api('/api/prepare',gather());showPreview(r.preview);status('CP1500以下のレベル調整を確認できたよ','good');}catch(e){status(e.message,'error');}finally{disableButtons(busy);}};
+el('run').onclick=async()=>{if(busy)return;disableButtons(true);status('計算を開始するよ…');el('download').hidden=true;try{const r=await api('/api/run',gather());showPreview(r.preview);status('計算開始。完了までこの画面は閉じずに待ってね。','good');}catch(e){status(e.message,'error');disableButtons(false);}};
+async function poll(){try{const s=await api('/api/status');busy=s.state==='running';disableButtons(busy);el('logs').hidden=!s.logs.length;el('logs').textContent=s.logs.join('\n');if(s.state==='running'){status('計算中: '+s.message);el('download').hidden=true;}else if(s.state==='done'){status('完了！ ZIPを保存してChatGPTへ送ってね。','good');el('download').hidden=false;}else if(s.state==='error'){status('エラー: '+s.message,'error');el('download').hidden=true;} }catch(e){status('状態確認に失敗: '+e.message,'error');}setTimeout(poll,1800);}
+ready();poll();
+</script></body></html>'''
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = 'PvPokeLocalUI/1.0'
+
+    def log_message(self, fmt, *args):
+        # Only log errors, not repetitive API polling.
+        if not self.path.startswith('/api/status'):
+            super().log_message(fmt, *args)
+
+    def respond(self, code, body, content_type='application/json; charset=utf-8'):
+        if isinstance(body, (dict, list)):
+            payload = json.dumps(body, ensure_ascii=False).encode('utf-8')
+        elif isinstance(body, str):
+            payload = body.encode('utf-8')
+        else:
+            payload = body
+        self.send_response(code)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', str(len(payload)))
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('X-Frame-Options', 'DENY')
+        self.end_headers()
+        try:
+            self.wfile.write(payload)
+        except BrokenPipeError:
+            pass
+
+    def do_GET(self):
+        path = urlparse(self.path).path
+        if path == '/':
+            self.respond(200, HTML.replace('__TOKEN__', TOKEN), 'text/html; charset=utf-8')
+        elif path == '/api/catalog':
+            with LOCK:
+                cat = dict(CATALOG)
+            saved = None
+            try:
+                if LAST_CONFIG.is_file():
+                    saved = json.loads(LAST_CONFIG.read_text(encoding='utf-8'))
+            except Exception:
+                pass
+            self.respond(200, {**cat, 'saved': saved})
+        elif path == '/api/status':
+            with LOCK:
+                details = {k: (list(v) if isinstance(v, deque) else v) for k, v in STATUS.items()}
+            details['has_previous_archive'] = LATEST_ZIP.is_file()
+            self.respond(200, details)
+        elif path == '/download':
+            with LOCK:
+                done = STATUS['state']=='done'
+            if not done or not LATEST_ZIP.exists():
+                return self.respond(404, {'error':'この起動で作ったZIPはまだありません'})
+            data = LATEST_ZIP.read_bytes()
+            # Download as attachment; the web UI never exposes arbitrary filesystem paths.
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/zip')
+            self.send_header('Content-Disposition', 'attachment; filename="pvpoke_results_latest.zip"')
+            self.send_header('Content-Length', str(len(data)))
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.end_headers()
+            self.wfile.write(data)
+        else:
+            self.respond(404, {'error': '見つかりません'})
+
+    def do_POST(self):
+        path = urlparse(self.path).path
+        if path not in ('/api/prepare','/api/run'):
+            return self.respond(404, {'error': '見つかりません'})
+        # Only same-origin JS with the random session token can start a job.
+        origin = self.headers.get('Origin','')
+        if origin and origin not in (f'http://{HOST}:{PORT}',f'http://localhost:{PORT}'):
+            return self.respond(403, {'error':'ローカル画面以外からは操作できません'})
+        if self.headers.get('X-PvPoke-Token') != TOKEN:
+            return self.respond(403, {'error':'この画面を再読み込みしてください'})
+        if 'application/json' not in self.headers.get('Content-Type',''):
+            return self.respond(415, {'error':'JSONで送信してください'})
+        try:
+            n = int(self.headers.get('Content-Length','0'))
+            if n < 2 or n > 140000:
+                raise ValueError('入力が大きすぎるか空です')
+            payload = json.loads(self.rfile.read(n))
+            with LOCK:
+                if STATUS['state'] == 'running':
+                    return self.respond(409, {'error':'計算中は入力を変更できません'})
+                cleaned, crows, orows, preview = prepare_payload(payload)
+                save_input(cleaned, crows, orows)
+                if path == '/api/prepare':
+                    STATUS.update({'state':'idle', 'message':'入力を確認できました。計算開始を押してください',
+                                   'logs':deque(maxlen=120), 'exit_code':None})
+                if path == '/api/run':
+                    STATUS.update({'state':'running', 'message':'計算を準備中',
+                                   'logs':deque(maxlen=120), 'exit_code':None,
+                                   'started_at':datetime.now().isoformat(timespec='seconds'),
+                                   'finished_at':None})
+                    threading.Thread(target=background_run, args=(cleaned['shields'],),
+                                     daemon=True).start()
+            self.respond(200, {'ok':True,'preview':preview})
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            self.respond(400, {'error': str(exc)})
+        except Exception as exc:
+            self.respond(500, {'error': '内部エラー: '+str(exc)})
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Androidブラウザで使うPvPoke個体値シミュレーター')
+    parser.add_argument('--worker', choices=list(engine.SCENARIOS.keys()))
+    parser.add_argument('--port', type=int, default=PORT)
+    args = parser.parse_args()
+    if args.worker:
+        worker(args.worker)
+        return
+    if args.port != PORT:
+        parser.error('このバージョンではセキュリティ上ポート8765固定です')
+    configure_engine()
+    threading.Thread(target=load_catalog, daemon=True).start()
+    httpd = ThreadingHTTPServer((HOST, PORT), Handler)
+    print(f'\nPvPokeブラウザ操作画面: http://{HOST}:{PORT}', flush=True)
+    print('AndroidのChromeでURLを開いてね。終了はTermuxでCtrl+C。', flush=True)
+    httpd.serve_forever()
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except KeyboardInterrupt:
+        print('\n終了したにぇ。保存済みのCSVとZIPは残るよ。')
