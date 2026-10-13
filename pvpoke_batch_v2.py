@@ -173,6 +173,29 @@ def pvpline(row):
                               f'{row["level"]:g}', row['atk'], row['def'], row['hp']]))
 
 
+def canonical_export_species(species_id):
+    """Normalize only PvPoke's shadow export suffix (e.g. _shadow-shadow).
+
+    Preserve the distinction between regular and shadow Pokemon.
+    """
+    species_id = species_id.strip().lower()
+    return species_id[:-len('-shadow')] if species_id.endswith('_shadow-shadow') else species_id
+
+
+def export_row_matches(actual, expected):
+    """Verify move, IV and level fields while accepting shadow export notation."""
+    if len(actual) < 8 or len(expected) < 8:
+        return False
+    if canonical_export_species(actual[0]) != canonical_export_species(expected[0]):
+        return False
+    if actual[1:4] != expected[1:4] or actual[5:8] != expected[5:8]:
+        return False
+    try:
+        return abs(float(actual[4]) - float(expected[4])) <= .001
+    except (ValueError, TypeError):
+        return False
+
+
 def prepare(refresh=False):
     setup()
     gm, cpms, species = game_data(refresh=refresh)
@@ -304,7 +327,7 @@ class Page:
         if len(parsed) != len(expected):
             raise RuntimeError(f'Export行数不一致: {len(parsed)}/{len(expected)}')
         for i, (a,b) in enumerate(zip(parsed, expected), 1):
-            if len(a) < 8 or a[:4] != b[:4] or a[5:8] != b[5:8] or abs(float(a[4])-float(b[4])) > .001:
+            if not export_row_matches(a, b):
                 raise RuntimeError(f'Export照合失敗 行{i}: {a} != {b}')
 
     def simulate(self, nleft, nright, pair):
