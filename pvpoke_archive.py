@@ -7,6 +7,7 @@ or set PVP_ARCHIVE_DIR to a persistent path, to retain files across redeploys.
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import uuid
 import zipfile
@@ -17,6 +18,23 @@ MODES = ("default", "rank1", "attack", "defense")
 SHIELDS = ("s0", "s1", "s2", "i0y1", "i0y2", "i1y2")
 REQUIRED = {f"{mode}_{shield}.csv" for mode in MODES for shield in SHIELDS}
 REQUIRED |= {"ranking_summary.csv", "manifest.json"}
+REQUIRED_BASE = {"ranking_summary.csv", "manifest.json"}
+
+
+def required_files(bundle: zipfile.ZipFile) -> set[str]:
+    """Use saved mode metadata to validate the correct 6 or 24 result files."""
+    try:
+        manifest = json.loads(bundle.read("manifest.json").decode("utf-8"))
+    except (KeyError, UnicodeError, ValueError) as exc:
+        raise ValueError("Invalid ZIP manifest") from exc
+    if not isinstance(manifest, dict):
+        raise ValueError("Invalid ZIP manifest structure")
+    batch_mode = manifest.get("batch_mode", "detailed")
+    modes = {"simple": ("default",), "detailed": MODES}.get(batch_mode)
+    if modes is None:
+        raise ValueError(f"Unknown archived batch mode: {batch_mode!r}")
+    return REQUIRED_BASE | {f"{mode}_{shield}.csv" for mode in modes for shield in SHIELDS}
+
 
 
 def archive_dir(work: Path) -> Path:
@@ -37,7 +55,8 @@ def verify_zip(path: Path) -> None:
         raise ValueError(f"Final ZIP missing or empty: {path}")
     with zipfile.ZipFile(path, "r") as bundle:
         names = set(bundle.namelist())
-        missing = sorted(REQUIRED - names)
+        required = required_files(bundle)
+        missing = sorted(required - names)
         if missing:
             raise ValueError(f"Final ZIP missing required files: {missing}")
         damaged = bundle.testzip()
