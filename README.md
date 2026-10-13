@@ -131,3 +131,31 @@ Simple results contain only `default_*.csv` and summary rows for `default`.
 The ZIP manifest identifies which mode was used and the archive validator
 requires the appropriate six or 24 files. Each run preserves one verified
 historical ZIP plus the latest pointer on the volume.
+
+## ChatGPT Project meta sync without manual Railway deploys
+
+Railway **cannot independently poll ChatGPT Project files**. The plugin now
+provides the authenticated MCP tools `get_meta_status` and
+`sync_meta_opponents({csv_text})`. The plugin skill should read the user's
+current `pvpokeメタポケモン.txt` Project file at the start of each evaluation,
+compare its canonical SHA256 with `get_meta_status`, and call
+`sync_meta_opponents` **only when different**. The submitted CSV must contain
+complete `species,fast,charged1,charged2` rows. This is *per-request*
+automatic sync, not background monitoring.
+
+The server validates all rows against the live GameMaster and rejects
+malformed/unknown/duplicate entries without altering the current source.
+Successful snapshots are atomically stored at
+`<volume>/pvpoke_archives/project_meta_opponents.csv`, surviving a Railway
+restart. Meta batch previews and actual runs both use this active snapshot,
+falling back to the original bundled `pvpoke_meta_opponents.csv` if nothing
+has been synced. Updates are rejected during running jobs. There is no
+automatic GitHub commit or modification to the Project file.
+
+`get_storage_status` reports saved historical ZIP counts and size.
+After verifying and retaining the new archive, cleanup now preserves the latest
+20 run-specific ZIPs within a 200 MiB budget, **always retaining at least the
+five newest**, and never deleting `latest.zip`, symlinks, or unrelated files.
+Other persistent files such as `project_meta_opponents.csv` are not touched.
+Retention is best-effort: an archive cleanup failure never invalidates a
+successfully saved, verified ZIP.
