@@ -67,6 +67,21 @@ def catalog() -> dict:
             'presets': out.get('presets', []), 'species_count': len(out.get('species', {}))}
 
 
+def meta_status() -> dict:
+    return _request('/api/meta/status')
+
+
+def sync_meta_opponents(csv_text: str) -> dict:
+    if not isinstance(csv_text, str) or not csv_text.strip():
+        raise BridgeError('メタ一覧を4列CSVテキストで送ってください')
+    return _request('/api/meta/sync', {'csv': csv_text},
+                    headers={'X-PvPoke-Token': _token()}, timeout=75)
+
+
+def storage_status() -> dict:
+    return _request('/api/storage/status')
+
+
 def validate_payload(candidate: dict, ivs: str, opponents: list[dict], shields: str,
                      opponent_iv_mode: str | None = None) -> dict:
     if shields not in ('all', 'equal', 'disadvantage'):
