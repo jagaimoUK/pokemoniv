@@ -145,9 +145,13 @@ def prepare_payload(payload):
     opponents = payload.get('opponents')
     if not isinstance(opponents, list) or not 1 <= len(opponents) <= MAX_OPPS:
         raise ValueError(f'対戦相手を1〜{MAX_OPPS}体登録してください')
-    global_mode = str(payload.get('opponent_iv_mode') or 'custom').lower()
-    if global_mode not in iv_modes.IV_MODES:
-        raise ValueError('個体値設定は custom / default / rank1 / attack / defense のいずれかです')
+
+    # Only these four modes are automatic. Source IVs require an explicit
+    # per-opponent iv_mode='source', even when source data contains IVs.
+    requested_mode = payload.get('opponent_iv_mode')
+    global_mode = str(requested_mode).strip().lower() if requested_mode is not None else ''
+    if global_mode and global_mode not in iv_modes.AUTO_IV_MODES:
+        raise ValueError('共通の自動個体値設定は default / rank1 / attack / defense の4種類です')
     scenario = str(payload.get('shields') or 'all')
     if scenario not in engine.SCENARIOS:
         raise ValueError('シールド条件が正しくありません')
@@ -155,23 +159,62 @@ def prepare_payload(payload):
     _, cpms, full_species = engine.game_data()
     crows = [species + list(iv) for iv in ivs]
     orows, odict, saved_opponents, modes = [], [], [], []
+    iv_names = ('atk', 'def', 'hp')
+
+    def numeric_ivs(raw, label):
+        if not isinstance(raw, dict) or any(k not in raw or raw[k] is None or str(raw[k]).strip() == '' for k in iv_names):
+            raise ValueError(f'{label}: 攻撃・防御・HPを3つとも指定してください')
+        values = []
+        for key in iv_names:
+            value = raw[key]
+            if isinstance(value, bool) or not str(value).strip().isdigit():
+                raise ValueError(f'{label}: 個体値は0〜15の整数です')
+            number = int(value)
+            if not 0 <= number <= 15:
+                raise ValueError(f'{label}: 個体値は0〜15です')
+            values.append(number)
+        return values
+
     for i, row in enumerate(opponents, 1):
         mons = normalize_pokemon(row, catalog, f'相手{i}体目')
-        present = [k in row and row[k] is not None and str(row[k]).strip() != '' for k in ('atk', 'def', 'hp')]
-        # Explicit source IVs take priority unless row-specific iv_mode overrides them.
-        mode = str(row.get('iv_mode') or ('custom' if any(present) else global_mode)).lower()
-        if mode not in iv_modes.IV_MODES:
-            raise ValueError(f'相手{i}体目: 未対応の個体値モード {mode}')
+        if not isinstance(row, dict):
+            raise ValueError(f'相手{i}体目: 入力が不正です')
+        any_direct_iv = any(k in row and row[k] is not None and str(row[k]).strip() != '' for k in iv_names)
+        full_direct_iv = all(k in row and row[k] is not None and str(row[k]).strip() != '' for k in iv_names)
+        direct_values = numeric_ivs(row, f'相手{i}体目') if full_direct_iv else None
+
+        source_raw = row.get('source_ivs')
+        if source_raw is not None:
+            source_values = numeric_ivs(source_raw, f'相手{i}体目の情報源個体値')
+        elif direct_values is not None:
+            # Existing source CSVs and old MCP callers place their source IVs here.
+            source_values = list(direct_values)
+        else:
+            source_values = None
+
+        explicit_mode = str(row.get('iv_mode') or '').strip().lower()
+        if explicit_mode == 'inherit':
+            explicit_mode = ''
+        if explicit_mode and explicit_mode not in iv_modes.IV_MODES:
+            raise ValueError(f'相手{i}体目: 未対応の個体値モード {explicit_mode}')
+        if explicit_mode:
+            mode = explicit_mode
+        elif global_mode:
+            # A selected automatic mode overrides existing source IVs.
+            mode = global_mode
+        else:
+            # Preserve old integrations which passed three explicit IVs and no mode.
+            mode = 'custom' if any_direct_iv else 'default'
+
         level_override = None
-        if mode == 'custom':
-            if not all(present):
-                raise ValueError(f'相手{i}体目: customモードは攻撃・防御・HPの3値が必要です')
-            try:
-                values = [int(row[k]) for k in ('atk', 'def', 'hp')]
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f'相手{i}体目: 個体値は0〜15の整数です') from exc
-            if any(not 0 <= v <= 15 for v in values):
-                raise ValueError(f'相手{i}体目: 個体値は0〜15です')
+        if mode == 'source':
+            if source_values is None:
+                raise ValueError(f'相手{i}体目: 情報源の個体値が未登録です。手動で指定してください')
+            values = source_values
+        elif mode == 'custom':
+            if direct_values is None:
+                raise ValueError(f'相手{i}体目: 直接指定には攻撃・防御・HPの3値が必要です')
+            values = direct_values
         else:
             poke = full_species[mons[0]]
             try:
@@ -182,6 +225,7 @@ def prepare_payload(payload):
             except ValueError as exc:
                 raise ValueError(f'相手{i}体目: {exc}') from exc
             values = [attack, defense, hp]
+
         full_row = mons + values
         orows.append(full_row + [level_override if level_override is not None else ''])
         prepared = dict(zip(engine.HEADER, full_row))
@@ -189,9 +233,14 @@ def prepare_payload(payload):
             prepared['level_override'] = level_override
         odict.append(prepared)
         saved = dict(zip(engine.HEADER[:4], mons))
-        saved['iv_mode'] = mode
+        # Remember manual choices, but never silently promote source IVs.
+        manual_selected = bool(explicit_mode) or (not global_mode and mode == 'custom')
+        saved['iv_mode'] = mode if manual_selected else 'inherit'
+        saved['manual_override'] = manual_selected
+        if source_values is not None:
+            saved['source_ivs'] = dict(zip(iv_names, source_values))
         if mode == 'custom':
-            saved.update(dict(zip(('atk', 'def', 'hp'), values)))
+            saved.update(dict(zip(iv_names, values)))
         saved_opponents.append(saved)
         modes.append(mode)
 
@@ -202,7 +251,7 @@ def prepare_payload(payload):
         'candidate': dict(zip(engine.HEADER[:4], species)),
         'ivs': '\n'.join(','.join(map(str, iv)) for iv in ivs),
         'opponents': saved_opponents,
-        'opponent_iv_mode': global_mode,
+        'opponent_iv_mode': global_mode or 'default',
         'shields': scenario,
     }
     preview = {
@@ -283,7 +332,7 @@ label{display:block;font-size:13px;color:#d0ddec;font-weight:650;margin:10px 0 5
 <label for="species">PvPokeの英語ID（直接入力も可能）</label><input id="species" list="species-list" value="azumarill" autocomplete="off"/><datalist id="species-list"></datalist>
 <label>技構成</label><div class="three"><div><label for="fast">通常技</label><select id="fast"></select></div><div><label for="charged1">ゲージ技①</label><select id="charged1"></select></div><div><label for="charged2">ゲージ技②</label><select id="charged2"></select></div></div></section>
 <section class="card"><div class="head"><div class="num">2</div><h2>個体値を貼り付け</h2></div><p class="tiny">攻撃,防御,HP の順。1行1体、最大150体。重複している個体値はエラーとして表示するよ。</p><textarea id="ivs" spellcheck="false" placeholder="0,15,15&#10;1,15,14&#10;0,14,15">0,15,15&#10;1,15,14</textarea></section>
-<section class="card"><div class="head"><div class="num">3</div><h2>対戦相手</h2></div><p class="tiny">共通設定か、相手ごとに個体値を選択できるよ。最大80体。</p><label for="opponentIVMode">対戦相手の共通個体値設定</label><select id="opponentIVMode"><option value="custom">直接指定（従来どおり）</option><option value="default">PvPokeデフォルト</option><option value="rank1">総合1位（Stat Product）</option><option value="attack">攻撃最大</option><option value="defense">防御最大</option></select><div id="opponents"></div>
+<section class="card"><div class="head"><div class="num">3</div><h2>対戦相手</h2></div><p class="tiny">自動切り替えは4種類。情報源の個体値は各相手の「手動」設定でのみ使用するよ。最大80体。</p><label for="opponentIVMode">対戦相手の共通個体値設定</label><select id="opponentIVMode"><option value="default">PvPokeデフォルト</option><option value="rank1">総合1位（Stat Product）</option><option value="attack">攻撃最大</option><option value="defense">防御最大</option></select><div id="opponents"></div>
 <div class="two"><select id="add-preset" aria-label="追加する対戦相手"><option value="">相手を選ぶ</option></select><button type="button" id="addOpp">＋ 対戦相手を追加</button></div></section>
 <section class="card"><div class="head"><div class="num">4</div><h2>計算する</h2></div><label for="shields">シールド条件</label><select id="shields"><option value="all">全6条件（同数3＋不利3）</option><option value="equal">同数3条件だけ（0-0 / 1-1 / 2-2）</option><option value="disadvantage">不利3条件だけ（0-1 / 0-2 / 1-2）</option></select>
 <div class="actions"><button id="preview" class="outline">① CP・対戦数を確認</button><button id="run" class="primary">② 計算してZIPを作成</button></div>
@@ -303,11 +352,16 @@ function getPreset(id){return presets.find(p=>p.species===id)||null;}
 function addOpponent(row={}){const sid=row.species||(presets[0]&&presets[0].species)||'clodsire';const base=getPreset(sid)||{species:sid};const o={...base,...row};const div=document.createElement('div');div.className='opponent';div.innerHTML=`<div class="rowtop"><b>対戦相手 <span class="idx"></span></b><button type="button" class="danger remove">削除</button></div><label>ポケモン（PvPoke ID）</label><input class="opp-species" list="species-list" value="${esc(sid)}" autocomplete="off"/><div class="three"><div><label>通常技</label><select class="opp-fast"></select></div><div><label>ゲージ技①</label><select class="opp-c1"></select></div><div><label>ゲージ技②</label><select class="opp-c2"></select></div></div><div class="three"><div><label>攻撃</label><input type="number" min="0" max="15" step="1" class="opp-atk" value="${esc(o.atk??0)}"/></div><div><label>防御</label><input type="number" min="0" max="15" step="1" class="opp-def" value="${esc(o.def??15)}"/></div><div><label>HP</label><input type="number" min="0" max="15" step="1" class="opp-hp" value="${esc(o.hp??15)}"/></div></div>`;
 const modeLabel=document.createElement('label');modeLabel.textContent='この相手の個体値設定';
 const modeSelect=document.createElement('select');modeSelect.className='opp-iv-mode';
-for(const [value,label] of [['inherit','共通設定'],['custom','直接指定'],['default','PvPokeデフォルト'],['rank1','総合1位'],['attack','攻撃最大'],['defense','防御最大']]){
+for(const [value,label] of [['inherit','共通設定（自動）'],['source','情報源の個体値（手動）'],['custom','直接指定（手動）'],['default','PvPokeデフォルト'],['rank1','総合1位'],['attack','攻撃最大'],['defense','防御最大']]){
 const opt=document.createElement('option');opt.value=value;opt.textContent=label;modeSelect.append(opt);}
-modeSelect.value=o.iv_mode||(['atk','def','hp'].every(k=>row[k]!==undefined)?'custom':'inherit');
+modeSelect.value=o.manual_override===true&&o.iv_mode&&o.iv_mode!=='inherit'?o.iv_mode:'inherit';
 const ivGroup=div.querySelectorAll('.three')[1];ivGroup.classList.add('opp-iv-inputs');ivGroup.before(modeLabel,modeSelect);
 modeSelect.addEventListener('change',refreshOpponentIVInputs);
+const rawSource=row.source_ivs||(['atk','def','hp'].every(k=>row[k]!==undefined)?{atk:row.atk,def:row.def,hp:row.hp}:null);
+if(rawSource)div.dataset.sourceIvs=JSON.stringify(rawSource);
+const sourceHint=document.createElement('p');sourceHint.className='muted opp-source-hint';
+sourceHint.textContent=rawSource?'情報源の個体値: '+[rawSource.atk,rawSource.def,rawSource.hp].join('/'):'情報源の個体値: 未登録';
+modeSelect.after(sourceHint);
 const sels=[div.querySelector('.opp-fast'),div.querySelector('.opp-c1'),div.querySelector('.opp-c2')];setMoves(sid,sels,o);
 div.querySelector('.opp-species').addEventListener('change',e=>{let p=getPreset(e.target.value)||{};setMoves(e.target.value,sels,p);});div.querySelector('.remove').onclick=()=>{div.remove();renumber();};el('opponents').append(div);renumber();refreshOpponentIVInputs();}
 function renumber(){[...el('opponents').children].forEach((d,i)=>d.querySelector('.idx').textContent=String(i+1));}
@@ -324,7 +378,9 @@ const mode=div.querySelector('.opp-iv-mode').value;
 const effective=mode==='inherit'?opponent_iv_mode:mode;
 const o={species:div.querySelector('.opp-species').value.trim(),
 fast:div.querySelector('.opp-fast').value,charged1:div.querySelector('.opp-c1').value,charged2:div.querySelector('.opp-c2').value};
+// Only an explicit row choice may activate the source-IV mode.
 if(mode!=='inherit')o.iv_mode=mode;
+if(div.dataset.sourceIvs)o.source_ivs=JSON.parse(div.dataset.sourceIvs);
 if(effective==='custom'){
 o.atk=div.querySelector('.opp-atk').value;
 o.def=div.querySelector('.opp-def').value;
@@ -341,7 +397,7 @@ function status(s,kind=''){const x=el('statusMessage');x.hidden=false;x.textCont
 async function ready(){try{const data=await api('/api/catalog');if(!data.ready){notice(data.error?'データ取得エラー: '+data.error:'ゲームデータを読み込んでいるよ。数秒待ってね。',data.error?'error':'');setTimeout(ready,data.error?8000:1500);return;}catalog=data.species;presets=data.presets;
 const names=Object.keys(catalog).sort();let dl=el('species-list');dl.replaceChildren();for(const sid of names){let o=document.createElement('option');o.value=sid;dl.append(o);}
 const selectOptions=ps=>[...ps.map(p=>({id:p.species,label:p.name+' ('+p.species+')'}))];for(const id of ['preset','add-preset']){let x=el(id);x.replaceChildren();if(id==='add-preset'){const o=document.createElement('option');o.value='';o.textContent='対戦相手を選ぶ';x.append(o);}for(let p of selectOptions(presets)){const o=document.createElement('option');o.value=p.id;o.textContent=p.label;x.append(o);}}
-let cfg=data.saved;if(cfg){setCandidate(cfg.candidate);el('ivs').value=cfg.ivs;el('shields').value=cfg.shields||'all';el('opponentIVMode').value=cfg.opponent_iv_mode||'custom';for(const o of cfg.opponents)addOpponent(o);}else{const p=getPreset('azumarill')||presets[0];if(p)setCandidate(p);addOpponent(getPreset('clodsire')||presets[0]);}if(presets.length)el('add-preset').value=presets[0].species;notice('準備OK。個体値や相手を確認して計算できるよ。','good');
+let cfg=data.saved;if(cfg){setCandidate(cfg.candidate);el('ivs').value=cfg.ivs;el('shields').value=cfg.shields||'all';el('opponentIVMode').value=['default','rank1','attack','defense'].includes(cfg.opponent_iv_mode)?cfg.opponent_iv_mode:'default';for(const o of cfg.opponents)addOpponent(o);}else{const p=getPreset('azumarill')||presets[0];if(p)setCandidate(p);addOpponent(getPreset('clodsire')||presets[0]);}if(presets.length)el('add-preset').value=presets[0].species;notice('準備OK。個体値や相手を確認して計算できるよ。','good');
 }catch(e){notice('接続確認: '+e.message,'error');setTimeout(ready,5000);}}
 el('preset').addEventListener('change',e=>{const p=getPreset(e.target.value);if(p)setCandidate(p);});el('species').addEventListener('change',e=>setCandidate({species:e.target.value}));
 el('opponentIVMode').addEventListener('change',refreshOpponentIVInputs);

@@ -2,7 +2,9 @@
 
 import math
 
-IV_MODES = ("custom", "default", "rank1", "attack", "defense")
+AUTO_IV_MODES = ("default", "rank1", "attack", "defense")
+MANUAL_IV_MODES = ("source", "custom")
+IV_MODES = MANUAL_IV_MODES + AUTO_IV_MODES
 
 
 def _levels(pokemon, cpms, level_cap):
@@ -32,7 +34,7 @@ def select_opponent_ivs(pokemon, cpms, mode, moves=(), cp_cap=1500, level_cap=50
     rank1: max stat product; attack and defense maximize each actual stat.
     Follows PvPoke's IV floors, level cap and stable IV tie order.
     """
-    if mode not in IV_MODES or mode == "custom":
+    if mode not in AUTO_IV_MODES:
         raise ValueError("自動個体値モードは default / rank1 / attack / defense です")
 
     levels = _levels(pokemon, cpms, level_cap)
