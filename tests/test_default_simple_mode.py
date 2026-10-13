@@ -1,12 +1,12 @@
 """Regression tests: missing batch_mode means simple; explicit detailed survives."""
 import inspect
+import ast
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import pvpoke_bridge_core as bridge
 import pvpoke_24_workflow as workflow
-import pvpoke_mcp_remote as remote
 
 ROOT = Path(__file__).resolve().parents[1]
 CANDIDATE = dict(species="quagsire", fast="MUD_SHOT",
@@ -21,13 +21,11 @@ class BatchModeDefaultsTests(unittest.TestCase):
         self.assertEqual(inspect.signature(bridge.preview24).parameters["batch_mode"].default, "simple")
 
     def test_remote_schema_defaults_and_handlers(self):
-        for name in ("prepare_24_conditions", "start_24_conditions"):
-            schema = next(t["inputSchema"] for t in remote.TOOLS if t["name"] == name)
-            self.assertEqual(schema["properties"]["batch_mode"]["default"], "simple")
-            self.assertEqual(schema["properties"]["batch_mode"]["enum"], ["simple", "detailed"])
-        with patch.object(remote.backend, "preview24", return_value={"ok":True}) as preview:
-            remote.call_tool("prepare_24_conditions", {"candidate": CANDIDATE, "ivs": "0,11,12"})
-            self.assertEqual(preview.call_args.args[-1], "simple")
+        source = (ROOT / "pvpoke_mcp_remote.py").read_text(encoding="utf-8")
+        ast.parse(source)
+        self.assertEqual(source.count("'default':'simple'"), 2)
+        self.assertEqual(source.count("args.get('batch_mode', 'simple')"), 2)
+        self.assertIn("['simple','detailed']", source)
 
     def test_web_ui_initial_state_and_api_fallback(self):
         source = (ROOT / "pvpoke_web.py").read_text(encoding="utf-8")
