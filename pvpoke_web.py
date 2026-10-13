@@ -145,9 +145,13 @@ def prepare_payload(payload):
     opponents = payload.get('opponents')
     if not isinstance(opponents, list) or not 1 <= len(opponents) <= MAX_OPPS:
         raise ValueError(f'対戦相手を1〜{MAX_OPPS}体登録してください')
-    global_mode = str(payload.get('opponent_iv_mode') or 'custom').lower()
-    if global_mode not in iv_modes.IV_MODES:
-        raise ValueError('個体値設定は custom / default / rank1 / attack / defense のいずれかです')
+
+    # Only these four modes are automatic. Source IVs require an explicit
+    # per-opponent iv_mode='source', even when source data contains IVs.
+    requested_mode = payload.get('opponent_iv_mode')
+    global_mode = str(requested_mode).strip().lower() if requested_mode is not None else ''
+    if global_mode and global_mode not in iv_modes.AUTO_IV_MODES:
+        raise ValueError('共通の自動個体値設定は default / rank1 / attack / defense の4種類です')
     scenario = str(payload.get('shields') or 'all')
     if scenario not in engine.SCENARIOS:
         raise ValueError('シールド条件が正しくありません')
@@ -155,23 +159,62 @@ def prepare_payload(payload):
     _, cpms, full_species = engine.game_data()
     crows = [species + list(iv) for iv in ivs]
     orows, odict, saved_opponents, modes = [], [], [], []
+    iv_names = ('atk', 'def', 'hp')
+
+    def numeric_ivs(raw, label):
+        if not isinstance(raw, dict) or any(k not in raw or raw[k] is None or str(raw[k]).strip() == '' for k in iv_names):
+            raise ValueError(f'{label}: 攻撃・防御・HPを3つとも指定してください')
+        values = []
+        for key in iv_names:
+            value = raw[key]
+            if isinstance(value, bool) or not str(value).strip().isdigit():
+                raise ValueError(f'{label}: 個体値は0〜15の整数です')
+            number = int(value)
+            if not 0 <= number <= 15:
+                raise ValueError(f'{label}: 個体値は0〜15です')
+            values.append(number)
+        return values
+
     for i, row in enumerate(opponents, 1):
         mons = normalize_pokemon(row, catalog, f'相手{i}体目')
-        present = [k in row and row[k] is not None and str(row[k]).strip() != '' for k in ('atk', 'def', 'hp')]
-        # Explicit source IVs take priority unless row-specific iv_mode overrides them.
-        mode = str(row.get('iv_mode') or ('custom' if any(present) else global_mode)).lower()
-        if mode not in iv_modes.IV_MODES:
-            raise ValueError(f'相手{i}体目: 未対応の個体値モード {mode}')
+        if not isinstance(row, dict):
+            raise ValueError(f'相手{i}体目: 入力が不正です')
+        any_direct_iv = any(k in row and row[k] is not None and str(row[k]).strip() != '' for k in iv_names)
+        full_direct_iv = all(k in row and row[k] is not None and str(row[k]).strip() != '' for k in iv_names)
+        direct_values = numeric_ivs(row, f'相手{i}体目') if full_direct_iv else None
+
+        source_raw = row.get('source_ivs')
+        if source_raw is not None:
+            source_values = numeric_ivs(source_raw, f'相手{i}体目の情報源個体値')
+        elif direct_values is not None:
+            # Existing source CSVs and old MCP callers place their source IVs here.
+            source_values = list(direct_values)
+        else:
+            source_values = None
+
+        explicit_mode = str(row.get('iv_mode') or '').strip().lower()
+        if explicit_mode == 'inherit':
+            explicit_mode = ''
+        if explicit_mode and explicit_mode not in iv_modes.IV_MODES:
+            raise ValueError(f'相手{i}体目: 未対応の個体値モード {explicit_mode}')
+        if explicit_mode:
+            mode = explicit_mode
+        elif global_mode:
+            # A selected automatic mode overrides existing source IVs.
+            mode = global_mode
+        else:
+            # Preserve old integrations which passed three explicit IVs and no mode.
+            mode = 'custom' if any_direct_iv else 'default'
+
         level_override = None
-        if mode == 'custom':
-            if not all(present):
-                raise ValueError(f'相手{i}体目: customモードは攻撃・防御・HPの3値が必要です')
-            try:
-                values = [int(row[k]) for k in ('atk', 'def', 'hp')]
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f'相手{i}体目: 個体値は0〜15の整数です') from exc
-            if any(not 0 <= v <= 15 for v in values):
-                raise ValueError(f'相手{i}体目: 個体値は0〜15です')
+        if mode == 'source':
+            if source_values is None:
+                raise ValueError(f'相手{i}体目: 情報源の個体値が未登録です。手動で指定してください')
+            values = source_values
+        elif mode == 'custom':
+            if direct_values is None:
+                raise ValueError(f'相手{i}体目: 直接指定には攻撃・防御・HPの3値が必要です')
+            values = direct_values
         else:
             poke = full_species[mons[0]]
             try:
@@ -182,6 +225,7 @@ def prepare_payload(payload):
             except ValueError as exc:
                 raise ValueError(f'相手{i}体目: {exc}') from exc
             values = [attack, defense, hp]
+
         full_row = mons + values
         orows.append(full_row + [level_override if level_override is not None else ''])
         prepared = dict(zip(engine.HEADER, full_row))
@@ -189,9 +233,14 @@ def prepare_payload(payload):
             prepared['level_override'] = level_override
         odict.append(prepared)
         saved = dict(zip(engine.HEADER[:4], mons))
-        saved['iv_mode'] = mode
+        # Remember manual choices, but never silently promote source IVs.
+        manual_selected = bool(explicit_mode) or (not global_mode and mode == 'custom')
+        saved['iv_mode'] = mode if manual_selected else 'inherit'
+        saved['manual_override'] = manual_selected
+        if source_values is not None:
+            saved['source_ivs'] = dict(zip(iv_names, source_values))
         if mode == 'custom':
-            saved.update(dict(zip(('atk', 'def', 'hp'), values)))
+            saved.update(dict(zip(iv_names, values)))
         saved_opponents.append(saved)
         modes.append(mode)
 
@@ -202,7 +251,7 @@ def prepare_payload(payload):
         'candidate': dict(zip(engine.HEADER[:4], species)),
         'ivs': '\n'.join(','.join(map(str, iv)) for iv in ivs),
         'opponents': saved_opponents,
-        'opponent_iv_mode': global_mode,
+        'opponent_iv_mode': global_mode or 'default',
         'shields': scenario,
     }
     preview = {
