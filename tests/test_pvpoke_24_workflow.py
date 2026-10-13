@@ -33,6 +33,33 @@ class Batch24Tests(unittest.TestCase):
             self.assertEqual(candidate['species'], 'azumarill')
             self.assertEqual(ivs.splitlines(), ['0,15,15', '1,15,14'])
 
+    def test_simple_mode_splits_into_six_csvs_and_one_mode_summary(self):
+        self.assertEqual(batch.BATCH_MODES["simple"], ("default",))
+        self.assertEqual(batch.BATCH_MODES["detailed"], batch.MODES)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / "raw"
+            raw.mkdir()
+            report = [{"mode": "default"} for _ in range(2)]
+            header = ["candidate", "opp_0", "opp_1", "Wins", "Losses", "Draws", "Average"]
+            for shield in batch.SHIELDS:
+                batch.write_csv(raw / f"pvpoke_{shield}.csv", header, [
+                    ["quagsire_0/11/12", "560", "440", "1", "1", "0", "500"]
+                ])
+            candidates = [{"species": "quagsire", "fast": "MUD_SHOT",
+                           "charged1": "AQUA_TAIL", "charged2": "STONE_EDGE",
+                           "atk": 0, "def": 11, "hp": 12}]
+            paths = batch.split_matrix(raw, root / "results", report, candidates,
+                                       full_modes=batch.BATCH_MODES["simple"])
+            self.assertEqual(len(paths), 7)
+            self.assertEqual(len(list((root / "results").glob("default_*.csv"))), 6)
+            self.assertFalse((root / "results" / "rank1_s0.csv").exists())
+            with (root / "results" / "ranking_summary.csv").open(encoding="utf-8-sig") as fp:
+                rows = list(csv.DictReader(fp))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["opponent_iv_mode"], "default")
+            self.assertEqual(rows[0]["matchups"], "12")
+
     def test_six_matrices_split_into_24_csvs(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
