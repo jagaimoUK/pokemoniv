@@ -183,7 +183,7 @@ def prepare_payload(payload):
                 raise ValueError(f'相手{i}体目: {exc}') from exc
             values = [attack, defense, hp]
         full_row = mons + values
-        orows.append(full_row)
+        orows.append(full_row + [level_override if level_override is not None else ''])
         prepared = dict(zip(engine.HEADER, full_row))
         if level_override is not None:
             prepared['level_override'] = level_override
@@ -223,7 +223,7 @@ def save_input(cleaned, crows, orows):
         tmp = path.with_suffix('.csv.tmp')
         with tmp.open('w', encoding='utf-8', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(engine.HEADER)
+            writer.writerow(engine.HEADER + (['level_override'] if path == OPPS else []))
             writer.writerows(rows)
         tmp.replace(path)
     tmp = LAST_CONFIG.with_suffix('.json.tmp')
