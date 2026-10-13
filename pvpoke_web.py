@@ -292,7 +292,7 @@ def worker(shields):
     print('DONE:', LATEST_ZIP, flush=True)
 
 
-def background_run(shields, batch24=False, batch_mode='simple')
+def background_run(shields, batch24=False, batch_mode='simple'):
     if batch24:
         command = [sys.executable, '-u', str(Path(__file__).resolve().parent / 'pvpoke_24_workflow.py'),
                    '--run', '--config', str(BATCH_CONFIG), '--output', str(BATCH_OUTPUT),
