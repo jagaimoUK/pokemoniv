@@ -28,22 +28,18 @@ class PhaseOneTests(unittest.TestCase):
         self.assertEqual((previous, improved), (792, 522))
         self.assertEqual(20 * 348 * 6, 41760)
 
-    def test_page_reload_requires_fresh_empty_groups(self):
-        class FakeSocket:
-            sent = None
-            def send(self, payload):
-                self.sent = json.loads(payload)
-            def recv(self):
-                return json.dumps({"id": 1, "result": {}})
-
+    def test_group_reset_uses_quick_fill_and_requires_empty_groups(self):
         page = engine.Page.__new__(engine.Page)
-        page.n = 0
-        page.ws = FakeSocket()
-        with patch.object(page, "wait_ready") as ready:
-            page.reload()
-        self.assertEqual(page.ws.sent["method"], "Page.reload")
-        self.assertEqual(page.ws.sent["params"], {"ignoreCache": False})
-        ready.assert_called_once_with(require_empty=True, attempts=12)
+        page.eval = Mock(return_value={"count": 2, "empty": True})
+        page.reset_groups()
+        script = page.eval.call_args.args[0]
+        self.assertIn("quick-fill-select", script)
+        self.assertIn("dispatchEvent", script)
+        self.assertIn("rankings-container .rank", script)
+
+        page.eval = Mock(return_value={"count": 2, "empty": False})
+        with self.assertRaises(RuntimeError):
+            page.reset_groups()
 
     def test_wait_ready_rejects_old_populated_matrix(self):
         page = engine.Page.__new__(engine.Page)
@@ -79,12 +75,12 @@ class PhaseOneTests(unittest.TestCase):
                 def __init__(self):
                     self.created.append(self)
                     self.groups = {}
-                    self.reload_count = 0
+                    self.reset_count = 0
                     self.closed = False
                 def wait_ready(self, require_empty=False):
                     assert require_empty
-                def reload(self):
-                    self.reload_count += 1
+                def reset_groups(self):
+                    self.reset_count += 1
                     self.groups.clear()
                 def import_group(self, index, rows):
                     self.groups[index] = rows
@@ -125,7 +121,7 @@ class PhaseOneTests(unittest.TestCase):
                     stack.enter_context(context)
                 engine.run(shield_set="equal")
                 self.assertEqual(len(FakePage.created), 1)
-                self.assertEqual(FakePage.created[0].reload_count, 3)
+                self.assertEqual(FakePage.created[0].reset_count, 3)
                 self.assertTrue(FakePage.created[0].closed)
                 run_dir = next((home / "results").glob("run_*"))
                 with (run_dir / "pvpoke_s0.csv").open(encoding="utf-8-sig", newline="") as f:
