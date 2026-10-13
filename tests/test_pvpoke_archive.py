@@ -1,5 +1,6 @@
 """End-to-end local checks for verify -> preserve ZIP -> safe cleanup."""
 import os
+import json
 import tempfile
 import unittest
 import zipfile
@@ -9,11 +10,16 @@ from unittest.mock import patch
 import pvpoke_archive as store
 
 
-def make_zip(path: Path, complete=True):
+def make_zip(path: Path, complete=True, batch_mode="detailed"):
+    modes = ("default",) if batch_mode == "simple" else store.MODES
+    files = ({"manifest.json", "ranking_summary.csv"}
+             | {f"{mode}_{shield}.csv" for mode in modes for shield in store.SHIELDS})
+    if not complete:
+        files = {"manifest.json"}
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
-        files = sorted(store.REQUIRED) if complete else ["manifest.json"]
-        for name in files:
-            z.writestr(name, f"data:{name}\\n")
+        for name in sorted(files):
+            content = json.dumps({"batch_mode": batch_mode}) if name == "manifest.json" else f"data:{name}\\n"
+            z.writestr(name, content)
 
 
 class ArchiveTests(unittest.TestCase):
@@ -34,6 +40,34 @@ class ArchiveTests(unittest.TestCase):
                 self.assertEqual(store.archived_latest(work).read_bytes(), archive.read_bytes())
                 store.verify_zip(archive)
                 store.verify_zip(store.archived_latest(work))
+
+    def test_simple_zip_only_six_files_accepted_and_cleaned(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            work, volume = root / "work", root / "volume"
+            batch = work / "batch24_results"
+            batch.mkdir(parents=True)
+            make_zip(batch / "pvpoke_24_conditions.zip", batch_mode="simple")
+            with patch.dict(os.environ, {"PVP_ARCHIVE_DIR": str(volume)}):
+                saved = store.preserve_and_cleanup(batch, work)
+                with zipfile.ZipFile(saved) as z:
+                    self.assertEqual(len([n for n in z.namelist() if n.endswith(".csv")]), 7)
+                    self.assertNotIn("rank1_s0.csv", z.namelist())
+                self.assertFalse(batch.exists())
+
+    def test_simple_archive_missing_shield_is_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            work = Path(d) / "work"
+            batch = work / "batch24_results"
+            batch.mkdir(parents=True)
+            dest = batch / "pvpoke_24_conditions.zip"
+            with zipfile.ZipFile(dest, "w") as z:
+                z.writestr("manifest.json", json.dumps({"batch_mode": "simple"}))
+                z.writestr("ranking_summary.csv", "ok")
+                z.writestr("default_s0.csv", "only one")
+            with self.assertRaises(ValueError):
+                store.preserve_and_cleanup(batch, work)
+            self.assertTrue(batch.exists())
 
     def test_corrupted_archive_preserves_everything(self):
         with tempfile.TemporaryDirectory() as d:
