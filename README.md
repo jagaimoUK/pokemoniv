@@ -115,7 +115,7 @@ Use the **メタポケモンとの比較モード** dropdown in the web screen:
 Both use the same curated meta move list, CP1500 / level 50, ZIP archive retention,
 and result tools. The selection changes **opponent IV modes**, not the user's
 candidate IVs; no source or custom IV mode is automatically inferred.
-Omitting `batch_mode` continues to run detailed as before.
+Omitting `batch_mode` now runs **simple**, Default opponent IV × 6 shields. Use explicit `batch_mode:"detailed"` for all four opponent IV modes.
 
 For ChatGPT MCP clients, use existing tools without switching plugin:
 ```text
@@ -125,7 +125,7 @@ get_status({})
 get_24_summary({mode:"default"})
 get_results({mode:"default",shield:"s1"})
 ```
-Use `batch_mode:"detailed"` (or omit) for all 24.
+Use explicit `batch_mode:"detailed"` for all 24.
 The existing tool names are retained for backward compatibility.
 Simple results contain only `default_*.csv` and summary rows for `default`.
 The ZIP manifest identifies which mode was used and the archive validator
