@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 import pvpoke_batch_v2 as engine
+import pvpoke_iv_modes as iv_modes
 
 HOST = '127.0.0.1'
 PORT = 8765
@@ -144,37 +145,72 @@ def prepare_payload(payload):
     opponents = payload.get('opponents')
     if not isinstance(opponents, list) or not 1 <= len(opponents) <= MAX_OPPS:
         raise ValueError(f'対戦相手を1〜{MAX_OPPS}体登録してください')
-    crows = [species + list(iv) for iv in ivs]
-    orows = []
-    for i, row in enumerate(opponents, 1):
-        mons = normalize_pokemon(row, catalog, f'相手{i}体目')
-        try:
-            iv = [int(row[k]) for k in ('atk','def','hp')]
-        except (TypeError, ValueError, KeyError) as exc:
-            raise ValueError(f'相手{i}体目: 個体値は0〜15の整数で指定してください') from exc
-        if any(v < 0 or v > 15 for v in iv):
-            raise ValueError(f'相手{i}体目: 個体値は0〜15です')
-        orows.append(mons + iv)
+    global_mode = str(payload.get('opponent_iv_mode') or 'custom').lower()
+    if global_mode not in iv_modes.IV_MODES:
+        raise ValueError('個体値設定は custom / default / rank1 / attack / defense のいずれかです')
     scenario = str(payload.get('shields') or 'all')
     if scenario not in engine.SCENARIOS:
         raise ValueError('シールド条件が正しくありません')
-    # The actual CP/level calculation is performed by the same PvPoke engine as the run.
+
     _, cpms, full_species = engine.game_data()
+    crows = [species + list(iv) for iv in ivs]
+    orows, odict, saved_opponents, modes = [], [], [], []
+    for i, row in enumerate(opponents, 1):
+        mons = normalize_pokemon(row, catalog, f'相手{i}体目')
+        present = [k in row and row[k] is not None and str(row[k]).strip() != '' for k in ('atk', 'def', 'hp')]
+        # Explicit source IVs take priority unless row-specific iv_mode overrides them.
+        mode = str(row.get('iv_mode') or ('custom' if any(present) else global_mode)).lower()
+        if mode not in iv_modes.IV_MODES:
+            raise ValueError(f'相手{i}体目: 未対応の個体値モード {mode}')
+        level_override = None
+        if mode == 'custom':
+            if not all(present):
+                raise ValueError(f'相手{i}体目: customモードは攻撃・防御・HPの3値が必要です')
+            try:
+                values = [int(row[k]) for k in ('atk', 'def', 'hp')]
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f'相手{i}体目: 個体値は0〜15の整数です') from exc
+            if any(not 0 <= v <= 15 for v in values):
+                raise ValueError(f'相手{i}体目: 個体値は0〜15です')
+        else:
+            poke = full_species[mons[0]]
+            try:
+                attack, defense, hp, level_override = iv_modes.select_opponent_ivs(
+                    poke, cpms, mode, moves=mons[1:],
+                    cp_cap=engine.CP_CAP, level_cap=engine.MAX_LEVEL,
+                )
+            except ValueError as exc:
+                raise ValueError(f'相手{i}体目: {exc}') from exc
+            values = [attack, defense, hp]
+        full_row = mons + values
+        orows.append(full_row)
+        prepared = dict(zip(engine.HEADER, full_row))
+        if level_override is not None:
+            prepared['level_override'] = level_override
+        odict.append(prepared)
+        saved = dict(zip(engine.HEADER[:4], mons))
+        saved['iv_mode'] = mode
+        if mode == 'custom':
+            saved.update(dict(zip(('atk', 'def', 'hp'), values)))
+        saved_opponents.append(saved)
+        modes.append(mode)
+
     cdict = [dict(zip(engine.HEADER, row)) for row in crows]
-    odict = [dict(zip(engine.HEADER, row)) for row in orows]
     cand_prepared = engine.optimize(cdict, full_species, cpms, 'candidates.csv')
     opp_prepared = engine.optimize(odict, full_species, cpms, 'opponents.csv')
     cleaned = {
         'candidate': dict(zip(engine.HEADER[:4], species)),
         'ivs': '\n'.join(','.join(map(str, iv)) for iv in ivs),
-        'opponents': [dict(zip(engine.HEADER, row)) for row in orows],
+        'opponents': saved_opponents,
+        'opponent_iv_mode': global_mode,
         'shields': scenario,
     }
     preview = {
         'candidates': [{'ivs': f'{p["atk"]}/{p["def"]}/{p["hp"]}',
                         'level': p['level'], 'cp': p['cp']} for p in cand_prepared],
-        'opponents': [{'species':p['species'], 'ivs':f'{p["atk"]}/{p["def"]}/{p["hp"]}',
-                       'level':p['level'], 'cp':p['cp']} for p in opp_prepared],
+        'opponents': [{'species': p['species'], 'ivs': f'{p["atk"]}/{p["def"]}/{p["hp"]}',
+                       'level': p['level'], 'cp': p['cp'], 'iv_mode': mode}
+                      for p, mode in zip(opp_prepared, modes)],
         'battles': len(crows) * len(orows) * len(engine.SCENARIOS[scenario]),
         'candidate_count': len(crows), 'opponent_count': len(orows),
     }
