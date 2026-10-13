@@ -1,0 +1,67 @@
+name: Experimental direct PvPoke JavaScript parity
+on:
+  push:
+    branches:
+      - experiment/phase3-direct-pvpoke-node-20261013
+  pull_request:
+    paths:
+      - 'pvpoke_node_matrix.js'
+      - 'tests/phase3_*.py'
+      - '.github/workflows/phase3-direct-parity.yml'
+  workflow_dispatch:
+jobs:
+  browser-free-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: application
+      - uses: actions/checkout@v4
+        with:
+          repository: pvpoke/pvpoke
+          ref: a23fb293300077028a65da534c73bd6367b7ef9d
+          path: upstream
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check syntax
+        run: |
+          node --check application/pvpoke_node_matrix.js
+          python -m compileall -q application/tests/phase3_make_probe.py application/tests/phase3_check_probe.py
+      - name: Create candidate/opponent fixture with pinned GameMaster
+        working-directory: application
+        run: python tests/phase3_make_probe.py ../upstream /tmp/phase3_input.jsonl
+      - name: Run direct engine (without Chromium)
+        env:
+          PVP_PVPOKE_SOURCE: ${{ github.workspace }}/upstream
+        run: node application/pvpoke_node_matrix.js < /tmp/phase3_input.jsonl > /tmp/phase3_output.jsonl
+      - name: Compare against production Matrix ratings
+        working-directory: application
+        run: python tests/phase3_check_probe.py /tmp/phase3_output.jsonl
+      - name: Prepare full 3x87x6 Matrix parity test
+        working-directory: application
+        run: python tests/phase3_make_full_probe.py ../upstream /tmp/phase3_full_input.jsonl
+      - name: Calculate all 1,566 battles directly
+        env:
+          PVP_PVPOKE_SOURCE: ${{ github.workspace }}/upstream
+        run: time node application/pvpoke_node_matrix.js < /tmp/phase3_full_input.jsonl > /tmp/phase3_full_output.jsonl
+      - name: Require exact parity for all candidate ratings and opponent labels
+        working-directory: application
+        run: python tests/phase3_check_full_probe.py /tmp/phase3_full_output.jsonl
+      - name: Validate pinned vendored PvPoke scripts
+        env:
+          PVP_PVPOKE_SOURCE: ${{ github.workspace }}/application/vendor/pvpoke
+        run: time node application/pvpoke_node_matrix.js < /tmp/phase3_full_input.jsonl > /tmp/phase3_vendor_output.jsonl
+      - name: Require vendor results to match all 1,566 production ratings
+        working-directory: application
+        run: python tests/phase3_check_full_probe.py /tmp/phase3_vendor_output.jsonl
+      - name: Check Python-to-Node IPC using vendored engine
+        working-directory: application
+        run: python tests/phase3_direct_ipc_smoke.py /tmp/phase3_full_input.jsonl vendor/pvpoke
+      - name: Run Python offline adapter tests
+        working-directory: application
+        run: python -m unittest discover -s tests -p 'test_direct_backend.py' -v
