@@ -16,7 +16,7 @@ class PhaseOneTests(unittest.TestCase):
             self.assertEqual(engine.chunk_size("PVP_OPP_CHUNK", 12), 12)
         with patch.dict(engine.os.environ, {"PVP_OPP_CHUNK": "16"}):
             self.assertEqual(engine.chunk_size("PVP_OPP_CHUNK", 12), 16)
-        for invalid in ("0", "51", "eight", "-1", "3.5"):
+        for invalid in ("0", "101", "eight", "-1", "3.5"):
             with self.subTest(invalid=invalid):
                 with patch.dict(engine.os.environ, {"PVP_OPP_CHUNK": invalid}):
                     with self.assertRaises(ValueError):
