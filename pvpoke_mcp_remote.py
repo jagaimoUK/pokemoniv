@@ -80,8 +80,14 @@ OPPONENT = {
         'atk': {'type': 'integer', 'minimum': 0, 'maximum': 15},
         'def': {'type': 'integer', 'minimum': 0, 'maximum': 15},
         'hp': {'type': 'integer', 'minimum': 0, 'maximum': 15},
-        'iv_mode': {'type': 'string', 'enum': ['custom', 'default', 'rank1', 'attack', 'defense'],
-                    'description': 'When set, selects custom IVs or PvPoke GameMaster/ranked opponent IVs.'},
+        'iv_mode': {'type': 'string', 'enum': ['inherit', 'source', 'custom', 'default', 'rank1', 'attack', 'defense'],
+                    'description': 'Explicit manual source/custom IVs, individual automatic mode, or inherit the global automatic setting.'},
+        'source_ivs': {'type': 'object', 'properties': {
+            'atk': {'type': 'integer', 'minimum': 0, 'maximum': 15},
+            'def': {'type': 'integer', 'minimum': 0, 'maximum': 15},
+            'hp': {'type': 'integer', 'minimum': 0, 'maximum': 15}},
+            'required': ['atk', 'def', 'hp'],
+            'description': 'Passive original IVs kept for iv_mode=source, never selected automatically.'},
     },
     'required': POKEMON['required'],
 }
@@ -92,9 +98,9 @@ PREP = {
         'ivs': {'type': 'string', 'description': 'One ATK,DEF,HP triplet per line, e.g. 0,15,15\\n1,15,14'},
         'opponents': {'type': 'array', 'items': OPPONENT, 'minItems': 1},
         'shields': {'type': 'string', 'enum': ['all', 'equal', 'disadvantage'], 'default': 'all'},
-        'opponent_iv_mode': {'type': 'string', 'enum': ['custom', 'default', 'rank1', 'attack', 'defense'],
-                             'default': 'custom',
-                             'description': 'Global opponent IV selection for rows without explicit IVs; existing IVs remain custom.'},
+        'opponent_iv_mode': {'type': 'string', 'enum': ['default', 'rank1', 'attack', 'defense'],
+                             'default': 'default',
+                             'description': 'Four automatic opponent IV modes. Overrides any present IVs unless a row explicitly selects iv_mode=source or custom.'},
     },
     'required': ['candidate', 'ivs', 'opponents'],
 }
@@ -124,15 +130,9 @@ def call_tool(name, args):
     if name == 'get_catalog':
         return backend.catalog()
     if name in ('prepare_battle', 'start_battle'):
-        global_mode = args.get('opponent_iv_mode', 'custom')
-        opponents = []
-        for row in args['opponents']:
-            opponent = dict(row)
-            if 'iv_mode' not in opponent and not any(k in opponent for k in ('atk', 'def', 'hp')):
-                opponent['iv_mode'] = global_mode
-            opponents.append(opponent)
         action = backend.preview if name == 'prepare_battle' else backend.start
-        return action(args['candidate'], args['ivs'], opponents, args.get('shields', 'all'))
+        return action(args['candidate'], args['ivs'], args['opponents'],
+                      args.get('shields', 'all'), args.get('opponent_iv_mode'))
     if name == 'get_status':
         return backend.status()
     if name == 'get_results':
