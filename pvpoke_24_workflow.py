@@ -208,6 +208,8 @@ def main():
     (target / 'manifest.json').write_text(json.dumps({
         'created_at': datetime.now(timezone.utc).isoformat(),
         'source_file': args.meta.name, 'gamemaster_timestamp': gm.get('timestamp'),
+        'cp_cap': engine.CP_CAP, 'max_level': engine.MAX_LEVEL,
+        'shield_pairs': [list(pair) for pair in engine.SCENARIOS['all']],
         'source_lines': len(meta) + len(source_errors), 'valid_source_rows': len(meta),
         'mode_counts': counts, 'excluded': len(errors),
         'candidates': len(own_rows), 'shield_cases': list(SHIELDS),
