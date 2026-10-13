@@ -52,3 +52,16 @@ jobs:
       - name: Require exact parity for all candidate ratings and opponent labels
         working-directory: application
         run: python tests/phase3_check_full_probe.py /tmp/phase3_full_output.jsonl
+      - name: Validate pinned vendored PvPoke scripts
+        env:
+          PVP_PVPOKE_SOURCE: ${{ github.workspace }}/application/vendor/pvpoke
+        run: time node application/pvpoke_node_matrix.js < /tmp/phase3_full_input.jsonl > /tmp/phase3_vendor_output.jsonl
+      - name: Require vendor results to match all 1,566 production ratings
+        working-directory: application
+        run: python tests/phase3_check_full_probe.py /tmp/phase3_vendor_output.jsonl
+      - name: Check Python-to-Node IPC using vendored engine
+        working-directory: application
+        run: python tests/phase3_direct_ipc_smoke.py /tmp/phase3_full_input.jsonl vendor/pvpoke
+      - name: Run Python offline adapter tests
+        working-directory: application
+        run: python -m unittest discover -s tests -p 'test_direct_backend.py' -v
