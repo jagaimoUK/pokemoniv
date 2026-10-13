@@ -491,7 +491,7 @@ def run(refresh=False, shield_set='all'):
     pairs = SCENARIOS[shield_set]
     OUT.mkdir(parents=True, exist_ok=True)
     # Either engine starts lazily: cached jobs launch neither Node nor Chromium.
-    selected_engine = os.environ.get('PVP_ENGINE', 'direct').strip().lower()
+    selected_engine = os.environ.get('PVP_ENGINE', 'browser').strip().lower()
     if selected_engine not in ('direct', 'node', 'browser'):
         raise ValueError('PVP_ENGINE must be direct or browser')
     use_direct = selected_engine in ('direct', 'node')
