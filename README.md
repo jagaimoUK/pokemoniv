@@ -46,3 +46,25 @@ The batch option combines 4 automatic opponent IV modes (`default`, `rank1`, `at
 The current curated file has 87 source lines. The standard Web UI limit of 80 manual opponents does not apply to this batch feature. Running all scenarios for many candidate IVs can be resource-intensive and may take substantially longer than an ordinary six-condition job. Only one batch job may run at a time.
 
 **Verification**: run unit tests and a small end-to-end PvPoke smoke test before trusting results. Railway build success alone cannot validate battle accuracy. Reconnect/refresh the ChatGPT plugin if its cached MCP tool schema does not expose the new operations.
+
+
+## Keep the Project meta move list in sync
+
+Railway cannot read ChatGPT Project attachments directly. When the Project file
+`pvpokeメタポケモン.txt` changes, export that current file and compare it
+with the bundled snapshot before running 24-condition batches:
+
+```bash
+python pvpoke_meta_sync.py --source /path/to/pvpokeメタポケモン.txt
+# If the diff is correct, write the updated snapshot explicitly:
+python pvpoke_meta_sync.py --source /path/to/pvpokeメタポケモン.txt --apply
+python -m unittest discover -s tests -v
+```
+
+The default command is **read-only** and returns exit code 1 if the lists differ.
+`--apply` preserves row order, repeated move sets, shadow spelling and all
+four columns. Unexpected extra columns, including embedded IVs, are rejected
+rather than silently discarded. After review, commit
+`pvpoke_meta_opponents.csv` to GitHub and verify Railway's deployment.
+There is **no automatic synchronization** from ChatGPT Project storage: the
+current source file must be provided to this command explicitly.
