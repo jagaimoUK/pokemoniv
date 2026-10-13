@@ -63,8 +63,13 @@ def catalog() -> dict:
     if not out.get('ready'):
         raise BridgeError('ゲームデータの読み込みが終わっていません: ' + str(out.get('error')))
     # Don't return the enormous catalog to the model; expose presets only.
-    return {'ready': True, 'gamemaster_timestamp': out.get('timestamp'),
-            'presets': out.get('presets', []), 'species_count': len(out.get('species', {}))}
+    result = {'ready': True, 'gamemaster_timestamp': out.get('timestamp'),
+              'presets': out.get('presets', []), 'species_count': len(out.get('species', {}))}
+    # Keep both status snapshots available even when ChatGPT has a stale
+    # cached MCP tool manifest without the new dedicated status tools.
+    result['meta_status'] = meta_status()
+    result['storage_status'] = storage_status()
+    return result
 
 
 def meta_status() -> dict:
