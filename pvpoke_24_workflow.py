@@ -184,9 +184,9 @@ def main():
     p = argparse.ArgumentParser(description='PvPoke対戦相手4モード×6シールド 一括実行')
     grp = p.add_mutually_exclusive_group(required=True)
     grp.add_argument('--prepare', action='store_true', help='計算前確認のみ。PvPoke Matrixは起動しない')
-    grp.add_argument('--run', action='store_true', help='24条件を計算してZIPを作成')
+    grp.add_argument('--run', action='store_true', help='6または24条件を計算してZIPを作成')
     p.add_argument('--config', type=Path, default=DEFAULT_HOME / 'last_input.json')
-    p.add_argument('--batch-mode', choices=tuple(BATCH_MODES), default='detailed',
+    p.add_argument('--batch-mode', choices=tuple(BATCH_MODES), default='simple',
                    help='simple = Default IV only (6); detailed = 4 IV modes (24)')
     p.add_argument('--meta', type=Path, default=Path(__file__).resolve().parent / META_NAME)
     p.add_argument('--output', type=Path, default=Path.home() / 'pvpoke_24_results')
