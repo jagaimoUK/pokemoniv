@@ -107,6 +107,15 @@ PREP = {
 TOOLS = [
     {'name': 'get_catalog', 'description': 'Get currently available Pokemon presets and dataset status.',
      'inputSchema': {'type': 'object', 'properties': {}}},
+    {'name': 'get_meta_status', 'description': 'Show currently active curated meta snapshot row count and SHA256. Before each batch compare to the current ChatGPT Project source.',
+     'inputSchema': {'type': 'object', 'properties': {}}},
+    {'name': 'sync_meta_opponents', 'description': 'Persist an updated, validated four-column curated opponent list from the ChatGPT Project file. Preserve rows/order/moves, call only when hash differs and no calculation is running.',
+     'inputSchema': {'type': 'object', 'properties': {
+         'csv_text': {'type': 'string', 'minLength': 1, 'maxLength': 80000,
+                      'description': 'Entire raw species,fast,charged1,charged2 CSV from Project; no headers or IVs.'}},
+                     'required': ['csv_text']}},
+    {'name': 'get_storage_status', 'description': 'Inspect saved ZIP archive count and storage byte usage; completed runs retain newest 20 archives up to 200MB.',
+     'inputSchema': {'type': 'object', 'properties': {}}},
     {'name': 'prepare_battle', 'description': 'Validate candidate IVs, moves and CP/level settings without running a battle.',
      'inputSchema': PREP},
     {'name': 'start_battle', 'description': 'Start asynchronous PvPoke Matrix simulations. Use get_status to poll.',
@@ -147,6 +156,12 @@ def call_tool(name, args):
         raise ValueError('arguments must be an object')
     if name == 'get_catalog':
         return backend.catalog()
+    if name == 'get_meta_status':
+        return backend.meta_status()
+    if name == 'sync_meta_opponents':
+        return backend.sync_meta_opponents(args['csv_text'])
+    if name == 'get_storage_status':
+        return backend.storage_status()
     if name in ('prepare_battle', 'start_battle'):
         action = backend.preview if name == 'prepare_battle' else backend.start
         return action(args['candidate'], args['ivs'], args['opponents'],
