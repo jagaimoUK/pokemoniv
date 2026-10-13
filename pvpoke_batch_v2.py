@@ -43,9 +43,9 @@ def chunk_size(name, default):
     try:
         value = int(raw)
     except ValueError as error:
-        raise ValueError(f'{name} must be an integer from 1 to 50: {raw!r}') from error
-    if not 1 <= value <= 50:
-        raise ValueError(f'{name} must be an integer from 1 to 50: {raw!r}')
+        raise ValueError(f'{name} must be an integer from 1 to 100: {raw!r}') from error
+    if not 1 <= value <= 100:
+        raise ValueError(f'{name} must be an integer from 1 to 100: {raw!r}')
     return value
 
 
