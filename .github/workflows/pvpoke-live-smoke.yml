@@ -15,8 +15,14 @@ jobs:
           python-version: '3.12'
       - name: Install Chromium and WebSocket client
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y chromium-browser || sudo apt-get install -y chromium
+          if command -v google-chrome >/dev/null 2>&1; then
+            sudo ln -sf "$(command -v google-chrome)" /usr/local/bin/chromium-browser
+          elif command -v chromium >/dev/null 2>&1; then
+            sudo ln -sf "$(command -v chromium)" /usr/local/bin/chromium-browser
+          else
+            echo "Neither Google Chrome nor Chromium is preinstalled" >&2
+            exit 1
+          fi
           python -m pip install websocket-client
       - name: Run one candidate x four opponent modes x six shields
         run: |
