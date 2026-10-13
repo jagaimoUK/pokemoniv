@@ -43,9 +43,9 @@ def chunk_size(name, default):
     try:
         value = int(raw)
     except ValueError as error:
-        raise ValueError(f'{name} must be an integer from 1 to 24: {raw!r}') from error
-    if not 1 <= value <= 24:
-        raise ValueError(f'{name} must be an integer from 1 to 24: {raw!r}')
+        raise ValueError(f'{name} must be an integer from 1 to 50: {raw!r}') from error
+    if not 1 <= value <= 50:
+        raise ValueError(f'{name} must be an integer from 1 to 50: {raw!r}')
     return value
 
 
@@ -534,6 +534,7 @@ def run(refresh=False, shield_set='all'):
     current_selection = None
     node_client = None
     direct_calculations = 0
+    node_memory_samples = []
 
     def simulate_rows(crows, orows, pair):
         nonlocal page, reuse_enabled, current_selection, node_client
@@ -546,6 +547,13 @@ def run(refresh=False, shield_set='all'):
                 started = time.monotonic()
                 rows = node_client.simulate(crows, orows, pair)
                 direct_calculations += len(crows) * len(orows)
+                if node_client.memory_samples:
+                    sample = node_client.memory_samples[-1]
+                    node_memory_samples.append(sample)
+                    print(f"  Node RSS {sample['rss_before_mb']:.2f} -> "
+                          f"{sample['rss_after_mb']:.2f} MiB; "
+                          f"peak {sample['peak_rss_mb']:.2f} MiB "
+                          f"({len(crows)}x{len(orows)})", flush=True)
                 print(f'  Direct Node time: {time.monotonic()-started:.2f}s '
                       f'({len(crows)}x{len(orows)})', flush=True)
                 return rows
@@ -654,7 +662,18 @@ def run(refresh=False, shield_set='all'):
             cache.close()
     if cache is not None:
         print(f'Matchup cache summary: {cache.stats}', flush=True)
-    print(f'Engine report: selected={selected_engine}, direct_calculations={direct_calculations}, browser_fallbacks={backend_fallbacks}', flush=True)
+    node_memory = (
+        {'method': 'linux_proc_VmRSS_VmHWM', 'unit': 'MiB',
+         'matrix_count': len(node_memory_samples),
+         'initial_rss_mb': node_memory_samples[0]['rss_before_mb'],
+         'final_rss_mb': node_memory_samples[-1]['rss_after_mb'],
+         'peak_rss_mb': max(x['peak_rss_mb'] for x in node_memory_samples),
+         'largest_matrix': max(
+             (x['candidates'] * x['opponents'] for x in node_memory_samples),
+             default=0)}
+        if node_memory_samples else {'matrix_count': 0, 'peak_rss_mb': None}
+    )
+    print(f'Engine report: selected={selected_engine}, direct_calculations={direct_calculations}, browser_fallbacks={backend_fallbacks}, Node peak RSS={node_memory["peak_rss_mb"]} MiB', flush=True)
     exports = []
     for pair in pairs:
         dest = run_dir / result_filename(pair)
@@ -686,7 +705,8 @@ def run(refresh=False, shield_set='all'):
         'matchup_cache': cache.stats if cache is not None else {'enabled': False},
         'engine': {'selected': selected_engine,
                    'direct_calculations': direct_calculations,
-                   'browser_fallbacks': backend_fallbacks},
+                   'browser_fallbacks': backend_fallbacks,
+                   'node_memory': node_memory},
         'description': 'CP <= 1500; maximal legal 0.5 step; score interpretation delegated to ChatGPT.'
     }
     (run_dir/'manifest.json').write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding='utf-8')
