@@ -17,3 +17,19 @@ jobs:
         run: python -m compileall -q pvpoke_24_workflow.py pvpoke_web.py pvpoke_mcp_remote.py pvpoke_bridge_core.py pvpoke_iv_modes.py pvpoke_batch_v2.py
       - name: Run self-contained unit tests
         run: python -m unittest discover -s tests -v
+      - name: Prepare 4 opponent modes from current PvPoke GameMaster
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = {'candidate':{'species':'azumarill','fast':'BUBBLE','charged1':'ICE_BEAM','charged2':'PLAY_ROUGH'},'ivs':'0,15,15'}
+          Path('/tmp/pvpoke24_smoke.json').write_text(json.dumps(payload))
+          PY
+          python pvpoke_24_workflow.py --prepare --config /tmp/pvpoke24_smoke.json --output /tmp/pvpoke24_smoke
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          result=json.loads(Path('/tmp/pvpoke24_smoke/manifest.json').read_text())
+          assert all(result['mode_counts'].get(mode,0)>0 for mode in ('default','rank1','attack','defense')), result
+          print('Real gamemaster preview passed:',result['mode_counts'],'excluded:',result['excluded'])
+          PY
