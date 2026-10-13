@@ -77,6 +77,52 @@ def _atomic_copy(source: Path, dest: Path) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def archive_stats(work: Path) -> dict:
+    """Safe summary, never scans arbitrary directories outside archive storage."""
+    storage = archive_dir(work)
+    files = sorted(
+        (p for p in storage.glob("pvpoke_*.zip") if p.is_file() and not p.is_symlink()),
+        key=lambda p: p.name, reverse=True,
+    ) if storage.is_dir() else []
+    return {
+        "archive_count": len(files),
+        "archive_bytes": sum(p.stat().st_size for p in files),
+        "latest_exists": bool(archived_latest(work)),
+        "latest_bytes": (archived_latest(work).stat().st_size if archived_latest(work) else 0),
+    }
+
+
+def prune_archives(work: Path, *, keep_count: int = 20, max_bytes: int = 200 * 1024 * 1024) -> dict:
+    """Delete old run-specific ZIPs after verifying latest; never delete latest.zip.
+
+    Protect the newest five even if they exceed the byte budget. Symlinks and
+    unrelated files are ignored. No deletion is done on invalid latest ZIP.
+    """
+    if keep_count < 5 or max_bytes < 1:
+        raise ValueError("Retention limits must preserve 5 archives and nonzero bytes")
+    storage = archive_dir(work).resolve()
+    latest = archived_latest(work)
+    if latest is None:
+        return {"removed": 0, "freed_bytes": 0}
+    verify_zip(latest)
+    files = sorted(
+        (p for p in storage.glob("pvpoke_*.zip") if p.is_file() and not p.is_symlink()),
+        key=lambda p: p.name, reverse=True,
+    )
+    kept_bytes, removed, freed = 0, 0, 0
+    for i, file in enumerate(files):
+        size = file.stat().st_size
+        must_keep = i < 5
+        allow_keep = i < keep_count and kept_bytes + size <= max_bytes
+        if must_keep or allow_keep:
+            kept_bytes += size
+        else:
+            file.unlink()
+            removed += 1
+            freed += size
+    return {"removed": removed, "freed_bytes": freed}
+
+
 def preserve_and_cleanup(batch_dir: Path, work: Path) -> Path:
     """Only erase the disposable batch directory once the archives verify.
 
@@ -100,4 +146,10 @@ def preserve_and_cleanup(batch_dir: Path, work: Path) -> Path:
     verify_zip(archived_latest(work))
     # No delete before both historical archive and latest pointer are valid.
     shutil.rmtree(batch_dir)
+    # Retention is best-effort: a cleanup issue must never invalidate a
+    # verified completed ZIP or turn a successful battle into an error.
+    try:
+        prune_archives(work)
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        print(f"Archive retention warning: {exc}", flush=True)
     return archived
