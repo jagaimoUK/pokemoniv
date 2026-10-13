@@ -68,3 +68,29 @@ rather than silently discarded. After review, commit
 `pvpoke_meta_opponents.csv` to GitHub and verify Railway's deployment.
 There is **no automatic synchronization** from ChatGPT Project storage: the
 current source file must be provided to this command explicitly.
+
+## Batch output retention and cleanup
+
+Successful 24-condition calculations now **verify and archive the final ZIP
+before removing intermediate CSV files**. The ZIP keeps the 24 per-mode
+battle-rating CSVs, ranking summary, opponent IV report and run manifest.
+Intermediate Matrix CSV parts, temporary inputs and expanded copies are
+deleted **only after** the historical archive and the latest ZIP have both
+been written and verified. On ZIP corruption or storage failure, the
+intermediate files remain available to diagnose or retry the calculation.
+
+- Without a persistent volume, archives go to
+  `~/pvpoke_automation_web/archives/` and do **not** survive Railway redeploys.
+- With a Railway volume mounted at `/data`, completed archives go to
+  `/data/pvpoke_archives/` (using `RAILWAY_VOLUME_MOUNT_PATH` automatically).
+- Optionally set `PVP_ARCHIVE_DIR` to a dedicated persistent directory.
+- Each successful run gets a unique `pvpoke_<timestamp>_<id>.zip`; the latest
+  archive is copied atomically to `latest.zip` and can be read by MCP
+  `get_results` and `get_24_summary` after a server restart.
+- Normal six-condition jobs keep their existing behavior; this cleanup is
+  limited to the **24-condition batch**. No historical ZIP is deleted
+  automatically, so monitor the volume's space usage over time.
+
+**Deployment note:** Attaching an empty Railway volume causes a redeployment;
+it cannot retroactively rescue ZIPs stored on an earlier deployment's
+ephemeral filesystem. Export any important earlier ZIP first.
