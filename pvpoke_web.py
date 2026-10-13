@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 import pvpoke_batch_v2 as engine
+import pvpoke_iv_modes as iv_modes
 
 HOST = '127.0.0.1'
 PORT = 8765
@@ -144,37 +145,72 @@ def prepare_payload(payload):
     opponents = payload.get('opponents')
     if not isinstance(opponents, list) or not 1 <= len(opponents) <= MAX_OPPS:
         raise ValueError(f'対戦相手を1〜{MAX_OPPS}体登録してください')
-    crows = [species + list(iv) for iv in ivs]
-    orows = []
-    for i, row in enumerate(opponents, 1):
-        mons = normalize_pokemon(row, catalog, f'相手{i}体目')
-        try:
-            iv = [int(row[k]) for k in ('atk','def','hp')]
-        except (TypeError, ValueError, KeyError) as exc:
-            raise ValueError(f'相手{i}体目: 個体値は0〜15の整数で指定してください') from exc
-        if any(v < 0 or v > 15 for v in iv):
-            raise ValueError(f'相手{i}体目: 個体値は0〜15です')
-        orows.append(mons + iv)
+    global_mode = str(payload.get('opponent_iv_mode') or 'custom').lower()
+    if global_mode not in iv_modes.IV_MODES:
+        raise ValueError('個体値設定は custom / default / rank1 / attack / defense のいずれかです')
     scenario = str(payload.get('shields') or 'all')
     if scenario not in engine.SCENARIOS:
         raise ValueError('シールド条件が正しくありません')
-    # The actual CP/level calculation is performed by the same PvPoke engine as the run.
+
     _, cpms, full_species = engine.game_data()
+    crows = [species + list(iv) for iv in ivs]
+    orows, odict, saved_opponents, modes = [], [], [], []
+    for i, row in enumerate(opponents, 1):
+        mons = normalize_pokemon(row, catalog, f'相手{i}体目')
+        present = [k in row and row[k] is not None and str(row[k]).strip() != '' for k in ('atk', 'def', 'hp')]
+        # Explicit source IVs take priority unless row-specific iv_mode overrides them.
+        mode = str(row.get('iv_mode') or ('custom' if any(present) else global_mode)).lower()
+        if mode not in iv_modes.IV_MODES:
+            raise ValueError(f'相手{i}体目: 未対応の個体値モード {mode}')
+        level_override = None
+        if mode == 'custom':
+            if not all(present):
+                raise ValueError(f'相手{i}体目: customモードは攻撃・防御・HPの3値が必要です')
+            try:
+                values = [int(row[k]) for k in ('atk', 'def', 'hp')]
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f'相手{i}体目: 個体値は0〜15の整数です') from exc
+            if any(not 0 <= v <= 15 for v in values):
+                raise ValueError(f'相手{i}体目: 個体値は0〜15です')
+        else:
+            poke = full_species[mons[0]]
+            try:
+                attack, defense, hp, level_override = iv_modes.select_opponent_ivs(
+                    poke, cpms, mode, moves=mons[1:],
+                    cp_cap=engine.CP_CAP, level_cap=engine.MAX_LEVEL,
+                )
+            except ValueError as exc:
+                raise ValueError(f'相手{i}体目: {exc}') from exc
+            values = [attack, defense, hp]
+        full_row = mons + values
+        orows.append(full_row + [level_override if level_override is not None else ''])
+        prepared = dict(zip(engine.HEADER, full_row))
+        if level_override is not None:
+            prepared['level_override'] = level_override
+        odict.append(prepared)
+        saved = dict(zip(engine.HEADER[:4], mons))
+        saved['iv_mode'] = mode
+        if mode == 'custom':
+            saved.update(dict(zip(('atk', 'def', 'hp'), values)))
+        saved_opponents.append(saved)
+        modes.append(mode)
+
     cdict = [dict(zip(engine.HEADER, row)) for row in crows]
-    odict = [dict(zip(engine.HEADER, row)) for row in orows]
     cand_prepared = engine.optimize(cdict, full_species, cpms, 'candidates.csv')
     opp_prepared = engine.optimize(odict, full_species, cpms, 'opponents.csv')
     cleaned = {
         'candidate': dict(zip(engine.HEADER[:4], species)),
         'ivs': '\n'.join(','.join(map(str, iv)) for iv in ivs),
-        'opponents': [dict(zip(engine.HEADER, row)) for row in orows],
+        'opponents': saved_opponents,
+        'opponent_iv_mode': global_mode,
         'shields': scenario,
     }
     preview = {
         'candidates': [{'ivs': f'{p["atk"]}/{p["def"]}/{p["hp"]}',
                         'level': p['level'], 'cp': p['cp']} for p in cand_prepared],
-        'opponents': [{'species':p['species'], 'ivs':f'{p["atk"]}/{p["def"]}/{p["hp"]}',
-                       'level':p['level'], 'cp':p['cp']} for p in opp_prepared],
+        'opponents': [{'species': p['species'], 'ivs': f'{p["atk"]}/{p["def"]}/{p["hp"]}',
+                       'level': p['level'], 'cp': p['cp'], 'iv_mode': mode}
+                      for p, mode in zip(opp_prepared, modes)],
         'battles': len(crows) * len(orows) * len(engine.SCENARIOS[scenario]),
         'candidate_count': len(crows), 'opponent_count': len(orows),
     }
@@ -187,7 +223,7 @@ def save_input(cleaned, crows, orows):
         tmp = path.with_suffix('.csv.tmp')
         with tmp.open('w', encoding='utf-8', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(engine.HEADER)
+            writer.writerow(engine.HEADER + (['level_override'] if path == OPPS else []))
             writer.writerows(rows)
         tmp.replace(path)
     tmp = LAST_CONFIG.with_suffix('.json.tmp')
@@ -247,7 +283,7 @@ label{display:block;font-size:13px;color:#d0ddec;font-weight:650;margin:10px 0 5
 <label for="species">PvPokeの英語ID（直接入力も可能）</label><input id="species" list="species-list" value="azumarill" autocomplete="off"/><datalist id="species-list"></datalist>
 <label>技構成</label><div class="three"><div><label for="fast">通常技</label><select id="fast"></select></div><div><label for="charged1">ゲージ技①</label><select id="charged1"></select></div><div><label for="charged2">ゲージ技②</label><select id="charged2"></select></div></div></section>
 <section class="card"><div class="head"><div class="num">2</div><h2>個体値を貼り付け</h2></div><p class="tiny">攻撃,防御,HP の順。1行1体、最大150体。重複している個体値はエラーとして表示するよ。</p><textarea id="ivs" spellcheck="false" placeholder="0,15,15&#10;1,15,14&#10;0,14,15">0,15,15&#10;1,15,14</textarea></section>
-<section class="card"><div class="head"><div class="num">3</div><h2>対戦相手</h2></div><p class="tiny">1行につき1体。種類・技・個体値をそれぞれ変更できるよ。最大80体。</p><div id="opponents"></div>
+<section class="card"><div class="head"><div class="num">3</div><h2>対戦相手</h2></div><p class="tiny">共通設定か、相手ごとに個体値を選択できるよ。最大80体。</p><label for="opponentIVMode">対戦相手の共通個体値設定</label><select id="opponentIVMode"><option value="custom">直接指定（従来どおり）</option><option value="default">PvPokeデフォルト</option><option value="rank1">総合1位（Stat Product）</option><option value="attack">攻撃最大</option><option value="defense">防御最大</option></select><div id="opponents"></div>
 <div class="two"><select id="add-preset" aria-label="追加する対戦相手"><option value="">相手を選ぶ</option></select><button type="button" id="addOpp">＋ 対戦相手を追加</button></div></section>
 <section class="card"><div class="head"><div class="num">4</div><h2>計算する</h2></div><label for="shields">シールド条件</label><select id="shields"><option value="all">全6条件（同数3＋不利3）</option><option value="equal">同数3条件だけ（0-0 / 1-1 / 2-2）</option><option value="disadvantage">不利3条件だけ（0-1 / 0-2 / 1-2）</option></select>
 <div class="actions"><button id="preview" class="outline">① CP・対戦数を確認</button><button id="run" class="primary">② 計算してZIPを作成</button></div>
@@ -265,20 +301,52 @@ function setMoves(sid, sels, desired={}){const p=catalog[sid]||{fastMoves:[],cha
 function setCandidate(row={}){if(row.species)el('species').value=row.species;setMoves(el('species').value,[el('fast'),el('charged1'),el('charged2')],row);el('preset').value=el('species').value;}
 function getPreset(id){return presets.find(p=>p.species===id)||null;}
 function addOpponent(row={}){const sid=row.species||(presets[0]&&presets[0].species)||'clodsire';const base=getPreset(sid)||{species:sid};const o={...base,...row};const div=document.createElement('div');div.className='opponent';div.innerHTML=`<div class="rowtop"><b>対戦相手 <span class="idx"></span></b><button type="button" class="danger remove">削除</button></div><label>ポケモン（PvPoke ID）</label><input class="opp-species" list="species-list" value="${esc(sid)}" autocomplete="off"/><div class="three"><div><label>通常技</label><select class="opp-fast"></select></div><div><label>ゲージ技①</label><select class="opp-c1"></select></div><div><label>ゲージ技②</label><select class="opp-c2"></select></div></div><div class="three"><div><label>攻撃</label><input type="number" min="0" max="15" step="1" class="opp-atk" value="${esc(o.atk??0)}"/></div><div><label>防御</label><input type="number" min="0" max="15" step="1" class="opp-def" value="${esc(o.def??15)}"/></div><div><label>HP</label><input type="number" min="0" max="15" step="1" class="opp-hp" value="${esc(o.hp??15)}"/></div></div>`;
+const modeLabel=document.createElement('label');modeLabel.textContent='この相手の個体値設定';
+const modeSelect=document.createElement('select');modeSelect.className='opp-iv-mode';
+for(const [value,label] of [['inherit','共通設定'],['custom','直接指定'],['default','PvPokeデフォルト'],['rank1','総合1位'],['attack','攻撃最大'],['defense','防御最大']]){
+const opt=document.createElement('option');opt.value=value;opt.textContent=label;modeSelect.append(opt);}
+modeSelect.value=o.iv_mode||(['atk','def','hp'].every(k=>row[k]!==undefined)?'custom':'inherit');
+const ivGroup=div.querySelectorAll('.three')[1];ivGroup.classList.add('opp-iv-inputs');ivGroup.before(modeLabel,modeSelect);
+modeSelect.addEventListener('change',refreshOpponentIVInputs);
 const sels=[div.querySelector('.opp-fast'),div.querySelector('.opp-c1'),div.querySelector('.opp-c2')];setMoves(sid,sels,o);
-div.querySelector('.opp-species').addEventListener('change',e=>{let p=getPreset(e.target.value)||{};setMoves(e.target.value,sels,p);});div.querySelector('.remove').onclick=()=>{div.remove();renumber();};el('opponents').append(div);renumber();}
+div.querySelector('.opp-species').addEventListener('change',e=>{let p=getPreset(e.target.value)||{};setMoves(e.target.value,sels,p);});div.querySelector('.remove').onclick=()=>{div.remove();renumber();};el('opponents').append(div);renumber();refreshOpponentIVInputs();}
 function renumber(){[...el('opponents').children].forEach((d,i)=>d.querySelector('.idx').textContent=String(i+1));}
-function gather(){return {candidate:{species:el('species').value.trim(),fast:el('fast').value,charged1:el('charged1').value,charged2:el('charged2').value},ivs:el('ivs').value,shields:el('shields').value,opponents:[...el('opponents').children].map(div=>({species:div.querySelector('.opp-species').value.trim(),fast:div.querySelector('.opp-fast').value,charged1:div.querySelector('.opp-c1').value,charged2:div.querySelector('.opp-c2').value,atk:div.querySelector('.opp-atk').value,def:div.querySelector('.opp-def').value,hp:div.querySelector('.opp-hp').value}))};}
+function refreshOpponentIVInputs(){
+for(const div of el('opponents').children){
+const mode=div.querySelector('.opp-iv-mode').value;
+const effective=mode==='inherit'?el('opponentIVMode').value:mode;
+div.querySelector('.opp-iv-inputs').hidden=effective!=='custom';
+}}
+function gather(){
+const opponent_iv_mode=el('opponentIVMode').value;
+const opponents=[...el('opponents').children].map(div=>{
+const mode=div.querySelector('.opp-iv-mode').value;
+const effective=mode==='inherit'?opponent_iv_mode:mode;
+const o={species:div.querySelector('.opp-species').value.trim(),
+fast:div.querySelector('.opp-fast').value,charged1:div.querySelector('.opp-c1').value,charged2:div.querySelector('.opp-c2').value};
+if(mode!=='inherit')o.iv_mode=mode;
+if(effective==='custom'){
+o.atk=div.querySelector('.opp-atk').value;
+o.def=div.querySelector('.opp-def').value;
+o.hp=div.querySelector('.opp-hp').value;
+}
+return o;
+});
+return {candidate:{species:el('species').value.trim(),fast:el('fast').value,
+charged1:el('charged1').value,charged2:el('charged2').value},
+ivs:el('ivs').value,shields:el('shields').value,opponent_iv_mode,opponents};
+}
 async function api(path,data){const args=data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-PvPoke-Token':TOKEN},body:JSON.stringify(data)};const r=await fetch(path,args);const obj=await r.json();if(!r.ok)throw Error(obj.error||'通信エラー');return obj;}
 function status(s,kind=''){const x=el('statusMessage');x.hidden=false;x.textContent=s;x.className='message '+kind;}
 async function ready(){try{const data=await api('/api/catalog');if(!data.ready){notice(data.error?'データ取得エラー: '+data.error:'ゲームデータを読み込んでいるよ。数秒待ってね。',data.error?'error':'');setTimeout(ready,data.error?8000:1500);return;}catalog=data.species;presets=data.presets;
 const names=Object.keys(catalog).sort();let dl=el('species-list');dl.replaceChildren();for(const sid of names){let o=document.createElement('option');o.value=sid;dl.append(o);}
 const selectOptions=ps=>[...ps.map(p=>({id:p.species,label:p.name+' ('+p.species+')'}))];for(const id of ['preset','add-preset']){let x=el(id);x.replaceChildren();if(id==='add-preset'){const o=document.createElement('option');o.value='';o.textContent='対戦相手を選ぶ';x.append(o);}for(let p of selectOptions(presets)){const o=document.createElement('option');o.value=p.id;o.textContent=p.label;x.append(o);}}
-let cfg=data.saved;if(cfg){setCandidate(cfg.candidate);el('ivs').value=cfg.ivs;el('shields').value=cfg.shields||'all';for(const o of cfg.opponents)addOpponent(o);}else{const p=getPreset('azumarill')||presets[0];if(p)setCandidate(p);addOpponent(getPreset('clodsire')||presets[0]);}if(presets.length)el('add-preset').value=presets[0].species;notice('準備OK。個体値や相手を確認して計算できるよ。','good');
+let cfg=data.saved;if(cfg){setCandidate(cfg.candidate);el('ivs').value=cfg.ivs;el('shields').value=cfg.shields||'all';el('opponentIVMode').value=cfg.opponent_iv_mode||'custom';for(const o of cfg.opponents)addOpponent(o);}else{const p=getPreset('azumarill')||presets[0];if(p)setCandidate(p);addOpponent(getPreset('clodsire')||presets[0]);}if(presets.length)el('add-preset').value=presets[0].species;notice('準備OK。個体値や相手を確認して計算できるよ。','good');
 }catch(e){notice('接続確認: '+e.message,'error');setTimeout(ready,5000);}}
 el('preset').addEventListener('change',e=>{const p=getPreset(e.target.value);if(p)setCandidate(p);});el('species').addEventListener('change',e=>setCandidate({species:e.target.value}));
+el('opponentIVMode').addEventListener('change',refreshOpponentIVInputs);
 el('addOpp').addEventListener('click',()=>{if(el('opponents').children.length>=80){status('対戦相手は最大80体だよ','error');return;}addOpponent(getPreset(el('add-preset').value)||{species:el('add-preset').value});});
-function showPreview(p){el('previewPanel').hidden=false;const stats=[['自分',p.candidate_count+'体'],['相手',p.opponent_count+'体'],['合計',p.battles+'対戦']];el('previewStats').innerHTML=stats.map(v=>`<div><b>${esc(v[1])}</b><small>${esc(v[0])}</small></div>`).join('');el('previewDetail').textContent=p.candidates.map(v=>v.ivs+' → Lv'+v.level+' CP'+v.cp).join('\n')+'\n--- 相手 ---\n'+p.opponents.map(v=>v.species+' '+v.ivs+' → Lv'+v.level+' CP'+v.cp).join('\n');}
+function showPreview(p){el('previewPanel').hidden=false;const stats=[['自分',p.candidate_count+'体'],['相手',p.opponent_count+'体'],['合計',p.battles+'対戦']];el('previewStats').innerHTML=stats.map(v=>`<div><b>${esc(v[1])}</b><small>${esc(v[0])}</small></div>`).join('');el('previewDetail').textContent=p.candidates.map(v=>v.ivs+' → Lv'+v.level+' CP'+v.cp).join('\n')+'\n--- 相手 ---\n'+p.opponents.map(v=>v.species+' ['+(v.iv_mode||'custom')+'] '+v.ivs+' → Lv'+v.level+' CP'+v.cp).join('\n');}
 function disableButtons(on){for(const id of ['preview','run','addOpp'])el(id).disabled=on;}
 el('preview').onclick=async()=>{if(busy)return;disableButtons(true);status('CPとレベルを計算しているよ…');try{const r=await api('/api/prepare',gather());showPreview(r.preview);status('CP1500以下のレベル調整を確認できたよ','good');}catch(e){status(e.message,'error');}finally{disableButtons(busy);}};
 el('run').onclick=async()=>{if(busy)return;disableButtons(true);status('計算を開始するよ…');el('download').hidden=true;try{const r=await api('/api/run',gather());showPreview(r.preview);status('計算開始。完了までこの画面は閉じずに待ってね。','good');}catch(e){status(e.message,'error');disableButtons(false);}};
