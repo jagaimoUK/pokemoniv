@@ -107,26 +107,28 @@ def start(candidate: dict, ivs: str, opponents: list[dict], shields: str = 'all'
             'next': '少し待ってから get_status を呼び、done なら get_results で結果を取得してください'}
 
 
-def validate_24(candidate: dict, ivs: str) -> dict:
+def validate_24(candidate: dict, ivs: str, batch_mode: str = 'detailed') -> dict:
     if not isinstance(candidate, dict) or any(not candidate.get(k) for k in ('species','fast','charged1','charged2')):
         raise BridgeError('candidateのspecies・技3つを指定してください')
     if not isinstance(ivs, str) or not ivs.strip():
         raise BridgeError('個体値リストが空です')
-    return {'candidate': candidate, 'ivs': ivs}
+    if batch_mode not in ('simple', 'detailed'):
+        raise BridgeError('batch_modeはsimple/detailedです')
+    return {'candidate': candidate, 'ivs': ivs, 'batch_mode': batch_mode}
 
 
-def preview24(candidate: dict, ivs: str) -> dict:
-    return _request('/api/prepare24', validate_24(candidate, ivs),
+def preview24(candidate: dict, ivs: str, batch_mode: str = 'detailed') -> dict:
+    return _request('/api/prepare24', validate_24(candidate, ivs, batch_mode),
                     headers={'X-PvPoke-Token': _token()}, timeout=75)
 
 
-def start24(candidate: dict, ivs: str) -> dict:
-    result = _request('/api/run24', validate_24(candidate, ivs),
+def start24(candidate: dict, ivs: str, batch_mode: str = 'detailed') -> dict:
+    result = _request('/api/run24', validate_24(candidate, ivs, batch_mode),
                       headers={'X-PvPoke-Token': _token()}, timeout=75)
     if not result.get('ok'):
         raise BridgeError(str(result))
     return {'started': True, 'preview': result['preview'],
-            'next': 'get_status が done になったら get_24_summary および get_results(mode=...) で分析してください'}
+            'next': 'get_status が done になったら get_24_summary と get_results(mode=...) で分析してください'}
 
 
 def status() -> dict:
@@ -205,7 +207,7 @@ def summary24(offset: int = 0, limit: int = 20, mode: str | None = None) -> dict
         raise BridgeError('modeは default/rank1/attack/defense のいずれかです')
     with _zip() as z:
         if 'ranking_summary.csv' not in z.namelist():
-            raise BridgeError('24条件の集計ファイルがありません。start_24_conditionsで実行してください')
+            raise BridgeError('一括計算の集計ファイルがありません。start_24_conditionsで実行してください')
         text = z.read('ranking_summary.csv').decode('utf-8-sig')
         data = list(csv.DictReader(io.StringIO(text)))
         if mode:
