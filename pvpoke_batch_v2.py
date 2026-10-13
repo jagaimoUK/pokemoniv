@@ -291,15 +291,23 @@ class Page:
             return val.get('value')
 
     def wait_ready(self):
-        for _ in range(90):
+        for attempt in range(90):
             state = self.eval('''(() => ({
               ready:document.readyState,
               mode:document.querySelector('.mode-select a.selected')?.getAttribute('data'),
               groups:document.querySelectorAll('.poke-select-container .poke.multi').length,
-              battle:!!document.querySelector('.battle-btn')
+              battle:!!document.querySelector('.battle-btn'),
+              title:document.title,
+              securityCheck:(document.title==='Just a moment...' &&
+                (document.body?.innerText||'').includes('security verification'))
             }))()''')
             if state['ready'] == 'complete' and state['groups'] == 2 and state['battle'] and state['mode'] == 'matrix':
                 return
+            if attempt >= 12 and state.get('securityCheck'):
+                raise RuntimeError('PvPokeのセキュリティ確認（Cloudflare）が表示されています。'
+                                   '自動操作は続行できません。手動ブラウザで確認するか、'
+                                   'サイトの許可された利用方法をご確認ください。'
+                                   '確認画面の回避は行いません。')
             time.sleep(1)
         raise RuntimeError(f'PvPoke Matrixが読み込めません: {state}')
 
