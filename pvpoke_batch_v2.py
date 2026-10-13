@@ -10,6 +10,7 @@ import hashlib
 import json
 import shutil
 import math
+import os
 import re
 import subprocess
 import sys
@@ -33,8 +34,21 @@ HEADER = ['species', 'fast', 'charged1', 'charged2', 'atk', 'def', 'hp']
 RAW = 'https://raw.githubusercontent.com/pvpoke/pvpoke/master/src/'
 MAX_LEVEL = 50
 CP_CAP = 1500
-CAND_CHUNK = 8
-OPP_CHUNK = 8
+def chunk_size(name, default):
+    """Validated knobs for conservative matrix-size tuning on limited RAM."""
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise ValueError(f'{name} must be an integer from 1 to 24: {raw!r}') from error
+    if not 1 <= value <= 24:
+        raise ValueError(f'{name} must be an integer from 1 to 24: {raw!r}')
+    return value
+
+
+# Keep the candidate dimension conservative on Railway's 1GB RAM allocation.
+CAND_CHUNK = chunk_size('PVP_CAND_CHUNK', 8)
+OPP_CHUNK = chunk_size('PVP_OPP_CHUNK', 12)
 SCENARIOS = {
     'equal': ((0, 0), (1, 1), (2, 2)),
     'disadvantage': ((0, 1), (0, 2), (1, 2)),
@@ -290,18 +304,21 @@ class Page:
                 raise RuntimeError('JavaScriptがundefinedを返しました')
             return val.get('value')
 
-    def wait_ready(self):
+    def wait_ready(self, require_empty=False):
         for attempt in range(90):
             state = self.eval('''(() => ({
               ready:document.readyState,
               mode:document.querySelector('.mode-select a.selected')?.getAttribute('data'),
               groups:document.querySelectorAll('.poke-select-container .poke.multi').length,
+              empty:[...document.querySelectorAll('.poke-select-container .poke.multi')]
+                  .every(g=>Number(g.querySelector('.poke-count')?.textContent)===0),
               battle:!!document.querySelector('.battle-btn'),
               title:document.title,
               securityCheck:(document.title==='Just a moment...' &&
                 (document.body?.innerText||'').includes('security verification'))
             }))()''')
-            if state['ready'] == 'complete' and state['groups'] == 2 and state['battle'] and state['mode'] == 'matrix':
+            if (state['ready'] == 'complete' and state['groups'] == 2 and state['battle']
+                    and state['mode'] == 'matrix' and (not require_empty or state['empty'])):
                 return
             if attempt >= 12 and state.get('securityCheck'):
                 raise RuntimeError('PvPokeのセキュリティ確認（Cloudflare）が表示されています。'
@@ -310,6 +327,27 @@ class Page:
                                    '確認画面の回避は行いません。')
             time.sleep(1)
         raise RuntimeError(f'PvPoke Matrixが読み込めません: {state}')
+
+    def reload(self):
+        """Reuse the same Chromium tab, but obtain a clean PvPoke Matrix DOM.
+
+        A real reload is safer than poking undocumented group-clearing controls.
+        Waiting for *empty* groups prevents old rows being mistaken for new ones.
+        """
+        self.n += 1
+        rid = self.n
+        self.ws.send(json.dumps({'id': rid, 'method': 'Page.reload',
+                                 'params': {'ignoreCache': False}}))
+        while True:
+            msg = json.loads(self.ws.recv())
+            if msg.get('id') != rid:
+                continue
+            if 'error' in msg:
+                raise RuntimeError(f'Chromium Page.reload failed: {msg["error"]}')
+            if msg.get('result', {}).get('errorText'):
+                raise RuntimeError(f'Chromium reload failed: {msg["result"]["errorText"]}')
+            break
+        self.wait_ready(require_empty=True)
 
     def import_group(self, group_index, rows):
         csvtext = '\n'.join(pvpline(r) for r in rows)
@@ -372,22 +410,26 @@ class Page:
           const table=document.querySelector('.matrix-table.rating-table');
           const button=document.querySelector('.battle-btn');
           if(!table||!button)return {error:'Battle画面なし'};
-          let changed=false;
-          const observer=new MutationObserver(()=>{changed=true});
+          const beforeHref=document.querySelector('.battle-results.matrix a.download-csv')?.href || null;
+          let changed=false, lastChange=performance.now();
+          const observer=new MutationObserver(()=>{changed=true;lastChange=performance.now()});
           observer.observe(table,{childList:true,subtree:true,characterData:true});
           button.click();
-          for(let i=0;i<480;i++){
-            await new Promise(resolve=>setTimeout(resolve,250));
+          for(let i=0;i<1200;i++){
+            await new Promise(resolve=>setTimeout(resolve,100));
             const rows=[...table.querySelectorAll('tbody tr')];
             const label=button.querySelector('.btn-label')?.textContent.trim();
             if(changed && label==='Battle' && rows.length===__LEFT__ &&
-               rows.every(r=>r.querySelectorAll('td a.rating').length>=__RIGHT__)){
-              await new Promise(resolve=>setTimeout(resolve,550));
+               rows.every(r=>r.querySelectorAll('td a.rating').length>=__RIGHT__) &&
+               performance.now()-lastChange>=100){
+              const link=document.querySelector('.battle-results.matrix a.download-csv');
+              if(!link?.href)continue;
+              // Prefer a newly generated CSV URL. Some PvPoke versions might
+              // reuse it; preserve the original 550ms grace period in that case.
+              if(link.href===beforeHref && performance.now()-lastChange<550)continue;
               observer.disconnect();
               const post=groups.map(g=>g.querySelector('.shield-picker .option.on')?.getAttribute('value'));
               if(!post.every((s,i)=>s===String(required[i])))return {error:'計算後のシールド設定が変更された',post,required};
-              const link=document.querySelector('.battle-results.matrix a.download-csv');
-              if(!link?.href)return {error:'CSVダウンロードリンクなし'};
               try{
                 const response=await fetch(link.href);
                 if(!response.ok)return {error:'CSVダウンロード失敗'};
@@ -435,6 +477,7 @@ def chunks(array, size):
 
 
 def run(refresh=False, shield_set='all'):
+    run_started = time.monotonic()
     gm, candidates, opponents = prepare(refresh=refresh)
     pairs = SCENARIOS[shield_set]
     info = chromium_connect()
@@ -447,7 +490,8 @@ def run(refresh=False, shield_set='all'):
         'candidates': candidates, 'opponents': opponents,
         'cp_cap': CP_CAP, 'max_level': MAX_LEVEL,
         'gamemaster_hash': gamemaster_hash, 'pokemonjs_hash': pokemonjs_hash,
-        'pairs': pairs, 'version': 3
+        'pairs': pairs, 'candidate_chunk': CAND_CHUNK,
+        'opponent_chunk': OPP_CHUNK, 'version': 4
     }, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
     parts_dir = OUT / ('parts_' + fingerprint)
     parts_dir.mkdir(parents=True, exist_ok=True)
@@ -457,62 +501,77 @@ def run(refresh=False, shield_set='all'):
                    'counts': [[0,0,0] for _ in candidates], 'headers': []} for pair in pairs}
     total = math.ceil(len(candidates) / CAND_CHUNK) * math.ceil(len(opponents) / OPP_CHUNK)
     n = 0
-    for ci, cpart in chunks(candidates, CAND_CHUNK):
-        for oi, opart in chunks(opponents, OPP_CHUNK):
-            n += 1
-            print(f'\nBatch {n}/{total}: 自分{ci+1}-{ci+len(cpart)}, 相手{oi+1}-{oi+len(opart)}', flush=True)
-            part_paths = {pair: parts_dir / f"c{ci:05d}_o{oi:05d}_{result_filename(pair)}" for pair in pairs}
-            rows_by_pair = {}
-            pending = []
-            for pair, path in part_paths.items():
-                if path.exists():
-                    with path.open(encoding='utf-8-sig', newline='') as f:
-                        rows_by_pair[pair] = list(csv.reader(f))
-                    print(f'  保存済み {result_filename(pair)} を再利用')
-                else:
-                    pending.append(pair)
-            if pending:
-                page = Page()
-                try:
-                    page.wait_ready()
+    page = None
+    try:
+        for ci, cpart in chunks(candidates, CAND_CHUNK):
+            for oi, opart in chunks(opponents, OPP_CHUNK):
+                n += 1
+                batch_started = time.monotonic()
+                print(f'\nBatch {n}/{total}: 自分{ci+1}-{ci+len(cpart)}, 相手{oi+1}-{oi+len(opart)}', flush=True)
+                part_paths = {pair: parts_dir / f"c{ci:05d}_o{oi:05d}_{result_filename(pair)}" for pair in pairs}
+                rows_by_pair = {}
+                pending = []
+                for pair, path in part_paths.items():
+                    if path.exists():
+                        with path.open(encoding='utf-8-sig', newline='') as f:
+                            rows_by_pair[pair] = list(csv.reader(f))
+                        print(f'  保存済み {result_filename(pair)} を再利用')
+                    else:
+                        pending.append(pair)
+                if pending:
+                    if page is None:
+                        page = Page()
+                        page.wait_ready(require_empty=True)
+                    else:
+                        try:
+                            page.reload()
+                        except Exception as error:
+                            print(f'  Reuse unavailable; reopening tab: {error}', flush=True)
+                            page.close()
+                            page = Page()
+                            page.wait_ready(require_empty=True)
                     page.import_group(0, cpart)
                     page.import_group(1, opart)
                     for pair in pending:
                         print(f'  自分{pair[0]}枚 / 相手{pair[1]}枚 計算中...', flush=True)
+                        matrix_started = time.monotonic()
                         result = page.simulate(len(cpart), len(opart), pair)
+                        print(f'  Matrix time: {time.monotonic()-matrix_started:.2f}s', flush=True)
                         rows_by_pair[pair] = result
                         temp = part_paths[pair].with_suffix('.tmp')
                         with temp.open('w', newline='', encoding='utf-8-sig') as f:
                             csv.writer(f).writerows(result)
                         temp.replace(part_paths[pair])
-                finally:
-                    page.close()
-            for pair in pairs:
-                result = rows_by_pair[pair]
-                if len(result) != len(cpart)+1 or len(result[0]) != len(opart)+5:
-                    raise RuntimeError(f'{pair}: 保存済みCSVの形式が不正です')
-                for j, r in enumerate(result[1:]):
-                    candidate = cpart[j]
-                    expected_ivs = f'{candidate["atk"]}/{candidate["def"]}/{candidate["hp"]}'
-                    if expected_ivs not in r[0]:
-                        raise RuntimeError(f'Row {j}: CSVの個体値を照合できません: {r[0]} / {expected_ivs}')
-                    a = ci+j
-                    old = data[pair]['labels'][a]
-                    if old is not None and old != r[0]:
-                        raise RuntimeError(f'Row {j}: 同じ候補のCSV行名が一致しません')
-                    data[pair]['labels'][a] = r[0]
-                    data[pair]['ratings'][a].extend(r[1:1+len(opart)])
-                    counts = [int(x) for x in r[1+len(opart):4+len(opart)]]
-                    if sum(counts) != len(opart):
-                        raise RuntimeError(f'勝敗数が対戦相手数と一致しません: {counts}')
-                    for k in range(3):
-                        data[pair]['counts'][a][k] += counts[k]
-                heads = result[0][1:1+len(opart)]
-                if ci == 0:
-                    data[pair]['headers'].extend(heads)
-                elif data[pair]['headers'][oi:oi+len(opart)] != heads:
-                    raise RuntimeError('相手ラベルがチャンク間で一致しません')
-                print(f'  {result_filename(pair)} OK')
+                for pair in pairs:
+                    result = rows_by_pair[pair]
+                    if len(result) != len(cpart)+1 or len(result[0]) != len(opart)+5:
+                        raise RuntimeError(f'{pair}: 保存済みCSVの形式が不正です')
+                    for j, r in enumerate(result[1:]):
+                        candidate = cpart[j]
+                        expected_ivs = f'{candidate["atk"]}/{candidate["def"]}/{candidate["hp"]}'
+                        if expected_ivs not in r[0]:
+                            raise RuntimeError(f'Row {j}: CSVの個体値を照合できません: {r[0]} / {expected_ivs}')
+                        a = ci+j
+                        old = data[pair]['labels'][a]
+                        if old is not None and old != r[0]:
+                            raise RuntimeError(f'Row {j}: 同じ候補のCSV行名が一致しません')
+                        data[pair]['labels'][a] = r[0]
+                        data[pair]['ratings'][a].extend(r[1:1+len(opart)])
+                        counts = [int(x) for x in r[1+len(opart):4+len(opart)]]
+                        if sum(counts) != len(opart):
+                            raise RuntimeError(f'勝敗数が対戦相手数と一致しません: {counts}')
+                        for k in range(3):
+                            data[pair]['counts'][a][k] += counts[k]
+                    heads = result[0][1:1+len(opart)]
+                    if ci == 0:
+                        data[pair]['headers'].extend(heads)
+                    elif data[pair]['headers'][oi:oi+len(opart)] != heads:
+                        raise RuntimeError('相手ラベルがチャンク間で一致しません')
+                    print(f'  {result_filename(pair)} OK')
+                print(f'  Batch time: {time.monotonic()-batch_started:.2f}s', flush=True)
+    finally:
+        if page is not None:
+            page.close()
     exports = []
     for pair in pairs:
         dest = run_dir / result_filename(pair)
@@ -553,6 +612,7 @@ def run(refresh=False, shield_set='all'):
     shutil.copy2(archive, latest)
     print(f'\n完了: {len(pairs)}条件のCSVと一括アップロード用ZIP: {latest}')
     print(f'今回の計算結果の保存場所: {run_dir}')
+    print(f'Runtime: {time.monotonic()-run_started:.2f}s; chunk={CAND_CHUNK}x{OPP_CHUNK}')
 
 
 
