@@ -1,0 +1,19 @@
+name: PvPoke 24-mode tests
+on:
+  push:
+    branches:
+      - 'feature/pvpoke-24-condition-batch-20261013'
+  pull_request:
+  workflow_dispatch:
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check Python syntax
+        run: python -m compileall -q pvpoke_24_workflow.py pvpoke_web.py pvpoke_mcp_remote.py pvpoke_bridge_core.py pvpoke_iv_modes.py pvpoke_batch_v2.py
+      - name: Run self-contained unit tests
+        run: python -m unittest discover -s tests -v
