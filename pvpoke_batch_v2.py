@@ -304,8 +304,8 @@ class Page:
                 raise RuntimeError('JavaScriptがundefinedを返しました')
             return val.get('value')
 
-    def wait_ready(self, require_empty=False):
-        for attempt in range(90):
+    def wait_ready(self, require_empty=False, attempts=90):
+        for attempt in range(attempts):
             state = self.eval('''(() => ({
               ready:document.readyState,
               mode:document.querySelector('.mode-select a.selected')?.getAttribute('data'),
@@ -347,7 +347,7 @@ class Page:
             if msg.get('result', {}).get('errorText'):
                 raise RuntimeError(f'Chromium reload failed: {msg["result"]["errorText"]}')
             break
-        self.wait_ready(require_empty=True)
+        self.wait_ready(require_empty=True, attempts=12)
 
     def import_group(self, group_index, rows):
         csvtext = '\n'.join(pvpline(r) for r in rows)
@@ -502,6 +502,7 @@ def run(refresh=False, shield_set='all'):
     total = math.ceil(len(candidates) / CAND_CHUNK) * math.ceil(len(opponents) / OPP_CHUNK)
     n = 0
     page = None
+    reuse_enabled = True
     try:
         for ci, cpart in chunks(candidates, CAND_CHUNK):
             for oi, opart in chunks(opponents, OPP_CHUNK):
@@ -523,10 +524,18 @@ def run(refresh=False, shield_set='all'):
                         page = Page()
                         page.wait_ready(require_empty=True)
                     else:
-                        try:
-                            page.reload()
-                        except Exception as error:
-                            print(f'  Reuse unavailable; reopening tab: {error}', flush=True)
+                        if reuse_enabled:
+                            try:
+                                page.reload()
+                            except Exception as error:
+                                # One failed reset disables reuse for the rest of
+                                # this job, avoiding repeated timeout penalties.
+                                reuse_enabled = False
+                                print(f'  Reuse disabled; reopening tabs: {error}', flush=True)
+                                page.close()
+                                page = Page()
+                                page.wait_ready(require_empty=True)
+                        else:
                             page.close()
                             page = Page()
                             page.wait_ready(require_empty=True)
