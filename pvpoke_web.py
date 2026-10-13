@@ -186,8 +186,9 @@ def prepare_payload(payload):
         source_raw = row.get('source_ivs')
         if source_raw is not None:
             source_values = numeric_ivs(source_raw, f'相手{i}体目の情報源個体値')
-        elif direct_values is not None:
-            # Existing source CSVs and old MCP callers place their source IVs here.
+        elif direct_values is not None and str(row.get('iv_mode') or '').strip().lower() not in iv_modes.AUTO_IV_MODES:
+            # Only manual/legacy fields may represent source IVs. Old client schemas
+            # require dummy ATK/DEF/HP for auto modes; never persist those as source.
             source_values = list(direct_values)
         else:
             source_values = None
