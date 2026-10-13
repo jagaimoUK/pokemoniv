@@ -232,7 +232,10 @@ def summary24(offset: int = 0, limit: int = 20, mode: str | None = None) -> dict
         data = list(csv.DictReader(io.StringIO(text)))
         if mode:
             data = [row for row in data if row.get('opponent_iv_mode') == mode]
+        manifest = json.loads(z.read('manifest.json').decode('utf-8'))
+        cache_stats = manifest.get('matchup_cache', {'enabled': False})
         return {'mode':mode,'total_rows':len(data),'offset':offset,
+                'matchup_cache': cache_stats,
                 'returned':len(data[offset:offset+limit]),
                 'has_more':offset+limit<len(data), 'rows':data[offset:offset+limit]}
 
