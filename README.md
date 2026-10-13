@@ -94,3 +94,14 @@ intermediate files remain available to diagnose or retry the calculation.
 **Deployment note:** Attaching an empty Railway volume causes a redeployment;
 it cannot retroactively rescue ZIPs stored on an earlier deployment's
 ephemeral filesystem. Export any important earlier ZIP first.
+
+
+## Railway volume permissions
+
+Railway mounts volumes as root. The Docker image now starts a minimal
+`volume_bootstrap.sh` as root, creates `<mount>/pvpoke_archives`, and
+changes ownership of **that directory only** to `appuser`.
+It immediately executes the existing `start.sh` as unprivileged
+`appuser` through `gosu`; the web server and Chromium never run as root.
+The mount directory is read from `RAILWAY_VOLUME_MOUNT_PATH` and must be
+an absolute path, not the filesystem root. Production mounts at `/data`.
