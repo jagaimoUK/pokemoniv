@@ -354,7 +354,7 @@ const modeLabel=document.createElement('label');modeLabel.textContent='この相
 const modeSelect=document.createElement('select');modeSelect.className='opp-iv-mode';
 for(const [value,label] of [['inherit','共通設定（自動）'],['source','情報源の個体値（手動）'],['custom','直接指定（手動）'],['default','PvPokeデフォルト'],['rank1','総合1位'],['attack','攻撃最大'],['defense','防御最大']]){
 const opt=document.createElement('option');opt.value=value;opt.textContent=label;modeSelect.append(opt);}
-modeSelect.value=(o.iv_mode==='custom'&&o.manual_override!==true)?'inherit':(o.iv_mode&&o.iv_mode!=='inherit'?o.iv_mode:'inherit');
+modeSelect.value=o.manual_override===true&&o.iv_mode&&o.iv_mode!=='inherit'?o.iv_mode:'inherit';
 const ivGroup=div.querySelectorAll('.three')[1];ivGroup.classList.add('opp-iv-inputs');ivGroup.before(modeLabel,modeSelect);
 modeSelect.addEventListener('change',refreshOpponentIVInputs);
 const rawSource=row.source_ivs||(['atk','def','hp'].every(k=>row[k]!==undefined)?{atk:row.atk,def:row.def,hp:row.hp}:null);
