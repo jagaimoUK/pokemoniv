@@ -14,7 +14,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Check Python syntax
-        run: python -m compileall -q pvpoke_24_workflow.py pvpoke_web.py pvpoke_mcp_remote.py pvpoke_bridge_core.py pvpoke_iv_modes.py pvpoke_batch_v2.py
+        run: python -m compileall -q pvpoke_24_workflow.py pvpoke_web.py pvpoke_mcp_remote.py pvpoke_bridge_core.py pvpoke_iv_modes.py pvpoke_batch_v2.py pvpoke_archive.py
       - name: Run self-contained unit tests
         run: python -m unittest discover -s tests -v
       - name: Prepare 4 opponent modes from current PvPoke GameMaster
@@ -32,4 +32,17 @@ jobs:
           result=json.loads(Path('/tmp/pvpoke24_smoke/manifest.json').read_text())
           assert all(result['mode_counts'].get(mode,0)>0 for mode in ('default','rank1','attack','defense')), result
           print('Real gamemaster preview passed:',result['mode_counts'],'excluded:',result['excluded'])
+          PY
+      - name: Prepare Default-only meta mode from current GameMaster
+        run: |
+          python pvpoke_24_workflow.py --prepare --batch-mode simple --config /tmp/pvpoke24_smoke.json --output /tmp/pvpoke6_smoke
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path('/tmp/pvpoke6_smoke/manifest.json').read_text())
+          assert result['batch_mode'] == 'simple', result
+          assert result['mode_counts']['default'] > 0, result
+          assert list(result['mode_counts']) == ['default'], result
+          assert result['opponent_iv_modes'] == ['default'], result
+          print('Simple Default-only preview passed:', result['mode_counts'])
           PY
