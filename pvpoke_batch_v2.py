@@ -20,6 +20,7 @@ import urllib.request
 import zipfile
 import pvpoke_archive
 import pvpoke_matchup_cache as matchup_cache
+import pvpoke_direct_backend as direct_backend
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -489,7 +490,13 @@ def run(refresh=False, shield_set='all'):
     gm, candidates, opponents = prepare(refresh=refresh)
     pairs = SCENARIOS[shield_set]
     OUT.mkdir(parents=True, exist_ok=True)
-    # Browser connection is lazy: a fully cached job never launches Chromium.
+    # Either engine starts lazily: cached jobs launch neither Node nor Chromium.
+    selected_engine = os.environ.get('PVP_ENGINE', 'direct').strip().lower()
+    if selected_engine not in ('direct', 'node', 'browser'):
+        raise ValueError('PVP_ENGINE must be direct or browser')
+    use_direct = selected_engine in ('direct', 'node')
+    backend_fallbacks = 0
+    print(f'PvPoke Matrix engine selected: {selected_engine}', flush=True)
     # A fresh cache ID whenever game data, inputs, or scenario choices change.
     gamemaster_hash = hashlib.sha256((DATA/'gamemaster.json').read_bytes()).hexdigest()
     pokemonjs_hash = hashlib.sha256((DATA/'Pokemon.js').read_bytes()).hexdigest()
@@ -512,7 +519,8 @@ def run(refresh=False, shield_set='all'):
             ns = matchup_cache.cache_namespace(
                 gamemaster_hash=gamemaster_hash, pokemonjs_hash=pokemonjs_hash,
                 cp_cap=CP_CAP, max_level=MAX_LEVEL,
-                epoch=os.environ.get('PVP_CACHE_EPOCH', ''))
+                epoch=os.environ.get('PVP_CACHE_EPOCH', '') +
+                ('|direct-a23fb293-adapter1' if use_direct else ''))
             cache_dir = pvpoke_archive.archive_dir(DATA.parent)
             cache = matchup_cache.MatchupCache(cache_dir / 'matchups.sqlite3', ns)
             print(f'Matchup cache enabled: {cache.path}', flush=True)
@@ -524,9 +532,30 @@ def run(refresh=False, shield_set='all'):
     page = None
     reuse_enabled = True
     current_selection = None
+    node_client = None
+    direct_calculations = 0
 
     def simulate_rows(crows, orows, pair):
-        nonlocal page, reuse_enabled, current_selection
+        nonlocal page, reuse_enabled, current_selection, node_client
+        nonlocal use_direct, backend_fallbacks, direct_calculations
+        if use_direct:
+            try:
+                if node_client is None:
+                    node_client = direct_backend.DirectMatrixClient(
+                        gamemaster=DATA / 'gamemaster.json', log_dir=DIR)
+                started = time.monotonic()
+                rows = node_client.simulate(crows, orows, pair)
+                direct_calculations += len(crows) * len(orows)
+                print(f'  Direct Node time: {time.monotonic()-started:.2f}s '
+                      f'({len(crows)}x{len(orows)})', flush=True)
+                return rows
+            except (OSError, ValueError, RuntimeError) as error:
+                print(f'  Direct engine rejected batch; using Chromium fallback: {error}', flush=True)
+                backend_fallbacks += 1
+                use_direct = False
+                if node_client is not None:
+                    node_client.close()
+                    node_client = None
         identity = (tuple(tuple(r.get(k) for k in HEADER + ['level', 'cp']) for r in crows),
                     tuple(tuple(r.get(k) for k in HEADER + ['level', 'cp']) for r in orows))
         if page is None:
@@ -619,10 +648,13 @@ def run(refresh=False, shield_set='all'):
     finally:
         if page is not None:
             page.close()
+        if node_client is not None:
+            node_client.close()
         if cache is not None:
             cache.close()
     if cache is not None:
         print(f'Matchup cache summary: {cache.stats}', flush=True)
+    print(f'Engine report: selected={selected_engine}, direct_calculations={direct_calculations}, browser_fallbacks={backend_fallbacks}', flush=True)
     exports = []
     for pair in pairs:
         dest = run_dir / result_filename(pair)
@@ -652,6 +684,9 @@ def run(refresh=False, shield_set='all'):
         'candidate_count': len(candidates), 'opponent_count': len(opponents),
         'shield_pairs': [list(p) for p in pairs], 'fingerprint': fingerprint,
         'matchup_cache': cache.stats if cache is not None else {'enabled': False},
+        'engine': {'selected': selected_engine,
+                   'direct_calculations': direct_calculations,
+                   'browser_fallbacks': backend_fallbacks},
         'description': 'CP <= 1500; maximal legal 0.5 step; score interpretation delegated to ChatGPT.'
     }
     (run_dir/'manifest.json').write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding='utf-8')
