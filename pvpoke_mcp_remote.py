@@ -111,13 +111,17 @@ TOOLS = [
      'inputSchema': PREP},
     {'name': 'start_battle', 'description': 'Start asynchronous PvPoke Matrix simulations. Use get_status to poll.',
      'inputSchema': PREP},
-    {'name': 'prepare_24_conditions', 'description': 'Preview 4 opponent IV modes x 6 shields using the curated project meta move list. Does not start battle.',
-     'inputSchema': {'type': 'object', 'properties': {'candidate': POKEMON, 'ivs': PREP['properties']['ivs']},
+    {'name': 'prepare_24_conditions', 'description': 'Preview curated meta batch. batch_mode=simple: Default IV x 6 shields; detailed (default): 4 IV modes x 6 shields. Does not start battle.',
+     'inputSchema': {'type': 'object', 'properties': {'candidate': POKEMON, 'ivs': PREP['properties']['ivs'],
+                         'batch_mode': {'type':'string','enum':['simple','detailed'],'default':'detailed',
+                                        'description':'simple = only PvPoke Default opponents, 6 shield conditions; detailed = all four opponent IV modes, 24 conditions'}},
                      'required': ['candidate', 'ivs']}},
-    {'name': 'start_24_conditions', 'description': 'Run all 24 shield/IV scenarios with bundled meta move sets. Poll get_status and read get_24_summary afterward.',
-     'inputSchema': {'type': 'object', 'properties': {'candidate': POKEMON, 'ivs': PREP['properties']['ivs']},
+    {'name': 'start_24_conditions', 'description': 'Run curated meta batch, simple 6 scenarios or detailed 24 scenarios. Defaults to detailed. Read get_status and get_24_summary.',
+     'inputSchema': {'type': 'object', 'properties': {'candidate': POKEMON, 'ivs': PREP['properties']['ivs'],
+                         'batch_mode': {'type':'string','enum':['simple','detailed'],'default':'detailed',
+                                        'description':'simple = only PvPoke Default opponents, 6 shield conditions; detailed = all four opponent IV modes, 24 conditions'}},
                      'required': ['candidate', 'ivs']}},
-    {'name': 'get_24_summary', 'description': 'Get candidate IV performance aggregates for a finished 24-condition job.',
+    {'name': 'get_24_summary', 'description': 'Get candidate IV performance aggregates for a finished 6 or 24 condition meta job.',
      'inputSchema': {'type': 'object', 'properties': {
          'offset': {'type':'integer','minimum':0,'default':0},
          'limit': {'type':'integer','minimum':1,'maximum':50,'default':20},
@@ -125,7 +129,7 @@ TOOLS = [
      }}},
     {'name': 'get_status', 'description': 'Read local calculation state, progress and recent logs.',
      'inputSchema': {'type': 'object', 'properties': {}}},
-    {'name': 'get_results', 'description': 'Get per-opponent Battle Ratings from an existing result ZIP.',
+    {'name': 'get_results', 'description': 'Get per-opponent Battle Ratings from a finished result ZIP, 6 or 24 conditions.',
      'inputSchema': {
          'type': 'object',
          'properties': {
@@ -148,9 +152,9 @@ def call_tool(name, args):
         return action(args['candidate'], args['ivs'], args['opponents'],
                       args.get('shields', 'all'), args.get('opponent_iv_mode'))
     if name == 'prepare_24_conditions':
-        return backend.preview24(args['candidate'], args['ivs'])
+        return backend.preview24(args['candidate'], args['ivs'], args.get('batch_mode', 'detailed'))
     if name == 'start_24_conditions':
-        return backend.start24(args['candidate'], args['ivs'])
+        return backend.start24(args['candidate'], args['ivs'], args.get('batch_mode', 'detailed'))
     if name == 'get_24_summary':
         return backend.summary24(args.get('offset',0), args.get('limit',20), args.get('mode'))
     if name == 'get_status':
