@@ -18,6 +18,8 @@ import time
 import urllib.parse
 import urllib.request
 import zipfile
+import pvpoke_archive
+import pvpoke_matchup_cache as matchup_cache
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -486,9 +488,8 @@ def run(refresh=False, shield_set='all'):
     run_started = time.monotonic()
     gm, candidates, opponents = prepare(refresh=refresh)
     pairs = SCENARIOS[shield_set]
-    info = chromium_connect()
     OUT.mkdir(parents=True, exist_ok=True)
-    print('Chromium:', info.get('Browser'))
+    # Browser connection is lazy: a fully cached job never launches Chromium.
     # A fresh cache ID whenever game data, inputs, or scenario choices change.
     gamemaster_hash = hashlib.sha256((DATA/'gamemaster.json').read_bytes()).hexdigest()
     pokemonjs_hash = hashlib.sha256((DATA/'Pokemon.js').read_bytes()).hexdigest()
@@ -497,7 +498,7 @@ def run(refresh=False, shield_set='all'):
         'cp_cap': CP_CAP, 'max_level': MAX_LEVEL,
         'gamemaster_hash': gamemaster_hash, 'pokemonjs_hash': pokemonjs_hash,
         'pairs': pairs, 'candidate_chunk': CAND_CHUNK,
-        'opponent_chunk': OPP_CHUNK, 'version': 4
+        'opponent_chunk': OPP_CHUNK, 'version': 5
     }, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
     parts_dir = OUT / ('parts_' + fingerprint)
     parts_dir.mkdir(parents=True, exist_ok=True)
@@ -505,10 +506,59 @@ def run(refresh=False, shield_set='all'):
     run_dir.mkdir(parents=True, exist_ok=True)
     data = {pair: {'labels': [None] * len(candidates), 'ratings': [[] for _ in candidates],
                    'counts': [[0,0,0] for _ in candidates], 'headers': []} for pair in pairs}
+    cache = None
+    if os.environ.get('PVP_MATCHUP_CACHE', '1').lower() not in ('0', 'false', 'off'):
+        try:
+            ns = matchup_cache.cache_namespace(
+                gamemaster_hash=gamemaster_hash, pokemonjs_hash=pokemonjs_hash,
+                cp_cap=CP_CAP, max_level=MAX_LEVEL,
+                epoch=os.environ.get('PVP_CACHE_EPOCH', ''))
+            cache_dir = pvpoke_archive.archive_dir(DATA.parent)
+            cache = matchup_cache.MatchupCache(cache_dir / 'matchups.sqlite3', ns)
+            print(f'Matchup cache enabled: {cache.path}', flush=True)
+        except (OSError, ValueError, __import__('sqlite3').DatabaseError) as exc:
+            print(f'Matchup cache unavailable; normal calculation: {exc}', flush=True)
+            cache = None
     total = math.ceil(len(candidates) / CAND_CHUNK) * math.ceil(len(opponents) / OPP_CHUNK)
     n = 0
     page = None
     reuse_enabled = True
+    current_selection = None
+
+    def simulate_rows(crows, orows, pair):
+        nonlocal page, reuse_enabled, current_selection
+        identity = (tuple(pvpline(r) for r in crows),
+                    tuple(pvpline(r) for r in orows))
+        if page is None:
+            info = chromium_connect()
+            print('Chromium:', info.get('Browser'), flush=True)
+            page = Page()
+            page.wait_ready(require_empty=True)
+            current_selection = None
+        if current_selection != identity:
+            if current_selection is not None:
+                if reuse_enabled:
+                    try:
+                        page.reset_groups()
+                    except Exception as exc:
+                        reuse_enabled = False
+                        print(f'  Reuse disabled; opening new tabs: {exc}', flush=True)
+                        page.close()
+                        page = Page()
+                        page.wait_ready(require_empty=True)
+                else:
+                    page.close()
+                    page = Page()
+                    page.wait_ready(require_empty=True)
+            page.import_group(0, crows)
+            page.import_group(1, orows)
+            current_selection = identity
+        started = time.monotonic()
+        result = page.simulate(len(crows), len(orows), pair)
+        print(f'  Matrix time: {time.monotonic()-started:.2f}s '
+              f'({len(crows)}x{len(orows)})', flush=True)
+        return result
+
     try:
         for ci, cpart in chunks(candidates, CAND_CHUNK):
             for oi, opart in chunks(opponents, OPP_CHUNK):
@@ -526,32 +576,14 @@ def run(refresh=False, shield_set='all'):
                     else:
                         pending.append(pair)
                 if pending:
-                    if page is None:
-                        page = Page()
-                        page.wait_ready(require_empty=True)
-                    else:
-                        if reuse_enabled:
-                            try:
-                                page.reset_groups()
-                            except Exception as error:
-                                # One failed reset disables reuse for the rest of
-                                # this job, avoiding repeated timeout penalties.
-                                reuse_enabled = False
-                                print(f'  Reuse disabled; reopening tabs: {error}', flush=True)
-                                page.close()
-                                page = Page()
-                                page.wait_ready(require_empty=True)
-                        else:
-                            page.close()
-                            page = Page()
-                            page.wait_ready(require_empty=True)
-                    page.import_group(0, cpart)
-                    page.import_group(1, opart)
                     for pair in pending:
                         print(f'  自分{pair[0]}枚 / 相手{pair[1]}枚 計算中...', flush=True)
-                        matrix_started = time.monotonic()
-                        result = page.simulate(len(cpart), len(opart), pair)
-                        print(f'  Matrix time: {time.monotonic()-matrix_started:.2f}s', flush=True)
+                        if cache is not None:
+                            result = cache.resolve(
+                                cpart, opart, pair, simulate_rows,
+                                cand_chunk=CAND_CHUNK, opp_chunk=OPP_CHUNK)
+                        else:
+                            result = simulate_rows(cpart, opart, pair)
                         rows_by_pair[pair] = result
                         temp = part_paths[pair].with_suffix('.tmp')
                         with temp.open('w', newline='', encoding='utf-8-sig') as f:
@@ -587,6 +619,10 @@ def run(refresh=False, shield_set='all'):
     finally:
         if page is not None:
             page.close()
+        if cache is not None:
+            cache.close()
+    if cache is not None:
+        print(f'Matchup cache summary: {cache.stats}', flush=True)
     exports = []
     for pair in pairs:
         dest = run_dir / result_filename(pair)
@@ -615,6 +651,7 @@ def run(refresh=False, shield_set='all'):
         'gamemaster_sha256': gamemaster_hash, 'pokemonjs_sha256': pokemonjs_hash,
         'candidate_count': len(candidates), 'opponent_count': len(opponents),
         'shield_pairs': [list(p) for p in pairs], 'fingerprint': fingerprint,
+        'matchup_cache': cache.stats if cache is not None else {'enabled': False},
         'description': 'CP <= 1500; maximal legal 0.5 step; score interpretation delegated to ChatGPT.'
     }
     (run_dir/'manifest.json').write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding='utf-8')
