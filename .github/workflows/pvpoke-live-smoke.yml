@@ -1,0 +1,62 @@
+name: PvPoke real Matrix smoke test
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/pvpoke-live-smoke.yml'
+  workflow_dispatch:
+jobs:
+  live-matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Chromium and WebSocket client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y chromium-browser || sudo apt-get install -y chromium
+          python -m pip install websocket-client
+      - name: Run one candidate x four opponent modes x six shields
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          Path('/tmp/pvpoke24_live.json').write_text(json.dumps({
+              'candidate': {'species':'azumarill','fast':'BUBBLE','charged1':'ICE_BEAM','charged2':'PLAY_ROUGH'},
+              'ivs':'0,15,15'
+          }))
+          Path('/tmp/pvpoke24_one_meta.csv').write_text('clodsire,POISON_STING,STONE_EDGE,EARTHQUAKE\n')
+          PY
+          python -u pvpoke_24_workflow.py --run --config /tmp/pvpoke24_live.json --meta /tmp/pvpoke24_one_meta.csv --output /tmp/pvpoke24_live
+      - name: Assert all 24 conditions and IV modes present
+        run: |
+          python - <<'PY'
+          import csv, json, zipfile
+          from pathlib import Path
+          zip_path=Path('/tmp/pvpoke24_live/pvpoke_24_conditions.zip')
+          assert zip_path.is_file(), 'ZIP missing'
+          with zipfile.ZipFile(zip_path) as z:
+              names=set(z.namelist())
+              modes=('default','rank1','attack','defense')
+              cases=('s0','s1','s2','i0y1','i0y2','i1y2')
+              missing=[f'{mode}_{case}.csv' for mode in modes for case in cases if f'{mode}_{case}.csv' not in names]
+              assert not missing, missing
+              rows=list(csv.DictReader(z.read('ranking_summary.csv').decode('utf-8-sig').splitlines()))
+              assert len(rows)==4, rows
+              assert set(row['opponent_iv_mode'] for row in rows)==set(modes)
+              print('PASS: 24 real PvPoke matrices split correctly')
+          PY
+      - name: Upload smoke archive
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pvpoke-24-live-results
+          path: |
+            /tmp/pvpoke24_live/pvpoke_24_conditions.zip
+            /tmp/pvpoke24_live/manifest.json
+            /tmp/pvpoke24_live/excluded_rows.json
+            /tmp/pvpoke24_live/engine_job/chromium.log
+          if-no-files-found: ignore
+          retention-days: 3
