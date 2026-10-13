@@ -301,9 +301,22 @@ function setMoves(sid, sels, desired={}){const p=catalog[sid]||{fastMoves:[],cha
 function setCandidate(row={}){if(row.species)el('species').value=row.species;setMoves(el('species').value,[el('fast'),el('charged1'),el('charged2')],row);el('preset').value=el('species').value;}
 function getPreset(id){return presets.find(p=>p.species===id)||null;}
 function addOpponent(row={}){const sid=row.species||(presets[0]&&presets[0].species)||'clodsire';const base=getPreset(sid)||{species:sid};const o={...base,...row};const div=document.createElement('div');div.className='opponent';div.innerHTML=`<div class="rowtop"><b>対戦相手 <span class="idx"></span></b><button type="button" class="danger remove">削除</button></div><label>ポケモン（PvPoke ID）</label><input class="opp-species" list="species-list" value="${esc(sid)}" autocomplete="off"/><div class="three"><div><label>通常技</label><select class="opp-fast"></select></div><div><label>ゲージ技①</label><select class="opp-c1"></select></div><div><label>ゲージ技②</label><select class="opp-c2"></select></div></div><div class="three"><div><label>攻撃</label><input type="number" min="0" max="15" step="1" class="opp-atk" value="${esc(o.atk??0)}"/></div><div><label>防御</label><input type="number" min="0" max="15" step="1" class="opp-def" value="${esc(o.def??15)}"/></div><div><label>HP</label><input type="number" min="0" max="15" step="1" class="opp-hp" value="${esc(o.hp??15)}"/></div></div>`;
+const modeLabel=document.createElement('label');modeLabel.textContent='この相手の個体値設定';
+const modeSelect=document.createElement('select');modeSelect.className='opp-iv-mode';
+for(const [value,label] of [['inherit','共通設定'],['custom','直接指定'],['default','PvPokeデフォルト'],['rank1','総合1位'],['attack','攻撃最大'],['defense','防御最大']]){
+const opt=document.createElement('option');opt.value=value;opt.textContent=label;modeSelect.append(opt);}
+modeSelect.value=o.iv_mode||(['atk','def','hp'].every(k=>row[k]!==undefined)?'custom':'inherit');
+const ivGroup=div.querySelectorAll('.three')[1];ivGroup.classList.add('opp-iv-inputs');ivGroup.before(modeLabel,modeSelect);
+modeSelect.addEventListener('change',refreshOpponentIVInputs);
 const sels=[div.querySelector('.opp-fast'),div.querySelector('.opp-c1'),div.querySelector('.opp-c2')];setMoves(sid,sels,o);
-div.querySelector('.opp-species').addEventListener('change',e=>{let p=getPreset(e.target.value)||{};setMoves(e.target.value,sels,p);});div.querySelector('.remove').onclick=()=>{div.remove();renumber();};el('opponents').append(div);renumber();}
+div.querySelector('.opp-species').addEventListener('change',e=>{let p=getPreset(e.target.value)||{};setMoves(e.target.value,sels,p);});div.querySelector('.remove').onclick=()=>{div.remove();renumber();};el('opponents').append(div);renumber();refreshOpponentIVInputs();}
 function renumber(){[...el('opponents').children].forEach((d,i)=>d.querySelector('.idx').textContent=String(i+1));}
+function refreshOpponentIVInputs(){
+for(const div of el('opponents').children){
+const mode=div.querySelector('.opp-iv-mode').value;
+const effective=mode==='inherit'?el('opponentIVMode').value:mode;
+div.querySelector('.opp-iv-inputs').hidden=effective!=='custom';
+}}
 function gather(){return {candidate:{species:el('species').value.trim(),fast:el('fast').value,charged1:el('charged1').value,charged2:el('charged2').value},ivs:el('ivs').value,shields:el('shields').value,opponents:[...el('opponents').children].map(div=>({species:div.querySelector('.opp-species').value.trim(),fast:div.querySelector('.opp-fast').value,charged1:div.querySelector('.opp-c1').value,charged2:div.querySelector('.opp-c2').value,atk:div.querySelector('.opp-atk').value,def:div.querySelector('.opp-def').value,hp:div.querySelector('.opp-hp').value}))};}
 async function api(path,data){const args=data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-PvPoke-Token':TOKEN},body:JSON.stringify(data)};const r=await fetch(path,args);const obj=await r.json();if(!r.ok)throw Error(obj.error||'通信エラー');return obj;}
 function status(s,kind=''){const x=el('statusMessage');x.hidden=false;x.textContent=s;x.className='message '+kind;}
