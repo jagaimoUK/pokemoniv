@@ -67,7 +67,8 @@ def catalog() -> dict:
             'presets': out.get('presets', []), 'species_count': len(out.get('species', {}))}
 
 
-def validate_payload(candidate: dict, ivs: str, opponents: list[dict], shields: str) -> dict:
+def validate_payload(candidate: dict, ivs: str, opponents: list[dict], shields: str,
+                     opponent_iv_mode: str | None = None) -> dict:
     if shields not in ('all', 'equal', 'disadvantage'):
         raise BridgeError('shields は all / equal / disadvantage のどれかです')
     if not isinstance(ivs, str) or not ivs.strip():
@@ -77,23 +78,31 @@ def validate_payload(candidate: dict, ivs: str, opponents: list[dict], shields: 
     if not isinstance(candidate, dict):
         raise BridgeError('candidate はポケモン情報の辞書で指定してください')
     # Detailed validation and CP checks are performed by the existing web app.
-    return {'candidate': candidate, 'ivs': ivs, 'opponents': opponents, 'shields': shields}
+    if opponent_iv_mode is not None and opponent_iv_mode not in ('default', 'rank1', 'attack', 'defense'):
+        raise BridgeError('自動設定は default / rank1 / attack / defense の4種類です')
+    payload = {'candidate': candidate, 'ivs': ivs, 'opponents': opponents, 'shields': shields}
+    if opponent_iv_mode is not None:
+        payload['opponent_iv_mode'] = opponent_iv_mode
+    return payload
 
 
-def _post(path: str, candidate: dict, ivs: str, opponents: list[dict], shields: str) -> dict:
-    payload = validate_payload(candidate, ivs, opponents, shields)
+def _post(path: str, candidate: dict, ivs: str, opponents: list[dict], shields: str,
+          opponent_iv_mode: str | None = None) -> dict:
+    payload = validate_payload(candidate, ivs, opponents, shields, opponent_iv_mode)
     result = _request(path, payload, headers={'X-PvPoke-Token': _token()}, timeout=75)
     if not result.get('ok'):
         raise BridgeError(str(result))
     return result
 
 
-def preview(candidate: dict, ivs: str, opponents: list[dict], shields: str = 'all') -> dict:
-    return _post('/api/prepare', candidate, ivs, opponents, shields)
+def preview(candidate: dict, ivs: str, opponents: list[dict], shields: str = 'all',
+            opponent_iv_mode: str | None = None) -> dict:
+    return _post('/api/prepare', candidate, ivs, opponents, shields, opponent_iv_mode)
 
 
-def start(candidate: dict, ivs: str, opponents: list[dict], shields: str = 'all') -> dict:
-    result = _post('/api/run', candidate, ivs, opponents, shields)
+def start(candidate: dict, ivs: str, opponents: list[dict], shields: str = 'all',
+          opponent_iv_mode: str | None = None) -> dict:
+    result = _post('/api/run', candidate, ivs, opponents, shields, opponent_iv_mode)
     return {'started': True, 'preview': result['preview'],
             'next': '少し待ってから get_status を呼び、done なら get_results で結果を取得してください'}
 
