@@ -5,6 +5,39 @@ on:
       - '.github/workflows/pvpoke-live-smoke.yml'
   workflow_dispatch:
 jobs:
+  inspect-matrix-page:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Inspect PvPoke document
+        run: |
+          python -m pip install websocket-client
+          if command -v google-chrome >/dev/null 2>&1; then sudo ln -sf "$(command -v google-chrome)" /usr/local/bin/chromium-browser; fi
+          python -u - <<'PY'
+          import json, time
+          from pathlib import Path
+          import pvpoke_batch_v2 as engine
+          engine.DIR = Path('/tmp/pvpoke_inspect')
+          engine.DIR.mkdir(parents=True,exist_ok=True)
+          engine.chromium_connect()
+          page = engine.Page()
+          try:
+              time.sleep(12)
+              state=page.eval("""(() => ({
+                  url:location.href,title:document.title,ready:document.readyState,
+                  body:(document.body?.innerText||'').slice(0,1700),
+                  groupCount:document.querySelectorAll('.poke-select-container .poke.multi').length,
+                  matrixCount:document.querySelectorAll('.matrix-table').length,
+                  frameCount:document.querySelectorAll('iframe').length
+              }))()""")
+              print('PVPOKE_DOCUMENT:',json.dumps(state,ensure_ascii=False))
+          finally:
+              page.close()
+          PY
   live-matrix:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
