@@ -63,6 +63,12 @@ class MatchupCache:
         self.db.execute("CREATE INDEX IF NOT EXISTS matchup_expiry ON matchup(expires)")
         self.db.commit()
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+
     def close(self):
         if self.db is None:
             return
