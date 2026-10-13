@@ -139,7 +139,11 @@ def status() -> dict:
 
 def _zip() -> zipfile.ZipFile:
     current = status()
-    if current.get('state') != 'done':
+    # A new Railway container starts in idle, but may already have a
+    # verified completed batch ZIP stored on its persistent volume.
+    if current.get('state') != 'done' and not (
+        current.get('state') == 'idle' and current.get('has_previous_archive')
+    ):
         raise BridgeError('計算がまだ完了していません。get_status で状態を確認してください: ' + str(current.get('state')))
     blob = _request('/download', expect_bytes=True, timeout=40)
     try:

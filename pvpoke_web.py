@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 
 import pvpoke_batch_v2 as engine
 import pvpoke_iv_modes as iv_modes
+import pvpoke_archive as archives
 
 HOST = '127.0.0.1'
 PORT = 8765
@@ -55,7 +56,7 @@ TOKEN = secrets.token_urlsafe(32)
 LOCK = threading.RLock()
 STATUS = {
     'state': 'idle', 'message': '入力を準備してね', 'logs': deque(maxlen=120),
-    'exit_code': None, 'started_at': None, 'finished_at': None,
+    'exit_code': None, 'started_at': None, 'finished_at': None, 'batch24': False,
 }
 CATALOG = {'ready': False, 'error': None, 'species': {}, 'presets': [], 'timestamp': None}
 
@@ -309,13 +310,16 @@ def background_run(shields, batch24=False):
                 STATUS['message'] = line[-180:]
         code = p.wait()
         if code == 0 and batch24:
-            batch_zip = BATCH_OUTPUT / 'pvpoke_24_conditions.zip'
-            if not batch_zip.is_file():
-                raise RuntimeError('24条件のZIPが見つかりません')
-            shutil.copy2(batch_zip, LATEST_ZIP)
+            # Verify all 24 files and atomically save the final ZIP first.
+            # Only after durable save succeeds may we remove the temporary
+            # browser CSV chunks and extracted results.
+            archives.preserve_and_cleanup(BATCH_OUTPUT, WORK)
+            BATCH_CONFIG.unlink(missing_ok=True)
+        result_zip = archives.archived_latest(WORK) if batch24 else LATEST_ZIP
         with LOCK:
             STATUS['exit_code'] = code
-            STATUS['state'] = 'done' if code == 0 and LATEST_ZIP.exists() else 'error'
+            STATUS['batch24'] = bool(batch24)
+            STATUS['state'] = 'done' if code == 0 and result_zip is not None and result_zip.is_file() else 'error'
             STATUS['finished_at'] = datetime.now().isoformat(timespec='seconds')
             STATUS['message'] = 'ZIPが完成しました' if STATUS['state']=='done' else '計算が中断されました。ログを確認してね'
     except Exception as exc:
@@ -469,14 +473,22 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/status':
             with LOCK:
                 details = {k: (list(v) if isinstance(v, deque) else v) for k, v in STATUS.items()}
-            details['has_previous_archive'] = LATEST_ZIP.is_file()
+            details['has_previous_archive'] = bool(archives.archived_latest(WORK)) or LATEST_ZIP.is_file()
             self.respond(200, details)
         elif path == '/download':
             with LOCK:
-                done = STATUS['state']=='done'
-            if not done or not LATEST_ZIP.exists():
-                return self.respond(404, {'error':'この起動で作ったZIPはまだありません'})
-            data = LATEST_ZIP.read_bytes()
+                state, batch24 = STATUS['state'], STATUS['batch24']
+            # On a fresh server process, only verified archived ZIPs are
+            # eligible: old in-memory state is intentionally not restored.
+            if state == 'done':
+                zip_path = archives.archived_latest(WORK) if batch24 else LATEST_ZIP
+            elif state == 'idle':
+                zip_path = archives.archived_latest(WORK)
+            else:
+                zip_path = None
+            if zip_path is None or not zip_path.is_file():
+                return self.respond(404, {'error':'利用可能な完成ZIPがありません'})
+            data = zip_path.read_bytes()
             # Download as attachment; the web UI never exposes arbitrary filesystem paths.
             self.send_response(200)
             self.send_header('Content-Type', 'application/zip')
@@ -528,7 +540,7 @@ class Handler(BaseHTTPRequestHandler):
                         STATUS.update({'state':'running', 'message':'全24条件を準備中',
                                        'logs':deque(maxlen=120), 'exit_code':None,
                                        'started_at':datetime.now().isoformat(timespec='seconds'),
-                                       'finished_at':None})
+                                       'finished_at':None, 'batch24':True})
                         threading.Thread(target=background_run, args=('all', True),
                                          daemon=True).start()
                     return self.respond(200, {'ok':True,'preview':preview})
@@ -541,7 +553,7 @@ class Handler(BaseHTTPRequestHandler):
                     STATUS.update({'state':'running', 'message':'計算を準備中',
                                    'logs':deque(maxlen=120), 'exit_code':None,
                                    'started_at':datetime.now().isoformat(timespec='seconds'),
-                                   'finished_at':None})
+                                   'finished_at':None, 'batch24':False})
                     threading.Thread(target=background_run, args=(cleaned['shields'],),
                                      daemon=True).start()
             self.respond(200, {'ok':True,'preview':preview})
