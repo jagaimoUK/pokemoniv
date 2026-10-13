@@ -107,8 +107,8 @@ def get_rows(path):
         raise ValueError(f'ファイルがありません: {path}。先に --setup を実行してください')
     with path.open(encoding='utf-8-sig', newline='') as f:
         reader = csv.DictReader(f)
-        if reader.fieldnames != HEADER:
-            raise ValueError(f'{path.name}: 列名が不正です。必要な列: {HEADER}')
+        if reader.fieldnames not in (HEADER, HEADER + ['level_override']):
+            raise ValueError(f'{path.name}: 列名が不正です。必要な列: {HEADER} (任意でlevel_override)')
         rows = []
         for i, row in enumerate(reader, 2):
             if not any((v or '').strip() for v in row.values()):
@@ -124,6 +124,15 @@ def get_rows(path):
             for k in ('fast', 'charged1', 'charged2'):
                 vals[k] = vals[k].upper()
             vals.update(dict(zip(('atk', 'def', 'hp'), iv)))
+            raw_level = (row.get('level_override') or '').strip()
+            if raw_level:
+                try:
+                    override = float(raw_level)
+                except ValueError as e:
+                    raise ValueError(f'{path.name} {i}行目: レベルは数値です') from e
+                if not math.isfinite(override) or override < 1 or override > MAX_LEVEL or override * 2 != int(override * 2):
+                    raise ValueError(f'{path.name} {i}行目: 指定レベルは1〜{MAX_LEVEL}の0.5刻みです')
+                vals['level_override'] = override
             rows.append(vals)
     if not rows:
         raise ValueError(f'{path.name}: データ行がありません')
