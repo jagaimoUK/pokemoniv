@@ -62,11 +62,11 @@ class DirectMemoryTelemetryTests(unittest.TestCase):
     def test_dead_process_returns_none(self):
         self.assertIsNone(linux_process_rss_mb(999999999))
 
-    def test_chunk_size_supports_fifty_but_not_more(self):
+    def test_chunk_size_supports_hundred_but_not_more(self):
         import pvpoke_batch_v2
         from unittest.mock import patch
-        with patch.dict(os.environ, {'PVP_CAND_CHUNK':'50'}):
-            self.assertEqual(pvpoke_batch_v2.chunk_size('PVP_CAND_CHUNK', 8), 50)
-        with patch.dict(os.environ, {'PVP_CAND_CHUNK':'51'}):
+        with patch.dict(os.environ, {'PVP_CAND_CHUNK':'100'}):
+            self.assertEqual(pvpoke_batch_v2.chunk_size('PVP_CAND_CHUNK', 8), 100)
+        with patch.dict(os.environ, {'PVP_CAND_CHUNK':'101'}):
             with self.assertRaises(ValueError):
                 pvpoke_batch_v2.chunk_size('PVP_CAND_CHUNK', 8)
