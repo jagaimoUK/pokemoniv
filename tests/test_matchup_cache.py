@@ -10,12 +10,12 @@ from pvpoke_matchup_cache import MatchupCache, cache_namespace
 
 def candidate(iv, *, move="AQUA_TAIL"):
     return dict(species="quagsire", fast="MUD_SHOT", charged1=move,
-                charged2="STONE_EDGE", atk=iv, def=11, hp=8, level=29.5, cp=1496)
+                charged2="STONE_EDGE", atk=iv, hp=8, level=29.5, cp=1496, **{'def': 11})
 
 
 def opponent(iv):
     return dict(species="clodsire", fast="POISON_STING", charged1="STONE_EDGE",
-                charged2="EARTHQUAKE", atk=iv, def=15, hp=15, level=27, cp=1499)
+                charged2="EARTHQUAKE", atk=iv, hp=15, level=27, cp=1499, **{'def': 15})
 
 
 def pvpmatrix(cands, opps, shield):
