@@ -292,7 +292,7 @@ def worker(shields):
     print('DONE:', LATEST_ZIP, flush=True)
 
 
-def background_run(shields, batch24=False, batch_mode='detailed'):
+def background_run(shields, batch24=False, batch_mode='simple'):
     if batch24:
         command = [sys.executable, '-u', str(Path(__file__).resolve().parent / 'pvpoke_24_workflow.py'),
                    '--run', '--config', str(BATCH_CONFIG), '--output', str(BATCH_OUTPUT),
@@ -353,10 +353,10 @@ label{display:block;font-size:13px;color:#d0ddec;font-weight:650;margin:10px 0 5
 <section class="card"><div class="head"><div class="num">3</div><h2>対戦相手</h2></div><p class="tiny">自動切り替えは4種類。情報源の個体値は各相手の「手動」設定でのみ使用するよ。最大80体。</p><label for="opponentIVMode">対戦相手の共通個体値設定</label><select id="opponentIVMode"><option value="default">PvPokeデフォルト</option><option value="rank1">総合1位（Stat Product）</option><option value="attack">攻撃最大</option><option value="defense">防御最大</option></select><div id="opponents"></div>
 <div class="two"><select id="add-preset" aria-label="追加する対戦相手"><option value="">相手を選ぶ</option></select><button type="button" id="addOpp">＋ 対戦相手を追加</button></div></section>
 <section class="card"><div class="head"><div class="num">4</div><h2>計算する</h2></div>
-<label for="batchMode">メタポケモンとの比較モード</label><select id="batchMode"><option value="detailed">詳細：相手IV4種類 × 6シールド（24条件）</option><option value="simple">簡易：相手IV Defaultのみ × 6シールド（6条件）</option></select>
-<p class="tiny" id="batchModeHint">詳細：Default・Rank 1・Attack・Defenseの4種類を比較</p>
+<label for="batchMode">メタポケモンとの比較モード</label><select id="batchMode"><option value="simple">簡易：相手IV Defaultのみ × 6シールド（6条件）</option><option value="detailed">詳細：相手IV4種類 × 6シールド（24条件）</option></select>
+<p class="tiny" id="batchModeHint">簡易：Default個体値×6シールド。詳細の約1/4の計算量</p>
 <label for="shields">シールド条件</label><select id="shields"><option value="all">全6条件（同数3＋不利3）</option><option value="equal">同数3条件だけ（0-0 / 1-1 / 2-2）</option><option value="disadvantage">不利3条件だけ（0-1 / 0-2 / 1-2）</option></select>
-<div class="actions"><button id="preview" class="outline">① CP・対戦数を確認</button><button id="run" class="primary">② 通常6条件を実行</button><button id="run24" class="primary">③ 詳細24条件を実行</button></div><p class="tiny">③は同梱のメタ技構成87行を使います。簡易はDefaultのみ、詳細はDefault/Rank 1/Attack/Defense。どちらも6シールド条件で、情報源IVは自動使用しません。</p>
+<div class="actions"><button id="preview" class="outline">① CP・対戦数を確認</button><button id="run" class="primary">② 通常6条件を実行</button><button id="run24" class="primary">③ 簡易6条件を実行</button></div><p class="tiny">③は同梱のメタ技構成87行を使います。簡易はDefaultのみ、詳細はDefault/Rank 1/Attack/Defense。どちらも6シールド条件で、情報源IVは自動使用しません。</p>
 <div id="previewPanel" hidden><div id="previewStats" class="stat"></div><details><summary>CP調整後のレベルを見る</summary><pre id="previewDetail"></pre></details></div><div id="statusMessage" class="message" hidden></div><pre id="logs" hidden></pre>
 <div class="actions"><a id="download" class="download" href="/download" hidden>完成したZIPを保存</a></div></section>
 <footer>この画面は端末の 127.0.0.1 だけで公開されるよ。PvPokeの計算結果をCSV化するツールで、勝敗や個体値の最終評価はChatGPTで確認してね。CP上限1500、Lv上限50。</footer></main>
@@ -434,7 +434,7 @@ el('batchMode').addEventListener('change',refreshBatchMode);
 refreshBatchMode();
 el('preview').onclick=async()=>{if(busy)return;disableButtons(true);status('CPとレベルを計算しているよ…');try{const r=await api('/api/prepare',gather());showPreview(r.preview);status('CP1500以下のレベル調整を確認できたよ','good');}catch(e){status(e.message,'error');}finally{disableButtons(busy);}};
 el('run').onclick=async()=>{if(busy)return;disableButtons(true);status('計算を開始するよ…');el('download').hidden=true;try{const r=await api('/api/run',gather());showPreview(r.preview);status('計算開始。完了までこの画面は閉じずに待ってね。','good');}catch(e){status(e.message,'error');disableButtons(false);}};
-el('run24').onclick=async()=>{if(busy)return;disableButtons(true);status('全24条件を準備中…');el('download').hidden=true;try{const r=await api('/api/run24',{...gather(),batch_mode:el('batchMode').value});showPreview(r.preview);status((r.preview.batch_mode==='simple'?'簡易6条件':'詳細24条件')+'を計算中。完了後にZIPを取得できるよ。','good');}catch(e){status(e.message,'error');disableButtons(false);}};
+el('run24').onclick=async()=>{if(busy)return;disableButtons(true);status('メタ比較の計算を準備中…');el('download').hidden=true;try{const r=await api('/api/run24',{...gather(),batch_mode:el('batchMode').value});showPreview(r.preview);status((r.preview.batch_mode==='simple'?'簡易6条件':'詳細24条件')+'を計算中。完了後にZIPを取得できるよ。','good');}catch(e){status(e.message,'error');disableButtons(false);}};
 async function poll(){try{const s=await api('/api/status');busy=s.state==='running';disableButtons(busy);el('logs').hidden=!s.logs.length;el('logs').textContent=s.logs.join('\n');if(s.state==='running'){status('計算中: '+s.message);el('download').hidden=true;}else if(s.state==='done'){status('完了！ ZIPを保存してChatGPTへ送ってね。','good');el('download').hidden=false;}else if(s.state==='error'){status('エラー: '+s.message,'error');el('download').hidden=true;} }catch(e){status('状態確認に失敗: '+e.message,'error');}setTimeout(poll,1800);}
 ready();poll();
 </script></body></html>'''
@@ -537,7 +537,7 @@ class Handler(BaseHTTPRequestHandler):
                     meta_file = Path(__file__).resolve().parent / 'pvpoke_meta_opponents.csv'
                     with meta_file.open(encoding='utf-8-sig', newline='') as fp:
                         meta_count = sum(bool(row) for row in csv.reader(fp))
-                    batch_mode = str(payload.get('batch_mode') or 'detailed').strip().lower()
+                    batch_mode = str(payload.get('batch_mode') or 'simple').strip().lower()
                     if batch_mode not in ('simple','detailed'):
                         raise ValueError('メタ計算モードはsimpleまたはdetailedです')
                     mode_count = 1 if batch_mode == 'simple' else 4
@@ -553,7 +553,7 @@ class Handler(BaseHTTPRequestHandler):
                             'batch_mode': batch_mode,
                         }, ensure_ascii=False), encoding='utf-8')
                         temp.replace(BATCH_CONFIG)
-                        STATUS.update({'state':'running', 'message':'全24条件を準備中',
+                        STATUS.update({'state':'running', 'message':'メタ比較を準備中',
                                        'logs':deque(maxlen=120), 'exit_code':None,
                                        'started_at':datetime.now().isoformat(timespec='seconds'),
                                        'finished_at':None, 'batch24':True})

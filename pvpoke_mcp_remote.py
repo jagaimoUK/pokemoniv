@@ -111,14 +111,14 @@ TOOLS = [
      'inputSchema': PREP},
     {'name': 'start_battle', 'description': 'Start asynchronous PvPoke Matrix simulations. Use get_status to poll.',
      'inputSchema': PREP},
-    {'name': 'prepare_24_conditions', 'description': 'Preview curated meta batch. batch_mode=simple: Default IV x 6 shields; detailed (default): 4 IV modes x 6 shields. Does not start battle.',
+    {'name': 'prepare_24_conditions', 'description': 'Preview curated meta batch. batch_mode=simple: Default IV x 6 shields; detailed: 4 IV modes x 6 shields. Does not start battle.',
      'inputSchema': {'type': 'object', 'properties': {'candidate': POKEMON, 'ivs': PREP['properties']['ivs'],
-                         'batch_mode': {'type':'string','enum':['simple','detailed'],'default':'detailed',
+                         'batch_mode': {'type':'string','enum':['simple','detailed'],'default':'simple',
                                         'description':'simple = only PvPoke Default opponents, 6 shield conditions; detailed = all four opponent IV modes, 24 conditions'}},
                      'required': ['candidate', 'ivs']}},
-    {'name': 'start_24_conditions', 'description': 'Run curated meta batch, simple 6 scenarios or detailed 24 scenarios. Defaults to detailed. Read get_status and get_24_summary.',
+    {'name': 'start_24_conditions', 'description': 'Run curated meta batch, simple 6 scenarios or detailed 24 scenarios. Defaults to simple. Read get_status and get_24_summary.',
      'inputSchema': {'type': 'object', 'properties': {'candidate': POKEMON, 'ivs': PREP['properties']['ivs'],
-                         'batch_mode': {'type':'string','enum':['simple','detailed'],'default':'detailed',
+                         'batch_mode': {'type':'string','enum':['simple','detailed'],'default':'simple',
                                         'description':'simple = only PvPoke Default opponents, 6 shield conditions; detailed = all four opponent IV modes, 24 conditions'}},
                      'required': ['candidate', 'ivs']}},
     {'name': 'get_24_summary', 'description': 'Get candidate IV performance aggregates for a finished 6 or 24 condition meta job.',
@@ -152,9 +152,9 @@ def call_tool(name, args):
         return action(args['candidate'], args['ivs'], args['opponents'],
                       args.get('shields', 'all'), args.get('opponent_iv_mode'))
     if name == 'prepare_24_conditions':
-        return backend.preview24(args['candidate'], args['ivs'], args.get('batch_mode', 'detailed'))
+        return backend.preview24(args['candidate'], args['ivs'], args.get('batch_mode', 'simple'))
     if name == 'start_24_conditions':
-        return backend.start24(args['candidate'], args['ivs'], args.get('batch_mode', 'detailed'))
+        return backend.start24(args['candidate'], args['ivs'], args.get('batch_mode', 'simple'))
     if name == 'get_24_summary':
         return backend.summary24(args.get('offset',0), args.get('limit',20), args.get('mode'))
     if name == 'get_status':

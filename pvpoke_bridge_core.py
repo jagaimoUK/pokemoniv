@@ -107,7 +107,7 @@ def start(candidate: dict, ivs: str, opponents: list[dict], shields: str = 'all'
             'next': '少し待ってから get_status を呼び、done なら get_results で結果を取得してください'}
 
 
-def validate_24(candidate: dict, ivs: str, batch_mode: str = 'detailed') -> dict:
+def validate_24(candidate: dict, ivs: str, batch_mode: str = 'simple') -> dict:
     if not isinstance(candidate, dict) or any(not candidate.get(k) for k in ('species','fast','charged1','charged2')):
         raise BridgeError('candidateのspecies・技3つを指定してください')
     if not isinstance(ivs, str) or not ivs.strip():
@@ -117,12 +117,12 @@ def validate_24(candidate: dict, ivs: str, batch_mode: str = 'detailed') -> dict
     return {'candidate': candidate, 'ivs': ivs, 'batch_mode': batch_mode}
 
 
-def preview24(candidate: dict, ivs: str, batch_mode: str = 'detailed') -> dict:
+def preview24(candidate: dict, ivs: str, batch_mode: str = 'simple') -> dict:
     return _request('/api/prepare24', validate_24(candidate, ivs, batch_mode),
                     headers={'X-PvPoke-Token': _token()}, timeout=75)
 
 
-def start24(candidate: dict, ivs: str, batch_mode: str = 'detailed') -> dict:
+def start24(candidate: dict, ivs: str, batch_mode: str = 'simple') -> dict:
     result = _request('/api/run24', validate_24(candidate, ivs, batch_mode),
                       headers={'X-PvPoke-Token': _token()}, timeout=75)
     if not result.get('ok'):
