@@ -328,26 +328,32 @@ class Page:
             time.sleep(1)
         raise RuntimeError(f'PvPoke Matrixが読み込めません: {state}')
 
-    def reload(self):
-        """Reuse the same Chromium tab, but obtain a clean PvPoke Matrix DOM.
+    def reset_groups(self):
+        """Reuse the Matrix tab by clearing both groups through PvPoke's own UI.
 
-        A real reload is safer than poking undocumented group-clearing controls.
-        Waiting for *empty* groups prevents old rows being mistaken for new ones.
+        PvPoke's PokeMultiSelect quick-fill 'new' change handler resets the
+        internal pokemonList and redraws the group. Avoid a page reload,
+        which can retain the old groups within the same tab.
         """
-        self.n += 1
-        rid = self.n
-        self.ws.send(json.dumps({'id': rid, 'method': 'Page.reload',
-                                 'params': {'ignoreCache': False}}))
-        while True:
-            msg = json.loads(self.ws.recv())
-            if msg.get('id') != rid:
-                continue
-            if 'error' in msg:
-                raise RuntimeError(f'Chromium Page.reload failed: {msg["error"]}')
-            if msg.get('result', {}).get('errorText'):
-                raise RuntimeError(f'Chromium reload failed: {msg["result"]["errorText"]}')
-            break
-        self.wait_ready(require_empty=True, attempts=12)
+        result = self.eval(r'''(() => {
+          if(typeof closeModalWindow==='function') {try{closeModalWindow()}catch(e){}}
+          document.querySelectorAll('.modal').forEach(m=>m.remove());
+          const groups=[...document.querySelectorAll('.poke-select-container .poke.multi')];
+          if(groups.length!==2)return {error:'Matrix groups missing',count:groups.length};
+          for(const g of groups){
+            const select=g.querySelector('.quick-fill-select');
+            if(!select || ![...select.options].some(o=>o.value==='new'))
+              return {error:'New Custom Group option missing'};
+            select.value='new';
+            select.dispatchEvent(new Event('change',{bubbles:true}));
+          }
+          const empty=groups.every(g=>
+            Number(g.querySelector('.poke-count')?.textContent)===0 &&
+            g.querySelectorAll('.rankings-container .rank').length===0);
+          return {count:groups.length,empty};
+        })()''')
+        if not isinstance(result, dict) or result.get('count') != 2 or not result.get('empty'):
+            raise RuntimeError(f'Unable to clear matrix groups: {result}')
 
     def import_group(self, group_index, rows):
         csvtext = '\n'.join(pvpline(r) for r in rows)
@@ -526,7 +532,7 @@ def run(refresh=False, shield_set='all'):
                     else:
                         if reuse_enabled:
                             try:
-                                page.reload()
+                                page.reset_groups()
                             except Exception as error:
                                 # One failed reset disables reuse for the rest of
                                 # this job, avoiding repeated timeout penalties.
