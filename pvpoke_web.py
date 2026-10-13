@@ -317,7 +317,25 @@ const mode=div.querySelector('.opp-iv-mode').value;
 const effective=mode==='inherit'?el('opponentIVMode').value:mode;
 div.querySelector('.opp-iv-inputs').hidden=effective!=='custom';
 }}
-function gather(){return {candidate:{species:el('species').value.trim(),fast:el('fast').value,charged1:el('charged1').value,charged2:el('charged2').value},ivs:el('ivs').value,shields:el('shields').value,opponents:[...el('opponents').children].map(div=>({species:div.querySelector('.opp-species').value.trim(),fast:div.querySelector('.opp-fast').value,charged1:div.querySelector('.opp-c1').value,charged2:div.querySelector('.opp-c2').value,atk:div.querySelector('.opp-atk').value,def:div.querySelector('.opp-def').value,hp:div.querySelector('.opp-hp').value}))};}
+function gather(){
+const opponent_iv_mode=el('opponentIVMode').value;
+const opponents=[...el('opponents').children].map(div=>{
+const mode=div.querySelector('.opp-iv-mode').value;
+const effective=mode==='inherit'?opponent_iv_mode:mode;
+const o={species:div.querySelector('.opp-species').value.trim(),
+fast:div.querySelector('.opp-fast').value,charged1:div.querySelector('.opp-c1').value,charged2:div.querySelector('.opp-c2').value};
+if(mode!=='inherit')o.iv_mode=mode;
+if(effective==='custom'){
+o.atk=div.querySelector('.opp-atk').value;
+o.def=div.querySelector('.opp-def').value;
+o.hp=div.querySelector('.opp-hp').value;
+}
+return o;
+});
+return {candidate:{species:el('species').value.trim(),fast:el('fast').value,
+charged1:el('charged1').value,charged2:el('charged2').value},
+ivs:el('ivs').value,shields:el('shields').value,opponent_iv_mode,opponents};
+}
 async function api(path,data){const args=data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-PvPoke-Token':TOKEN},body:JSON.stringify(data)};const r=await fetch(path,args);const obj=await r.json();if(!r.ok)throw Error(obj.error||'通信エラー');return obj;}
 function status(s,kind=''){const x=el('statusMessage');x.hidden=false;x.textContent=s;x.className='message '+kind;}
 async function ready(){try{const data=await api('/api/catalog');if(!data.ready){notice(data.error?'データ取得エラー: '+data.error:'ゲームデータを読み込んでいるよ。数秒待ってね。',data.error?'error':'');setTimeout(ready,data.error?8000:1500);return;}catalog=data.species;presets=data.presets;
