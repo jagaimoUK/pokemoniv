@@ -42,3 +42,13 @@ jobs:
       - name: Compare against production Matrix ratings
         working-directory: application
         run: python tests/phase3_check_probe.py /tmp/phase3_output.jsonl
+      - name: Prepare full 3x87x6 Matrix parity test
+        working-directory: application
+        run: python tests/phase3_make_full_probe.py ../upstream /tmp/phase3_full_input.jsonl
+      - name: Calculate all 1,566 battles directly
+        env:
+          PVP_PVPOKE_SOURCE: ${{ github.workspace }}/upstream
+        run: time node application/pvpoke_node_matrix.js < /tmp/phase3_full_input.jsonl > /tmp/phase3_full_output.jsonl
+      - name: Require exact parity for all candidate ratings and opponent labels
+        working-directory: application
+        run: python tests/phase3_check_full_probe.py /tmp/phase3_full_output.jsonl
