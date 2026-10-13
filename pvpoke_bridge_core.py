@@ -236,6 +236,7 @@ def summary24(offset: int = 0, limit: int = 20, mode: str | None = None) -> dict
         cache_stats = manifest.get('matchup_cache', {'enabled': False})
         return {'mode':mode,'total_rows':len(data),'offset':offset,
                 'matchup_cache': cache_stats,
+                'engine': manifest.get('engine', {'selected':'legacy'}),
                 'returned':len(data[offset:offset+limit]),
                 'has_more':offset+limit<len(data), 'rows':data[offset:offset+limit]}
 

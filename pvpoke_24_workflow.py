@@ -188,6 +188,10 @@ def record_cache_stats(engine_manifest_path: Path, batch_manifest_path: Path):
     if not isinstance(cache_stats, dict):
         raise ValueError('Engine cache stats are not an object')
     batch_manifest['matchup_cache'] = cache_stats
+    engine_stats = engine_manifest.get('engine', {'selected': 'legacy'})
+    if not isinstance(engine_stats, dict):
+        raise ValueError('Engine metadata is not an object')
+    batch_manifest['engine'] = engine_stats
     temp = batch_manifest_path.with_suffix('.tmp')
     try:
         temp.write_text(json.dumps(batch_manifest, ensure_ascii=False, indent=2), encoding='utf-8')
