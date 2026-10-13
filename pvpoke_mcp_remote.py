@@ -80,8 +80,10 @@ OPPONENT = {
         'atk': {'type': 'integer', 'minimum': 0, 'maximum': 15},
         'def': {'type': 'integer', 'minimum': 0, 'maximum': 15},
         'hp': {'type': 'integer', 'minimum': 0, 'maximum': 15},
+        'iv_mode': {'type': 'string', 'enum': ['custom', 'default', 'rank1', 'attack', 'defense'],
+                    'description': 'When set, selects custom IVs or PvPoke GameMaster/ranked opponent IVs.'},
     },
-    'required': [*POKEMON['required'], 'atk', 'def', 'hp'],
+    'required': POKEMON['required'],
 }
 PREP = {
     'type': 'object',
@@ -90,6 +92,9 @@ PREP = {
         'ivs': {'type': 'string', 'description': 'One ATK,DEF,HP triplet per line, e.g. 0,15,15\\n1,15,14'},
         'opponents': {'type': 'array', 'items': OPPONENT, 'minItems': 1},
         'shields': {'type': 'string', 'enum': ['all', 'equal', 'disadvantage'], 'default': 'all'},
+        'opponent_iv_mode': {'type': 'string', 'enum': ['custom', 'default', 'rank1', 'attack', 'defense'],
+                             'default': 'custom',
+                             'description': 'Global opponent IV selection for rows without explicit IVs; existing IVs remain custom.'},
     },
     'required': ['candidate', 'ivs', 'opponents'],
 }
@@ -118,10 +123,16 @@ def call_tool(name, args):
         raise ValueError('arguments must be an object')
     if name == 'get_catalog':
         return backend.catalog()
-    if name == 'prepare_battle':
-        return backend.preview(args['candidate'], args['ivs'], args['opponents'], args.get('shields', 'all'))
-    if name == 'start_battle':
-        return backend.start(args['candidate'], args['ivs'], args['opponents'], args.get('shields', 'all'))
+    if name in ('prepare_battle', 'start_battle'):
+        global_mode = args.get('opponent_iv_mode', 'custom')
+        opponents = []
+        for row in args['opponents']:
+            opponent = dict(row)
+            if 'iv_mode' not in opponent and not any(k in opponent for k in ('atk', 'def', 'hp')):
+                opponent['iv_mode'] = global_mode
+            opponents.append(opponent)
+        action = backend.preview if name == 'prepare_battle' else backend.start
+        return action(args['candidate'], args['ivs'], opponents, args.get('shields', 'all'))
     if name == 'get_status':
         return backend.status()
     if name == 'get_results':
