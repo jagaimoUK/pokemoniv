@@ -105,3 +105,29 @@ It immediately executes the existing `start.sh` as unprivileged
 `appuser` through `gosu`; the web server and Chromium never run as root.
 The mount directory is read from `RAILWAY_VOLUME_MOUNT_PATH` and must be
 an absolute path, not the filesystem root. Production mounts at `/data`.
+
+## One-switch meta batch modes
+
+Use the **メタポケモンとの比較モード** dropdown in the web screen:
+- **簡易 (simple)**: PvPoke Default opponent IV only × all six shield cases, 6 rating CSVs.
+- **詳細 (detailed)**: Default / Rank 1 / Attack / Defense × all six cases, 24 CSVs.
+
+Both use the same curated meta move list, CP1500 / level 50, ZIP archive retention,
+and result tools. The selection changes **opponent IV modes**, not the user's
+candidate IVs; no source or custom IV mode is automatically inferred.
+Omitting `batch_mode` continues to run detailed as before.
+
+For ChatGPT MCP clients, use existing tools without switching plugin:
+```text
+prepare_24_conditions({candidate, ivs, batch_mode: "simple"})
+start_24_conditions({candidate, ivs, batch_mode: "simple"})
+get_status({})
+get_24_summary({mode:"default"})
+get_results({mode:"default",shield:"s1"})
+```
+Use `batch_mode:"detailed"` (or omit) for all 24.
+The existing tool names are retained for backward compatibility.
+Simple results contain only `default_*.csv` and summary rows for `default`.
+The ZIP manifest identifies which mode was used and the archive validator
+requires the appropriate six or 24 files. Each run preserves one verified
+historical ZIP plus the latest pointer on the volume.
