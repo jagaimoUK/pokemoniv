@@ -20,6 +20,25 @@ class DirectMatrixError(RuntimeError):
     pass
 
 
+def linux_process_rss_mb(pid: int) -> dict | None:
+    """Read Node RSS and the process-lifetime Linux VmHWM peak, in MiB.
+
+    Railway's coarse service sampling can miss short Matrix calculations.
+    Reading /proc after each calculation captures their real high water mark.
+    """
+    try:
+        values = {}
+        for line in Path(f'/proc/{pid}/status').read_text().splitlines():
+            if line.startswith(('VmRSS:', 'VmHWM:')):
+                name, raw = line.split(':', 1)
+                values[name] = round(int(raw.strip().split()[0]) / 1024, 2)
+        if 'VmRSS' in values and 'VmHWM' in values:
+            return {'rss_mb': values['VmRSS'], 'peak_rss_mb': values['VmHWM']}
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
 def matrix_from_response(payload: dict, candidates: list, opponents: list) -> list[list]:
     if not isinstance(payload, dict) or payload.get("ok") is not True:
         raise DirectMatrixError("PvPoke Node result failed: " +
@@ -75,6 +94,7 @@ class DirectMatrixClient:
             raise DirectMatrixError("Node.js binary is not installed")
         self._log_file = None
         self.proc = None
+        self.memory_samples = []
         log_dir = Path(log_dir)
         log_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -100,6 +120,7 @@ class DirectMatrixClient:
             "shields": list(shields),
         }
         try:
+            before = linux_process_rss_mb(self.proc.pid)
             self.proc.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
             self.proc.stdin.flush()
             ready, _, _ = select.select([self.proc.stdout], [], [], self.timeout_seconds)
@@ -108,7 +129,16 @@ class DirectMatrixClient:
             line = self.proc.stdout.readline()
             if not line:
                 raise DirectMatrixError("PvPoke Node exited without a Matrix response")
-            return matrix_from_response(json.loads(line), candidates, opponents)
+            matrix = matrix_from_response(json.loads(line), candidates, opponents)
+            after = linux_process_rss_mb(self.proc.pid)
+            if before is not None and after is not None:
+                self.memory_samples.append({
+                    'candidates': len(candidates), 'opponents': len(opponents),
+                    'rss_before_mb': before['rss_mb'],
+                    'rss_after_mb': after['rss_mb'],
+                    'peak_rss_mb': after['peak_rss_mb'],
+                })
+            return matrix
         except (ValueError, OSError, BrokenPipeError) as exc:
             raise DirectMatrixError(f"PvPoke Node protocol failed: {exc}") from exc
 

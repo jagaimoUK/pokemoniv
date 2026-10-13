@@ -1,7 +1,8 @@
 """Safety tests for the experimental Node PvPoke IPC adapter."""
+import os
 import unittest
 
-from pvpoke_direct_backend import DirectMatrixError, matrix_from_response
+from pvpoke_direct_backend import DirectMatrixError, matrix_from_response, linux_process_rss_mb
 
 
 class DirectMatrixTests(unittest.TestCase):
@@ -49,3 +50,23 @@ class DirectMatrixTests(unittest.TestCase):
 
 if __name__=="__main__":
     unittest.main()
+
+class DirectMemoryTelemetryTests(unittest.TestCase):
+    def test_proc_rss_peak_is_not_below_current_rss(self):
+        result = linux_process_rss_mb(os.getpid())
+        if result is None:
+            self.skipTest('Linux /proc not present')
+        self.assertGreater(result['rss_mb'], 0)
+        self.assertGreaterEqual(result['peak_rss_mb'], result['rss_mb'])
+
+    def test_dead_process_returns_none(self):
+        self.assertIsNone(linux_process_rss_mb(999999999))
+
+    def test_chunk_size_supports_fifty_but_not_more(self):
+        import pvpoke_batch_v2
+        from unittest.mock import patch
+        with patch.dict(os.environ, {'PVP_CAND_CHUNK':'50'}):
+            self.assertEqual(pvpoke_batch_v2.chunk_size('PVP_CAND_CHUNK', 8), 50)
+        with patch.dict(os.environ, {'PVP_CAND_CHUNK':'51'}):
+            with self.assertRaises(ValueError):
+                pvpoke_batch_v2.chunk_size('PVP_CAND_CHUNK', 8)
