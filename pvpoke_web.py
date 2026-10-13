@@ -26,6 +26,7 @@ from urllib.parse import urlparse
 import pvpoke_batch_v2 as engine
 import pvpoke_iv_modes as iv_modes
 import pvpoke_archive as archives
+import pvpoke_meta_live as meta_live
 
 HOST = '127.0.0.1'
 PORT = 8765
@@ -296,7 +297,7 @@ def background_run(shields, batch24=False, batch_mode='simple'):
     if batch24:
         command = [sys.executable, '-u', str(Path(__file__).resolve().parent / 'pvpoke_24_workflow.py'),
                    '--run', '--config', str(BATCH_CONFIG), '--output', str(BATCH_OUTPUT),
-                   '--batch-mode', batch_mode]
+                   '--batch-mode', batch_mode, '--meta', str(meta_live.active_path(WORK))]
     else:
         command = [sys.executable, str(Path(__file__).resolve()), '--worker', shields]
     try:
@@ -481,6 +482,10 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
             self.respond(200, {**cat, 'saved': saved})
+        elif path == '/api/meta/status':
+            self.respond(200, meta_live.get_status(WORK))
+        elif path == '/api/storage/status':
+            self.respond(200, archives.archive_stats(WORK))
         elif path == '/api/status':
             with LOCK:
                 details = {k: (list(v) if isinstance(v, deque) else v) for k, v in STATUS.items()}
@@ -513,7 +518,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        if path not in ('/api/prepare','/api/run','/api/prepare24','/api/run24'):
+        if path not in ('/api/prepare','/api/run','/api/prepare24','/api/run24','/api/meta/sync'):
             return self.respond(404, {'error': '見つかりません'})
         # Only same-origin JS with the random session token can start a job.
         origin = self.headers.get('Origin','')
@@ -531,10 +536,13 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 if STATUS['state'] == 'running':
                     return self.respond(409, {'error':'計算中は入力を変更できません'})
+                if path == '/api/meta/sync':
+                    result = meta_live.sync(WORK, payload.get('csv'), CATALOG['species'])
+                    return self.respond(200, {'ok': True, **result})
                 if path in ('/api/prepare24','/api/run24'):
                     cand_parts = normalize_pokemon(payload.get('candidate'), CATALOG['species'], '自分')
                     iv_list = parse_ivs(payload.get('ivs'))
-                    meta_file = Path(__file__).resolve().parent / 'pvpoke_meta_opponents.csv'
+                    meta_file = meta_live.active_path(WORK)
                     with meta_file.open(encoding='utf-8-sig', newline='') as fp:
                         meta_count = sum(bool(row) for row in csv.reader(fp))
                     batch_mode = str(payload.get('batch_mode') or 'simple').strip().lower()
