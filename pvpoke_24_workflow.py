@@ -180,6 +180,22 @@ def split_matrix(raw_dir: Path, output: Path, mode_report: list[dict], candidate
     return generated
 
 
+def record_cache_stats(engine_manifest_path: Path, batch_manifest_path: Path):
+    """Include real cache usage in the final durable ZIP manifest."""
+    engine_manifest = json.loads(engine_manifest_path.read_text(encoding='utf-8'))
+    batch_manifest = json.loads(batch_manifest_path.read_text(encoding='utf-8'))
+    cache_stats = engine_manifest.get('matchup_cache', {'enabled': False})
+    if not isinstance(cache_stats, dict):
+        raise ValueError('Engine cache stats are not an object')
+    batch_manifest['matchup_cache'] = cache_stats
+    temp = batch_manifest_path.with_suffix('.tmp')
+    try:
+        temp.write_text(json.dumps(batch_manifest, ensure_ascii=False, indent=2), encoding='utf-8')
+        temp.replace(batch_manifest_path)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
 def main():
     p = argparse.ArgumentParser(description='PvPoke対戦相手4モード×6シールド 一括実行')
     grp = p.add_mutually_exclusive_group(required=True)
@@ -248,6 +264,7 @@ def main():
         if not runs:
             raise RuntimeError('シミュレーションの結果が生成されませんでした')
         latest = runs[-1].parent
+        record_cache_stats(latest / 'manifest.json', target / 'manifest.json')
         outfiles = split_matrix(latest, target, opponent_report, own_rows,
                                 full_modes=selected_modes)
         (target / 'GPT_REVIEW.txt').write_text(
