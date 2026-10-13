@@ -527,8 +527,8 @@ def run(refresh=False, shield_set='all'):
 
     def simulate_rows(crows, orows, pair):
         nonlocal page, reuse_enabled, current_selection
-        identity = (tuple(pvpline(r) for r in crows),
-                    tuple(pvpline(r) for r in orows))
+        identity = (tuple(tuple(r.get(k) for k in HEADER + ['level', 'cp']) for r in crows),
+                    tuple(tuple(r.get(k) for k in HEADER + ['level', 'cp']) for r in orows))
         if page is None:
             info = chromium_connect()
             print('Chromium:', info.get('Browser'), flush=True)
