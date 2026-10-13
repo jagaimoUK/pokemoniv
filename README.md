@@ -31,3 +31,18 @@ Then send `POST /mcp` with the Authorization header. Requests with missing or in
 ## Auth0 OAuth integration (experimental)
 
 See `AUTH0_SETUP.md` for how to configure Auth0 and Railway safely. The existing API key remains usable for testing.
+
+
+## 24-condition curated meta batch (experimental)
+
+The batch option combines 4 automatic opponent IV modes (`default`, `rank1`, `attack`, `defense`) with the existing 6 PvPoke shield situations. It uses the `pvpoke_meta_opponents.csv` snapshot bundled in this private repository. This is a **move-set list only**; source/custom IVs are **never automatically selected**. PvPoke GameMaster supplies the four automatic opponent IV presets.
+
+- Web UI: select your own Pokemon and enter own IVs, then choose **③ メタ全件×4モード×6シールド**.
+- MCP: call `prepare_24_conditions` with your candidate and IV lines; then `start_24_conditions`, poll `get_status`, call `get_24_summary` and `get_results` with `mode` and `shield`.
+- Headless CLI: `python pvpoke_24_workflow.py --prepare` followed by `python pvpoke_24_workflow.py --run`, reading the most recent web input or a specified `--config` file.
+
+`pvpoke_24_conditions.zip` includes 24 `{mode}_{shield}.csv` files, `ranking_summary.csv`, `opponent_modes_report.csv`, validation exclusions, and a manifest. Battle Ratings above/below 500 in the 24 CSVs are **estimated outcomes**, not PvPoke's original win/loss/draw counters. GPT must evaluate competitive S/A roles from the per-opponent ratings and the intended team context.
+
+The current curated file has 87 source lines. The standard Web UI limit of 80 manual opponents does not apply to this batch feature. Running all scenarios for many candidate IVs can be resource-intensive and may take substantially longer than an ordinary six-condition job. Only one batch job may run at a time.
+
+**Verification**: run unit tests and a small end-to-end PvPoke smoke test before trusting results. Railway build success alone cannot validate battle accuracy. Reconnect/refresh the ChatGPT plugin if its cached MCP tool schema does not expose the new operations.
