@@ -1,0 +1,59 @@
+"""Network-free smoke tests for the 24-condition PvPoke batch workflow."""
+import csv
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+import pvpoke_24_workflow as batch
+
+
+class Batch24Tests(unittest.TestCase):
+    def test_meta_reader_normalizes_shadow_suffix(self):
+        species = {'feraligatr_shadow': {
+            'fastMoves': ['SHADOW_CLAW'], 'chargedMoves': ['HYDRO_CANNON', 'ICE_BEAM']}}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'meta.csv'
+            path.write_text('feraligatr_shadow-shadow,SHADOW_CLAW,HYDRO_CANNON,ICE_BEAM\n'
+                            'unknown,TACKLE,X,Y\n', encoding='utf-8')
+            good, rejected = batch.load_meta(path, species)
+        self.assertEqual(len(good), 1)
+        self.assertEqual(good[0]['species'], 'feraligatr_shadow')
+        self.assertEqual(len(rejected), 1)
+
+    def test_explicit_candidate_ivs_are_validated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'job.json'
+            path.write_text(json.dumps({
+                'candidate': {'species': 'azumarill', 'fast': 'BUBBLE',
+                              'charged1': 'ICE_BEAM', 'charged2': 'PLAY_ROUGH'},
+                'ivs': '0,15,15\n1,15,14',
+            }), encoding='utf-8')
+            candidate, ivs = batch.input_config(path)
+            self.assertEqual(candidate['species'], 'azumarill')
+            self.assertEqual(ivs.splitlines(), ['0,15,15', '1,15,14'])
+
+    def test_six_matrices_split_into_24_csvs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / 'raw'
+            raw.mkdir()
+            report = [{'mode': mode} for mode in batch.MODES for _ in range(2)]
+            header = ['candidate'] + [f'opp_{i}' for i in range(8)] + ['Wins', 'Losses', 'Draws', 'Average']
+            for shield in batch.SHIELDS:
+                batch.write_csv(raw / f'pvpoke_{shield}.csv', header,
+                                [[f'azumarill_{i}', *[str(450 + j*10 + i*20) for j in range(8)],
+                                  '2', '6', '0', '500'] for i in range(2)])
+            candidates = [{'species': 'azumarill', 'fast': 'BUBBLE',
+                           'charged1': 'ICE_BEAM', 'charged2': 'PLAY_ROUGH',
+                           'atk': i, 'def': 15, 'hp': 15-i} for i in range(2)]
+            files = batch.split_matrix(raw, root / 'results', report, candidates)
+            self.assertEqual(len(files), 25)
+            with (root / 'results' / 'default_s0.csv').open(encoding='utf-8-sig') as fp:
+                self.assertEqual(len(list(csv.reader(fp))), 3)
+            with (root / 'results' / 'ranking_summary.csv').open(encoding='utf-8-sig') as fp:
+                self.assertEqual(len(list(csv.reader(fp))), 9)
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -7,6 +7,7 @@ WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 COPY *.py /app/
+COPY pvpoke_meta_opponents.csv /app/pvpoke_meta_opponents.csv
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh && chown -R appuser:appuser /app
 USER appuser

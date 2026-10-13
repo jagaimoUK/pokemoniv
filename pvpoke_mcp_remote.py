@@ -111,6 +111,18 @@ TOOLS = [
      'inputSchema': PREP},
     {'name': 'start_battle', 'description': 'Start asynchronous PvPoke Matrix simulations. Use get_status to poll.',
      'inputSchema': PREP},
+    {'name': 'prepare_24_conditions', 'description': 'Preview 4 opponent IV modes x 6 shields using the curated project meta move list. Does not start battle.',
+     'inputSchema': {'type': 'object', 'properties': {'candidate': POKEMON, 'ivs': PREP['properties']['ivs']},
+                     'required': ['candidate', 'ivs']}},
+    {'name': 'start_24_conditions', 'description': 'Run all 24 shield/IV scenarios with bundled meta move sets. Poll get_status and read get_24_summary afterward.',
+     'inputSchema': {'type': 'object', 'properties': {'candidate': POKEMON, 'ivs': PREP['properties']['ivs']},
+                     'required': ['candidate', 'ivs']}},
+    {'name': 'get_24_summary', 'description': 'Get candidate IV performance aggregates for a finished 24-condition job.',
+     'inputSchema': {'type': 'object', 'properties': {
+         'offset': {'type':'integer','minimum':0,'default':0},
+         'limit': {'type':'integer','minimum':1,'maximum':50,'default':20},
+         'mode': {'type':'string','enum':['default','rank1','attack','defense']}
+     }}},
     {'name': 'get_status', 'description': 'Read local calculation state, progress and recent logs.',
      'inputSchema': {'type': 'object', 'properties': {}}},
     {'name': 'get_results', 'description': 'Get per-opponent Battle Ratings from an existing result ZIP.',
@@ -120,6 +132,8 @@ TOOLS = [
              'shield': {'type': 'string', 'enum': ['s0','s1','s2','i0y1','i0y2','i1y2'], 'default': 's1'},
              'offset': {'type': 'integer', 'minimum': 0, 'default': 0},
              'limit': {'type': 'integer', 'minimum': 1, 'maximum': 20, 'default': 10},
+             'mode': {'type':'string','enum':['default','rank1','attack','defense'],
+                      'description':'Required for 24-condition ZIP results, absent for legacy 6-condition ZIP'},
          },
      }},
 ]
@@ -133,10 +147,17 @@ def call_tool(name, args):
         action = backend.preview if name == 'prepare_battle' else backend.start
         return action(args['candidate'], args['ivs'], args['opponents'],
                       args.get('shields', 'all'), args.get('opponent_iv_mode'))
+    if name == 'prepare_24_conditions':
+        return backend.preview24(args['candidate'], args['ivs'])
+    if name == 'start_24_conditions':
+        return backend.start24(args['candidate'], args['ivs'])
+    if name == 'get_24_summary':
+        return backend.summary24(args.get('offset',0), args.get('limit',20), args.get('mode'))
     if name == 'get_status':
         return backend.status()
     if name == 'get_results':
-        return backend.results(args.get('shield', 's1'), args.get('offset', 0), args.get('limit', 10))
+        return backend.results(args.get('shield', 's1'), args.get('offset', 0),
+                               args.get('limit', 10), args.get('mode'))
     raise KeyError(f'Unknown tool: {name}')
 
 if AUTH0_ENABLED:

@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import subprocess
 import sys
 import threading
@@ -34,6 +35,8 @@ CAND = WORK / 'candidates.csv'
 OPPS = WORK / 'opponents.csv'
 LAST_CONFIG = WORK / 'last_input.json'
 LATEST_ZIP = WORK / 'pvpoke_results_latest.zip'
+BATCH_CONFIG = WORK / 'batch24_input.json'
+BATCH_OUTPUT = WORK / 'batch24_results'
 MAX_CAND = 150
 MAX_OPPS = 80
 PRESETS = [
@@ -288,8 +291,12 @@ def worker(shields):
     print('DONE:', LATEST_ZIP, flush=True)
 
 
-def background_run(shields):
-    command = [sys.executable, str(Path(__file__).resolve()), '--worker', shields]
+def background_run(shields, batch24=False):
+    if batch24:
+        command = [sys.executable, '-u', str(Path(__file__).resolve().parent / 'pvpoke_24_workflow.py'),
+                   '--run', '--config', str(BATCH_CONFIG), '--output', str(BATCH_OUTPUT)]
+    else:
+        command = [sys.executable, str(Path(__file__).resolve()), '--worker', shields]
     try:
         p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              text=True, bufsize=1, cwd=str(HOME))
@@ -301,6 +308,11 @@ def background_run(shields):
                 STATUS['logs'].append(line)
                 STATUS['message'] = line[-180:]
         code = p.wait()
+        if code == 0 and batch24:
+            batch_zip = BATCH_OUTPUT / 'pvpoke_24_conditions.zip'
+            if not batch_zip.is_file():
+                raise RuntimeError('24条件のZIPが見つかりません')
+            shutil.copy2(batch_zip, LATEST_ZIP)
         with LOCK:
             STATUS['exit_code'] = code
             STATUS['state'] = 'done' if code == 0 and LATEST_ZIP.exists() else 'error'
@@ -336,7 +348,7 @@ label{display:block;font-size:13px;color:#d0ddec;font-weight:650;margin:10px 0 5
 <section class="card"><div class="head"><div class="num">3</div><h2>対戦相手</h2></div><p class="tiny">自動切り替えは4種類。情報源の個体値は各相手の「手動」設定でのみ使用するよ。最大80体。</p><label for="opponentIVMode">対戦相手の共通個体値設定</label><select id="opponentIVMode"><option value="default">PvPokeデフォルト</option><option value="rank1">総合1位（Stat Product）</option><option value="attack">攻撃最大</option><option value="defense">防御最大</option></select><div id="opponents"></div>
 <div class="two"><select id="add-preset" aria-label="追加する対戦相手"><option value="">相手を選ぶ</option></select><button type="button" id="addOpp">＋ 対戦相手を追加</button></div></section>
 <section class="card"><div class="head"><div class="num">4</div><h2>計算する</h2></div><label for="shields">シールド条件</label><select id="shields"><option value="all">全6条件（同数3＋不利3）</option><option value="equal">同数3条件だけ（0-0 / 1-1 / 2-2）</option><option value="disadvantage">不利3条件だけ（0-1 / 0-2 / 1-2）</option></select>
-<div class="actions"><button id="preview" class="outline">① CP・対戦数を確認</button><button id="run" class="primary">② 計算してZIPを作成</button></div>
+<div class="actions"><button id="preview" class="outline">① CP・対戦数を確認</button><button id="run" class="primary">② 通常6条件を実行</button><button id="run24" class="primary">③ メタ全件×4モード×6シールド</button></div><p class="tiny">③は同梱のメタ技構成87行を読み取ります。情報源の個体値は使用せず、Default/Rank 1/Attack/Defenseの4種類で計算します。長時間かかる場合があります。</p>
 <div id="previewPanel" hidden><div id="previewStats" class="stat"></div><details><summary>CP調整後のレベルを見る</summary><pre id="previewDetail"></pre></details></div><div id="statusMessage" class="message" hidden></div><pre id="logs" hidden></pre>
 <div class="actions"><a id="download" class="download" href="/download" hidden>完成したZIPを保存</a></div></section>
 <footer>この画面は端末の 127.0.0.1 だけで公開されるよ。PvPokeの計算結果をCSV化するツールで、勝敗や個体値の最終評価はChatGPTで確認してね。CP上限1500、Lv上限50。</footer></main>
@@ -403,10 +415,11 @@ let cfg=data.saved;if(cfg){setCandidate(cfg.candidate);el('ivs').value=cfg.ivs;e
 el('preset').addEventListener('change',e=>{const p=getPreset(e.target.value);if(p)setCandidate(p);});el('species').addEventListener('change',e=>setCandidate({species:e.target.value}));
 el('opponentIVMode').addEventListener('change',refreshOpponentIVInputs);
 el('addOpp').addEventListener('click',()=>{if(el('opponents').children.length>=80){status('対戦相手は最大80体だよ','error');return;}addOpponent(getPreset(el('add-preset').value)||{species:el('add-preset').value});});
-function showPreview(p){el('previewPanel').hidden=false;const stats=[['自分',p.candidate_count+'体'],['相手',p.opponent_count+'体'],['合計',p.battles+'対戦']];el('previewStats').innerHTML=stats.map(v=>`<div><b>${esc(v[1])}</b><small>${esc(v[0])}</small></div>`).join('');el('previewDetail').textContent=p.candidates.map(v=>v.ivs+' → Lv'+v.level+' CP'+v.cp).join('\n')+'\n--- 相手 ---\n'+p.opponents.map(v=>v.species+' ['+(v.iv_mode||'custom')+'] '+v.ivs+' → Lv'+v.level+' CP'+v.cp).join('\n');}
-function disableButtons(on){for(const id of ['preview','run','addOpp'])el(id).disabled=on;}
+function showPreview(p){if(p.batch24){el('previewPanel').hidden=false;el('previewStats').textContent='メタ全件・4モード・6シールド';el('previewDetail').textContent='候補:'+p.candidate_count+'体 / 登録メタ:'+p.opponent_count+'行 / 最大対戦数:'+p.battles_upper_bound+' (技の有効性で変動)';return;}el('previewPanel').hidden=false;const stats=[['自分',p.candidate_count+'体'],['相手',p.opponent_count+'体'],['合計',p.battles+'対戦']];el('previewStats').innerHTML=stats.map(v=>`<div><b>${esc(v[1])}</b><small>${esc(v[0])}</small></div>`).join('');el('previewDetail').textContent=p.candidates.map(v=>v.ivs+' → Lv'+v.level+' CP'+v.cp).join('\n')+'\n--- 相手 ---\n'+p.opponents.map(v=>v.species+' ['+(v.iv_mode||'custom')+'] '+v.ivs+' → Lv'+v.level+' CP'+v.cp).join('\n');}
+function disableButtons(on){for(const id of ['preview','run','run24','addOpp'])el(id).disabled=on;}
 el('preview').onclick=async()=>{if(busy)return;disableButtons(true);status('CPとレベルを計算しているよ…');try{const r=await api('/api/prepare',gather());showPreview(r.preview);status('CP1500以下のレベル調整を確認できたよ','good');}catch(e){status(e.message,'error');}finally{disableButtons(busy);}};
 el('run').onclick=async()=>{if(busy)return;disableButtons(true);status('計算を開始するよ…');el('download').hidden=true;try{const r=await api('/api/run',gather());showPreview(r.preview);status('計算開始。完了までこの画面は閉じずに待ってね。','good');}catch(e){status(e.message,'error');disableButtons(false);}};
+el('run24').onclick=async()=>{if(busy)return;disableButtons(true);status('全24条件を準備中…');el('download').hidden=true;try{const r=await api('/api/run24',gather());showPreview(r.preview);status('24条件を順次計算中。完了後にZIPを取得できるよ。','good');}catch(e){status(e.message,'error');disableButtons(false);}};
 async function poll(){try{const s=await api('/api/status');busy=s.state==='running';disableButtons(busy);el('logs').hidden=!s.logs.length;el('logs').textContent=s.logs.join('\n');if(s.state==='running'){status('計算中: '+s.message);el('download').hidden=true;}else if(s.state==='done'){status('完了！ ZIPを保存してChatGPTへ送ってね。','good');el('download').hidden=false;}else if(s.state==='error'){status('エラー: '+s.message,'error');el('download').hidden=true;} }catch(e){status('状態確認に失敗: '+e.message,'error');}setTimeout(poll,1800);}
 ready();poll();
 </script></body></html>'''
@@ -477,7 +490,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        if path not in ('/api/prepare','/api/run'):
+        if path not in ('/api/prepare','/api/run','/api/prepare24','/api/run24'):
             return self.respond(404, {'error': '見つかりません'})
         # Only same-origin JS with the random session token can start a job.
         origin = self.headers.get('Origin','')
@@ -495,6 +508,30 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 if STATUS['state'] == 'running':
                     return self.respond(409, {'error':'計算中は入力を変更できません'})
+                if path in ('/api/prepare24','/api/run24'):
+                    cand_parts = normalize_pokemon(payload.get('candidate'), CATALOG['species'], '自分')
+                    iv_list = parse_ivs(payload.get('ivs'))
+                    meta_file = Path(__file__).resolve().parent / 'pvpoke_meta_opponents.csv'
+                    with meta_file.open(encoding='utf-8-sig', newline='') as fp:
+                        meta_count = sum(bool(row) for row in csv.reader(fp))
+                    preview = {'batch24': True, 'candidate_count': len(iv_list),
+                               'opponent_count': meta_count, 'mode_count': 4, 'shield_cases': 6,
+                               'battles_upper_bound': len(iv_list)*meta_count*24}
+                    if path == '/api/run24':
+                        BATCH_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+                        temp = BATCH_CONFIG.with_suffix('.tmp')
+                        temp.write_text(json.dumps({
+                            'candidate': dict(zip(engine.HEADER[:4], cand_parts)),
+                            'ivs': '\n'.join(','.join(map(str, iv)) for iv in iv_list),
+                        }, ensure_ascii=False), encoding='utf-8')
+                        temp.replace(BATCH_CONFIG)
+                        STATUS.update({'state':'running', 'message':'全24条件を準備中',
+                                       'logs':deque(maxlen=120), 'exit_code':None,
+                                       'started_at':datetime.now().isoformat(timespec='seconds'),
+                                       'finished_at':None})
+                        threading.Thread(target=background_run, args=('all', True),
+                                         daemon=True).start()
+                    return self.respond(200, {'ok':True,'preview':preview})
                 cleaned, crows, orows, preview = prepare_payload(payload)
                 save_input(cleaned, crows, orows)
                 if path == '/api/prepare':
