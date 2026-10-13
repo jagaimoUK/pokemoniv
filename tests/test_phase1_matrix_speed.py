@@ -43,7 +43,7 @@ class PhaseOneTests(unittest.TestCase):
             page.reload()
         self.assertEqual(page.ws.sent["method"], "Page.reload")
         self.assertEqual(page.ws.sent["params"], {"ignoreCache": False})
-        ready.assert_called_once_with(require_empty=True)
+        ready.assert_called_once_with(require_empty=True, attempts=12)
 
     def test_wait_ready_rejects_old_populated_matrix(self):
         page = engine.Page.__new__(engine.Page)
