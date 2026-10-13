@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Batch PvPoke GL: 4 automatic opponent IV presets x 6 shield cases.
+"""Batch PvPoke GL: choose Default-only or 4 opponent IV modes x 6 shields.
 
 Runs one matrix per shield case with four opponent-mode sections, then
 splits results into 24 CSVs. Source/custom IVs are NEVER selected implicitly.
@@ -28,6 +28,7 @@ import pvpoke_batch_v2 as engine
 import pvpoke_iv_modes as iv_modes
 
 MODES = ('default', 'rank1', 'attack', 'defense')
+BATCH_MODES = {'simple': ('default',), 'detailed': MODES}
 SHIELDS = ('s0', 's1', 's2', 'i0y1', 'i0y2', 'i1y2')
 IV_FIELDS = ('atk', 'def', 'hp')
 POKE_FIELDS = ('species', 'fast', 'charged1', 'charged2')
@@ -122,8 +123,8 @@ def write_csv(path, columns, data):
         writer.writerows(data)
 
 
-def split_matrix(raw_dir: Path, output: Path, mode_report: list[dict], candidates: list[dict]):
-    """Convert six 4-mode matrix files to 24 files, with exact per-mode averages.
+def split_matrix(raw_dir: Path, output: Path, mode_report: list[dict], candidates: list[dict], *, full_modes=MODES):
+    """Convert six multi-mode matrices to 6 or 24 files, with exact averages.
 
     W/L/D in the 24 files are derived from Battle Rating vs 500 and are labeled
     as *estimated* (not copied from PvPoke's match-outcome counters).
@@ -140,7 +141,7 @@ def split_matrix(raw_dir: Path, output: Path, mode_report: list[dict], candidate
         expected = len(mode_report) + 5
         if len(table) != len(candidates) + 1 or any(len(row) != expected for row in table):
             raise ValueError(f'{original.name}: 期待する表サイズではありません')
-        for mode in MODES:
+        for mode in full_modes:
             indices = groups[mode]
             out_rows = []
             for cidx, row in enumerate(table[1:]):
@@ -163,7 +164,7 @@ def split_matrix(raw_dir: Path, output: Path, mode_report: list[dict], candidate
             generated.append(output / name)
     summary = []
     for cidx, cand in enumerate(candidates):
-        for mode in MODES:
+        for mode in full_modes:
             values = accumulated[(cidx, mode)]
             vals = values['ratings']
             eq = values['equal']
@@ -185,6 +186,8 @@ def main():
     grp.add_argument('--prepare', action='store_true', help='計算前確認のみ。PvPoke Matrixは起動しない')
     grp.add_argument('--run', action='store_true', help='24条件を計算してZIPを作成')
     p.add_argument('--config', type=Path, default=DEFAULT_HOME / 'last_input.json')
+    p.add_argument('--batch-mode', choices=tuple(BATCH_MODES), default='detailed',
+                   help='simple = Default IV only (6); detailed = 4 IV modes (24)')
     p.add_argument('--meta', type=Path, default=Path(__file__).resolve().parent / META_NAME)
     p.add_argument('--output', type=Path, default=Path.home() / 'pvpoke_24_results')
     args = p.parse_args()
@@ -197,7 +200,9 @@ def main():
     own_rows = [{**own, **dict(zip(IV_FIELDS, map(int, iv.split(','))))} for iv in iv_text.splitlines()]
     own_prepared = engine.optimize(own_rows, species, cpms, 'candidates.csv')
     meta, source_errors = load_meta(args.meta, species)
-    rows, opponent_report, mode_errors, counts = generate_rows(meta, species, cpms)
+    selected_modes = BATCH_MODES[args.batch_mode]
+    rows, opponent_report, mode_errors, counts = generate_rows(meta, species, cpms,
+                                                              full_modes=selected_modes)
     target = args.output.resolve()
     target.mkdir(parents=True, exist_ok=True)
     write_csv(target / 'opponent_modes_report.csv',
@@ -209,11 +214,13 @@ def main():
         'created_at': datetime.now(timezone.utc).isoformat(),
         'source_file': args.meta.name, 'gamemaster_timestamp': gm.get('timestamp'),
         'cp_cap': engine.CP_CAP, 'max_level': engine.MAX_LEVEL,
+        'batch_mode': args.batch_mode,
+        'opponent_iv_modes': list(selected_modes),
         'shield_pairs': [list(pair) for pair in engine.SCENARIOS['all']],
         'source_lines': len(meta) + len(source_errors), 'valid_source_rows': len(meta),
         'mode_counts': counts, 'excluded': len(errors),
         'candidates': len(own_rows), 'shield_cases': list(SHIELDS),
-        'note': 'The six base matrices each contain all four opponent modes. Source IVs are never automatically chosen. S/A grades require GPT analysis.'
+        'note': 'Each base matrix uses the selected opponent modes. Source IVs are never automatically chosen. S/A grades require GPT analysis.'
     }, ensure_ascii=False, indent=2), encoding='utf-8')
     print(f'自分{len(own_prepared)}体 / 有効なメタ技構成{len(meta)}行 / 対戦相手のモード合計{len(rows)}行')
     print('モード別:', counts, '無効・除外:', len(errors))
@@ -241,9 +248,10 @@ def main():
         if not runs:
             raise RuntimeError('シミュレーションの結果が生成されませんでした')
         latest = runs[-1].parent
-        outfiles = split_matrix(latest, target, opponent_report, own_rows)
+        outfiles = split_matrix(latest, target, opponent_report, own_rows,
+                                full_modes=selected_modes)
         (target / 'GPT_REVIEW.txt').write_text(
-            '個体値厳選: ranking_summary.csvと24本のmode_shield CSVを比較して、\n'
+            f'個体値厳選: ranking_summary.csvと{len(selected_modes) * 6}本のmode_shield CSVを比較して、\n'
             '優劣だけでなく重要対面、S0/S1/S2、不利シールドを総合評価してください。\n'
             'S/Aランクを決める際は、採用候補の先頭ポケモンとその裏を想定してください。\n'
             'rating_gt500等はBattle Ratingに基づく参考値であり、PvPoke自身の勝敗数とは区別してください。\n'
