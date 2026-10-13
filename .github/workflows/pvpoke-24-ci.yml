@@ -25,7 +25,7 @@ jobs:
           payload = {'candidate':{'species':'azumarill','fast':'BUBBLE','charged1':'ICE_BEAM','charged2':'PLAY_ROUGH'},'ivs':'0,15,15'}
           Path('/tmp/pvpoke24_smoke.json').write_text(json.dumps(payload))
           PY
-          python pvpoke_24_workflow.py --prepare --config /tmp/pvpoke24_smoke.json --output /tmp/pvpoke24_smoke
+          python pvpoke_24_workflow.py --prepare --batch-mode detailed --config /tmp/pvpoke24_smoke.json --output /tmp/pvpoke24_smoke
           python - <<'PY'
           import json
           from pathlib import Path
@@ -35,7 +35,7 @@ jobs:
           PY
       - name: Prepare Default-only meta mode from current GameMaster
         run: |
-          python pvpoke_24_workflow.py --prepare --batch-mode simple --config /tmp/pvpoke24_smoke.json --output /tmp/pvpoke6_smoke
+          python pvpoke_24_workflow.py --prepare --config /tmp/pvpoke24_smoke.json --output /tmp/pvpoke6_smoke
           python - <<'PY'
           import json
           from pathlib import Path
