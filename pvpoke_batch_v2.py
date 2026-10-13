@@ -163,7 +163,14 @@ def optimize(rows, species, cpms, fname):
                 possibilities.append((level, cp))
         if not possibilities:
             raise ValueError(f'{fname} {idx}行目: CP{CP_CAP}以下の適正レベルが見つかりません')
-        level, cp = possibilities[-1]
+        if row.get('level_override') is not None:
+            requested = float(row['level_override'])
+            selected = [pair for pair in possibilities if abs(pair[0] - requested) < .001]
+            if not selected:
+                raise ValueError(f'{fname} {idx}行目: PvPokeデフォルトのLv{requested:g}がCP上限・レベル上限に適合しません')
+            level, cp = selected[0]
+        else:
+            level, cp = possibilities[-1]
         prepared.append({**row, 'level': level, 'cp': cp})
     return prepared
 
