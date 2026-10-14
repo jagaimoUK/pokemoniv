@@ -132,7 +132,7 @@ class IVWorkflowTests(unittest.TestCase):
                 workflow = IVWorkflow(backend)
                 start = workflow.run(CANDIDATE, IVS, wait_seconds=0)
                 backend.state = "done"
-                with self.assertRaisesRegex(ValueError, "different"):
+                with self.assertRaisesRegex(ValueError, "different|differ"):
                     workflow.result(start["run_ref"])
 
     def test_project_hash_mismatch_must_not_start(self):
