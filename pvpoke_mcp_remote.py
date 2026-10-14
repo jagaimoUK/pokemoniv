@@ -157,7 +157,7 @@ TOOLS = [
          'focus_limit': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 20}
      }}},
     {'name': 'run_iv_selection',
-     'description': 'Launch all curated battles and wait up to 20s. Return verified decision-v1 tables covering every candidate, or run_ref for bounded polling. No automatic S/A grades.',
+     'description': 'Launch all curated battles and wait up to 20s. Return verified decision-v2 tables with all-candidate evidence and tradeoffs, or run_ref for bounded polling. Decode opponent_index using each report opponents array (zero-based). No automatic S/A grades.',
      'inputSchema': {'type': 'object', 'properties': {
          'candidate': POKEMON,
          'ivs': PREP['properties']['ivs'],
@@ -169,7 +169,7 @@ TOOLS = [
          'review_limit': {'type': 'integer', 'minimum': 2, 'maximum': 12, 'default': 8},
          'focus_limit': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 20},
          'wait_seconds': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 12},
-         'report_format': {'type': 'string', 'enum': ['decision', 'compact'], 'default': 'decision'}
+         'report_format': {'type': 'string', 'enum': ['decision', 'decision-v1', 'compact'], 'default': 'decision'}
      }, 'required': ['candidate', 'ivs']}},
     {'name': 'get_iv_selection_result',
      'description': 'Wait up to 12s by default for the exact run_ref; return verified decision evidence when complete. Cached results retain job-identity checks. Never restart the batch.',

@@ -26,3 +26,25 @@ Local benchmark medians (nine samples; milliseconds). Fixtures use synthetic rat
 An offline skill test decoded the verified live Quagsire three-candidate result and recommended all three candidates using actual matchup evidence and correct English search strings without extra retrieval.
 
 The server timing field excludes GPT evaluation, model scheduling, tool transport and final text generation. Payload reduction and fewer tool round-trips do not establish an end-to-end latency percentage. Compare the same inputs, model, reasoning effort and cache state over several independent runs before claiming overall speed gains.
+
+## v0.3.20: server-side tradeoffs and decision-v2
+
+The default decision format now adds a grounded downside example for every candidate where a meaningful difference exists. It scans all opponents and six shields, counts lower-than-best and own<=500/other>500 conditions, and prioritizes focus opponents for the selected example. Each matchup may have a different best candidate; this is not Pareto dominance and never assigns S/A automatically. The model can explain gains and losses from the returned evidence without reconstructing every comparison.
+
+All analyses share one cached sort of each matchup. Decision-v2 preserves every v1 signal, selected example, crossover and focus rating. Repeated opponent labels use each report's zero-based `opponents` dictionary; crossover candidate references use its zero-based `candidate_ivs` dictionary. Tradeoff rows follow `candidate_ivs` order. Integral numbers omit `.0` with no rounding. The skill explicitly decodes both dictionaries per mode. `report_format=decision-v1` and `compact` retain the previous formats. This version also normalizes SHA256 case before verification and rejects matrices whose actual IV set differs from the initiating ticket even if their summary looks valid.
+
+94 tests pass, including complete v1 reconstruction, brute-force tradeoff counts, equal ratings, the 500 boundary, single-candidate batches, focus priority, legacy format, uppercase hash completion, and mismatched matrix rejection. The legacy digest objects still exactly match the original fixtures for 3/12/40/150 candidates. A separate offline skill test decoded a real three-candidate Quagsire report, produced all three recommendations with correct opponent variants, losses and English search strings, and required no extra lookup. The precise subjective S/A order is not a fixed regression expectation.
+
+Compact JSON bytes for the report only, including new tradeoff facts:
+
+| Fixture | v1 bytes | v2 bytes |
+|---|---:|---:|
+| Synthetic 3 candidates | 4298 | 4114 |
+| Synthetic 12 candidates | 6355 | 5675 |
+| Synthetic 40 candidates | 10604 | 9853 |
+| Synthetic 150 candidates | 27754 | 27588 |
+| Real Quagsire 3 candidates, 87 opponents, 6 shields | 6265 | 5368 |
+
+The real report is 14.3% smaller despite the added tradeoffs. Results depend on how much text repeats. These fixtures are not a claim about every possible input or model token count.
+
+Eleven-run local medians for parsing, analysis and encoding (v19/v20): 3 candidates 4.11/5.80 ms; 12 candidates 10.71/14.79 ms; 40 candidates 46.00/39.18 ms; 150 candidates 160.85/198.31 ms. Additional server-side comparison work can increase CPU time slightly; the intended gain is less transmission and less GPT reconstruction/extra retrieval. GPT final-response latency has not been measured in a controlled end-to-end comparison, so no overall percentage is claimed.

@@ -27,7 +27,7 @@
 - `get_selection_digest` / `get_selection_report` / `get_results` は重要対面・Ratingの補足取得とフォールバックに残す。S/Aを自動確定せず、ユーザーの先頭・裏ポケモン想定で評価する。
 
 
-## v0.3.19 の応答と待機
-- 一括ツールの既定はdecision-v1。全candidate_evidenceとpriority_crossoversを列定義/行の表形式に変換し、指標・代表例・境界反転の値は保持する。columnsに従って読む。必要時、公開済み引数report_format:"compact"で旧形式を指定できる。get_selection_digest自体は旧形式を維持する。
+## v0.3.20 の応答と待機
+- 一括ツールの既定はdecision-v2。全候補の指標・代表例・境界反転を保持し、相手名と境界反転のIVを各reportの0始まり索引へ圧縮する。解釈はSKILL.mdのv2手順に従う。全候補のトレードオフもアプリが集計する。report_format:"decision-v1"または"compact"で以前の形式を指定できるが、形式変更だけの再計算はしない。get_selection_digestは旧形式を維持する。
 - get_iv_selection_resultは既定最大12秒の待機、公開済み引数wait_seconds:0〜20で変更可能。同じrun_refの完成レポートはメモリ内再利用するが、毎回ジョブ同一性を照合する。別ジョブや再起動後への再利用はしない。
 - 原本実ハッシュをrun_iv_selectionに渡せるなら事前get_meta_statusを省略できる。サーバー照合が失敗した場合のみ原本同期し再試行する。

@@ -55,7 +55,7 @@ class PipelineTests(unittest.TestCase):
             timer.join()
         self.assertEqual(result['state'], 'done')
         self.assertEqual(backend.run_count, 1)
-        self.assertEqual(result['reports']['default']['format'], 'decision-v1')
+        self.assertEqual(result['reports']['default']['format'], 'decision-v2')
 
     def test_cached_result_is_isolated_and_identity_checked(self):
         backend = FakeBackend()

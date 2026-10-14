@@ -65,10 +65,7 @@ def report_from_matrix(data: SelectionMatrix, mode: str, focus: list[str],
     crossover = []
     for shield in SHIELDS:
         for pos, opponent in enumerate(names):
-            scores = sorted(
-                ((iv, matrix[shield][iv][pos]) for iv in candidates),
-                key=lambda pair: (-pair[1], pair[0]),
-            )
+            scores = data.ordered_scores[shield][pos]
             if scores[0][1] <= 500 or scores[-1][1] >= 500:
                 continue
             focused = any(term.casefold() in opponent.casefold() for term in focus)

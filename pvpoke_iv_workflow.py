@@ -16,7 +16,7 @@ import uuid
 from zipfile import ZipFile
 
 from pvpoke_selection_digest import build_selection_digest
-from pvpoke_decision_digest import decision_digest
+from pvpoke_decision_digest import decision_digest, decision_digest_v2
 
 MODES = ("default", "rank1", "attack", "defense")
 IV_LINE = re.compile(r"^(\d{1,2}),(\d{1,2}),(\d{1,2})$")
@@ -98,8 +98,8 @@ class IVWorkflow:
             expected_meta_sha256: str | None = None,
             report_format: str = "decision") -> dict:
         requested_at = time.monotonic()
-        if report_format not in ("decision", "compact"):
-            raise ValueError("report_format must be decision or compact")
+        if report_format not in ("decision", "decision-v1", "compact"):
+            raise ValueError("report_format must be decision, decision-v1 or compact")
         own, normalized, rows = _canonical(candidate, ivs, batch_mode)
         if not isinstance(wait_seconds, int) or not 0 <= wait_seconds <= 20:
             raise ValueError("wait_seconds must be 0..20")
@@ -107,6 +107,8 @@ class IVWorkflow:
                 (not isinstance(expected_meta_sha256, str)
                  or not SHA256.fullmatch(expected_meta_sha256))):
             raise ValueError("expected_meta_sha256 must be a 64-digit SHA256")
+        if expected_meta_sha256 is not None:
+            expected_meta_sha256 = expected_meta_sha256.lower()
         # Validate digest parameters before starting any real battle job.
         if (focus_opponents is not None and
                 (not isinstance(focus_opponents, list)
@@ -127,6 +129,8 @@ class IVWorkflow:
                 raise ValueError("A PvPoke calculation is already running")
             meta = self.backend.meta_status()
             actual_sha = meta.get("sha256")
+            if isinstance(actual_sha, str):
+                actual_sha = actual_sha.lower()
             if (expected_meta_sha256 is not None
                     and (not isinstance(actual_sha, str)
                          or actual_sha.lower() != expected_meta_sha256.lower())):
@@ -197,15 +201,22 @@ class IVWorkflow:
                     mode: build_selection_digest(
                         archive, mode, ticket["focus_opponents"],
                         ticket["highlight_limit"], ticket["review_limit"],
-                        ticket["focus_limit"])
+                        ticket["focus_limit"],
+                        include_tradeoffs=ticket["report_format"] == "decision")
                     for mode in modes
                 }
+                expected_ivs = {"/".join(map(str, row)) for row in ticket["iv_rows"]}
+                if any({row[0] for row in report["ranking_rows"]} != expected_ivs
+                       for report in reports.values()):
+                    raise ValueError("Matrix candidate IVs differ from the requested job")
             # Recheck identity after ZIP download/analysis before caching.
             verified = self.backend.status()
             if (verified.get("started_at") != ticket["started_at"]
                     or verified.get("state") != "done" or not verified.get("batch24")):
                 raise ValueError("PvPoke job identity changed during result analysis")
             if ticket["report_format"] == "decision":
+                reports = {mode: decision_digest_v2(report) for mode, report in reports.items()}
+            elif ticket["report_format"] == "decision-v1":
                 reports = {mode: decision_digest(report) for mode, report in reports.items()}
             output = {
                 "run_ref": run_ref,

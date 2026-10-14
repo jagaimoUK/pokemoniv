@@ -7,6 +7,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
+from functools import cached_property
 from zipfile import ZipFile
 
 SHIELDS = ("s0", "s1", "s2", "i0y1", "i0y2", "i1y2")
@@ -21,6 +22,17 @@ class SelectionMatrix:
     candidates: list[str]
     ratings: dict[str, dict[str, list[float]]]
     manifest: dict
+
+    @cached_property
+    def ordered_scores(self) -> dict[str, list[list[tuple[str, float]]]]:
+        """Sort each matchup once; reports and evidence share the same ordering."""
+        return {
+            shield: [sorted(
+                ((iv, self.ratings[shield][iv][pos]) for iv in self.candidates),
+                key=lambda pair: (-pair[1], pair[0]),
+            ) for pos in range(len(self.opponents))]
+            for shield in SHIELDS
+        }
 
 
 def load_selection_matrix(archive: ZipFile, mode: str) -> SelectionMatrix:

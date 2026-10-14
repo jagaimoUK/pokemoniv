@@ -68,10 +68,7 @@ def _all_candidate_evidence(
         disadvantage = shield.startswith("i")
         for pos, opponent in enumerate(opponent_names):
             focused = any(word in opponent.casefold() for word in focus)
-            scores = sorted(
-                ((iv, matrix[shield][iv][pos]) for iv in ivs),
-                key=lambda item: (-item[1], item[0]),
-            )
+            scores = data.ordered_scores[shield][pos]
             # A one-candidate batch has no comparative signals.
             if len(scores) < 2:
                 continue
@@ -154,6 +151,7 @@ def build_selection_digest(
     highlight_limit: int = 20,
     review_limit: int = 8,
     focus_limit: int = 20,
+    include_tradeoffs: bool = False,
 ) -> dict:
     """Compact JSON from the exact six matrices, with no battle recalculation."""
     if mode not in MODES:
@@ -291,7 +289,7 @@ def build_selection_digest(
         for row in chosen_focus[:focus_limit]
     ]
 
-    return {
+    result = {
         "mode": full["mode"],
         "batch_mode": full["batch_mode"],
         "complete": full["complete"],
@@ -331,4 +329,8 @@ def build_selection_digest(
                 "Inspect get_selection_report for omitted opponent evidence. "
                 "S/A ranks require user-context judgment.",
     }
+    if include_tradeoffs:
+        from pvpoke_selection_tradeoffs import candidate_tradeoffs
+        result["candidate_tradeoffs"] = candidate_tradeoffs(data, ivs, focus)
+    return result
 

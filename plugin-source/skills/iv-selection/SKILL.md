@@ -13,7 +13,7 @@ description: 「個体値厳選」「個体値厳選 d」「個体値厳選 s」
 ## 原本照合と一括実行
 1. Project原本 `pvpokeメタポケモン.txt` を読み、4列・順序・重複・shadowを保持して正規化SHA256を実際に計算する。UTF-8 BOMと空行を除き、各列の前後空白を除去し、CSV各行をカンマで連結、LFで連結して末尾LFを1つ付ける（サーバーの `pvpoke_meta_sync.serialize` と同じ）。末尾 `-shadow` を取り除く前の原本表記でハッシュする。
 2. `run_iv_selection` があれば、**原本の実ハッシュを `expected_meta_sha256` に渡すことでサーバーに照合させる**。事前の `get_meta_status` / catalog / prepare / start / digest の重複照会は不要。サーバーはハッシュ不一致なら計算を開始せず拒否する。不一致時だけ `references/project-meta-batching.md` を読み、原本全体を `sync_meta_opponents` に渡して同期成功を確認し、一括実行を再試行する。開始済みなら再実行しない。
-3. `run_iv_selection({candidate,ivs,batch_mode,expected_meta_sha256,focus_opponents,highlight_limit:20,review_limit:8,focus_limit:20,wait_seconds:12})` を1回呼ぶ。現行サーバーは既定で `decision-v1` を返す。新引数がツール一覧に未反映でも既定値で動くため、更新をユーザーに求めず進める。
+3. `run_iv_selection({candidate,ivs,batch_mode,expected_meta_sha256,focus_opponents,highlight_limit:20,review_limit:8,focus_limit:20,wait_seconds:12})` を1回呼ぶ。現行サーバーは既定で `decision-v2` を返す。新引数がツール一覧に未反映でも既定値で動くため、更新をユーザーに求めず進める。
 4. `running` なら同じ `run_ref` で `get_iv_selection_result({run_ref})` を続ける。サーバーは既定最大12秒待って返す。別の待機・get_status・再起動を重ねない。`done` の reportsを検証・評価する。`error`、未知/古いrun_ref、再起動、欠損は簡潔に報告し古いZIPを今回の成果にしない。
 5. 複数種は最初の登場順に単一ワーカーで順次実行。各種の根拠の保持・評価・必要な補足取得まで済ませて次へ進む。同じ依頼では原本・実ハッシュを再利用し、毎回runの照合を維持する。途中の「次」要求をしない。
 - 実ハッシュを計算できない場合は照合済みと偽らない。既存データに根拠があればexpected引数を省略し、サーバーメタによる計算として区別する。不一致を無視して省略しない。
@@ -21,7 +21,10 @@ description: 「個体値厳選」「個体値厳選 d」「個体値厳選 s」
 
 ## 結果を一度で検証・評価する
 - 簡易はreports.default、詳細はdefault/rank1/attack/defenseの全4つ。各complete、candidate_count、opponent_count、condition_count=6、total_ratings_checked=候補×相手×6、excluded、全候補証拠件数を確認する。候補・技・モード・メタハッシュが依頼と一致することを検証する。欠損や除外を黙って隠さない。
-- `format:"decision-v1"` は **columns配列に対応するrows配列**。`evidence_columns/evidence_rows` が全候補の指標、`example_columns/examples_by_iv` が個体別代表例、`crossover_columns/crossover_rows` が境界反転の抜粋。`ranking_columns/ranking_rows`、`dominated_by`、`focus_matchups` は従来と同じ。列順を固定で推測せず返却columnsで読む。空のexamples_by_ivは比較信号の例なしであり評価失敗ではない。
+- `decision-v1/v2` は **columns配列に対応するrows配列**。`evidence_rows` が全候補の指標、`examples_by_iv` が個体別代表例、`crossover_rows` が境界反転の抜粋。列順を推測せず返却columnsで読む。空のexamples_by_ivは比較信号の例なしであり評価失敗ではない。
+- **v2の索引は各report内で0始まり。** `opponent_index` は同reportの `opponents[index]`。境界反転の `above500_candidate_indices` と `best/second/worst_index_rating` の個体indexは `candidate_ivs[index]` に変換する（後者は `[index,Rating]`）。別モードの辞書を流用しない。ranking/evidence/examplesのIVは従来どおり文字列。
+- v2の `tradeoff_rows` は **candidate_ivsと同じ順序で全候補を収録**。columnsに従い、lower_than_best＝その対面の最高候補より低い条件数、lost_gt500＝自分500以下・他候補500超の条件数。exampleはtradeoff_example_columnsで読み、具体的な損失と代替IVに使う。比較相手のbest_ivは対面ごとに変わるため完全支配とは別物。代表例は1つの抜粋であり、nullも弱点ゼロを意味しない。S/Aや順位は自動確定しない。
+- v1の相手名と境界反転IVは文字列。`ranking_rows`、`dominated_by`、focusの `by_iv` はv1/v2共通。focusはv2だけ相手名をopponent_indexで参照する。
 - 旧形式は `candidate_evidence` と `priority_crossovers`。どちらも全候補・同一相手・同一IVモード・同一シールドで比較する。形式変換のためだけに別レポートを取得しない。
 - `unique_gt500`＝他候補すべて500以下でその個体だけ500超、`clear_leads`＝次点より20以上高い条件。focus / disadvantage内訳、strict_leads、examples_total / examples_truncatedを全候補で確認する。指標は採用価値の発見用であり自動S/Aではない。Rating500超は勝利方向の推定で正式な勝数ではない。
 - 平均だけで決めず、重要メタ、500境界逆転、不利シールド、安定性、代替不能な役割を評価する。全条件で他候補以上かつ1条件で上なら完全支配。完全同値は同等。低平均・review_ivs外・新指標ゼロだけで落とさない。詳細のモード間の強みと損失も照合する。
