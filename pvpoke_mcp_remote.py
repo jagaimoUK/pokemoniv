@@ -223,7 +223,7 @@ def call_tool(name, args):
                                         args.get('focus_limit',10))
     if name == 'run_iv_selection':
         return IV_RUNNER.run(args['candidate'], args['ivs'],
-                             args.get('batch_mode', 'simple'),
+                             args.get('batch_mode') or 'simple',
                              args.get('focus_opponents'),
                              args.get('highlight_limit', 20),
                              args.get('review_limit', 8),
