@@ -157,7 +157,7 @@ TOOLS = [
          'focus_limit': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 20}
      }}},
     {'name': 'run_iv_selection',
-     'description': 'Launch a curated IV batch and wait up to 20s. If complete, return the verified compact digest, otherwise return run_ref to poll. Existing PvPoke worker executes every battle.',
+     'description': 'Launch all curated battles and wait up to 20s. Return verified decision-v1 tables covering every candidate, or run_ref for bounded polling. No automatic S/A grades.',
      'inputSchema': {'type': 'object', 'properties': {
          'candidate': POKEMON,
          'ivs': PREP['properties']['ivs'],
@@ -168,12 +168,14 @@ TOOLS = [
          'highlight_limit': {'type': 'integer', 'minimum': 1, 'maximum': 60, 'default': 20},
          'review_limit': {'type': 'integer', 'minimum': 2, 'maximum': 12, 'default': 8},
          'focus_limit': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 20},
-         'wait_seconds': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 12}
+         'wait_seconds': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 12},
+         'report_format': {'type': 'string', 'enum': ['decision', 'compact'], 'default': 'decision'}
      }, 'required': ['candidate', 'ivs']}},
     {'name': 'get_iv_selection_result',
-     'description': 'Poll only a run_ref returned by run_iv_selection; return the verified compact digest when the exact job completes. Never use an unrelated prior ZIP.',
+     'description': 'Wait up to 12s by default for the exact run_ref; return verified decision evidence when complete. Cached results retain job-identity checks. Never restart the batch.',
      'inputSchema': {'type': 'object', 'properties': {
-         'run_ref': {'type': 'string', 'minLength': 1}
+         'run_ref': {'type': 'string', 'minLength': 1},
+         'wait_seconds': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 12}
      }, 'required': ['run_ref']}},
     {'name': 'get_status', 'description': 'Read local calculation state, progress and recent logs.',
      'inputSchema': {'type': 'object', 'properties': {}}},
@@ -229,9 +231,10 @@ def call_tool(name, args):
                              args.get('review_limit', 8),
                              args.get('focus_limit', 20),
                              args.get('wait_seconds', 12),
-                             args.get('expected_meta_sha256'))
+                             args.get('expected_meta_sha256'),
+                             args.get('report_format', 'decision'))
     if name == 'get_iv_selection_result':
-        return IV_RUNNER.result(args['run_ref'])
+        return IV_RUNNER.result(args['run_ref'], args.get('wait_seconds', 12))
     if name == 'get_status':
         return backend.status()
     if name == 'get_results':
@@ -330,7 +333,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 try:
                     output = call_tool(name, params.get('arguments') or {})
-                    result = {'content':[{'type':'text','text':json.dumps(output,ensure_ascii=False)}],
+                    result = {'content':[{'type':'text','text':json.dumps(output,ensure_ascii=False,separators=(',',':'))}],
                               'isError':False}
                 except Exception as e:
                     result = {'content':[{'type':'text','text':f'{type(e).__name__}: {e}'}],
@@ -348,3 +351,4 @@ if __name__ == '__main__':
     print(f'Local MCP test server: http://{HOST}:{PORT}/mcp', flush=True)
     print('Authenticated prototype server. HTTPS must be terminated by hosting platform.', flush=True)
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+

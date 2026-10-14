@@ -1,0 +1,21 @@
+{
+  "apps": "./.app.json",
+  "interface": {
+    "category": "Productivity",
+    "defaultPrompt": "個体値厳選。厳選Projectの『pvpokeメタポケモン』を対戦相手にして、PvPokeの自動個体値モードと6条件で比較してください。",
+    "developerName": "haggis z",
+    "displayName": "PvPoke 個体値厳選",
+    "longDescription": "簡易6条件（Defaultのみ）と詳細24条件（Default/Rank 1/Attack/Defense）を選択。厳選Projectのメタ構成で比較し、重要対面と英語検索式を提示。情報源IVは手動指定のみ。",
+    "shortDescription": "PvPokeの簡易・詳細個体値厳選",
+    "capabilities": []
+  },
+  "name": "pvpoke-iv-selector",
+  "version": "0.3.19",
+  "description": "PvPokeの実測結果と厳選Projectのpvpokeメタポケモンを使う個体値厳選。",
+  "author": {
+    "name": "haggis z",
+    "email": "kurosuke96382@gmail.com"
+  },
+  "keywords": [],
+  "skills": "./skills"
+}

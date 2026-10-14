@@ -322,14 +322,14 @@ def background_run(shields, batch24=False, batch_mode='simple'):
             STATUS['exit_code'] = code
             STATUS['batch24'] = bool(batch24)
             STATUS['state'] = 'done' if code == 0 and result_zip is not None and result_zip.is_file() else 'error'
-            STATUS['finished_at'] = datetime.now().isoformat(timespec='seconds')
+            STATUS['finished_at'] = datetime.now().isoformat(timespec='microseconds')
             STATUS['message'] = 'ZIPが完成しました' if STATUS['state']=='done' else '計算が中断されました。ログを確認してね'
     except Exception as exc:
         with LOCK:
             STATUS['logs'].append(f'ERROR: {exc}')
             STATUS['state'] = 'error'
             STATUS['message'] = str(exc)
-            STATUS['finished_at'] = datetime.now().isoformat(timespec='seconds')
+            STATUS['finished_at'] = datetime.now().isoformat(timespec='microseconds')
 
 
 HTML = r'''<!DOCTYPE html>
@@ -563,7 +563,7 @@ class Handler(BaseHTTPRequestHandler):
                         temp.replace(BATCH_CONFIG)
                         STATUS.update({'state':'running', 'message':'メタ比較を準備中',
                                        'logs':deque(maxlen=120), 'exit_code':None,
-                                       'started_at':datetime.now().isoformat(timespec='seconds'),
+                                       'started_at':datetime.now().isoformat(timespec='microseconds'),
                                        'finished_at':None, 'batch24':True})
                         threading.Thread(target=background_run, args=('all', True, batch_mode),
                                          daemon=True).start()
@@ -576,7 +576,7 @@ class Handler(BaseHTTPRequestHandler):
                 if path == '/api/run':
                     STATUS.update({'state':'running', 'message':'計算を準備中',
                                    'logs':deque(maxlen=120), 'exit_code':None,
-                                   'started_at':datetime.now().isoformat(timespec='seconds'),
+                                   'started_at':datetime.now().isoformat(timespec='microseconds'),
                                    'finished_at':None, 'batch24':False})
                     threading.Thread(target=background_run, args=(cleaned['shields'],),
                                      daemon=True).start()
@@ -610,3 +610,4 @@ if __name__ == '__main__':
         main()
     except KeyboardInterrupt:
         print('\n終了したにぇ。保存済みのCSVとZIPは残るよ。')
+

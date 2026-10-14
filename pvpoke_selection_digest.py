@@ -6,30 +6,19 @@ Use get_selection_report/get_results to inspect the omitted raw matchups.
 """
 from __future__ import annotations
 
-import csv
-import io
 from zipfile import ZipFile
 
 from pvpoke_selection_report import (
-    IV_SUFFIX, MODES, SHIELDS, build_selection_report,
+    MODES, SHIELDS, report_from_matrix,
+
 )
+from pvpoke_selection_matrix import SelectionMatrix, load_selection_matrix
 
 
-def _dominance(archive: ZipFile, mode: str, ivs: list[str]) -> dict[str, list[str]]:
-    """Pairwise Pareto dominance over ALL opponent/shield Battle Ratings."""
-    series = {iv: [] for iv in ivs}
-    for shield in SHIELDS:
-        table = list(csv.reader(io.StringIO(
-            archive.read(f"{mode}_{shield}.csv").decode("utf-8-sig")
-        )))
-        for row in table[1:]:
-            match = IV_SUFFIX.search(row[0])
-            if match is None:
-                raise ValueError(f"Missing IV in {shield}")
-            iv = "/".join(str(int(number)) for number in match.groups())
-            if iv not in series:
-                raise ValueError(f"Unexpected IV in {shield}: {iv}")
-            series[iv].extend(float(n) for n in row[1:-4])
+def _dominance(data: SelectionMatrix, ivs: list[str]) -> dict[str, list[str]]:
+    """Pairwise Pareto dominance over every validated opponent and shield."""
+    series = {iv: [r for shield in SHIELDS for r in data.ratings[shield][iv]]
+              for iv in ivs}
     dominated = {}
     for iv in ivs:
         rivals = []
@@ -50,8 +39,7 @@ def _dominance(archive: ZipFile, mode: str, ivs: list[str]) -> dict[str, list[st
 
 
 def _all_candidate_evidence(
-    archive: ZipFile,
-    mode: str,
+    data: SelectionMatrix,
     ivs: list[str],
     dominated: dict[str, list[str]],
     focus_opponents: list[str] | None,
@@ -62,29 +50,7 @@ def _all_candidate_evidence(
     never cross the 500 boundary. A signal is *not* an automatic S/A grade.
     """
     focus = tuple(word.casefold() for word in (focus_opponents or []))
-    matrix: dict[str, dict[str, list[float]]] = {}
-    opponent_names: list[str] | None = None
-    for shield in SHIELDS:
-        table = list(csv.reader(io.StringIO(
-            archive.read(f"{mode}_{shield}.csv").decode("utf-8-sig")
-        )))
-        names = table[0][1:-4]
-        if opponent_names is None:
-            opponent_names = names
-        elif opponent_names != names:
-            raise ValueError("Opponent order differs between shields")
-        per_candidate = {}
-        for row in table[1:]:
-            match = IV_SUFFIX.search(row[0])
-            if match is None:
-                raise ValueError(f"Missing IV in {shield}")
-            key = "/".join(str(int(v)) for v in match.groups())
-            per_candidate[key] = [float(value) for value in row[1:-4]]
-        if set(per_candidate) != set(ivs):
-            raise ValueError(f"Candidates differ in {shield}")
-        matrix[shield] = per_candidate
-
-    assert opponent_names is not None
+    matrix, opponent_names = data.ratings, data.opponents
     evidence: dict[str, dict] = {
         iv: {
             "ivs": iv, "dominated": iv in dominated,
@@ -199,15 +165,19 @@ def build_selection_digest(
     if not isinstance(focus_limit, int) or not 0 <= focus_limit <= 20:
         raise ValueError("focus_limit must be 0..20")
 
-    full = build_selection_report(archive, mode=mode,
-                                  focus_opponents=focus_opponents,
-                                  max_flips=522)
+    # One validated read per CSV; rankings, dominance and evidence share it.
+    data = load_selection_matrix(archive, mode)
+    focus = focus_opponents if focus_opponents is not None else []
+    if (not isinstance(focus, list) or len(focus) > 15
+            or any(not isinstance(word, str) or not word.strip() or len(word) > 100
+                   for word in focus)):
+        raise ValueError("focus_opponents must contain up to 15 nonempty names")
+    full = report_from_matrix(data, mode, focus)
     candidates = full["rankings"]
     flips = full["crossovers"]
     ivs = [row["ivs"] for row in candidates]
-    dominated = _dominance(archive, mode, ivs)
-    candidate_evidence = _all_candidate_evidence(archive, mode, ivs, dominated,
-                                                focus_opponents)
+    dominated = _dominance(data, ivs)
+    candidate_evidence = _all_candidate_evidence(data, ivs, dominated, focus)
 
     focus_best = {iv: 0 for iv in ivs}
     focus_unique = {iv: 0 for iv in ivs}
@@ -361,3 +331,4 @@ def build_selection_digest(
                 "Inspect get_selection_report for omitted opponent evidence. "
                 "S/A ranks require user-context judgment.",
     }
+

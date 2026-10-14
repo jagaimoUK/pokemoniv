@@ -6,17 +6,10 @@ get_results. Rankings are descriptive, not PvPoke S/A grades.
 """
 from __future__ import annotations
 
-import csv
-import io
-import json
-import math
-import re
 from zipfile import ZipFile
-
-SHIELDS = ("s0", "s1", "s2", "i0y1", "i0y2", "i1y2")
-MODES = ("default", "rank1", "attack", "defense")
-IV_SUFFIX = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{1,2})$")
-EXPECTED_END = ("rating_gt500", "rating_lt500", "rating_eq500", "mean_rating")
+from pvpoke_selection_matrix import (
+    SHIELDS, MODES, IV_SUFFIX, EXPECTED_END, SelectionMatrix, load_selection_matrix,
+)
 
 
 def _mean(numbers: list[float]) -> float:
@@ -43,47 +36,13 @@ def build_selection_report(
             or any(not isinstance(word, str) or not word.strip() or len(word) > 100
                    for word in focus)):
         raise ValueError("focus_opponents must contain up to 15 nonempty names")
-    names: list[str] | None = None
-    candidates: list[str] | None = None
-    matrix: dict[str, dict[str, list[float]]] = {}
+    return report_from_matrix(load_selection_matrix(archive, mode), mode, focus, max_flips)
 
-    for shield in SHIELDS:
-        path = f"{mode}_{shield}.csv"
-        if path not in archive.namelist():
-            raise ValueError(f"Missing required condition: {path}")
-        table = list(csv.reader(io.StringIO(archive.read(path).decode("utf-8-sig"))))
-        if len(table) < 2 or len(table[0]) < 6:
-            raise ValueError(f"Invalid matrix CSV: {path}")
-        header = table[0]
-        if tuple(header[-4:]) != EXPECTED_END:
-            raise ValueError(f"Unexpected summary columns in {path}")
-        opponents = header[1:-4]
-        if names is None:
-            names = opponents
-        elif names != opponents:
-            raise ValueError(f"Opponent order differs in {path}")
-        per_candidate = {}
-        for row in table[1:]:
-            if len(row) != len(header):
-                raise ValueError(f"Malformed candidate row in {path}")
-            match = IV_SUFFIX.search(row[0])
-            if match is None:
-                raise ValueError(f"Missing IV triplet in candidate: {row[0]}")
-            key = "/".join(str(int(v)) for v in match.groups())
-            if key in per_candidate:
-                raise ValueError(f"Duplicate candidate IVs in {path}: {key}")
-            values = [float(value) for value in row[1:-4]]
-            if any(not math.isfinite(r) or r < 0 or r > 1000 for r in values):
-                raise ValueError(f"Invalid Battle Rating in {path}")
-            per_candidate[key] = values
-        keys = list(per_candidate)
-        if candidates is None:
-            candidates = keys
-        elif candidates != keys:
-            raise ValueError(f"Candidate order differs in {path}")
-        matrix[shield] = per_candidate
 
-    assert names is not None and candidates is not None
+def report_from_matrix(data: SelectionMatrix, mode: str, focus: list[str],
+                       max_flips: int | None = None) -> dict:
+    """Internal uncapped view; public report keeps its existing output limit."""
+    names, candidates, matrix = data.opponents, data.candidates, data.ratings
     rankings = []
     for iv in candidates:
         equal = [r for s in SHIELDS[:3] for r in matrix[s][iv]]
@@ -137,7 +96,8 @@ def build_selection_report(
                     for iv in candidates
                 },
             })
-    manifest = json.loads(archive.read("manifest.json").decode("utf-8")) if "manifest.json" in archive.namelist() else {}
+    manifest = data.manifest
+    returned = len(crossover) if max_flips is None else min(max_flips, len(crossover))
     return {
         "mode": mode,
         "batch_mode": manifest.get("batch_mode"),
@@ -150,9 +110,10 @@ def build_selection_report(
         "counts_estimated_from_rating": True,
         "rankings": rankings,
         "crossovers_total": len(crossover),
-        "crossovers_returned": min(max_flips, len(crossover)),
-        "crossovers": crossover[:max_flips],
+        "crossovers_returned": returned,
+        "crossovers": crossover[:returned],
         "focus_matchups": focus_matchups,
         "excluded": manifest.get("excluded"),
         "gamemaster_timestamp": manifest.get("gamemaster_timestamp"),
     }
+

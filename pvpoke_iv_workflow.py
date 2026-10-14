@@ -7,6 +7,7 @@ created: the already existing single PvPoke worker does the calculations.
 from __future__ import annotations
 
 import csv
+from copy import deepcopy
 import io
 import re
 import threading
@@ -15,6 +16,7 @@ import uuid
 from zipfile import ZipFile
 
 from pvpoke_selection_digest import build_selection_digest
+from pvpoke_decision_digest import decision_digest
 
 MODES = ("default", "rank1", "attack", "defense")
 IV_LINE = re.compile(r"^(\d{1,2}),(\d{1,2}),(\d{1,2})$")
@@ -93,7 +95,11 @@ class IVWorkflow:
             focus_opponents: list[str] | None = None,
             highlight_limit: int = 20, review_limit: int = 8,
             focus_limit: int = 20, wait_seconds: int = 12,
-            expected_meta_sha256: str | None = None) -> dict:
+            expected_meta_sha256: str | None = None,
+            report_format: str = "decision") -> dict:
+        requested_at = time.monotonic()
+        if report_format not in ("decision", "compact"):
+            raise ValueError("report_format must be decision or compact")
         own, normalized, rows = _canonical(candidate, ivs, batch_mode)
         if not isinstance(wait_seconds, int) or not 0 <= wait_seconds <= 20:
             raise ValueError("wait_seconds must be 0..20")
@@ -141,18 +147,28 @@ class IVWorkflow:
                 "highlight_limit": highlight_limit,
                 "review_limit": review_limit,
                 "focus_limit": focus_limit,
+                "report_format": report_format,
+                "requested_at": requested_at,
+                "completed_result": None,
             }
             self._ticket = ticket
 
+        result = self.result(ticket["run_ref"], wait_seconds=wait_seconds)
+        result["preview"] = started["preview"]
+        return result
+
+    def result(self, run_ref: str, wait_seconds: int = 12) -> dict:
+        """Bounded long poll avoids repeated model/tool round-trips."""
+        if not isinstance(wait_seconds, int) or not 0 <= wait_seconds <= 20:
+            raise ValueError("wait_seconds must be 0..20")
         deadline = time.monotonic() + wait_seconds
         while True:
-            result = self.result(ticket["run_ref"])
+            result = self._result_once(run_ref)
             if result["state"] != "running" or time.monotonic() >= deadline:
-                result["preview"] = started["preview"]
                 return result
-            time.sleep(min(0.8, max(0, deadline - time.monotonic())))
+            time.sleep(min(0.25, max(0, deadline - time.monotonic())))
 
-    def result(self, run_ref: str) -> dict:
+    def _result_once(self, run_ref: str) -> dict:
         if not isinstance(run_ref, str) or not run_ref:
             raise ValueError("run_ref is required")
         with self._lock:
@@ -171,6 +187,9 @@ class IVWorkflow:
                         "message": current.get("message"),
                         "candidate_count": len(ticket["iv_rows"]),
                         "batch_mode": ticket["batch_mode"]}
+            if ticket["completed_result"] is not None:
+                return deepcopy(ticket["completed_result"])
+            analysis_started = time.monotonic()
             with self.backend._zip() as archive:
                 _verify_zip(archive, ticket)
                 modes = ("default",) if ticket["batch_mode"] == "simple" else MODES
@@ -181,7 +200,14 @@ class IVWorkflow:
                         ticket["focus_limit"])
                     for mode in modes
                 }
-            return {
+            # Recheck identity after ZIP download/analysis before caching.
+            verified = self.backend.status()
+            if (verified.get("started_at") != ticket["started_at"]
+                    or verified.get("state") != "done" or not verified.get("batch24")):
+                raise ValueError("PvPoke job identity changed during result analysis")
+            if ticket["report_format"] == "decision":
+                reports = {mode: decision_digest(report) for mode, report in reports.items()}
+            output = {
                 "run_ref": run_ref,
                 "state": "done", "complete": all(report["complete"] for report in reports.values()),
                 "candidate": ticket["candidate"], "batch_mode": ticket["batch_mode"],
@@ -190,4 +216,14 @@ class IVWorkflow:
                 "total_ratings_checked": sum(
                     report["total_ratings_checked"] for report in reports.values()),
                 "reports": reports,
+                "timing": {
+                    "server_request_to_result_seconds": round(
+                        time.monotonic() - ticket["requested_at"], 3),
+                    "zip_and_analysis_seconds": round(
+                        time.monotonic() - analysis_started, 3),
+                    "scope": "server only; excludes GPT evaluation and final response",
+                },
             }
+            ticket["completed_result"] = output
+            return deepcopy(output)
+

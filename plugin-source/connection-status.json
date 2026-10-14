@@ -1,0 +1,54 @@
+{
+  "status": "endpoint_registered_developer_app_tools_verified",
+  "endpoint": "https://pokemoniv-production.up.railway.app/mcp",
+  "transport": "streamable-http",
+  "authentication": "Auth0 OAuth; no embedded secrets",
+  "resource_metadata_verified": true,
+  "resource_scopes": [
+    "run:pvpoke"
+  ],
+  "tools_expected": [
+    "get_catalog",
+    "prepare_battle",
+    "start_battle",
+    "get_status",
+    "get_results",
+    "prepare_24_conditions",
+    "start_24_conditions",
+    "get_24_summary"
+  ],
+  "development_mcp_eight_tools_verified": true,
+  "development_mcp_24_conditions_simulation_verified": true,
+  "plugin_specific_oauth_verified": false,
+  "plugin_specific_tool_discovery_verified": false,
+  "verification_date": "2026-10-13",
+  "cp_cap": 1500,
+  "max_level": 50,
+  "shield_pairs_i_y": [
+    [
+      0,
+      0
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      2,
+      2
+    ],
+    [
+      0,
+      1
+    ],
+    [
+      0,
+      2
+    ],
+    [
+      1,
+      2
+    ]
+  ]
+}
+
