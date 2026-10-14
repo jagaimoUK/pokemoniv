@@ -17,6 +17,7 @@ from zipfile import ZipFile
 
 from pvpoke_selection_digest import build_selection_digest
 from pvpoke_decision_digest import decision_digest, decision_digest_v2
+from pvpoke_app_selection import recommendations_from_zip, validate_policy
 
 MODES = ("default", "rank1", "attack", "defense")
 IV_LINE = re.compile(r"^(\d{1,2}),(\d{1,2}),(\d{1,2})$")
@@ -96,10 +97,11 @@ class IVWorkflow:
             highlight_limit: int = 20, review_limit: int = 8,
             focus_limit: int = 20, wait_seconds: int = 12,
             expected_meta_sha256: str | None = None,
-            report_format: str = "decision") -> dict:
+            report_format: str = "decision", selection_policy: dict | None = None) -> dict:
         requested_at = time.monotonic()
-        if report_format not in ("decision", "decision-v1", "compact"):
-            raise ValueError("report_format must be decision, decision-v1 or compact")
+        if report_format not in ("decision", "decision-v1", "compact", "app"):
+            raise ValueError("report_format must be decision, decision-v1, compact or app")
+        validate_policy(selection_policy)
         own, normalized, rows = _canonical(candidate, ivs, batch_mode)
         if not isinstance(wait_seconds, int) or not 0 <= wait_seconds <= 20:
             raise ValueError("wait_seconds must be 0..20")
@@ -136,6 +138,7 @@ class IVWorkflow:
                          or actual_sha.lower() != expected_meta_sha256.lower())):
                 raise ValueError("Project meta SHA256 does not match the server; synchronize first")
             # /api/run24 already validates inputs and builds the preview atomically.
+            english_name = self.backend.candidate_name(own["species"]) if report_format == "app" else None
             started = self.backend.start24(own, normalized, batch_mode)
             status = self.backend.status()
             started_at = status.get("started_at")
@@ -152,6 +155,7 @@ class IVWorkflow:
                 "review_limit": review_limit,
                 "focus_limit": focus_limit,
                 "report_format": report_format,
+                "english_name": english_name, "selection_policy": selection_policy,
                 "requested_at": requested_at,
                 "completed_result": None,
             }
@@ -197,15 +201,24 @@ class IVWorkflow:
             with self.backend._zip() as archive:
                 _verify_zip(archive, ticket)
                 modes = ("default",) if ticket["batch_mode"] == "simple" else MODES
-                reports = {
-                    mode: build_selection_digest(
-                        archive, mode, ticket["focus_opponents"],
-                        ticket["highlight_limit"], ticket["review_limit"],
-                        ticket["focus_limit"],
-                        include_tradeoffs=ticket["report_format"] == "decision")
-                    for mode in modes
-                }
+                app_selection = None
+                if ticket["report_format"] == "app":
+                    app_selection = recommendations_from_zip(
+                        archive, ticket["candidate"], ticket["english_name"],
+                        ticket["batch_mode"], ticket["focus_opponents"], ticket["selection_policy"])
+                    reports = {}
+                else:
+                    reports = {
+                        mode: build_selection_digest(
+                            archive, mode, ticket["focus_opponents"],
+                            ticket["highlight_limit"], ticket["review_limit"],
+                            ticket["focus_limit"],
+                            include_tradeoffs=ticket["report_format"] == "decision")
+                        for mode in modes
+                    }
                 expected_ivs = {"/".join(map(str, row)) for row in ticket["iv_rows"]}
+                if app_selection is not None and set(app_selection['candidate_ivs']) != expected_ivs:
+                    raise ValueError("Matrix candidate IVs differ from the requested job")
                 if any({row[0] for row in report["ranking_rows"]} != expected_ivs
                        for report in reports.values()):
                     raise ValueError("Matrix candidate IVs differ from the requested job")
@@ -235,6 +248,12 @@ class IVWorkflow:
                     "scope": "server only; excludes GPT evaluation and final response",
                 },
             }
+            if app_selection is not None:
+                output["selection"] = app_selection
+                output["complete"] = app_selection["complete"]
+                output["total_ratings_checked"] = app_selection["total_ratings_checked"]
+                output["reports"] = {}
             ticket["completed_result"] = output
             return deepcopy(output)
+
 

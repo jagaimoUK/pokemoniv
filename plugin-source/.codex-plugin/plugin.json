@@ -10,7 +10,7 @@
     "capabilities": []
   },
   "name": "pvpoke-iv-selector",
-  "version": "0.3.20",
+  "version": "0.3.21",
   "description": "PvPokeの実測結果と厳選Projectのpvpokeメタポケモンを使う個体値厳選。",
   "author": {
     "name": "haggis z",
@@ -19,3 +19,4 @@
   "keywords": [],
   "skills": "./skills"
 }
+

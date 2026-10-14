@@ -78,6 +78,17 @@ def meta_status() -> dict:
     return _request('/api/meta/status')
 
 
+def candidate_name(species: str) -> str:
+    """Use game-data English names, never invent form spellings from an ID."""
+    cat = _request('/api/catalog')
+    item = cat.get('species', {}).get(species, {})
+    name = item.get('name')
+    if not cat.get('ready') or not isinstance(name, str) or not name:
+        raise BridgeError('ゲームデータの英語名が取得できません。データ読込完了を待ってください')
+    # Search by the base English species; forms/shadow remain in job identity.
+    return re.sub(r'\s*\([^)]*\)', '', name).strip()
+
+
 def sync_meta_opponents(csv_text: str) -> dict:
     if not isinstance(csv_text, str) or not csv_text.strip():
         raise BridgeError('メタ一覧を4列CSVテキストで送ってください')
@@ -274,3 +285,4 @@ if __name__ == '__main__':
         print(json.dumps(healthcheck(), ensure_ascii=False, indent=2))
     except BridgeError as e:
         raise SystemExit('接続確認エラー: ' + str(e)) from e
+

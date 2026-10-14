@@ -159,3 +159,10 @@ five newest**, and never deleting `latest.zip`, symlinks, or unrelated files.
 Other persistent files such as `project_meta_opponents.csv` are not touched.
 Retention is best-effort: an archive cleanup failure never invalidates a
 successfully saved, verified ZIP.
+
+# ブラウザだけで個体値厳選
+
+[アプリ版を開く](https://pokemoniv-production.up.railway.app/app)。既存の接続キーで接続し、
+ポケモン・技・個体値を入力すると、全条件の計算から推薦理由と英語検索式まで表示する。
+GPT評価は従来どおり使用できる。自動判定の基準と接続方法は [アプリ推薦](docs/app-selection.md) を参照。
+

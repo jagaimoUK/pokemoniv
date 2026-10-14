@@ -7,11 +7,16 @@ import json
 import logging
 import os
 import hmac
+from urllib.parse import urlparse
 import jwt
 from jwt import PyJWKClient, InvalidTokenError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pvpoke_bridge_core as backend
 from pvpoke_iv_workflow import IVWorkflow
+from pvpoke_app_ui import HTML as APP_HTML
+from pvpoke_app_access import AppAccess
+
+APP_ACCESS = AppAccess()
 
 IV_RUNNER = IVWorkflow(backend)
 
@@ -23,6 +28,8 @@ ALLOWED_ORIGINS = {'https://chatgpt.com', 'https://chat.openai.com', f'http://12
 VERSION = '2025-06-18'
 # OAuth is enabled only when the authenticated user's Auth0 tenant is configured.
 MCP_URL = os.environ.get('PVP_MCP_URL', 'https://pokemoniv-production.up.railway.app/mcp').rstrip('/')
+APP_ORIGIN = '{0.scheme}://{0.netloc}'.format(urlparse(MCP_URL))
+ALLOWED_ORIGINS.add(APP_ORIGIN)
 AUTH0_ISSUER_RAW = os.environ.get('AUTH0_ISSUER', '').strip().rstrip('/')
 AUTH0_ISSUER = AUTH0_ISSUER_RAW + '/' if AUTH0_ISSUER_RAW else ''
 JWT_AUDIENCE = os.environ.get('JWT_AUDIENCE', MCP_URL).strip()
@@ -157,7 +164,7 @@ TOOLS = [
          'focus_limit': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 20}
      }}},
     {'name': 'run_iv_selection',
-     'description': 'Launch all curated battles and wait up to 20s. Return verified decision-v2 tables with all-candidate evidence and tradeoffs, or run_ref for bounded polling. Decode opponent_index using each report opponents array (zero-based). No automatic S/A grades.',
+     'description': 'Launch all curated battles and wait up to 20s. Default: verified decision-v2 evidence for GPT evaluation. report_format=app: rule-based provisional recommendations, reasons and search strings. Return run_ref for bounded polling. Never restart a running batch.',
      'inputSchema': {'type': 'object', 'properties': {
          'candidate': POKEMON,
          'ivs': PREP['properties']['ivs'],
@@ -169,7 +176,10 @@ TOOLS = [
          'review_limit': {'type': 'integer', 'minimum': 2, 'maximum': 12, 'default': 8},
          'focus_limit': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 20},
          'wait_seconds': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 12},
-         'report_format': {'type': 'string', 'enum': ['decision', 'decision-v1', 'compact'], 'default': 'decision'}
+         'report_format': {'type': 'string', 'enum': ['decision', 'decision-v1', 'compact', 'app'], 'default': 'decision'},
+         'selection_policy': {'type': 'object', 'properties': {
+             'meaningful_win_lead': {'type': 'number', 'minimum': 1, 'maximum': 1000, 'default': 20}
+         }, 'additionalProperties': False}
      }, 'required': ['candidate', 'ivs']}},
     {'name': 'get_iv_selection_result',
      'description': 'Wait up to 12s by default for the exact run_ref; return verified decision evidence when complete. Cached results retain job-identity checks. Never restart the batch.',
@@ -196,7 +206,9 @@ def call_tool(name, args):
     if not isinstance(args, dict):
         raise ValueError('arguments must be an object')
     if name == 'get_catalog':
-        return backend.catalog()
+        result = backend.catalog()
+        result['app_access'] = APP_ACCESS.issue(APP_ORIGIN)
+        return result
     if name == 'get_meta_status':
         return backend.meta_status()
     if name == 'sync_meta_opponents':
@@ -232,7 +244,7 @@ def call_tool(name, args):
                              args.get('focus_limit', 20),
                              args.get('wait_seconds', 12),
                              args.get('expected_meta_sha256'),
-                             args.get('report_format', 'decision'))
+                             args.get('report_format', 'decision'), args.get('selection_policy'))
     if name == 'get_iv_selection_result':
         return IV_RUNNER.result(args['run_ref'], args.get('wait_seconds', 12))
     if name == 'get_status':
@@ -269,7 +281,61 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Cache-Control', 'no-store')
         self.end_headers()
 
+    def app_page(self):
+        data = APP_HTML.encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('X-Frame-Options', 'DENY')
+        self.send_header('Referrer-Policy', 'no-referrer')
+        self.end_headers()
+        self.wfile.write(data)
+
+    def app_request(self):
+        """Only explicit app operations; never proxy arbitrary backend paths."""
+        if self.path not in ('/app-api/catalog', '/app-api/run', '/app-api/result'):
+            return self.respond(404, {'error': 'Not found'})
+        origin = self.headers.get('Origin')
+        if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'):
+            return self.respond(403, {'error': 'Origin not allowed'})
+        if self.headers.get('Content-Type', '').split(';')[0].strip().lower() != 'application/json':
+            return self.respond(415, {'error': 'Content-Type must be application/json'})
+        try:
+            size = int(self.headers.get('Content-Length', '0'))
+            if not 0 < size <= 140000:
+                return self.respond(413, {'error': 'Invalid body size'})
+            args = json.loads(self.rfile.read(size))
+            if not isinstance(args, dict):
+                raise ValueError('入力はJSONオブジェクトで指定してください')
+            if self.path == '/app-api/catalog':
+                result = backend._request('/api/catalog')
+                result.pop('saved', None)
+            elif self.path == '/app-api/run':
+                if args.get('report_format', 'app') not in ('app', 'decision'):
+                    raise ValueError('評価方法はappまたはdecisionです')
+                # Browser has no access to Project files. Bind the job to the
+                # currently installed server meta snapshot instead.
+                args['expected_meta_sha256'] = backend.meta_status()['sha256']
+                args.setdefault('report_format', 'app')
+                result = call_tool('run_iv_selection', args)
+            else:
+                result = IV_RUNNER.result(args.get('run_ref'), args.get('wait_seconds', 12))
+            if self.path != '/app-api/catalog':
+                result['meta_verified_against_project'] = False
+                result['meta_verification_source'] = 'server snapshot; Project file unavailable in browser'
+            self.respond(200, result)
+        except (ValueError, TypeError, KeyError, backend.BridgeError) as exc:
+            self.respond(400, {'error': str(exc)})
+        except Exception:
+            logging.exception('App request failed')
+            self.respond(500, {'error': 'アプリの処理に失敗しました'})
+
     def do_GET(self):
+        if self.path in ('/', '/app'):
+            self.app_page()
+            return
         if self.path in ('/.well-known/oauth-protected-resource',
                          '/.well-known/oauth-protected-resource/mcp') and AUTH0_ENABLED:
             self.respond(200, {
@@ -285,8 +351,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         token = self.headers.get('Authorization', '')
         is_api_key = hmac.compare_digest(token, 'Bearer ' + API_KEY)
-        if not is_api_key and not oauth_token_valid(token):
+        app_session = self.path.startswith('/app-api/') and APP_ACCESS.valid(token)
+        if not is_api_key and not app_session and not oauth_token_valid(token):
             self.unauthorized()
+            return
+        if self.path.startswith('/app-api/'):
+            self.app_request()
             return
         if self.path != '/mcp':
             self.respond(404, {'error': 'Not found'})
@@ -351,4 +421,5 @@ if __name__ == '__main__':
     print(f'Local MCP test server: http://{HOST}:{PORT}/mcp', flush=True)
     print('Authenticated prototype server. HTTPS must be terminated by hosting platform.', flush=True)
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+
 

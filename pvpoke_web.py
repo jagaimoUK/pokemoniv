@@ -79,6 +79,7 @@ def load_catalog():
         gm, cpms, species = engine.game_data()
         payload = {
             sid: {
+                'name': p.get('speciesName'),
                 'fastMoves': p.get('fastMoves', []),
                 'chargedMoves': p.get('chargedMoves', []),
             }
@@ -610,4 +611,5 @@ if __name__ == '__main__':
         main()
     except KeyboardInterrupt:
         print('\n終了したにぇ。保存済みのCSVとZIPは残るよ。')
+
 
