@@ -11,6 +11,9 @@ import jwt
 from jwt import PyJWKClient, InvalidTokenError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pvpoke_bridge_core as backend
+from pvpoke_iv_workflow import IVWorkflow
+
+IV_RUNNER = IVWorkflow(backend)
 
 HOST, PORT = '0.0.0.0', int(os.environ.get('PORT', '8787'))
 API_KEY = os.environ.get('PVP_API_KEY', '')
@@ -153,6 +156,198 @@ TOOLS = [
          'review_limit': {'type': 'integer', 'minimum': 2, 'maximum': 12, 'default': 8},
          'focus_limit': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 10}
      }}},
+    {'name': 'run_iv_selection',
+     'description': 'Launch a curated meta IV batch, optionally wait up to 20 seconds, and return a verified compact digest if already done. Otherwise return run_ref for get_iv_selection_result. Does not skip any PvPoke battle, does not assign S/A grades.',
+     'inputSchema': {'type': 'object', 'properties': {
+         'candidate': POKEMON,
+         'ivs': PREP['properties']['ivs'],
+         'batch_mode': {'type': 'string', 'enum': ['simple', 'detailed'], 'default': 'simple'},
+         'expected_meta_sha256': {'type': 'string', 'pattern': '^[0-9a-fA-F]{64} 'description': 'Read local calculation state, progress and recent logs.',
+     'inputSchema': {'type': 'object', 'properties': {}}},
+    {'name': 'get_results', 'description': 'Get per-opponent Battle Ratings from a finished result ZIP, 6 or 24 conditions.',
+     'inputSchema': {
+         'type': 'object',
+         'properties': {
+             'shield': {'type': 'string', 'enum': ['s0','s1','s2','i0y1','i0y2','i1y2'], 'default': 's1'},
+             'offset': {'type': 'integer', 'minimum': 0, 'default': 0},
+             'limit': {'type': 'integer', 'minimum': 1, 'maximum': 20, 'default': 10},
+             'mode': {'type':'string','enum':['default','rank1','attack','defense'],
+                      'description':'Required for 24-condition ZIP results, absent for legacy 6-condition ZIP'},
+         },
+     }},
+]
+
+def call_tool(name, args):
+    if not isinstance(args, dict):
+        raise ValueError('arguments must be an object')
+    if name == 'get_catalog':
+        return backend.catalog()
+    if name == 'get_meta_status':
+        return backend.meta_status()
+    if name == 'sync_meta_opponents':
+        return backend.sync_meta_opponents(args['csv_text'])
+    if name == 'get_storage_status':
+        return backend.storage_status()
+    if name in ('prepare_battle', 'start_battle'):
+        action = backend.preview if name == 'prepare_battle' else backend.start
+        return action(args['candidate'], args['ivs'], args['opponents'],
+                      args.get('shields', 'all'), args.get('opponent_iv_mode'))
+    if name == 'prepare_24_conditions':
+        return backend.preview24(args['candidate'], args['ivs'], args.get('batch_mode', 'simple'))
+    if name == 'start_24_conditions':
+        return backend.start24(args['candidate'], args['ivs'], args.get('batch_mode', 'simple'))
+    if name == 'get_24_summary':
+        return backend.summary24(args.get('offset',0), args.get('limit',20), args.get('mode'))
+    if name == 'get_selection_report':
+        return backend.selection_report(args.get('mode','default'),
+                                        args.get('focus_opponents'),
+                                        args.get('max_flips',120))
+    if name == 'get_selection_digest':
+        return backend.selection_digest(args.get('mode','default'),
+                                        args.get('focus_opponents'),
+                                        args.get('highlight_limit',20),
+                                        args.get('review_limit',8),
+                                        args.get('focus_limit',10))
+    if name == 'run_iv_selection':
+        return IV_RUNNER.run(args['candidate'], args['ivs'],
+                             args.get('batch_mode', 'simple'),
+                             args.get('focus_opponents'),
+                             args.get('highlight_limit', 20),
+                             args.get('review_limit', 8),
+                             args.get('focus_limit', 10),
+                             args.get('wait_seconds', 12),
+                             args.get('expected_meta_sha256'))
+    if name == 'get_iv_selection_result':
+        return IV_RUNNER.result(args['run_ref'])
+    if name == 'get_status':
+        return backend.status()
+    if name == 'get_results':
+        return backend.results(args.get('shield', 's1'), args.get('offset', 0),
+                               args.get('limit', 10), args.get('mode'))
+    raise KeyError(f'Unknown tool: {name}')
+
+if AUTH0_ENABLED:
+    # Make authorization explicit in MCP tool discovery, without exposing secrets.
+    for t in TOOLS:
+        t['securitySchemes'] = [{'type':'oauth2', 'scopes':[OAUTH_SCOPE] if OAUTH_SCOPE else []}]
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = 'PvPokeMCPLite/0.1'
+    def respond(self, code, obj=None):
+        data = b'' if obj is None else json.dumps(obj, ensure_ascii=False).encode('utf-8')
+        self.send_response(code)
+        if obj is not None:
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        if data: self.wfile.write(data)
+    def unauthorized(self):
+        self.send_response(401)
+        challenge = 'Bearer'
+        if AUTH0_ENABLED:
+            challenge += (f' resource_metadata="{MCP_URL.rsplit("/mcp",1)[0]}'
+                          '/.well-known/oauth-protected-resource"')
+        self.send_header('WWW-Authenticate', challenge)
+        self.send_header('Content-Length', '0')
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+
+    def do_GET(self):
+        if self.path in ('/.well-known/oauth-protected-resource',
+                         '/.well-known/oauth-protected-resource/mcp') and AUTH0_ENABLED:
+            self.respond(200, {
+                'resource': MCP_URL,
+                'authorization_servers': [AUTH0_ISSUER],
+                'scopes_supported': [OAUTH_SCOPE] if OAUTH_SCOPE else []
+            })
+            return
+        if self.path == '/health':
+            self.respond(200, {'ok':True, 'version':'0.2-cloud-prototype'})
+        else:
+            self.respond(405, {'error': 'POST /mcp for MCP requests'})
+    def do_POST(self):
+        token = self.headers.get('Authorization', '')
+        is_api_key = hmac.compare_digest(token, 'Bearer ' + API_KEY)
+        if not is_api_key and not oauth_token_valid(token):
+            self.unauthorized()
+            return
+        if self.path != '/mcp':
+            self.respond(404, {'error': 'Not found'})
+            return
+        origin = self.headers.get('Origin')
+        if origin and origin not in ALLOWED_ORIGINS:
+            self.respond(403, {'error': 'Origin not allowed'})
+            return
+        ct = self.headers.get('Content-Type', '').split(';')[0].strip().lower()
+        if ct != 'application/json':
+            self.respond(415, {'error': 'Content-Type must be application/json'})
+            return
+        try:
+            size = int(self.headers.get('Content-Length','0'))
+            if not 0 < size <= 1_000_000:
+                self.respond(413, {'error': 'Invalid body size'})
+                return
+            data = json.loads(self.rfile.read(size))
+            if not isinstance(data, dict) or data.get('jsonrpc') != '2.0' or not isinstance(data.get('method'), str):
+                self.respond(400, {'jsonrpc':'2.0','id':data.get('id') if isinstance(data,dict) else None,
+                                   'error':{'code':-32600,'message':'Invalid Request'}})
+                return
+            method, id_ = data['method'], data.get('id')
+            if 'id' not in data:
+                # Notifications are acknowleded without a JSON-RPC response.
+                self.respond(202)
+                return
+            if method == 'initialize':
+                result = {'protocolVersion':VERSION, 'capabilities':{'tools':{'listChanged':False}},
+                          'serverInfo':{'name':'PvPoke IV Matrix Local', 'version':'0.1'},
+                          'instructions':'PvPoke single-worker prototype. Call get_catalog and prepare_battle before start_battle. Avoid concurrent jobs.'}
+            elif method == 'ping':
+                result = {}
+            elif method == 'tools/list':
+                result = {'tools': TOOLS}
+            elif method == 'tools/call':
+                params = data.get('params') or {}
+                if not isinstance(params, dict):
+                    raise ValueError('Invalid tool params')
+                name = params.get('name')
+                if name not in {t['name'] for t in TOOLS}:
+                    self.respond(200, {'jsonrpc':'2.0','id':id_,
+                                       'error':{'code':-32602, 'message':'Unknown tool'}})
+                    return
+                try:
+                    output = call_tool(name, params.get('arguments') or {})
+                    result = {'content':[{'type':'text','text':json.dumps(output,ensure_ascii=False)}],
+                              'isError':False}
+                except Exception as e:
+                    result = {'content':[{'type':'text','text':f'{type(e).__name__}: {e}'}],
+                              'isError':True}
+            else:
+                self.respond(200, {'jsonrpc':'2.0','id':id_,
+                                   'error':{'code':-32601,'message':'Method not found'}})
+                return
+            self.respond(200, {'jsonrpc':'2.0','id':id_,'result':result})
+        except Exception as e:
+            self.respond(400, {'jsonrpc':'2.0','id':None,
+                               'error':{'code':-32700,'message':f'Parse error: {str(e)[:200]}'}})
+
+if __name__ == '__main__':
+    print(f'Local MCP test server: http://{HOST}:{PORT}/mcp', flush=True)
+    print('Authenticated prototype server. HTTPS must be terminated by hosting platform.', flush=True)
+    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+,
+                                   'description': 'Project source SHA256; refuse to launch if server meta differs. The caller must compute this from the project file.'},
+         'focus_opponents': {'type': 'array', 'items': {'type': 'string'}, 'maxItems': 15},
+         'highlight_limit': {'type': 'integer', 'minimum': 1, 'maximum': 60, 'default': 20},
+         'review_limit': {'type': 'integer', 'minimum': 2, 'maximum': 12, 'default': 8},
+         'focus_limit': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 10},
+         'wait_seconds': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 12}
+     }, 'required': ['candidate', 'ivs']}},
+    {'name': 'get_iv_selection_result',
+     'description': 'Poll the exact run_ref from run_iv_selection. Returns pending/error, or completed verified digest for all requested opponent IV modes. Never returns a stale prior ZIP.',
+     'inputSchema': {'type': 'object', 'properties': {
+         'run_ref': {'type': 'string', 'minLength': 1}
+     }, 'required': ['run_ref']}},
     {'name': 'get_status', 'description': 'Read local calculation state, progress and recent logs.',
      'inputSchema': {'type': 'object', 'properties': {}}},
     {'name': 'get_results', 'description': 'Get per-opponent Battle Ratings from a finished result ZIP, 6 or 24 conditions.',
