@@ -15,6 +15,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from typing import Any
+from pvpoke_selection_report import build_selection_report
 
 BASE = os.environ.get('PVP_LOCAL_URL', 'http://127.0.0.1:8765').rstrip('/')
 SHIELDS = {'s0', 's1', 's2', 'i0y1', 'i0y2', 'i1y2'}
@@ -218,6 +219,17 @@ def results(shield: str = 's1', offset: int = 0, limit: int = 10,
                 'manifest': {k: manifest.get(k) for k in ('gamemaster_timestamp','cp_cap','max_level','shield_pairs')}
                 if isinstance(manifest, dict) else None,
                 'rows': items}
+
+
+def selection_report(mode: str = 'default', focus_opponents: list[str] | None = None,
+                     max_flips: int = 120) -> dict:
+    """Analyze all six shield matrices with a single ZIP download.
+
+    Unlike get_results, this returns compact rankings and crossover evidence.
+    It never changes or recalculates the underlying battle results.
+    """
+    with _zip() as archive:
+        return build_selection_report(archive, mode, focus_opponents, max_flips)
 
 
 def summary24(offset: int = 0, limit: int = 20, mode: str | None = None) -> dict:
