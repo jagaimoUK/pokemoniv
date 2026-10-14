@@ -136,6 +136,14 @@ TOOLS = [
          'limit': {'type':'integer','minimum':1,'maximum':50,'default':20},
          'mode': {'type':'string','enum':['default','rank1','attack','defense']}
      }}},
+    {'name': 'get_selection_report',
+     'description': 'Fast six-shield IV comparison in one call: all candidate rankings, 500-rating crossovers and optionally full ratings for named focus opponents. Reuses completed ZIP without rerunning battles.',
+     'inputSchema': {'type': 'object', 'properties': {
+         'mode': {'type': 'string', 'enum': ['default','rank1','attack','defense'], 'default': 'default'},
+         'focus_opponents': {'type': 'array', 'items': {'type': 'string'}, 'maxItems': 15,
+                             'description': 'Optional case-insensitive name fragments, e.g. Corsola, Tinkaton, Clodsire'},
+         'max_flips': {'type': 'integer', 'minimum': 0, 'maximum': 500, 'default': 120}
+     }}},
     {'name': 'get_status', 'description': 'Read local calculation state, progress and recent logs.',
      'inputSchema': {'type': 'object', 'properties': {}}},
     {'name': 'get_results', 'description': 'Get per-opponent Battle Ratings from a finished result ZIP, 6 or 24 conditions.',
@@ -172,6 +180,10 @@ def call_tool(name, args):
         return backend.start24(args['candidate'], args['ivs'], args.get('batch_mode', 'simple'))
     if name == 'get_24_summary':
         return backend.summary24(args.get('offset',0), args.get('limit',20), args.get('mode'))
+    if name == 'get_selection_report':
+        return backend.selection_report(args.get('mode','default'),
+                                        args.get('focus_opponents'),
+                                        args.get('max_flips',120))
     if name == 'get_status':
         return backend.status()
     if name == 'get_results':
