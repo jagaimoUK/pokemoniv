@@ -16,6 +16,7 @@ import urllib.request
 import zipfile
 from typing import Any
 from pvpoke_selection_report import build_selection_report
+from pvpoke_selection_digest import build_selection_digest
 
 BASE = os.environ.get('PVP_LOCAL_URL', 'http://127.0.0.1:8765').rstrip('/')
 SHIELDS = {'s0', 's1', 's2', 'i0y1', 'i0y2', 'i1y2'}
@@ -230,6 +231,15 @@ def selection_report(mode: str = 'default', focus_opponents: list[str] | None = 
     """
     with _zip() as archive:
         return build_selection_report(archive, mode, focus_opponents, max_flips)
+
+
+def selection_digest(mode: str = 'default', focus_opponents: list[str] | None = None,
+                     highlight_limit: int = 20, review_limit: int = 8,
+                     focus_limit: int = 10) -> dict:
+    """Return a compact server-side evidence digest from all saved ratings."""
+    with _zip() as archive:
+        return build_selection_digest(archive, mode, focus_opponents,
+                                      highlight_limit, review_limit, focus_limit)
 
 
 def summary24(offset: int = 0, limit: int = 20, mode: str | None = None) -> dict:

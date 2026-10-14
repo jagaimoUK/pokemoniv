@@ -36,8 +36,8 @@ def build_selection_report(
     """
     if mode not in MODES:
         raise ValueError("mode must be default, rank1, attack or defense")
-    if not isinstance(max_flips, int) or not 0 <= max_flips <= 500:
-        raise ValueError("max_flips must be an integer between 0 and 500")
+    if not isinstance(max_flips, int) or not 0 <= max_flips <= 522:
+        raise ValueError("max_flips must be an integer between 0 and 522")
     focus = focus_opponents if focus_opponents is not None else []
     if (not isinstance(focus, list) or len(focus) > 15
             or any(not isinstance(word, str) or not word.strip() or len(word) > 100
