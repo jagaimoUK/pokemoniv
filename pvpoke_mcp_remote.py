@@ -11,6 +11,9 @@ import jwt
 from jwt import PyJWKClient, InvalidTokenError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pvpoke_bridge_core as backend
+from pvpoke_iv_workflow import IVWorkflow
+
+IV_RUNNER = IVWorkflow(backend)
 
 HOST, PORT = '0.0.0.0', int(os.environ.get('PORT', '8787'))
 API_KEY = os.environ.get('PVP_API_KEY', '')
@@ -153,6 +156,25 @@ TOOLS = [
          'review_limit': {'type': 'integer', 'minimum': 2, 'maximum': 12, 'default': 8},
          'focus_limit': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 10}
      }}},
+    {'name': 'run_iv_selection',
+     'description': 'Launch a curated IV batch and wait up to 20s. If complete, return the verified compact digest, otherwise return run_ref to poll. Existing PvPoke worker executes every battle.',
+     'inputSchema': {'type': 'object', 'properties': {
+         'candidate': POKEMON,
+         'ivs': PREP['properties']['ivs'],
+         'batch_mode': {'type': 'string', 'enum': ['simple', 'detailed'], 'default': 'simple'},
+         'expected_meta_sha256': {'type': 'string', 'pattern': '^[0-9a-fA-F]{64}$',
+                                  'description': 'Hash from the Project meta source; abort when the server meta hash differs.'},
+         'focus_opponents': {'type': 'array', 'items': {'type': 'string'}, 'maxItems': 15},
+         'highlight_limit': {'type': 'integer', 'minimum': 1, 'maximum': 60, 'default': 20},
+         'review_limit': {'type': 'integer', 'minimum': 2, 'maximum': 12, 'default': 8},
+         'focus_limit': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 10},
+         'wait_seconds': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 12}
+     }, 'required': ['candidate', 'ivs']}},
+    {'name': 'get_iv_selection_result',
+     'description': 'Poll only a run_ref returned by run_iv_selection; return the verified compact digest when the exact job completes. Never use an unrelated prior ZIP.',
+     'inputSchema': {'type': 'object', 'properties': {
+         'run_ref': {'type': 'string', 'minLength': 1}
+     }, 'required': ['run_ref']}},
     {'name': 'get_status', 'description': 'Read local calculation state, progress and recent logs.',
      'inputSchema': {'type': 'object', 'properties': {}}},
     {'name': 'get_results', 'description': 'Get per-opponent Battle Ratings from a finished result ZIP, 6 or 24 conditions.',
@@ -199,6 +221,17 @@ def call_tool(name, args):
                                         args.get('highlight_limit',20),
                                         args.get('review_limit',8),
                                         args.get('focus_limit',10))
+    if name == 'run_iv_selection':
+        return IV_RUNNER.run(args['candidate'], args['ivs'],
+                             args.get('batch_mode') or 'simple',
+                             args.get('focus_opponents'),
+                             args.get('highlight_limit', 20),
+                             args.get('review_limit', 8),
+                             args.get('focus_limit', 10),
+                             args.get('wait_seconds', 12),
+                             args.get('expected_meta_sha256'))
+    if name == 'get_iv_selection_result':
+        return IV_RUNNER.result(args['run_ref'])
     if name == 'get_status':
         return backend.status()
     if name == 'get_results':
