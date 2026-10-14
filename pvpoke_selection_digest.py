@@ -48,6 +48,139 @@ def _dominance(archive: ZipFile, mode: str, ivs: list[str]) -> dict[str, list[st
     return dominated
 
 
+
+def _all_candidate_evidence(
+    archive: ZipFile,
+    mode: str,
+    ivs: list[str],
+    dominated: dict[str, list[str]],
+    focus_opponents: list[str] | None,
+) -> list[dict]:
+    """Find distinctive matchup evidence for EVERY candidate, not review_ivs.
+
+    All opponent rows x all six shields are examined, including rows which
+    never cross the 500 boundary. A signal is *not* an automatic S/A grade.
+    """
+    focus = tuple(word.casefold() for word in (focus_opponents or []))
+    matrix: dict[str, dict[str, list[float]]] = {}
+    opponent_names: list[str] | None = None
+    for shield in SHIELDS:
+        table = list(csv.reader(io.StringIO(
+            archive.read(f"{mode}_{shield}.csv").decode("utf-8-sig")
+        )))
+        names = table[0][1:-4]
+        if opponent_names is None:
+            opponent_names = names
+        elif opponent_names != names:
+            raise ValueError("Opponent order differs between shields")
+        per_candidate = {}
+        for row in table[1:]:
+            match = IV_SUFFIX.search(row[0])
+            if match is None:
+                raise ValueError(f"Missing IV in {shield}")
+            key = "/".join(str(int(v)) for v in match.groups())
+            per_candidate[key] = [float(value) for value in row[1:-4]]
+        if set(per_candidate) != set(ivs):
+            raise ValueError(f"Candidates differ in {shield}")
+        matrix[shield] = per_candidate
+
+    assert opponent_names is not None
+    evidence: dict[str, dict] = {
+        iv: {
+            "ivs": iv, "dominated": iv in dominated,
+            "unique_gt500": 0, "unique_gt500_focus": 0,
+            "unique_gt500_disadvantage": 0,
+            "clear_leads": 0, "clear_leads_focus": 0,
+            "clear_leads_disadvantage": 0,
+            "strict_leads": 0,
+            "_events": [],
+        } for iv in ivs
+    }
+    # A >=20 Battle Rating lead is a diagnostic signal, not a win threshold.
+    clear_lead_margin = 20
+    for shield in SHIELDS:
+        disadvantage = shield.startswith("i")
+        for pos, opponent in enumerate(opponent_names):
+            focused = any(word in opponent.casefold() for word in focus)
+            scores = sorted(
+                ((iv, matrix[shield][iv][pos]) for iv in ivs),
+                key=lambda item: (-item[1], item[0]),
+            )
+            # A one-candidate batch has no comparative signals.
+            if len(scores) < 2:
+                continue
+            leader, highest = scores[0]
+            second = scores[1][1]
+            if highest <= second:
+                # No unique best, but one candidate may still be the only one
+                # above 500; impossible here if the top score is tied.
+                continue
+            info = evidence[leader]
+            info["strict_leads"] += 1
+            gap = round(highest - second, 2)
+            unique = highest > 500 and second <= 500
+            clear = gap >= clear_lead_margin
+            if unique:
+                info["unique_gt500"] += 1
+                if focused:
+                    info["unique_gt500_focus"] += 1
+                if disadvantage:
+                    info["unique_gt500_disadvantage"] += 1
+            if clear:
+                info["clear_leads"] += 1
+                if focused:
+                    info["clear_leads_focus"] += 1
+                if disadvantage:
+                    info["clear_leads_disadvantage"] += 1
+            if unique or clear:
+                info["_events"].append({
+                    "shield": shield, "opponent": opponent,
+                    "rating": highest, "next_best": second,
+                    "lead": gap, "unique_gt500": unique,
+                    "focus": focused, "disadvantage": disadvantage,
+                })
+
+    # At most three grounded examples per IV, but *every* IV is listed even
+    # when outside review_ivs. Favor distinct opponents and role coverage.
+    rules = (
+        lambda e: e["unique_gt500"] and e["focus"],
+        lambda e: e["unique_gt500"] and e["disadvantage"],
+        lambda e: e["unique_gt500"],
+        lambda e: e["focus"] and e["lead"] >= clear_lead_margin,
+        lambda e: e["disadvantage"] and e["lead"] >= clear_lead_margin,
+        lambda e: True,
+    )
+    for iv in ivs:
+        info = evidence[iv]
+        events = sorted(info.pop("_events"), key=lambda e: (
+            -int(e["focus"]), -int(e["unique_gt500"]),
+            -int(e["disadvantage"]), -e["lead"],
+            SHIELDS.index(e["shield"]), e["opponent"],
+        ))
+        picked = []
+        used = set()
+        for rule in rules:
+            options = [(index, event) for index, event in enumerate(events)
+                       if index not in used and rule(event)]
+            if not options:
+                continue
+            diverse = [(index, event) for index, event in options
+                       if event["opponent"] not in {p["opponent"] for p in picked}]
+            if diverse:
+                options = diverse
+            index, event = options[0]
+            used.add(index)
+            picked.append(event)
+            if len(picked) == 3:
+                break
+        info["examples_total"] = len(events)
+        info["examples_truncated"] = len(events) > len(picked)
+        info["examples"] = [{key: event[key] for key in (
+            "opponent", "shield", "rating", "next_best", "lead",
+            "unique_gt500", "focus")} for event in picked]
+    return [evidence[iv] for iv in ivs]
+
+
 def build_selection_digest(
     archive: ZipFile,
     mode: str = "default",
@@ -73,6 +206,8 @@ def build_selection_digest(
     flips = full["crossovers"]
     ivs = [row["ivs"] for row in candidates]
     dominated = _dominance(archive, mode, ivs)
+    candidate_evidence = _all_candidate_evidence(archive, mode, ivs, dominated,
+                                                focus_opponents)
 
     focus_best = {iv: 0 for iv in ivs}
     focus_unique = {iv: 0 for iv in ivs}
@@ -206,6 +341,11 @@ def build_selection_digest(
             for row in candidates
         ],
         "dominated_by": dominated,
+        "candidate_evidence_complete": True,
+        "candidate_evidence_count": len(candidate_evidence),
+        "candidate_evidence_scope": "all candidates, all opponents, all six shields",
+        "clear_lead_minimum": 20,
+        "candidate_evidence": candidate_evidence,
         "review_ivs": review,
         "review_only_not_SA_grade": True,
         "crossovers_total": full["crossovers_total"],
