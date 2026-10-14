@@ -154,7 +154,7 @@ TOOLS = [
          'focus_opponents': {'type': 'array', 'items': {'type': 'string'}, 'maxItems': 15},
          'highlight_limit': {'type': 'integer', 'minimum': 1, 'maximum': 60, 'default': 20},
          'review_limit': {'type': 'integer', 'minimum': 2, 'maximum': 12, 'default': 8},
-         'focus_limit': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 10}
+         'focus_limit': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 20}
      }}},
     {'name': 'run_iv_selection',
      'description': 'Launch a curated IV batch and wait up to 20s. If complete, return the verified compact digest, otherwise return run_ref to poll. Existing PvPoke worker executes every battle.',
@@ -167,7 +167,7 @@ TOOLS = [
          'focus_opponents': {'type': 'array', 'items': {'type': 'string'}, 'maxItems': 15},
          'highlight_limit': {'type': 'integer', 'minimum': 1, 'maximum': 60, 'default': 20},
          'review_limit': {'type': 'integer', 'minimum': 2, 'maximum': 12, 'default': 8},
-         'focus_limit': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 10},
+         'focus_limit': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 20},
          'wait_seconds': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 12}
      }, 'required': ['candidate', 'ivs']}},
     {'name': 'get_iv_selection_result',
@@ -220,14 +220,14 @@ def call_tool(name, args):
                                         args.get('focus_opponents'),
                                         args.get('highlight_limit',20),
                                         args.get('review_limit',8),
-                                        args.get('focus_limit',10))
+                                        args.get('focus_limit',20))
     if name == 'run_iv_selection':
         return IV_RUNNER.run(args['candidate'], args['ivs'],
                              args.get('batch_mode') or 'simple',
                              args.get('focus_opponents'),
                              args.get('highlight_limit', 20),
                              args.get('review_limit', 8),
-                             args.get('focus_limit', 10),
+                             args.get('focus_limit', 20),
                              args.get('wait_seconds', 12),
                              args.get('expected_meta_sha256'))
     if name == 'get_iv_selection_result':

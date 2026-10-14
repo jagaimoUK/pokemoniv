@@ -187,7 +187,7 @@ def build_selection_digest(
     focus_opponents: list[str] | None = None,
     highlight_limit: int = 20,
     review_limit: int = 8,
-    focus_limit: int = 10,
+    focus_limit: int = 20,
 ) -> dict:
     """Compact JSON from the exact six matrices, with no battle recalculation."""
     if mode not in MODES:

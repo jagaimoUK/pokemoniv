@@ -235,7 +235,7 @@ def selection_report(mode: str = 'default', focus_opponents: list[str] | None = 
 
 def selection_digest(mode: str = 'default', focus_opponents: list[str] | None = None,
                      highlight_limit: int = 20, review_limit: int = 8,
-                     focus_limit: int = 10) -> dict:
+                     focus_limit: int = 20) -> dict:
     """Return a compact server-side evidence digest from all saved ratings."""
     with _zip() as archive:
         return build_selection_digest(archive, mode, focus_opponents,

@@ -92,7 +92,7 @@ class IVWorkflow:
     def run(self, candidate: dict, ivs: str, batch_mode: str = "simple",
             focus_opponents: list[str] | None = None,
             highlight_limit: int = 20, review_limit: int = 8,
-            focus_limit: int = 10, wait_seconds: int = 12,
+            focus_limit: int = 20, wait_seconds: int = 12,
             expected_meta_sha256: str | None = None) -> dict:
         own, normalized, rows = _canonical(candidate, ivs, batch_mode)
         if not isinstance(wait_seconds, int) or not 0 <= wait_seconds <= 20:
