@@ -323,7 +323,8 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('評価方法はappまたはdecisionです')
                 # Browser has no access to Project files. Bind the job to the
                 # currently installed server meta snapshot instead.
-                args['expected_meta_sha256'] = backend.meta_status()['sha256']
+                if args.get('expected_meta_sha256') is None:
+                    args['expected_meta_sha256'] = backend.meta_status()['sha256']
                 args.setdefault('report_format', 'app')
                 result = call_tool('run_iv_selection', args)
             else:

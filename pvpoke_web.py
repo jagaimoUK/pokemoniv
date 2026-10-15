@@ -28,6 +28,7 @@ import pvpoke_iv_modes as iv_modes
 import pvpoke_archive as archives
 import pvpoke_meta_live as meta_live
 from pvpoke_app_input import app_presets
+from pvpoke_app_catalog import enrich_catalog
 
 HOST = '127.0.0.1'
 PORT = 8765
@@ -87,6 +88,7 @@ def load_catalog():
             for sid, p in species.items()
         }
         presets = []
+        enrich_catalog(payload, species)
         for ja, sid, fast, c1, c2 in PRESETS:
             p = payload.get(sid)
             if not p:

@@ -1,7 +1,7 @@
-"""Import one species/moveset from pasted IV commands or existing PvPoke CSV.
+"""Import grouped species/movesets from pasted IV commands or PvPoke CSV.
 
 Parsing validates the entire paste before returning anything to the form.
-It never starts a battle, guesses an unknown species, or mixes evolution groups.
+It never starts a battle, guesses unknown species, or mixes species' ratings.
 """
 from __future__ import annotations
 
@@ -42,17 +42,17 @@ def app_presets(species: dict, legacy: list[dict], meta_text: str) -> list[dict]
 
 def parse_import(text: str, catalog: dict, current: dict | None = None) -> dict:
     if not isinstance(text, str) or not text.strip() or len(text) > 140000:
-        raise ValueError('ポケモン名・技・個体値、またはCSVを貼り付けてください')
+        raise ValueError('ポケモン名と個体値、またはCSVを貼り付けてください')
     species = catalog.get('species', {})
     presets = catalog.get('app_presets') or catalog.get('presets', [])
     current = current or {}
     if not isinstance(current, dict):
         raise ValueError('現在のポケモン情報が不正です')
     def normalized(word):
-        return unicodedata.normalize('NFKC', word).strip().casefold()
+        return re.sub(r'\s+', ' ', unicodedata.normalize('NFKC', word).strip().casefold())
     aliases = {}
     for sid, entry in species.items():
-        for name in [sid, entry.get('name')]:
+        for name in [sid, entry.get('name'), *entry.get('aliases', [])]:
             if name:
                 aliases.setdefault(normalized(name), set()).add(sid)
     for entry in catalog.get('presets', []):
@@ -63,57 +63,76 @@ def parse_import(text: str, catalog: dict, current: dict | None = None) -> dict:
         if key.endswith('_shadow-shadow'):
             key = key[:-7]
         matches = aliases.get(key, set())
-        if len(matches) == 1:
-            return next(iter(matches))
-        return None
-    chosen, chosen_moves, triples, warnings = None, None, [], []
-    mode = None
-    ignored_levels = False
-    def set_species(sid):
-        nonlocal chosen
-        if chosen is not None and chosen != sid:
-            raise ValueError('複数種が含まれています。1回の取り込みでは1種類ずつ貼り付けてください')
-        chosen = sid
-    def set_moves(values):
-        nonlocal chosen_moves
-        values = tuple(v.strip().upper() for v in values)
-        if chosen_moves is not None and values != chosen_moves:
-            raise ValueError('複数の技構成が含まれています。技構成ごとに取り込んでください')
-        chosen_moves = values
+        return next(iter(matches)) if len(matches) == 1 else None
+    ordered_aliases = sorted((x for x in aliases if len(aliases[x]) == 1), key=len, reverse=True)
+    def targets(word):
+        word = normalized(re.sub(r'^これ以降\s*', '', word))
+        exact = resolve(word)
+        if exact:
+            return [exact]
+        found = []
+        while word:
+            match = next((a for a in ordered_aliases if word.startswith(a)
+                          and (len(word) == len(a) or word[len(a)] in ' ,、と・/')), None)
+            if match is None:
+                return None
+            sid = resolve(match)
+            if sid not in found:
+                found.append(sid)
+            word = word[len(match):].lstrip(' ,、と・/')
+        return found or None
+    sections = []
+    section = {'species': None, 'moves': None, 'ivs': [], 'levels': False}
+    sections.append(section)
+    mode, header = None, None
+    def change_section(sids, moves=None, force=False):
+        nonlocal section
+        if not force and section['species'] is None:
+            section['species'], section['moves'] = sids, moves or section['moves']
+        else:
+            section = {'species': sids, 'moves': moves, 'ivs': [], 'levels': False}
+            sections.append(section)
     def add_iv(parts, line):
         if len(parts) != 3 or any(not re.fullmatch(r'\d{1,2}', x.strip()) for x in parts):
-            raise ValueError(f'{line}行目: 個体値は攻撃,防御,HPの3つで指定してください')
+            raise ValueError(f'{line}行目: 個体値は攻撃,防御,HPの3つです')
         triple = tuple(int(x) for x in parts)
         if any(x > 15 for x in triple):
             raise ValueError(f'{line}行目: 個体値は0〜15です')
-        triples.append(triple)
+        section['ivs'].append(triple)
     text = unicodedata.normalize('NFKC', text).replace('\ufeff', '').replace('、', ',')
-    header = None
+    # Hyphens separated by whitespace are list/paragraph separators, never a
+    # negative-IV sign or the export spelling "_shadow-shadow".
+    text = re.sub(r'\s+[-–—]\s+', '\n', text)
+    iv_pattern = r'\d{1,2}\s*[,/]\s*\d{1,2}\s*[,/]\s*\d{1,2}'
     for number, raw in enumerate(text.splitlines(), 1):
-        line = raw.strip()
-        if not line or line.startswith('```'):
+        line = re.sub(r'^[-•]\s+', '', raw.strip())
+        if not line or line in ('-', '–', '—') or line.startswith('```'):
             continue
         command = re.fullmatch(r'(?:個体値厳選|個体値リスト|重要個体値)(?:\s+([ds]))?', line, re.I)
         if command:
-            if command.group(1):
-                new_mode = 'detailed' if command.group(1).lower() == 'd' else 'simple'
+            if command.group(1) or line == '個体値厳選':
+                new_mode = 'detailed' if (command.group(1) or '').lower() == 'd' else 'simple'
                 if mode and mode != new_mode:
                     raise ValueError('計算モードが混在しています')
                 mode = new_mode
             continue
-        if TRIPLE.fullmatch(line):
-            add_iv(re.split(r'\s*[,/]\s*', line), number)
+        groups = re.findall(iv_pattern, line)
+        if groups and not re.sub(iv_pattern, '', line).strip():
+            for group in groups:
+                add_iv(re.split(r'\s*[,/]\s*', group), number)
             continue
-        # Support several space-separated IV triples from voice transcription.
-        if re.fullmatch(r'\d{1,2},\d{1,2},\d{1,2}(?:\s+\d{1,2},\d{1,2},\d{1,2})+', line):
-            for group in line.split():
-                add_iv(group.split(','), number)
+        if line.startswith('#'):
+            sids = targets(re.sub(r'^#+\s*', '', line))
+            if not sids:
+                raise ValueError(f'{number}行目: 種名・フォルムを特定できません: {line}')
+            change_section(sids, force=True)
+            header = None
             continue
         cleaned = re.sub(r'^(?:ポケモン|種族|species)\s*:\s*', '', line, flags=re.I)
-        cleaned = re.sub(r'^#+\s*', '', cleaned)
         sid = resolve(cleaned)
         if sid:
-            set_species(sid)
+            if section['species'] != [sid] or section['ivs']:
+                change_section([sid])
             continue
         move_line = re.sub(r'^(?:技構成|技|moves)\s*:\s*', '', line, flags=re.I)
         fields = [x.strip() for x in next(csv.reader([move_line]))]
@@ -124,58 +143,89 @@ def parse_import(text: str, catalog: dict, current: dict | None = None) -> dict:
             if len(fields) != len(header):
                 raise ValueError(f'{number}行目: CSVの列数が一致しません')
             row = dict(zip(header, fields))
-            required = {*FIELDS, 'atk', 'def', 'hp'}
-            if not required <= row.keys():
+            if not {*FIELDS, 'atk', 'def', 'hp'} <= row.keys():
                 raise ValueError('CSVにはspecies,fast,charged1,charged2,atk,def,hp列が必要です')
             sid = resolve(row['species'])
             if not sid:
                 raise ValueError(f'{number}行目: ポケモンが見つかりません')
-            set_species(sid)
-            set_moves([row[k] for k in FIELDS[1:]])
+            change_section([sid], tuple(row[k].upper() for k in FIELDS[1:]), force=True)
             add_iv([row[k] for k in ('atk', 'def', 'hp')], number)
-            ignored_levels |= 'level' in row
+            section['levels'] = 'level' in row
             continue
         if len(fields) in (4, 7, 8) and resolve(fields[0]):
-            set_species(resolve(fields[0]))
-            set_moves(fields[1:4])
+            sid, moves = resolve(fields[0]), tuple(x.upper() for x in fields[1:4])
+            if len(fields) == 4 and section['species'] == [sid] and section['moves'] is None:
+                section['moves'] = moves
+            else:
+                change_section([sid], moves, force=section['species'] is not None)
             if len(fields) in (7, 8):
                 add_iv(fields[-3:], number)
-                ignored_levels |= len(fields) == 8
+                section['levels'] = len(fields) == 8
             continue
         if len(fields) == 3 and all(re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', x) for x in fields):
-            set_moves(fields)
+            if section['moves'] is not None and section['ivs'] and section['moves'] != tuple(x.upper() for x in fields):
+                raise ValueError('同じ区間内に異なる技指定があります。見出しで区間を分けてください')
+            section['moves'] = tuple(x.upper() for x in fields)
             continue
-        raise ValueError(f'{number}行目を読み取れません: {line[:80]}。英語ID・英語名、技ID、個体値またはCSVで指定してください')
-    if not triples:
+        raise ValueError(f'{number}行目を読み取れません: {line[:80]}。分からない部分を修正してください')
+    def valid(sid, moves):
+        p = species[sid]
+        return (len(moves) == 3 and moves[0] in p.get('fastMoves', [])
+                and all(x in p.get('chargedMoves', []) for x in moves[1:]) and moves[1] != moves[2])
+    jobs, notices = {}, []
+    for index, part in enumerate(sections):
+        if not part['ivs']:
+            if part['moves'] is not None:
+                raise ValueError('技を指定した区間に個体値がありません。対象の見出しと同じ区間に置いてください')
+            continue
+        sids = part['species'] or [current.get('species')]
+        for sid in sids:
+            if sid not in species:
+                raise ValueError('個体値に対応するポケモンを指定してください')
+            p, warnings = species[sid], []
+            if part['species'] is None:
+                warnings.append('ポケモン名の指定がないため現在フォームの種類を使います')
+            moves, source = part['moves'], '入力で指定'
+            if moves is None:
+                if part['species'] is None and sid == current.get('species') and all(current.get(k) for k in FIELDS[1:]):
+                    moves = tuple(current[k].upper() for k in FIELDS[1:])
+                    source = '現在フォームの技構成'
+                elif p.get('default_moves'):
+                    moves = tuple(p['default_moves'][k] for k in FIELDS[1:])
+                    source = p.get('default_moves_source', 'PvPoke GL推奨技')
+                else:
+                    choices = {tuple(v[k] for k in FIELDS[1:]) for v in presets if v['species'] == sid}
+                    if len(choices) != 1:
+                        raise ValueError(f'{p.get("name_ja") or p.get("name") or sid}: 検証済みの推奨技がありません。この種類だけ技構成を指定してください')
+                    moves = next(iter(choices))
+                    source = '登録済みの唯一の技構成'
+                warnings.append('技省略: ' + source + ' → ' + ','.join(moves))
+            if not valid(sid, moves):
+                raise ValueError(f'{p.get("name_ja") or sid}: 技構成が現在のPvPokeデータと一致しません')
+            key = (sid, *moves)
+            if key not in jobs:
+                jobs[key] = {'candidate': dict(zip(FIELDS, key)), 'name': p.get('name_ja') or p.get('name') or sid,
+                             '_ivs': [], 'warnings': [], 'source_sections': [], 'moves_source': source}
+            job = jobs[key]
+            job['_ivs'].extend(part['ivs'])
+            job['source_sections'].append(index)
+            if part['levels']:
+                warnings.append('貼り付け元のレベルは使わず計算時にCP1500以下へ調整します')
+            job['warnings'] = list(dict.fromkeys([*job['warnings'], *warnings]))
+    if not jobs:
         raise ValueError('個体値がありません。攻撃,防御,HPの順に貼り付けてください')
-    if not chosen:
-        chosen = current.get('species')
-        warnings.append('ポケモン名の指定がないため、現在フォームで選択している種類を使います')
-    if chosen not in species:
-        raise ValueError('ポケモンを指定してください。プリセット外は英語ID・英語名が使えます')
-    if chosen_moves is None:
-        if chosen == current.get('species') and all(current.get(k) for k in FIELDS[1:]):
-            chosen_moves = tuple(current[k] for k in FIELDS[1:])
-            warnings.append('技の指定がないため、現在フォームの技構成を使います')
-        else:
-            available = [p for p in presets if p['species'] == chosen]
-            configs = {tuple(p[k] for k in FIELDS[1:]) for p in available}
-            if len(configs) != 1:
-                raise ValueError('技構成を指定してください。このポケモンには未登録または複数の技構成があります')
-            chosen_moves = next(iter(configs))
-            warnings.append('技の指定がないため、登録済みの唯一の技構成を使います')
-    entry = species[chosen]
-    if (chosen_moves[0] not in entry.get('fastMoves', [])
-            or any(m not in entry.get('chargedMoves', []) for m in chosen_moves[1:])
-            or chosen_moves[1] == chosen_moves[2]):
-        raise ValueError('技構成が現在のPvPokeデータと一致しません。技IDを確認してください')
-    unique = list(dict.fromkeys(triples))
-    if not 1 <= len(unique) <= 150:
-        raise ValueError('個体値は1〜150体までです')
-    if len(unique) != len(triples):
-        warnings.append(f'重複する個体値{len(triples) - len(unique)}件をまとめました')
-    if ignored_levels:
-        warnings.append('貼り付け元のレベルは使わず、計算時にCP1500以下へ調整します')
-    return {'candidate': dict(zip(FIELDS, [chosen, *chosen_moves])),
-            'ivs': '\n'.join(','.join(map(str, triple)) for triple in unique),
-            'candidate_count': len(unique), 'batch_mode': mode, 'warnings': warnings}
+    for job in jobs.values():
+        original = job.pop('_ivs')
+        unique = list(dict.fromkeys(original))
+        if len(unique) > 150:
+            raise ValueError(job['name'] + ': 1種類・1技構成につき150体までです。切り捨てずに入力を分けてください')
+        if len(unique) != len(original):
+            job['warnings'].append(f'重複する個体値{len(original)-len(unique)}件をまとめました')
+        job.update(ivs='\n'.join(','.join(map(str, iv)) for iv in unique),
+                   candidate_count=len(unique), batch_mode=mode)
+    values = list(jobs.values())
+    output = {'jobs': values, 'group_count': len(values), 'batch_mode': mode,
+              'total_candidate_count': sum(x['candidate_count'] for x in values), 'warnings': notices}
+    if len(values) == 1:
+        output.update(values[0])
+    return output

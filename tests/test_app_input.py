@@ -49,19 +49,27 @@ class AppInputTests(unittest.TestCase):
         self.assertEqual(r['candidate'], CANDIDATE)
         self.assertEqual(len(r['warnings']), 2)
 
-    def test_unknown_and_multiple_species_never_mixed(self):
-        for text in ['UnknownMon\n0,11,12',
-                     'quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE,0,11,12\nblastoise,BITE,HYDRO_CANNON,SKULL_BASH,0,15,15']:
-            with self.subTest(text=text), self.assertRaises(ValueError):
-                parse_import(text, CATALOG)
+    def test_unknown_species_still_fail(self):
+        with self.assertRaises(ValueError):
+            parse_import('UnknownMon\n0,11,12', CATALOG)
+
+    def test_mixed_species_csv_are_separate_jobs(self):
+        r = parse_import('quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE,0,11,12\nblastoise,BITE,HYDRO_CANNON,SKULL_BASH,0,15,15', CATALOG)
+        self.assertEqual(r['group_count'], 2)
+        self.assertEqual([x['ivs'] for x in r['jobs']], ['0,11,12', '0,15,15'])
+        self.assertNotIn('candidate', r)
 
     def test_mixed_moves_and_bad_ivs_fail(self):
         for text in ['quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE\n0,16,12',
-                     'quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE,0,11,12\nquagsire,MUD_SHOT,AQUA_TAIL,MUD_BOMB,3,13,8',
                      'blastoise,MUD_SHOT,AQUA_TAIL,STONE_EDGE\n0,11,12',
                      'quagsire,MUD_SHOT,AQUA_TAIL,AQUA_TAIL\n0,11,12']:
             with self.subTest(text=text), self.assertRaises(ValueError):
                 parse_import(text, CATALOG)
+
+    def test_distinct_moves_are_separate_jobs(self):
+        r = parse_import('quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE,0,11,12\nquagsire,MUD_SHOT,AQUA_TAIL,MUD_BOMB,3,13,8', CATALOG)
+        self.assertEqual(r['group_count'], 2)
+        self.assertEqual([x['candidate']['charged2'] for x in r['jobs']], ['STONE_EDGE', 'MUD_BOMB'])
 
     def test_ambiguous_preset_moves_require_explicit_selection(self):
         catalog = {**CATALOG, 'app_presets': [CANDIDATE, {**CANDIDATE, 'charged2': 'MUD_BOMB'}]}
