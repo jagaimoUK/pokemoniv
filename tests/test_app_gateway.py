@@ -55,10 +55,21 @@ class AppGatewayTests(unittest.TestCase):
         self.assertNotIn(remote.API_KEY, page)
 
     def test_app_data_requires_current_mcp_authentication(self):
-        for path in ['/app-api/catalog', '/app-api/run', '/app-api/result']:
+        for path in ['/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result']:
             status, _ = self.request(path, {}, token=False)
             self.assertEqual(status, 401)
         self.assertEqual(self.backend.run_count, 0)
+
+    def test_import_validates_without_starting_a_battle(self):
+        from test_app_input import CATALOG
+        with patch.object(remote.backend, '_request', return_value=CATALOG):
+            status, body = self.request('/app-api/import', {
+                'text': 'quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE\n0,11,12\n3,13,8'})
+            self.assertEqual(status, 200)
+            result = json.loads(body)
+            self.assertEqual(result['candidate_count'], 2)
+            self.assertEqual(result['ivs'], '0,11,12\n3,13,8')
+            self.assertEqual(self.backend.run_count, 0)
 
     def test_cross_origin_and_unknown_operations_are_rejected(self):
         self.assertEqual(self.request('/app-api/run', {}, origin='https://invalid.example')[0], 403)

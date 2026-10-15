@@ -15,6 +15,7 @@ import pvpoke_bridge_core as backend
 from pvpoke_iv_workflow import IVWorkflow
 from pvpoke_app_ui import HTML as APP_HTML
 from pvpoke_app_access import AppAccess
+from pvpoke_app_input import parse_import
 
 APP_ACCESS = AppAccess()
 
@@ -295,7 +296,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def app_request(self):
         """Only explicit app operations; never proxy arbitrary backend paths."""
-        if self.path not in ('/app-api/catalog', '/app-api/run', '/app-api/result'):
+        if self.path not in ('/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result'):
             return self.respond(404, {'error': 'Not found'})
         origin = self.headers.get('Origin')
         if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'):
@@ -312,6 +313,11 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == '/app-api/catalog':
                 result = backend._request('/api/catalog')
                 result.pop('saved', None)
+            elif self.path == '/app-api/import':
+                cat = backend._request('/api/catalog')
+                if not cat.get('ready'):
+                    raise ValueError('ゲームデータを読み込み中です。少し待ってください')
+                result = parse_import(args.get('text'), cat, args.get('current'))
             elif self.path == '/app-api/run':
                 if args.get('report_format', 'app') not in ('app', 'decision'):
                     raise ValueError('評価方法はappまたはdecisionです')
@@ -322,7 +328,7 @@ class Handler(BaseHTTPRequestHandler):
                 result = call_tool('run_iv_selection', args)
             else:
                 result = IV_RUNNER.result(args.get('run_ref'), args.get('wait_seconds', 12))
-            if self.path != '/app-api/catalog':
+            if self.path in ('/app-api/run', '/app-api/result'):
                 result['meta_verified_against_project'] = False
                 result['meta_verification_source'] = 'server snapshot; Project file unavailable in browser'
             self.respond(200, result)

@@ -27,6 +27,7 @@ import pvpoke_batch_v2 as engine
 import pvpoke_iv_modes as iv_modes
 import pvpoke_archive as archives
 import pvpoke_meta_live as meta_live
+from pvpoke_app_input import app_presets
 
 HOST = '127.0.0.1'
 PORT = 8765
@@ -482,7 +483,11 @@ class Handler(BaseHTTPRequestHandler):
                     saved = json.loads(LAST_CONFIG.read_text(encoding='utf-8'))
             except Exception:
                 pass
-            self.respond(200, {**cat, 'saved': saved})
+            available = []
+            if cat.get('ready'):
+                available = app_presets(cat['species'], cat['presets'],
+                                       meta_live.active_path(WORK).read_text(encoding='utf-8-sig'))
+            self.respond(200, {**cat, 'app_presets': available, 'saved': saved})
         elif path == '/api/meta/status':
             self.respond(200, meta_live.get_status(WORK))
         elif path == '/api/storage/status':
