@@ -57,6 +57,6 @@ def assign_nickname_codes(payload):
                     yield (letters[0] + ''.join(letters[i] for i in indices)).capitalize() + suffix
             for n in range(10000):
                 yield letters[0].upper() + str(n)
-        code = next(c for c in options() if 1 <= len(c) <= 4 and c not in used)
-        used.add(code)
+        code = next(c for c in options() if 1 <= len(c) <= 4 and c.casefold() not in used)
+        used.add(code.casefold())
         entry['nickname_code'] = code

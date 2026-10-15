@@ -11,7 +11,7 @@ class AppLabelTests(unittest.TestCase):
         rows = {sid: {} for sid in names}
         assign_nickname_codes(rows)
         codes = [r['nickname_code'] for r in rows.values()]
-        self.assertEqual(len(codes), len(set(codes)))
+        self.assertEqual(len(codes), len({c.casefold() for c in codes}))
         self.assertTrue(all(c.isascii() and c.isalnum() and len(c) <= 4 for c in codes))
         self.assertEqual(rows['leavanny']['nickname_code'], 'Lea')
         reverse = {sid: {} for sid in reversed(names)}
@@ -21,7 +21,7 @@ class AppLabelTests(unittest.TestCase):
     def test_collisions_do_not_alias_one_form_to_another(self):
         rows = {f'pokemon_form{i}': {} for i in range(60)}
         assign_nickname_codes(rows)
-        self.assertEqual(len({r['nickname_code'] for r in rows.values()}), 60)
+        self.assertEqual(len({r['nickname_code'].casefold() for r in rows.values()}), 60)
         self.assertTrue(all(len(r['nickname_code']) <= 4 for r in rows.values()))
 
     def test_japanese_form_keeps_region_shadow_and_sex(self):
