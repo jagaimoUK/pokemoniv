@@ -57,24 +57,22 @@ function nicknameFor(result,row){
  return {text:nickname,description:grade+'＝候補評価 / '+self+'＝'+(catalog[sid].name_ja||catalog[sid].name)+' / '+(e.rating>500?'>＝勝ち':e.rating===500?'=＝引き分け':'<＝負け')+' / '+opponent.code+'＝'+opponent.name+' / '+conditionLabel(e)};
 }
 function recommendationExport(result){
- const sid=result.candidate.species,p=result.candidate;
- const title=result.display_name||catalog[sid]?.name_ja||result.selection?.english_name||sid;
- const rows=(result.selection?.recommendations||[]).flatMap(row=>{
-  const nick=nicknameFor(result,row),wins=matchupNames(row,true),draws=matchupNames(row,false);
-  return [row,...(row.equivalent_candidates||[])].map(iv=>[
-   iv.ivs.replaceAll('/',','),nick?.text||'ニックネーム未生成',row.grade,row.role,
-   wins.length?'勝てる相手（根拠の条件）：'+wins.join('、'):'勝ちの根拠なし',
-   draws.length?'引き分けにできる相手：'+draws.join('、'):'引き分けの根拠なし',
-   nick?.description||'略号を確認できないため生成していません'
-  ].filter(Boolean).join('\t'));
- });
- return rows.length?'# '+title+'\n技：'+[p.fast,p.charged1,p.charged2].join(' / ')+'\n個体値\tニックネーム\t評価\t役割\t勝てる相手\t引き分けの相手\t名前の意味・条件\n'+rows.join('\n'):'';
+ return (result.selection?.recommendations||[]).flatMap(row=>{
+  const nick=nicknameFor(result,row);
+  if(!nick)throw Error('ニックネームを生成できない個体があります。再接続してカタログを更新してください。');
+  return [row,...(row.equivalent_candidates||[])].map(iv=>{
+   if(!iv.search_string)throw Error('検索式を確認できない個体があります。結果を再取得してください。');
+   return iv.search_string+'\n'+nick.text;
+  });
+ }).join('\n');
 }
+async function copyRecommendations(results,button){try{await copy(results.map(recommendationExport).filter(Boolean).join('\n'),button);}catch(e){message(e.message,true);}}
+function renderSearch(row,parent){if(!row.search_string)return;node('label','検索式',parent);node('code',row.search_string,parent,'search');const b=node('button','検索式をコピー',parent);b.onclick=()=>copy(row.search_string,b);}
 function renderNickname(result,row,parent){const nick=nicknameFor(result,row);if(!nick){node('p','略号を確認できないためニックネームを生成できません。再接続してカタログを更新してください。',parent,'note');return;}node('label','ニックネーム（'+nick.text.length+'/12文字）',parent);node('code',nick.text,parent,'search');const b=node('button','ニックネームをコピー',parent);b.onclick=()=>copy(nick.text,b);node('p',nick.description,parent,'note');}
 function updateAllCopy(){const box=el('allCopyActions');const available=displayedResults.filter(r=>r.selection?.recommendations?.length);box.hidden=available.length<2;}
 function render(result,append=false){
  lastResult=result;const root=el('results');
- if(!append){root.replaceChildren();displayedResults=[];const all=node('div','',root,'actions');all.id='allCopyActions';all.hidden=true;const b=node('button','全種類の重要個体とニックネームをコピー',all);b.onclick=()=>copy(displayedResults.map(recommendationExport).filter(Boolean).join('\n\n'),b);}
+ if(!append){root.replaceChildren();displayedResults=[];const all=node('div','',root,'actions');all.id='allCopyActions';all.hidden=true;const b=node('button','全種類の検索式とニックネームをコピー',all);b.onclick=()=>copyRecommendations(displayedResults,b);}
  displayedResults.push(result);updateAllCopy();root.hidden=false;
  const panel=node('div','',root),sid=result.candidate.species;
  node('h2',result.display_name||catalog[sid]?.name_ja||result.selection?.english_name||sid,panel);
@@ -82,7 +80,7 @@ function render(result,append=false){
  if(!selection){node('h2','GPT評価用の比較情報',panel);node('p','今回の比較情報をコピーしてGPTに評価を依頼できます。',panel);const b=node('button','比較情報をコピー',panel);b.onclick=()=>copy('以下のPvPoke実測比較を、個体値厳選の基準で評価してください。おすすめ個体と英語検索式を示してください。\n'+JSON.stringify(result),b);return;}
  node('h2','おすすめ個体',panel);
  node('p','S/Aは入力した候補内での暫定評価です。勝ち・引き分けは記載したシールド・相手IV条件での計算結果です。',panel,'note');
- if(selection.recommendations.length){const b=node('button','重要個体とニックネームをすべてコピー',panel);b.onclick=()=>copy(recommendationExport(result),b);node('p','同じ性能の代替個体も含めます。ニックネームは英語略号・半角12文字以内。主な1対面とシールド条件を記録します。',panel,'note');}
+ if(selection.recommendations.length){const b=node('button','検索式とニックネームをすべてコピー',panel);b.onclick=()=>copyRecommendations([result],b);node('p','検索式→改行→ニックネームの順で、同じ性能の代替個体も含めてコピーします。',panel,'note');}
  if(selection.excluded&&(!Array.isArray(selection.excluded)||selection.excluded.length))node('p','計算対象から除外された対面があります：'+JSON.stringify(selection.excluded),panel);
  if(selection.unmatched_focus.length)node('p','一致しなかった重要相手：'+selection.unmatched_focus.map(x=>opponentLabel(x).name).join('、'),panel);
  if(!selection.recommendations.length)node('p','自動推薦の根拠が十分な個体はありません。下の保留個体を確認してください。',panel);
@@ -92,9 +90,10 @@ function render(result,append=false){
   if(wins.length)node('p','勝てる相手（推薦根拠の条件）：'+wins.join('、'),card);
   if(draws.length)node('p','引き分けにできる相手：'+draws.join('、'),card);
   if(row.evidence?.length)node('p','主な根拠：'+evidenceText(primaryEvidence(row)),card,'note');
+  renderSearch(row,card);
   renderNickname(result,row,card);
   if(row.tradeoff){const e=row.tradeoff;node('p','苦手になる対面：'+opponentLabel(e.opponent).name+'・'+conditionLabel(e)+' は '+outcome(e)+'（Rating '+e.rating+' / '+e.best_iv+' は '+e.best_rating+'）。',card,'note');}
-  if(row.equivalent_candidates.length){const d=node('details','',card);node('summary','全条件で同じ性能の代替個体',d);for(const e of row.equivalent_candidates){node('p',e.ivs,d);renderNickname(result,row,d);}}
+  if(row.equivalent_candidates.length){const d=node('details','',card);node('summary','全条件で同じ性能の代替個体',d);for(const e of row.equivalent_candidates){node('p',e.ivs,d);renderSearch(e,d);renderNickname(result,row,d);}}
   const details=node('details','',card);node('summary','推薦根拠をすべて見る（'+row.evidence_count+'条件）',details);node('pre',row.evidence.map(evidenceText).join('\n'),details);
  }
  if(selection.review_candidates.length){const d=node('details','',panel);node('summary','保留：'+selection.review_candidates.length+'個体',d);for(const row of selection.review_candidates){node('p',row.ivs+'：'+row.reason,d);if(row.equivalent_candidates.length)node('p','同じ性能：'+row.equivalent_candidates.map(x=>x.ivs).join(', '),d);}}

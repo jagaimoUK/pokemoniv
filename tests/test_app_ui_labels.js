@@ -7,7 +7,7 @@ vm.runInContext(`catalog={quagsire:{name:'Quagsire',name_ja:'ヌオー',nickname
 const event=(opponent,rating,shield='i0y1')=>({opponent,rating,shield,mode:'default',next_best:490});
 const draw=event('Corviknight SdA+AC/Pbk 4/12/14',500);
 const win=event('Feraligatr (Shadow) SC+HC/IB 5/11/14',510,'i1y2');
-const row={ivs:'0/11/12',rank:1,grade:'S候補',role:'不利シールド対応型',reason:'English old reason',equivalent_candidates:[{ivs:'1/11/12'}],evidence:[draw,win],evidence_count:2,tradeoff:{...draw,rating:450,best_iv:'3/13/8',best_rating:520}};
+const row={ivs:'0/11/12',rank:1,grade:'S候補',role:'不利シールド対応型',reason:'English old reason',search_string:'Quagsire&0attack&3defense&3hp',equivalent_candidates:[{ivs:'1/11/12',search_string:'Quagsire&1attack&3defense&3hp'}],evidence:[draw,win],evidence_count:2,tradeoff:{...draw,rating:450,best_iv:'3/13/8',best_rating:520}};
 const result={candidate:{species:'quagsire',fast:'F',charged1:'C1',charged2:'C2'},selection:{recommendations:[row],excluded:0,unmatched_focus:[],review_candidates:[{ivs:'5/5/5',reason:'保留',equivalent_candidates:[]}],dominated_by:{'6/6/6':['0/11/12']}}};
 context.result=result;context.draw=draw;
 assert.equal(vm.runInContext("nicknameFor(result,result.selection.recommendations[0]).text",context),'SQuag>Fers12');
@@ -20,7 +20,10 @@ assert(nodes.some(n=>n.textContent==='勝てる相手（推薦根拠の条件）
 assert(nodes.some(n=>n.textContent==='引き分けにできる相手：アーマーガア'));
 assert(!nodes.some(n=>n.textContent.includes('English old reason')||n.textContent.includes('Corviknight')));
 const exported=vm.runInContext('recommendationExport(result)',context);
-assert(exported.includes('0,11,12\tSQuag>Fers12')&&exported.includes('1,11,12\tSQuag>Fers12'));
+assert.equal(exported,'Quagsire&0attack&3defense&3hp\nSQuag>Fers12\nQuagsire&1attack&3defense&3hp\nSQuag>Fers12');
+assert.equal(nodes.filter(n=>n.textContent==='検索式をコピー').length,2);
+assert(!exported.includes('\t')&&!exported.includes('\n\n'));
+assert.throws(()=>vm.runInContext('recommendationExport({candidate:result.candidate,selection:{recommendations:[{...result.selection.recommendations[0],search_string:null}]}})',context),/検索式/);
 assert(!exported.includes('5,5,5')&&!exported.includes('6,6,6'));
 assert.equal(els.allCopyActions.hidden,true);
-console.log('Japanese opponents, conditional win/draw, 12-character nickname, alternatives and export scope: OK');
+(async()=>{for(const b of nodes.filter(n=>n.textContent==='検索式をコピー')){await b.onclick();assert(['Quagsire&0attack&3defense&3hp','Quagsire&1attack&3defense&3hp'].includes(context.copied));}console.log('Japanese matchups, restored search copies, exact search/nickname pairs and alternatives: OK');})();

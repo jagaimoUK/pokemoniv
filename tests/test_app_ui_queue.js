@@ -4,7 +4,7 @@ function element(){const e={children:[],value:'',textContent:'',disabled:false,h
 const els={},storage=new Map(),calls=[],copied=[];
 const job=(species,name,ivs)=>({candidate:{species,fast:'FAST',charged1:'CHARGE1',charged2:'CHARGE2'},name,ivs,candidate_count:1,warnings:[]});
 const jobs=[job('swadloon','クルマユ','1,2,3'),job('leavanny','ハハコモリ','1,2,3')];
-const result=j=>({state:'done',complete:true,meta_sha256:'a'.repeat(64),candidate:j.candidate,batch_mode:'simple',selection:{english_name:j.name,recommendations:[{ivs:'1/2/3',rank:1,grade:'A候補',role:'対応型',reason:'測定済み',search_string:'Search',equivalent_candidates:[],evidence_count:1,evidence:[{opponent:'Other',mode:'default',shield:'s1',rating:510,next_best:490}]}],unmatched_focus:[],review_candidates:[],dominated_by:{},excluded:0}});
+const result=j=>({state:'done',complete:true,meta_sha256:'a'.repeat(64),candidate:j.candidate,batch_mode:'simple',selection:{english_name:j.name,recommendations:[{ivs:'1/2/3',rank:1,grade:'A候補',role:'対応型',reason:'測定済み',search_string:j.candidate.species+'&1attack&1defense&1hp',equivalent_candidates:[],evidence_count:1,evidence:[{opponent:'Other',mode:'default',shield:'s1',rating:510,next_best:490}]}],unmatched_focus:[],review_candidates:[],dominated_by:{},excluded:0}});
 const context={document:{getElementById(id){return els[id]??=element();},createElement:element},navigator:{clipboard:{async writeText(t){copied.push(t);}}},URLSearchParams,location:{hash:''},sessionStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},fetch:async(path,options)=>{const data=JSON.parse(options.body);calls.push({path,data});const index=calls.filter(c=>c.path.endsWith('/run')).length-1;return {ok:true,json:async()=>path.endsWith('/run')?{state:'running',run_ref:'ref-'+index}:result(jobs[index])};}};
 vm.createContext(context);vm.runInContext(script,context);context.jobs=jobs;
 vm.runInContext("catalog={swadloon:{name:'Swadloon',name_ja:'クルマユ',nickname_code:'Swd'},leavanny:{name:'Leavanny',name_ja:'ハハコモリ',nickname_code:'Lea'},other:{name:'Other',name_ja:'相手',nickname_code:'Oth'}};prepareLabels();batchState={jobs,index:0,results:[],run_ref:null,batch_mode:'simple',focus:[],report_format:'app',policy:{meaningful_win_lead:20}};setImportedJobs(jobs)",context);
@@ -14,12 +14,13 @@ vm.runInContext("catalog={swadloon:{name:'Swadloon',name_ja:'クルマユ',nickn
  assert.deepEqual(calls.filter(c=>c.path.endsWith('/run')).map(c=>c.data.candidate.species),['swadloon','leavanny']);
  assert.equal(calls[2].data.expected_meta_sha256,'a'.repeat(64));
  function flat(x){return [x,...x.children.flatMap(flat)];}let nodes=flat(els.results);assert(nodes.some(x=>x.textContent==='クルマユ'));assert(nodes.some(x=>x.textContent==='ハハコモリ'));
- assert.equal(nodes.filter(x=>x.textContent==='重要個体とニックネームをすべてコピー').length,2);
- assert(!nodes.some(x=>/重要個体値（コピペ用）|この個体値をコピー|検索式をコピー/.test(x.textContent)));
+ assert.equal(nodes.filter(x=>x.textContent==='検索式とニックネームをすべてコピー').length,2);
+ assert(!nodes.some(x=>/重要個体値（コピペ用）|この個体値をコピー/.test(x.textContent)));
  assert.equal(els.allCopyActions.hidden,false);
- for(const b of nodes.filter(x=>x.textContent==='重要個体とニックネームをすべてコピー'))await b.onclick();
- assert(copied[0].includes('クルマユ')&&copied[0].includes('ASwd>Oth11'));assert(copied[1].includes('ハハコモリ')&&copied[1].includes('ALea>Oth11'));
- await els.allCopyActions.children[0].onclick();assert(copied[2].includes('ASwd>Oth11')&&copied[2].includes('ALea>Oth11'));
+ for(const b of nodes.filter(x=>x.textContent==='検索式とニックネームをすべてコピー'))await b.onclick();
+ assert.equal(copied[0],'swadloon&1attack&1defense&1hp\nASwd>Oth11');assert.equal(copied[1],'leavanny&1attack&1defense&1hp\nALea>Oth11');
+ assert.equal(nodes.filter(x=>x.textContent==='検索式をコピー').length,2);
+ await els.allCopyActions.children[0].onclick();assert.equal(copied[2],copied[0]+'\n'+copied[1]);
  for(const b of nodes.filter(x=>x.textContent==='ニックネームをコピー'))await b.onclick();
  assert.deepEqual(copied.slice(3),['ASwd>Oth11','ALea>Oth11']);
  assert(!storage.has('pvpoke-app-batch'));assert(els.resume.hidden);
