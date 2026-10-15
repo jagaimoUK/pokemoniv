@@ -1,0 +1,31 @@
+name: IV text transfer contract
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'pvpoke_app_*.py'
+      - 'contracts/**'
+      - 'tests/test_*input.py'
+      - 'tests/test_iv_text_contract.py'
+      - '.github/workflows/iv-text-contract.yml'
+  pull_request:
+  workflow_dispatch:
+jobs:
+  importer:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile and run the reader's production text serializer
+        run: |
+          kotlinc contracts/reader/IvSelectionText.kt contracts/reader/ExportContract.kt -include-runtime -d /tmp/iv-text.jar
+          java -jar /tmp/iv-text.jar contracts/iv-text-v1.tsv /tmp/iv-reader-exports
+      - name: Reader output, legacy input, normal and form regressions
+        env:
+          IV_READER_EXPORT_DIR: /tmp/iv-reader-exports
+        run: |
+          python -m unittest discover -s tests -p 'test_iv_text_contract.py' -v
+          python -m unittest discover -s tests -p 'test_*input.py' -v
+          python -m unittest discover -s tests -p 'test_app_sizes.py' -v
