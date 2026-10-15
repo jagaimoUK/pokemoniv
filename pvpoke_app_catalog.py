@@ -29,12 +29,14 @@ def enrich_catalog(payload: dict, species: dict) -> None:
             if region:
                 names = [region + ja, ja + '(' + region + ')']
                 if shadow:
-                    names = ['shadow ' + x for x in names] + ['シャドウ' + x for x in names]
+                    names = (['shadow ' + x for x in names] + ['シャドウ' + x for x in names]
+                             + [x + gap + '(シャドウ)' for x in names for gap in ('', ' ')])
                 aliases.extend(names)
             elif shadow:
                 base = sid.removesuffix('_shadow')
                 if base in plain:
-                    aliases.extend(['shadow ' + ja, 'シャドウ' + ja, ja + ' shadow'])
+                    aliases.extend(['shadow ' + ja, 'シャドウ' + ja, ja + ' shadow',
+                                    ja + '(シャドウ)', ja + ' (シャドウ)'])
             english = entry.get('name') or sid
             suffix = english[english.find('('):] if '(' in english else ''
             if suffix:
@@ -53,3 +55,4 @@ def enrich_catalog(payload: dict, species: dict) -> None:
             entry['default_moves_source'] = 'PvPoke GL overall / ' + SOURCES['retrieved']
 
     assign_nickname_codes(payload)
+
