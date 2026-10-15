@@ -14,6 +14,7 @@ FORM_JA = {'Shadow': 'シャドウ', 'Galarian': 'ガラル', 'Alolan': 'アロ�
            'Attack': 'アタック', 'Defense': 'ディフェンス', 'Speed': 'スピード',
            'Normal': 'ノーマル', 'Altered': 'アナザー', 'Origin': 'オリジン',
            'Plant': 'くさき', 'Sandy': 'すなち', 'Trash': 'ゴミ',
+           'Full Belly': 'まんぷくもよう', 'Hangry': 'はらぺこもよう',
            'Hero': 'れきせんのゆうしゃ', 'Crowned Sword': 'けんのおう',
            'Crowned Shield': 'たてのおう', 'Average': 'ふつう', 'Large': 'おおきい',
            'Small': 'ちいさい', 'Super': 'とくだい', 'Standard': 'ノーマル',

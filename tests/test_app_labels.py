@@ -26,11 +26,13 @@ class AppLabelTests(unittest.TestCase):
 
     def test_japanese_form_keeps_region_shadow_and_sex(self):
         raw = {'corsola_galarian_shadow': {'dex': 222},
-               'oinkologne_female': {'dex': 916}, 'aegislash': {'dex': 681}}
+               'oinkologne_female': {'dex': 916}, 'aegislash': {'dex': 681}, 'morpeko_full_belly': {'dex': 877}}
         rows = {'corsola_galarian_shadow': {'name': 'Corsola (Galarian) (Shadow)'},
                 'oinkologne_female': {'name': 'Oinkologne (Female)'},
-                'aegislash': {'name': 'Aegislash (Shield)'}}
+                'aegislash': {'name': 'Aegislash (Shield)'},
+                'morpeko_full_belly': {'name': 'Morpeko (Full Belly)'}}
         enrich_catalog(rows, raw)
         self.assertEqual(rows['corsola_galarian_shadow']['name_ja'], 'サニーゴ(ガラル) (シャドウ)')
         self.assertIn('メス', rows['oinkologne_female']['name_ja'])
         self.assertIn('シールド', rows['aegislash']['name_ja'])
+        self.assertEqual(rows['morpeko_full_belly']['name_ja'], 'モルペコ(まんぷくもよう)')
