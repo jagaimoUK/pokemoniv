@@ -46,7 +46,8 @@ def assign_nickname_codes(payload):
         parts = sid.split('_')[1:]
         suffix = ''.join({'shadow': 's', 'galarian': 'G', 'alolan': 'A',
                           'hisuian': 'H', 'paldean': 'P', 'mega': 'M',
-                          'male': 'm', 'female': 'f'}.get(x, x[:1].upper()) for x in parts)
+                          'male': 'm', 'female': 'f',
+                          'small': 'X', 'average': 'M', 'large': 'L', 'super': 'Z'}.get(x, x[:1].upper()) for x in parts)
         suffix = suffix[:2]
         limit = 4 - len(suffix)
         preferred = PREFERRED.get(base, letters[:3].capitalize())

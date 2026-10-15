@@ -10,6 +10,8 @@ import io
 import re
 import unicodedata
 
+from pvpoke_app_sizes import FAMILIES
+
 FIELDS = ('species', 'fast', 'charged1', 'charged2')
 TRIPLE = re.compile(r'^\d{1,2}\s*[,/]\s*\d{1,2}\s*[,/]\s*\d{1,2}$')
 
@@ -60,6 +62,8 @@ def parse_import(text: str, catalog: dict, current: dict | None = None) -> dict:
             aliases.setdefault(normalized(entry['name']), set()).add(entry['species'])
     def resolve(word):
         key = normalized(word)
+        if key in (*FAMILIES, *FAMILIES.values()):
+            raise ValueError(f'{word}: サイズを指定してください（こだましゅ/XS、ちゅうだましゅ/通常、おおだましゅ/XL、ギガだましゅ/XXL）')
         if key.endswith('_shadow-shadow'):
             key = key[:-7]
         matches = aliases.get(key, set())

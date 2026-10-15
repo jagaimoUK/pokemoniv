@@ -10,6 +10,7 @@ import math
 from zipfile import ZipFile
 
 from pvpoke_selection_matrix import MODES, SHIELDS, SelectionMatrix, load_selection_matrix
+from pvpoke_app_sizes import pumpkin_search
 
 
 @dataclass(frozen=True)
@@ -39,15 +40,20 @@ def validate_focus(focus: list[str] | None) -> list[str]:
     return [x.strip() for x in focus]
 
 
-def search_string(name: str, iv: str, shadow: bool = False) -> str:
+def search_string(name: str, iv: str, shadow: bool = False, species_id: str | None = None) -> str:
     values = [int(x) for x in iv.split("/")]
     if len(values) != 3 or any(not 0 <= x <= 15 for x in values):
         raise ValueError("Invalid candidate IV")
     if not name or any(x in name for x in "&\r\n"):
         raise ValueError("A valid English species name is required")
+    form_search = pumpkin_search(species_id)
+    if form_search:
+        name, size_filter = form_search
+    else:
+        size_filter = ""
     def bucket(x):
         return 0 if x == 0 else 1 if x <= 5 else 2 if x <= 10 else 3 if x < 15 else 4
-    return name + "".join(f"&{bucket(x)}{label}" for x, label in zip(values, ("attack", "defense", "hp"))) + ("&shadow" if shadow else "")
+    return name + "".join(f"&{bucket(x)}{label}" for x, label in zip(values, ("attack", "defense", "hp"))) + size_filter + ("&shadow" if shadow else "")
 
 
 def recommend(matrices: dict[str, SelectionMatrix], candidate: dict,
@@ -122,7 +128,7 @@ def recommend(matrices: dict[str, SelectionMatrix], candidate: dict,
     shadow = "shadow" in candidate["species"].split("_") or candidate["species"].endswith("-shadow")
     for iv in reps:
         found = sorted(events[iv], key=priority)
-        equivalent_rows = [{"ivs": x, "search_string": search_string(english_name, x, shadow)} for x in equivalents[iv]]
+        equivalent_rows = [{"ivs": x, "search_string": search_string(english_name, x, shadow, candidate['species'])} for x in equivalents[iv]]
         if not found:
             held.append({"ivs": iv, "status": "review", "reason": "完全支配はされていません。自動推薦の採用根拠が不足しています。",
                          "equivalent_candidates": equivalent_rows})
@@ -140,7 +146,7 @@ def recommend(matrices: dict[str, SelectionMatrix], candidate: dict,
         reason += "。"
         loss = max(losses[iv], key=lambda e: (e["focus"], e["best_rating"] - e["rating"]), default=None)
         recommendations.append({"ivs": iv, "grade": grade, "role": role, "reason": reason,
-                                "search_string": search_string(english_name, iv, shadow),
+                                "search_string": search_string(english_name, iv, shadow, candidate['species']),
                                 "evidence_count": len(found), "evidence": found,
                                 "tradeoff_count": len(losses[iv]), "tradeoff": loss,
                                 "equivalent_candidates": equivalent_rows})

@@ -3,6 +3,7 @@ from collections import defaultdict
 
 from pvpoke_app_defaults import NAMES_JA, GL_MOVES, SOURCES
 from pvpoke_app_labels import assign_nickname_codes, japanese_form_suffix
+from pvpoke_app_sizes import pumpkin_aliases, pumpkin_display_name
 
 
 def enrich_catalog(payload: dict, species: dict) -> None:
@@ -39,6 +40,10 @@ def enrich_catalog(payload: dict, species: dict) -> None:
             if suffix:
                 aliases.append(ja + suffix)
             entry['name_ja'] = ja + japanese_form_suffix(suffix) if suffix else ja + ((' (' + region + ')') if region else '')
+        pumpkin_name = pumpkin_display_name(sid)
+        if pumpkin_name:
+            entry['name_ja'] = pumpkin_name
+            aliases.extend(pumpkin_aliases(sid))
         entry['aliases'] = list(dict.fromkeys(aliases))
         moves = GL_MOVES.get(sid)
         if (moves and moves[0] in entry.get('fastMoves', [])
