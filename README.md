@@ -1,6 +1,11 @@
-# PvPoke cloud prototype (unpublished)
+# PvPoke IV selection server and browser app
 
-This is a **single-user** prototype using the existing local PvPoke Matrix automation code. It does not replace PvPoke and does not perform GPT IV selection; ChatGPT does that after reading measured results.
+Current implementation: a single-user PvPoke calculation server, an authenticated browser app with rule-based IV recommendations, and the existing ChatGPT evaluation path.
+
+- [Current development handoff (Japanese)](docs/development-handoff.md)
+- [Browser input, recommendation and copy behavior](docs/app-selection.md)
+
+The handoff and app documentation describe the current deployed behavior. The original deployment outline and limitations below are historical setup notes and may not describe the current implementation.
 
 ## Deployment outline
 1. Upload these files to a private GitHub repository, or use a host that supports directory/Dockerfile deployments.
