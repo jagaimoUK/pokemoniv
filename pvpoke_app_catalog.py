@@ -2,6 +2,7 @@
 from collections import defaultdict
 
 from pvpoke_app_defaults import NAMES_JA, GL_MOVES, SOURCES
+from pvpoke_app_labels import assign_nickname_codes, japanese_form_suffix
 
 
 def enrich_catalog(payload: dict, species: dict) -> None:
@@ -37,7 +38,7 @@ def enrich_catalog(payload: dict, species: dict) -> None:
             suffix = english[english.find('('):] if '(' in english else ''
             if suffix:
                 aliases.append(ja + suffix)
-            entry['name_ja'] = ja + ((' (' + region + ')') if region else suffix)
+            entry['name_ja'] = ja + japanese_form_suffix(suffix) if suffix else ja + ((' (' + region + ')') if region else '')
         entry['aliases'] = list(dict.fromkeys(aliases))
         moves = GL_MOVES.get(sid)
         if (moves and moves[0] in entry.get('fastMoves', [])
@@ -45,3 +46,5 @@ def enrich_catalog(payload: dict, species: dict) -> None:
                 and moves[1] != moves[2]):
             entry['default_moves'] = dict(zip(('fast', 'charged1', 'charged2'), moves))
             entry['default_moves_source'] = 'PvPoke GL overall / ' + SOURCES['retrieved']
+
+    assign_nickname_codes(payload)

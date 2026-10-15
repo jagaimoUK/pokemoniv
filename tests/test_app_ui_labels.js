@@ -1,0 +1,26 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const script=fs.readFileSync('pvpoke_app_ui.py','utf8').split('<script>')[1].split('</script>')[0];
+const els={};function element(){const e={children:[],value:'',textContent:'',hidden:false,append(x){this.children.push(x)},replaceChildren(){this.children=[]}};Object.defineProperty(e,'id',{set(v){els[v]=e}});return e;}
+const context={document:{getElementById(id){return els[id]??=element()},createElement:element},navigator:{clipboard:{async writeText(t){context.copied=t}}},URLSearchParams,location:{hash:''}};
+vm.createContext(context);vm.runInContext(script,context);
+vm.runInContext(`catalog={quagsire:{name:'Quagsire',name_ja:'ヌオー',nickname_code:'Quag'},corviknight:{name:'Corviknight',name_ja:'アーマーガア',nickname_code:'Cor'},feraligatr_shadow:{name:'Feraligatr (Shadow)',name_ja:'オーダイル(シャドウ)',nickname_code:'Fers'}};prepareLabels()`,context);
+const event=(opponent,rating,shield='i0y1')=>({opponent,rating,shield,mode:'default',next_best:490});
+const draw=event('Corviknight SdA+AC/Pbk 4/12/14',500);
+const win=event('Feraligatr (Shadow) SC+HC/IB 5/11/14',510,'i1y2');
+const row={ivs:'0/11/12',rank:1,grade:'S候補',role:'不利シールド対応型',reason:'English old reason',equivalent_candidates:[{ivs:'1/11/12'}],evidence:[draw,win],evidence_count:2,tradeoff:{...draw,rating:450,best_iv:'3/13/8',best_rating:520}};
+const result={candidate:{species:'quagsire',fast:'F',charged1:'C1',charged2:'C2'},selection:{recommendations:[row],excluded:0,unmatched_focus:[],review_candidates:[{ivs:'5/5/5',reason:'保留',equivalent_candidates:[]}],dominated_by:{'6/6/6':['0/11/12']}}};
+context.result=result;context.draw=draw;
+assert.equal(vm.runInContext("nicknameFor(result,result.selection.recommendations[0]).text",context),'SQuag>Fers12');
+assert.equal(vm.runInContext("nicknameFor(result,{grade:'A候補',evidence:[draw]}).text",context),'AQuag=Cor01');
+assert.equal(vm.runInContext("opponentLabel('Feraligatr (Shadow) SC+HC/IB 5/11/14').name",context),'オーダイル(シャドウ)');
+assert.equal(vm.runInContext("nicknameFor(result,{evidence:[{opponent:'Unknown',rating:510}]} )",context),null);
+vm.runInContext('render(result)',context);
+const flat=e=>[e,...e.children.flatMap(flat)];const nodes=flat(els.results);
+assert(nodes.some(n=>n.textContent==='勝てる相手（推薦根拠の条件）：オーダイル(シャドウ)'));
+assert(nodes.some(n=>n.textContent==='引き分けにできる相手：アーマーガア'));
+assert(!nodes.some(n=>n.textContent.includes('English old reason')||n.textContent.includes('Corviknight')));
+const exported=vm.runInContext('recommendationExport(result)',context);
+assert(exported.includes('0,11,12\tSQuag>Fers12')&&exported.includes('1,11,12\tSQuag>Fers12'));
+assert(!exported.includes('5,5,5')&&!exported.includes('6,6,6'));
+assert.equal(els.allCopyActions.hidden,true);
+console.log('Japanese opponents, conditional win/draw, 12-character nickname, alternatives and export scope: OK');
