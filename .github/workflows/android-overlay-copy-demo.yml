@@ -14,12 +14,14 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
       - run: tar -xJf android-overlay-copy-demo.tar.xz
-      - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
       - run: gradle -p demo :app:assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
         with:
