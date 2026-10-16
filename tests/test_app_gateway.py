@@ -92,6 +92,57 @@ class AppGatewayTests(unittest.TestCase):
             r.read()
             c.close()
 
+    def test_remembered_login_only_unlocks_app(self):
+        c = http.client.HTTPConnection(*self.server.server_address)
+        api_headers = {
+            'Content-Type': 'application/json',
+            'Origin': remote.APP_ORIGIN,
+            'Authorization': 'Bearer ' + remote.API_KEY,
+        }
+        c.request('POST', '/app-api/session', '{}', api_headers)
+        response = c.getresponse()
+        self.assertEqual(response.status, 200)
+        saved_cookie = response.getheader('Set-Cookie')
+        response.read()
+        self.assertIn('HttpOnly', saved_cookie)
+        self.assertIn('SameSite=Strict', saved_cookie)
+        self.assertIn('Max-Age=2592000', saved_cookie)
+        self.assertNotIn(remote.API_KEY, saved_cookie)
+
+        cookie_only = {
+            'Content-Type': 'application/json',
+            'Cookie': saved_cookie.split(';', 1)[0],
+            'Origin': remote.APP_ORIGIN,
+        }
+        with patch.object(remote.backend, '_request', return_value={'ready': True, 'species': {}}):
+            c.request('POST', '/app-api/catalog', '{}', cookie_only)
+            response = c.getresponse()
+            self.assertEqual(response.status, 200)
+            response.read()
+
+        c.request('POST', '/app-api/session', '{}', cookie_only)
+        response = c.getresponse()
+        self.assertEqual(response.status, 401)
+        response.read()
+
+        c.request('POST', '/mcp', '{}', cookie_only)
+        response = c.getresponse()
+        self.assertEqual(response.status, 401)
+        response.read()
+
+        c.request('POST', '/app-api/catalog', '{}',
+                  {**cookie_only, 'Origin': 'https://attacker.example'})
+        response = c.getresponse()
+        self.assertEqual(response.status, 403)
+        response.read()
+
+        c.request('POST', '/app-api/logout', '{}', cookie_only)
+        response = c.getresponse()
+        self.assertEqual(response.status, 200)
+        self.assertIn('Max-Age=0', response.getheader('Set-Cookie'))
+        response.read()
+        c.close()
+
     def test_launch_poll_recommendations_and_gpt_mode(self):
         args = {'candidate': CANDIDATE, 'ivs': IVS, 'wait_seconds': 0}
         status, body = self.request('/app-api/run', args, origin=remote.APP_ORIGIN)
