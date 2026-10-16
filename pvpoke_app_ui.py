@@ -57,6 +57,18 @@ function outcome(e){return e.rating>500?'勝ち':e.rating===500?'引き分け':'
 function evidenceText(e){const label=opponentLabel(e.opponent);return label.name+label.detail+'｜'+conditionLabel(e)+'｜'+outcome(e)+'・Rating '+e.rating+'（他候補の最高 '+(e.next_best??'比較なし')+'）';}
 function matchupNames(row,win){return [...new Set((row.evidence||[]).filter(e=>win?e.rating>500:e.rating===500).map(e=>opponentLabel(e.opponent).name))];}
 function primaryEvidence(row){return (row.evidence||[]).find(e=>e.rating>500)||(row.evidence||[])[0];}
+function summaryEvidence(row){
+ const seen=new Set(),summary=[];
+ // Evidence is already ordered by focus, uniqueness and shield relevance.
+ for(const e of row.evidence||[]){
+  if(e.rating<500)continue;
+  const name=opponentLabel(e.opponent).name;
+  if(seen.has(name))continue;
+  seen.add(name);summary.push(e);
+  if(summary.length===3)break;
+ }
+ return summary;
+}
 // Check assembled nicknames as well as individual codes; reject unknown patterns.
 const blockedNickname=/(anal|ass|bitch|cunt|dick|fuck|nazi|porn|sex|shit|slut)/i;
 function validNickname(t){return t.length<=12&&/^[A-Za-z0-9><=]+$/.test(t)&&!blockedNickname.test(t.replace(/[^A-Za-z]/g,''));}
@@ -150,7 +162,9 @@ function refreshNicknames(){
 }
 function renderNickname(result,row,parent,ivs=row.ivs){
  const label=node('label','',parent),code=node('code','',parent,'search');
- const button=node('button','ニックネームをコピー',parent),note=node('p','',parent,'note');
+ const button=node('button','ニックネームをコピー',parent);
+ const explanation=node('details','',parent);node('summary','ニックネームの意味',explanation);
+ const note=node('p','',explanation,'note');
  nicknameBindings.push({result,row,ivs,label,code,button,note});
  button.onclick=()=>{const nick=nicknameFor(result,row,ivs);if(nick)copy(nick.text,button);};
  refreshNicknames();
@@ -173,16 +187,15 @@ function render(result,append=false){
  if(!selection.recommendations.length)node('p','自動推薦の根拠が十分な個体はありません。下の保留個体を確認してください。',panel);
  for(const row of selection.recommendations){
   const card=node('article','',panel,'recommendation');node('h2',row.rank+'位｜'+row.ivs+'｜'+row.grade,card);node('div',row.role,card,'badge');
-  const wins=matchupNames(row,true),draws=matchupNames(row,false);
-  if(wins.length)node('p','勝てる相手（推薦根拠の条件）：'+wins.join('、'),card);
-  if(draws.length)node('p','引き分けにできる相手：'+draws.join('、'),card);
-  if(row.evidence?.length)node('p','主な根拠：'+evidenceText(primaryEvidence(row)),card,'note');
+  const summary=summaryEvidence(row);
+  if(summary.length){const list=node('ul','',card,'matchup-summary');for(const e of summary)node('li',opponentLabel(e.opponent).name+'：'+outcome(e)+'（'+conditionLabel(e)+'）',list);}
   renderSearch(row,card);
   renderNickname(result,row,card);
-  if(row.tradeoff){const e=row.tradeoff;node('p','苦手になる対面：'+opponentLabel(e.opponent).name+'・'+conditionLabel(e)+' は '+outcome(e)+'（Rating '+e.rating+' / '+e.best_iv+' は '+e.best_rating+'）。',card,'note');}
   if(row.equivalent_candidates.length){const d=node('details','',card);node('summary','全条件で同じ性能の代替個体',d);for(const e of row.equivalent_candidates){node('p',e.ivs,d);renderSearch(e,d);renderNickname(result,row,d,e.ivs);}}
   const details=node('details','',card);node('summary','推薦根拠をすべて見る（'+row.evidence_count+'条件）',details);node('pre',row.evidence.map(evidenceText).join('\n'),details);
+  if(row.tradeoff){const e=row.tradeoff;node('p','苦手になる対面：'+opponentLabel(e.opponent).name+'・'+conditionLabel(e)+' は '+outcome(e)+'（Rating '+e.rating+' / '+e.best_iv+' は '+e.best_rating+'）。',details,'note');}
  }
+ if(selection.covered_candidates?.length){const d=node('details','',panel);node('summary','役割が重複する個体（'+selection.covered_candidates.length+'）',d);for(const row of selection.covered_candidates){node('p',row.ivs+' → '+row.covered_by+'で全条件をカバー',d);if(row.equivalent_candidates?.length)node('p','同じ性能：'+row.equivalent_candidates.map(x=>x.ivs).join(', '),d);}}
  if(selection.review_candidates.length){const d=node('details','',panel);node('summary','保留：'+selection.review_candidates.length+'個体',d);for(const row of selection.review_candidates){node('p',row.ivs+'：'+row.reason,d);if(row.equivalent_candidates.length)node('p','同じ性能：'+row.equivalent_candidates.map(x=>x.ivs).join(', '),d);}}
  const rejected=Object.entries(selection.dominated_by);if(rejected.length){const d=node('details','',panel);node('summary','全条件で他候補以下の個体（'+rejected.length+'）',d);for(const [iv,rivals] of rejected)node('p',iv+' → '+rivals.join(', '),d);}
  refreshNicknames();
@@ -258,3 +271,4 @@ el('disconnect').onclick=async()=>{try{await api('logout');}catch(e){message('�
 const access=new URLSearchParams(location.hash.slice(1)).get('access');
 if(access){history.replaceState(null,'',location.pathname);el('credential').value=access;connect(false);}else{connect(true);}
 </script></body></html>'''
+
