@@ -6,6 +6,7 @@ import unicodedata
 # Familiar compact labels, including adjacent evolution stages.
 PREFERRED = {'quagsire': 'Quag', 'corviknight': 'Cor', 'feraligatr': 'Fer',
              'swadloon': 'Swd', 'leavanny': 'Lea', 'swampert': 'Swa',
+             'nacli': 'Ncl', 'naclstack': 'Nst', 'garganacl': 'Gag',
              'squirtle': 'Sqt', 'wartortle': 'Wrt', 'blastoise': 'Bls',
              'bulbasaur': 'Bul', 'ivysaur': 'Ivy', 'venusaur': 'Ven'}
 FORM_JA = {'Shadow': 'シャドウ', 'Galarian': 'ガラル', 'Alolan': 'アローラ',
@@ -24,6 +25,19 @@ FORM_JA = {'Shadow': 'シャドウ', 'Galarian': 'ガラル', 'Alolan': 'アロ�
            'Land': 'ランド', 'Sky': 'スカイ', 'Midday': 'まひる',
            'Midnight': 'まよなか', 'Dusk': 'たそがれ',
            'Sunny': 'たいよう', 'Rainy': 'あまみず', 'Snowy': 'ゆきぐも'}
+
+
+# Short labels are joined directly to an A/S grade in GO nicknames.
+# Validate the composed prefix too: A + Nal becomes the rejected word ANal.
+# This is a conservative local screen, not an official exhaustive GO word list.
+BLOCKED_NICKNAME_FRAGMENTS = ('anal', 'ass', 'bitch', 'cunt', 'dick',
+                              'fuck', 'nazi', 'porn', 'sex', 'shit', 'slut')
+
+
+def safe_nickname_fragment(code):
+    return all(not any(term in (grade + code).casefold()
+                       for term in BLOCKED_NICKNAME_FRAGMENTS)
+               for grade in ('', 'A', 'S'))
 
 
 def japanese_form_suffix(suffix):
@@ -58,6 +72,7 @@ def assign_nickname_codes(payload):
                     yield (letters[0] + ''.join(letters[i] for i in indices)).capitalize() + suffix
             for n in range(10000):
                 yield letters[0].upper() + str(n)
-        code = next(c for c in options() if 1 <= len(c) <= 4 and c.casefold() not in used)
+        code = next(c for c in options() if 1 <= len(c) <= 4 and c.casefold() not in used
+                    and safe_nickname_fragment(c))
         used.add(code.casefold())
         entry['nickname_code'] = code

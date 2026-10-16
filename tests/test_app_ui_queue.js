@@ -38,4 +38,42 @@ vm.runInContext("catalog={swadloon:{name:'Swadloon',name_ja:'クルマユ',nickn
  await assert.rejects(vm.runInContext('executeBatch()',context),/test failure/);
  assert.equal(vm.runInContext('batchState.results.length',context),1);assert.equal(vm.runInContext('batchState.index',context),1);
  console.log('Partial failure keeps completed result and stops subsequent work: OK');
+
+ // Two names in one imported section share the same exact physical IV.
+ // Preserve both stages while using the winning matchup with the highest Rating.
+ vm.runInContext("catalog.naclstack={name:'Naclstack',name_ja:'ジオヅム',nickname_code:'Nal'};"+
+  "catalog.garganacl={name:'Garganacl',name_ja:'キョジオーン',nickname_code:'Gag'};"+
+  "catalog.winner={name:'Winner',name_ja:'高レート対面',nickname_code:'Win'};prepareLabels()",context);
+ const staged=(sid,ivs,rating,op,shield,section,grade='A候補')=>({
+  state:'done',complete:true,candidate:{species:sid,fast:'FAST',charged1:'C1',charged2:'C2'},
+  source_sections:[section],selection:{english_name:sid,unmatched_focus:[],excluded:0,
+  review_candidates:[],dominated_by:{},
+  recommendations:[{ivs,search_string:sid+'&1attack&1defense&1hp',rank:1,grade,
+    role:'対応',equivalent_candidates:[],evidence_count:1,
+    evidence:[{opponent:op,mode:'default',shield,rating,next_best:490}]}]}})
+ context.stageA=staged('naclstack','1/2/3',540,'Other','s1',99);
+ context.stageB=staged('garganacl','1/2/3',680,'Winner','s2',99,'S候補');
+ vm.runInContext('render(stageA)',context);
+ assert(!/anal/i.test(vm.runInContext('nicknameFor(stageA,stageA.selection.recommendations[0]).text',context)));
+ vm.runInContext('render(stageB,true)',context);
+ const bothA=vm.runInContext('nicknameFor(stageA,stageA.selection.recommendations[0])',context);
+ const bothB=vm.runInContext('nicknameFor(stageB,stageB.selection.recommendations[0])',context);
+ assert.equal(bothA.text,bothB.text,'One physical IV must have one shared nickname');
+ assert(bothA.text.endsWith('>Win22'),'Use the higher actual winning Rating (680)');
+ assert(bothA.text.length<=12&&!/anal|ass|sex|fuck/i.test(bothA.text));
+ assert(bothA.description.includes('ジオヅム')&&bothA.description.includes('キョジオーン'));
+ assert(bothA.description.includes('680'));
+ let buttons=flat(els.results).filter(x=>x.textContent==='ニックネームをコピー');
+ assert.equal(buttons.length,2);
+ await buttons[0].onclick();await buttons[1].onclick();
+ assert.deepEqual(copied.slice(-2),[bothA.text,bothA.text],'Existing buttons must refresh when next stage finishes');
+ const joined=vm.runInContext('displayedResults.map(recommendationExport).join("\\n")',context);
+ assert.equal((joined.match(new RegExp(bothA.text,'g'))||[]).length,2,'All-copy uses the same resolved nickname');
+ context.stageC=staged('garganacl','1/2/4',900,'Winner','s2',99,'S候補');
+ vm.runInContext('render(stageC,true)',context);
+ const still=vm.runInContext('nicknameFor(stageA,stageA.selection.recommendations[0])',context);
+ assert.equal(still.text,bothA.text,'Different exact IVs must never be merged');
+ assert.equal(vm.runInContext("validNickname('ANal>Oth11')",context),false);
+ console.log('Safe nicknames, shared stages, strongest Rating, precise IV and refreshed copies: OK');
+
 })();
