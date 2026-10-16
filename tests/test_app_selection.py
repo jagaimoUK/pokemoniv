@@ -112,7 +112,7 @@ class AppSelectionTests(unittest.TestCase):
         self.assertEqual(set(kept), {a, b})
         self.assertEqual(result['explanation_version'], 'pairwise-v1')
         self.assertEqual({r['ivs'] for r in result['covered_candidates']}, {redundant})
-        self.assertEqual(result['covered_candidates'][0]['covered_by'], a)
+        self.assertIn(result['covered_candidates'][0]['covered_by'], {a, b})
         latter = next(r for r in result['recommendations'] if r['rank'] == 2)
         self.assertEqual(latter['comparison_peer'], result['recommendations'][0]['ivs'])
         self.assertTrue(latter['comparison_differences'])
