@@ -18,6 +18,17 @@ class AppLabelTests(unittest.TestCase):
         assign_nickname_codes(reverse)
         self.assertEqual(rows, reverse)
 
+    def test_grade_prefix_never_forms_a_blocked_word(self):
+        rows = {sid: {} for sid in ('nacli', 'naclstack', 'garganacl',
+                                     'naclstack_shadow')}
+        assign_nickname_codes(rows)
+        self.assertEqual(rows['naclstack']['nickname_code'], 'Nst')
+        self.assertEqual(rows['garganacl']['nickname_code'], 'Gag')
+        for row in rows.values():
+            code = row['nickname_code']
+            self.assertNotIn('anal', ('A' + code).casefold())
+            self.assertNotIn('ass', ('S' + code).casefold())
+
     def test_collisions_do_not_alias_one_form_to_another(self):
         rows = {f'pokemon_form{i}': {} for i in range(60)}
         assign_nickname_codes(rows)
