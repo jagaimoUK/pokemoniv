@@ -16,8 +16,8 @@ assert.equal(vm.runInContext("opponentLabel('Feraligatr (Shadow) SC+HC/IB 5/11/1
 assert.equal(vm.runInContext("nicknameFor(result,{evidence:[{opponent:'Unknown',rating:510}]} )",context),null);
 vm.runInContext('render(result)',context);
 const flat=e=>[e,...e.children.flatMap(flat)];const nodes=flat(els.results);
-assert(nodes.some(n=>n.textContent==='勝てる相手（推薦根拠の条件）：オーダイル(シャドウ)'));
-assert(nodes.some(n=>n.textContent==='引き分けにできる相手：アーマーガア'));
+assert(nodes.some(n=>n.textContent==='オーダイル(シャドウ)：勝ち（標準IV・自分シールド1 / 相手2）'));
+assert(nodes.some(n=>n.textContent==='アーマーガア：引き分け（標準IV・自分シールド0 / 相手1）'));
 assert(!nodes.some(n=>n.textContent.includes('English old reason')||n.textContent.includes('Corviknight')));
 const exported=vm.runInContext('recommendationExport(result)',context);
 assert.equal(exported,'Quagsire&0attack&3defense&3hp\nSQuag>Fers12\nQuagsire&1attack&3defense&3hp\nSQuag>Fers12');
@@ -26,4 +26,17 @@ assert(!exported.includes('\t')&&!exported.includes('\n\n'));
 assert.throws(()=>vm.runInContext('recommendationExport({candidate:result.candidate,selection:{recommendations:[{...result.selection.recommendations[0],search_string:null}]}})',context),/検索式/);
 assert(!exported.includes('5,5,5')&&!exported.includes('6,6,6'));
 assert.equal(els.allCopyActions.hidden,true);
+// At most three distinct opponents total, across wins and draws. Full evidence
+// remains inside details; repeated shields/moves do not crowd the summary.
+context.many={...row,evidence:[win,{...win,shield:'s2'},draw,event('Quagsire MS+AT/SE',510),event('Fourth',520)]};
+assert.equal(vm.runInContext('summaryEvidence(many).length',context),3);
+assert.equal(vm.runInContext('summaryEvidence(many).map(e=>opponentLabel(e.opponent).name).join(",")',context),'オーダイル(シャドウ),アーマーガア,ヌオー');
+const coveredResult={...result,selection:{...result.selection,covered_candidates:[{ivs:'2/2/2',covered_by:row.ivs,equivalent_candidates:[]}]}};
+context.coveredResult=coveredResult;
+vm.runInContext('render(coveredResult)',context);
+const coveredNodes=flat(els.results);
+assert(coveredNodes.some(n=>n.textContent==='役割が重複する個体（1）'));
+assert.equal(vm.runInContext('recommendationExport(coveredResult)',context),exported);
+assert(!vm.runInContext('recommendationExport(coveredResult)',context).includes('2/2/2'));
 (async()=>{for(const b of nodes.filter(n=>n.textContent==='検索式をコピー')){await b.onclick();assert(['Quagsire&0attack&3defense&3hp','Quagsire&1attack&3defense&3hp'].includes(context.copied));}console.log('Japanese matchups, restored search copies, exact search/nickname pairs and alternatives: OK');})();
+

@@ -15,7 +15,7 @@ from pvpoke_app_sizes import pumpkin_search
 
 @dataclass(frozen=True)
 class SelectionPolicy:
-    version: str = "roles-v1"
+    version: str = "roles-v2"
     meaningful_win_lead: float = 20
 
 
@@ -152,6 +152,28 @@ def recommend(matrices: dict[str, SelectionMatrix], candidate: dict,
                                 "equivalent_candidates": equivalent_rows})
     recommendations.sort(key=lambda row: (row["grade"] != "S候補", priority(row["evidence"][0]),
                                             -len(row["evidence"]), -sum(vectors[row["ivs"]]) / len(cells), row["ivs"]))
+    # Compare outcomes on the FULL matrix, never the evidence excerpts or just
+    # opponent names. A higher Rating in an already-won cell is not a new role.
+    # Draws must also be covered, by the SAME retained candidate across modes.
+    outcomes = {iv: tuple(2 if r > 500 else 1 if r == 500 else 0
+                          for r in vectors[iv]) for iv in reps}
+    order = {row["ivs"]: index for index, row in enumerate(recommendations)}
+    def covers(other, iv):
+        a, b = outcomes[other], outcomes[iv]
+        return (all(x >= y for x, y in zip(a, b))
+                and (a != b or order[other] < order[iv]))
+    kept = [row for row in recommendations
+            if not any(covers(other["ivs"], row["ivs"])
+                       for other in recommendations if other is not row)]
+    covered = []
+    for row in recommendations:
+        if row in kept:
+            continue
+        covering = next(other for other in kept if covers(other["ivs"], row["ivs"]))
+        covered.append({"ivs": row["ivs"], "covered_by": covering["ivs"],
+                        "reason": "勝ち・引き分けの全条件が、残した1個体でカバーされています。",
+                        "equivalent_candidates": row["equivalent_candidates"]})
+    recommendations = kept
     for rank, row in enumerate(recommendations, 1):
         row["rank"] = rank
     matched_focus = [x for x in focus if any(x.casefold() in name.casefold() for _, _, _, name in cells)]
@@ -163,6 +185,7 @@ def recommend(matrices: dict[str, SelectionMatrix], candidate: dict,
             "total_ratings_checked": len(cells) * len(ivs),
             "focus_opponents": focus, "unmatched_focus": [x for x in focus if x not in matched_focus],
             "recommendations": recommendations, "review_candidates": held,
+            "covered_candidates": covered,
             "dominated_by": {iv: by for iv, by in dominated.items() if by},
             "excluded": matrices["default"].manifest.get("excluded"),
             "counts_estimated_from_rating": True}
@@ -175,3 +198,4 @@ def recommendations_from_zip(archive: ZipFile, candidate: dict, english_name: st
     modes = ("default",) if batch_mode == "simple" else MODES
     return recommend({mode: load_selection_matrix(archive, mode) for mode in modes},
                      candidate, english_name, focus_opponents, policy)
+

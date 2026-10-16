@@ -21,7 +21,7 @@ def matrix(rows, opponents=None):
 class AppSelectionTests(unittest.TestCase):
     def test_three_specialists_survive_with_low_average(self):
         data = matrix({'0/11/12': [506, 350, 200], '3/13/8': [490, 600, 499],
-                       '2/15/13': [480, 590, 510]})
+                       '2/15/13': [480, 490, 510]})
         result = recommend({'default': data}, CANDIDATE, 'Quagsire', ['Corviknight'])
         rows = {r['ivs']: r for r in result['recommendations']}
         self.assertEqual(set(rows), set(data.candidates))
@@ -73,6 +73,60 @@ class AppSelectionTests(unittest.TestCase):
         result = recommend({'default': matrix(rows, [f'Opponent {i}' for i in range(15)])}, CANDIDATE, 'Quagsire')
         self.assertEqual(len(result['recommendations']), 15)
         self.assertEqual(result['total_ratings_checked'], 15 * 15 * 6)
+
+    def test_win_subset_is_covered_despite_higher_rating_on_shared_win(self):
+        a, b = '0/11/12', '3/13/8'
+        data = matrix({a: [550, 550], b: [700, 490]})
+        result = recommend({'default': data}, CANDIDATE, 'Quagsire')
+        self.assertEqual([r['ivs'] for r in result['recommendations']], [a])
+        self.assertEqual(result['covered_candidates'][0]['covered_by'], a)
+        self.assertEqual(result['covered_candidates'][0]['ivs'], b)
+        self.assertFalse(result['dominated_by'])  # Outcome coverage != Rating dominance.
+        self.assertEqual(result['policy']['version'], 'roles-v2')
+        self.assertEqual(result['total_ratings_checked'], 24)
+
+    def test_same_outcomes_have_one_representative_and_preserve_alternatives(self):
+        a, b, c = '0/11/12', '3/13/8', '2/15/13'
+        result = recommend({'default': matrix({a: [550, 520], b: [520, 550], c: [520, 550]})},
+                           CANDIDATE, 'Quagsire')
+        self.assertEqual(len(result['recommendations']), 1)
+        self.assertEqual(len(result['covered_candidates']), 1)
+        seen = set()
+        for row in result['recommendations'] + result['covered_candidates']:
+            seen.add(row['ivs'])
+            seen.update(e['ivs'] for e in row['equivalent_candidates'])
+        self.assertEqual(seen, {a, b, c})
+
+    def test_draw_on_other_matchup_is_not_discarded(self):
+        a, b = '0/11/12', '3/13/8'
+        result = recommend({'default': matrix({a: [550, 550, 490], b: [700, 490, 500]})},
+                           CANDIDATE, 'Quagsire')
+        self.assertEqual(len(result['recommendations']), 2)
+        self.assertFalse(result['covered_candidates'])
+
+    def test_same_opponent_different_shield_role_survives(self):
+        a, b = '0/11/12', '3/13/8'
+        data = matrix({a: [550], b: [490]})
+        data.ratings['i0y1'][a] = [490]
+        data.ratings['i0y1'][b] = [550]
+        result = recommend({'default': data}, CANDIDATE, 'Quagsire')
+        self.assertEqual(len(result['recommendations']), 2)
+        self.assertFalse(result['covered_candidates'])
+
+    def test_covering_candidate_must_itself_be_retained(self):
+        a, b, c = '0/11/12', '3/13/8', '2/15/13'
+        result = recommend({'default': matrix({a: [530, 530, 530], b: [600, 600, 490],
+                                              c: [700, 490, 490]})}, CANDIDATE, 'Quagsire')
+        self.assertEqual([r['ivs'] for r in result['recommendations']], [a])
+        self.assertEqual({r['ivs']: r['covered_by'] for r in result['covered_candidates']}, {b: a, c: a})
+
+    def test_multiple_retained_candidates_cannot_jointly_cover_another(self):
+        a, b, c = '0/11/12', '3/13/8', '2/15/13'
+        data = matrix({a: [550, 550, 490, 490], b: [490, 490, 550, 550],
+                       c: [650, 490, 650, 490]}, ['X1', 'X2', 'Y1', 'Y2'])
+        result = recommend({'default': data}, CANDIDATE, 'Quagsire')
+        self.assertEqual(len(result['recommendations']), 3)
+        self.assertFalse(result['covered_candidates'])
 
     def test_invalid_policy_and_missing_mode_fail_before_battle(self):
         for v in [0, float('nan'), float('inf'), True, '20']:
@@ -127,6 +181,9 @@ class AppSelectionTests(unittest.TestCase):
         result = recommend({'default': data}, CANDIDATE, 'Quagsire')
         self.assertEqual(result['total_ratings_checked'], 3 * 87 * 6)
         seen = set(result['dominated_by']) | {r['ivs'] for r in result['review_candidates']}
+        for row in result['covered_candidates']:
+            seen.add(row['ivs'])
+            seen.update(e['ivs'] for e in row['equivalent_candidates'])
         for row in result['recommendations']:
             seen.add(row['ivs'])
             seen.update(e['ivs'] for e in row['equivalent_candidates'])
@@ -137,3 +194,4 @@ class AppSelectionTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
