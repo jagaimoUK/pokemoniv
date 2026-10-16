@@ -3,9 +3,13 @@
 These tokens authorize app endpoints only, never the MCP gateway itself.
 The URL fragment keeps the credential out of HTTP URLs and access logs.
 """
+import base64
+import hashlib
+import hmac
 import secrets
 import threading
 import time
+from http.cookies import SimpleCookie
 
 
 class AppAccess:
@@ -34,3 +38,56 @@ class AppAccess:
                 self._tokens.pop(token, None)
                 return False
             return True
+
+
+class BrowserLogin:
+    """Signed, renewable-only-by-relogin app cookie; never authorizes /mcp.
+
+    The 30-day cookie survives Railway restarts without storing the root key
+    in browser storage or a persistence layer. Changing PVP_API_KEY revokes it.
+    """
+    COOKIE_NAME = 'pvpoke_app_login'
+
+    def __init__(self, api_key, ttl=30 * 24 * 60 * 60):
+        self.ttl = ttl
+        self._secret = hashlib.sha256(('pvpoke-browser-login-v1:' + api_key).encode()).digest()
+
+    def _sign(self, payload):
+        return base64.urlsafe_b64encode(
+            hmac.new(self._secret, payload.encode('ascii'), hashlib.sha256).digest()
+        ).decode('ascii').rstrip('=')
+
+    def _cookie(self, value, max_age, secure):
+        flags = '; Secure' if secure else ''
+        return (f'{self.COOKIE_NAME}={value}; Max-Age={max_age}; Path=/app-api; '
+                f'HttpOnly; SameSite=Strict{flags}')
+
+    def issue(self, secure=True):
+        expires = int(time.time()) + self.ttl
+        payload = f'v1.{expires}.{secrets.token_urlsafe(16)}'
+        value = payload + '.' + self._sign(payload)
+        return self._cookie(value, self.ttl, secure)
+
+    def clear(self, secure=True):
+        return self._cookie('', 0, secure)
+
+    def valid(self, cookie_header):
+        if not cookie_header or len(cookie_header) > 4096:
+            return False
+        try:
+            cookies = SimpleCookie()
+            cookies.load(cookie_header)
+            item = cookies.get(self.COOKIE_NAME)
+            if item is None:
+                return False
+            parts = item.value.split('.')
+            if len(parts) != 4 or parts[0] != 'v1':
+                return False
+            expires = int(parts[1])
+            now = time.time()
+            if not now < expires <= now + self.ttl:
+                return False
+            payload = '.'.join(parts[:3])
+            return hmac.compare_digest(self._sign(payload), parts[3])
+        except (ValueError, TypeError):
+            return False
