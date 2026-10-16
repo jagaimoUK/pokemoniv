@@ -300,7 +300,8 @@ class Handler(BaseHTTPRequestHandler):
     def app_request(self):
         """Only explicit app operations; never proxy arbitrary backend paths."""
         if self.path not in ('/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result',
-                             '/app-api/session', '/app-api/logout'):
+                             '/app-api/session', '/app-api/logout', '/app-api/meta-status',
+                             '/app-api/meta-preview', '/app-api/meta-apply'):
             return self.respond(404, {'error': 'Not found'})
         origin = self.headers.get('Origin')
         if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'):
@@ -320,6 +321,14 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == '/app-api/logout':
                 return self.respond(200, {'logged_out': True},
                                     cookie=BROWSER_LOGIN.clear(secure=APP_ORIGIN.startswith('https://')))
+            if self.path == '/app-api/meta-status':
+                return self.respond(200, backend.meta_status())
+            if self.path == '/app-api/meta-preview':
+                return self.respond(200, backend.preview_meta_opponents(args.get('csv')))
+            if self.path == '/app-api/meta-apply':
+                return self.respond(200, backend.apply_meta_opponents(
+                    args.get('csv'), args.get('expected_previous_sha256'),
+                    args.get('expected_sha256')))
             if self.path == '/app-api/catalog':
                 result = backend._request('/api/catalog')
                 result.pop('saved', None)
