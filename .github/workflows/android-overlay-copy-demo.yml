@@ -21,7 +21,9 @@ jobs:
       - run: |
           export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          if [ ! -f "$ANDROID_HOME/platforms/android-35/android.jar" ]; then
+            "$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0"
+          fi
       - run: gradle -p demo :app:assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
         with:
