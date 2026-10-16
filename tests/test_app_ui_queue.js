@@ -74,6 +74,16 @@ vm.runInContext("catalog={swadloon:{name:'Swadloon',name_ja:'クルマユ',nickn
  const still=vm.runInContext('nicknameFor(stageA,stageA.selection.recommendations[0])',context);
  assert.equal(still.text,bothA.text,'Different exact IVs must never be merged');
  assert.equal(vm.runInContext("validNickname('ANal>Oth11')",context),false);
+
+ // Four-letter opponent codes also have to fit inside the 12-character limit.
+ vm.runInContext("catalog.quagsire={name:'Quagsire',name_ja:'ヌオー',nickname_code:'Quag'};prepareLabels()",context);
+ context.stageB.selection.recommendations[0].evidence[0].opponent='Quagsire';
+ context.stageB.selection.recommendations[0].evidence[0].rating=710;
+ vm.runInContext('refreshNicknames()',context);
+ const four=vm.runInContext('nicknameFor(stageA,stageA.selection.recommendations[0])',context);
+ assert(four&&four.text.endsWith('>Quag22')&&four.text.length<=12);
+ assert(four.description.includes('ジオヅム')&&four.description.includes('キョジオーン'));
+
  console.log('Safe nicknames, shared stages, strongest Rating, precise IV and refreshed copies: OK');
 
 })();

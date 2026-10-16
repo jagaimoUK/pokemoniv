@@ -98,8 +98,11 @@ function nicknameFor(result,row,ivs=row.ivs){
  const sign=best.e.rating>500?'>':best.e.rating===500?'=':'<', suffix=sign+best.opponent.code+shieldCode(best.e.shield);
  // Two stages: 3 letters for the best-Rating stage, 2 for the other.
  // Three stages: 2 per stage, grade omitted to retain opponent and shields.
+ const labelBudget=12-grade.length-suffix.length;
+ const primaryWidth=Math.min(3,labelBudget-2);
  const widths=members.length===1?[4]:members.length===2?
-  members.map(m=>m===best.member?3:2):[2,2,2];
+  members.map(m=>m===best.member?primaryWidth:2):[2,2,2];
+ if(members.length===2&&primaryWidth<2)return null;
  const candidates=members.map((m,i)=>codeChoices(m.sid,members.length===1?
   Math.min(4,String(catalog[m.sid]?.nickname_code||'').length):widths[i]));
  if(candidates.some(x=>!x.length))return null;
