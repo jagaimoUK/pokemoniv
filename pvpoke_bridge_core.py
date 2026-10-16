@@ -89,6 +89,28 @@ def candidate_name(species: str) -> str:
     return re.sub(r'\s*\([^)]*\)', '', name).strip()
 
 
+def preview_meta_opponents(csv_text: str) -> dict:
+    if not isinstance(csv_text, str) or not csv_text.strip():
+        raise BridgeError('アップロードするメタ一覧が空です')
+    return _request('/api/meta/preview', {'csv': csv_text},
+                    headers={'X-PvPoke-Token': _token()}, timeout=75)
+
+
+def apply_meta_opponents(csv_text: str, expected_previous_sha256: str,
+                         expected_sha256: str) -> dict:
+    """Browser upload must apply exactly the reviewed proposal to an unchanged snapshot."""
+    if not isinstance(csv_text, str) or not csv_text.strip():
+        raise BridgeError('メタ一覧が空です')
+    if not all(isinstance(v, str) and re.fullmatch(r'[0-9a-f]{64}', v)
+               for v in (expected_previous_sha256, expected_sha256)):
+        raise BridgeError('メタ確認情報がありません。再度プレビューしてください')
+    return _request('/api/meta/sync', {
+        'csv': csv_text,
+        'expected_previous_sha256': expected_previous_sha256,
+        'expected_sha256': expected_sha256,
+    }, headers={'X-PvPoke-Token': _token()}, timeout=75)
+
+
 def sync_meta_opponents(csv_text: str) -> dict:
     if not isinstance(csv_text, str) or not csv_text.strip():
         raise BridgeError('メタ一覧を4列CSVテキストで送ってください')
