@@ -526,7 +526,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        if path not in ('/api/prepare','/api/run','/api/prepare24','/api/run24','/api/meta/sync'):
+        if path not in ('/api/prepare','/api/run','/api/prepare24','/api/run24','/api/meta/sync','/api/meta/preview'):
             return self.respond(404, {'error': '見つかりません'})
         # Only same-origin JS with the random session token can start a job.
         origin = self.headers.get('Origin','')
@@ -544,8 +544,18 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 if STATUS['state'] == 'running':
                     return self.respond(409, {'error':'計算中は入力を変更できません'})
+                if path == '/api/meta/preview':
+                    if not CATALOG['ready']:
+                        raise ValueError('ゲームデータの読み込みが完了していません')
+                    result = meta_live.preview(WORK, payload.get('csv'), CATALOG['species'])
+                    return self.respond(200, {'ok': True, **result})
                 if path == '/api/meta/sync':
-                    result = meta_live.sync(WORK, payload.get('csv'), CATALOG['species'])
+                    if not CATALOG['ready']:
+                        raise ValueError('ゲームデータの読み込みが完了していません')
+                    result = meta_live.sync(
+                        WORK, payload.get('csv'), CATALOG['species'],
+                        expected_previous_sha256=payload.get('expected_previous_sha256'),
+                        expected_sha256=payload.get('expected_sha256'))
                     return self.respond(200, {'ok': True, **result})
                 if path in ('/api/prepare24','/api/run24'):
                     cand_parts = normalize_pokemon(payload.get('candidate'), CATALOG['species'], '自分')
