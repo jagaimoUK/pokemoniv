@@ -40,7 +40,7 @@ def _parse(csv_data: str) -> list[tuple[str, str, str, str]]:
     if not isinstance(csv_data, str) or len(csv_data.encode("utf-8")) > MAX_BYTES:
         raise ValueError("メタ一覧が空、または80KBを超えています")
     rows = []
-    for i, fields in enumerate(csv.reader(io.StringIO(csv_data)), 1):
+    for i, fields in enumerate(csv.reader(io.StringIO(csv_data.lstrip('\ufeff'))), 1):
         if not fields or (len(fields) == 1 and not fields[0].strip()):
             continue
         if len(fields) != 4 or any(not f.strip() for f in fields):
