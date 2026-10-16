@@ -1,0 +1,21 @@
+name: Validate Android reader recovery script
+on:
+  push:
+    branches: [feature/overlay-copy-queue-build-20261016]
+  workflow_dispatch:
+jobs:
+  powershell-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse PowerShell scripts
+        shell: pwsh
+        run: |
+          $errorsFound = $null
+          $tokens = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("Recover-OverlayCopyQueue-FromPCProject.ps1", [ref]$tokens, [ref]$errorsFound) | Out-Null
+          if ($errorsFound.Count -gt 0) {
+            $errorsFound | Format-List | Out-String | Write-Output
+            throw "PowerShell script parser errors"
+          }
+          Write-Host "PowerShell script syntax valid"
