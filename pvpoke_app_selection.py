@@ -174,10 +174,55 @@ def recommend(matrices: dict[str, SelectionMatrix], candidate: dict,
                         "reason": "勝ち・引き分けの全条件が、残した1個体でカバーされています。",
                         "equivalent_candidates": row["equivalent_candidates"]})
     recommendations = kept
+    # A surviving IV can look redundant when the UI shows a shared win.
+    # Compare it to the MOST SIMILAR higher-ranked retained IV across all
+    # opponents/modes/shields. A distinct outcome is required because otherwise
+    # that higher-ranked IV would have covered the current one above.
+    # Do not change selection or infer differences from sparse evidence lists.
+    for position, row in enumerate(recommendations):
+        earlier = recommendations[:position]
+        if not earlier:
+            row["comparison_peer"] = None
+            row["comparison_differences"] = []
+            row["comparison_difference_count"] = 0
+            continue
+        iv = row["ivs"]
+        peer = max(earlier, key=lambda other: (
+            sum(a == b for a, b in zip(outcomes[iv], outcomes[other["ivs"]])),
+            order[other["ivs"]]))
+        peer_iv = peer["ivs"]
+        differences = []
+        for index, (mode, shield, _, opponent) in enumerate(cells):
+            if outcomes[iv][index] <= outcomes[peer_iv][index]:
+                continue
+            differences.append({
+                "mode": mode, "shield": shield, "opponent": opponent,
+                "rating": vectors[iv][index], "peer_rating": vectors[peer_iv][index],
+                "focus": any(term.casefold() in opponent.casefold() for term in focus),
+                "disadvantage": shield in SHIELDS[3:]})
+        # Prefer meaningful conditions; show at most three different opponent
+        # records, leaving the full recommendation evidence untouched.
+        differences.sort(key=lambda e: (
+            -int(e["focus"]), -int(e["disadvantage"]), -int(e["rating"] > 500),
+            -e["rating"], MODES.index(e["mode"]),
+            SHIELDS.index(e["shield"]), e["opponent"]))
+        seen_opponents = set()
+        selected = []
+        for evidence in differences:
+            if evidence["opponent"] in seen_opponents:
+                continue
+            seen_opponents.add(evidence["opponent"])
+            selected.append(evidence)
+            if len(selected) == 3:
+                break
+        row["comparison_peer"] = peer_iv
+        row["comparison_differences"] = selected
+        row["comparison_difference_count"] = len(differences)
     for rank, row in enumerate(recommendations, 1):
         row["rank"] = rank
     matched_focus = [x for x in focus if any(x.casefold() in name.casefold() for _, _, _, name in cells)]
     return {"format": "app-recommendations-v1", "complete": True, "policy": asdict(rules),
+            "explanation_version": "pairwise-v1",
             "grade_source": "project rule-based provisional candidates", "candidate": candidate,
             "english_name": english_name, "candidate_count": len(ivs),
             "candidate_ivs": ivs,

@@ -97,6 +97,30 @@ class AppSelectionTests(unittest.TestCase):
             seen.update(e['ivs'] for e in row['equivalent_candidates'])
         self.assertEqual(seen, {a, b, c})
 
+    def test_repeated_kingdra_wins_show_real_difference_and_remove_covered_iv(self):
+        # Both retained IVs beat Kingdra at 0/1 with an identical Rating.
+        # A third IV has a HIGHER Kingdra Rating but no additional wins.
+        # The summary of the second IV must explain its actual distinct role.
+        a, b, redundant = '5/13/4', '4/10/6', '0/10/0'
+        data = matrix({a: [511, 530], b: [511, 490],
+                       redundant: [510, 480]}, ['Kingdra', 'Other'])
+        data.ratings['s0'][redundant] = [560, 480]
+        data.ratings['i0y1'][a] = [511, 450]
+        data.ratings['i0y1'][b] = [511, 550]
+        result = recommend({'default': data}, CANDIDATE, 'Annihilape')
+        kept = {r['ivs']: r for r in result['recommendations']}
+        self.assertEqual(set(kept), {a, b})
+        self.assertEqual(result['explanation_version'], 'pairwise-v1')
+        self.assertEqual({r['ivs'] for r in result['covered_candidates']}, {redundant})
+        self.assertIn(result['covered_candidates'][0]['covered_by'], {a, b})
+        latter = next(r for r in result['recommendations'] if r['rank'] == 2)
+        self.assertEqual(latter['comparison_peer'], result['recommendations'][0]['ivs'])
+        self.assertTrue(latter['comparison_differences'])
+        for event in latter['comparison_differences']:
+            self.assertGreater(event['rating'] > 500, event['peer_rating'] > 500)
+            self.assertEqual(event['opponent'], 'Other')
+        self.assertEqual(result['total_ratings_checked'], 3 * 2 * 6)
+
     def test_draw_on_other_matchup_is_not_discarded(self):
         a, b = '0/11/12', '3/13/8'
         result = recommend({'default': matrix({a: [550, 550, 490], b: [700, 490, 500]})},

@@ -180,6 +180,9 @@ function render(result,append=false){
  if(!selection){node('h2','GPT評価用の比較情報',panel);node('p','今回の比較情報をコピーしてGPTに評価を依頼できます。',panel);const b=node('button','比較情報をコピー',panel);b.onclick=()=>copy('以下のPvPoke実測比較を、個体値厳選の基準で評価してください。おすすめ個体と英語検索式を示してください。\n'+JSON.stringify(result),b);return;}
  node('h2','おすすめ個体',panel);
  node('p','S/Aは入力した候補内での暫定評価です。勝ち・引き分けは記載したシールド・相手IV条件での計算結果です。',panel,'note');
+ if(selection.policy?.version&&selection.explanation_version!=='pairwise-v1'){
+  node('p','保存済みの結果は旧版の推薦説明です。ページを再読み込みし、同じ入力を再計算すると最新の重複判定と比較説明を確認できます。',panel,'note');
+ }
  if(selection.recommendations.length){const b=node('button','検索式とニックネームをすべてコピー',panel);b.onclick=()=>copyRecommendations([result],b);node('p','検索式→改行→ニックネームの順で、同じ性能の代替個体も含めてコピーします。',panel,'note');}
  if(selection.excluded&&(!Array.isArray(selection.excluded)||selection.excluded.length))node('p','計算対象から除外された対面があります：'+JSON.stringify(selection.excluded),panel);
  const searchCounts=new Map();for(const r of selection.recommendations)for(const item of [r,...(r.equivalent_candidates||[])]){const v=searchCounts.get(item.search_string)||new Set();v.add(item.ivs);searchCounts.set(item.search_string,v);}if([...searchCounts.values()].some(x=>x.size>1))node('p','注意：同じ検索式に異なる個体値が含まれます。検索式は範囲指定なので、名前を付ける前に各個体の攻撃・防御・HPを確認してください。',panel,'note');
@@ -187,8 +190,23 @@ function render(result,append=false){
  if(!selection.recommendations.length)node('p','自動推薦の根拠が十分な個体はありません。下の保留個体を確認してください。',panel);
  for(const row of selection.recommendations){
   const card=node('article','',panel,'recommendation');node('h2',row.rank+'位｜'+row.ivs+'｜'+row.grade,card);node('div',row.role,card,'badge');
-  const summary=summaryEvidence(row);
-  if(summary.length){const list=node('ul','',card,'matchup-summary');for(const e of summary)node('li',opponentLabel(e.opponent).name+'：'+outcome(e)+'（'+conditionLabel(e)+'）',list);}
+  // Prefer the actual WIN/DRAW differences from a similar higher-ranked IV.
+  // Sharing a displayed opponent or even Rating 511 is not a distinct role.
+  const comparison=Boolean(row.comparison_peer),seenNames=new Set(),summary=[];
+  for(const e of comparison?(row.comparison_differences||[]):summaryEvidence(row)){
+   const name=opponentLabel(e.opponent).name;
+   if(seenNames.has(name))continue;
+   seenNames.add(name);summary.push(e);
+   if(summary.length===3)break;
+  }
+  if(comparison)node('p','最も似た上位個体 '+row.comparison_peer+' と勝敗が異なる条件（最大3件）',card,'note');
+  if(summary.length){const list=node('ul','',card,'matchup-summary');
+   for(const e of summary){
+    const relative=comparison?'［'+row.comparison_peer+'：'+outcome({rating:e.peer_rating})+'］':'';
+    node('li',opponentLabel(e.opponent).name+'：'+outcome(e)+'（'+conditionLabel(e)+'）'+relative,list);
+   }
+  }
+  if(comparison&&!summary.length)node('p','比較根拠を表示できません。結果の再計算をお願いします。',card,'note');
   renderSearch(row,card);
   renderNickname(result,row,card);
   if(row.equivalent_candidates.length){const d=node('details','',card);node('summary','全条件で同じ性能の代替個体',d);for(const e of row.equivalent_candidates){node('p',e.ivs,d);renderSearch(e,d);renderNickname(result,row,d,e.ivs);}}
