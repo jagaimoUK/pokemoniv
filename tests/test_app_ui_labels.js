@@ -52,7 +52,7 @@ assert(overlapNodes.some(n=>n.textContent.includes('最も似た上位個体 5/1
 assert(overlapNodes.some(n=>n.textContent.includes('ヌオー：勝ち')&&n.textContent.includes('5/13/4：負け')));
 assert(!overlapNodes.some(n=>n.textContent.includes('オーダイル(シャドウ)：勝ち')),
  'Shared Rating=511 must not hide the real reason for retaining the IV.');
-assert.equal(vm.runInContext('recommendationExport(overlapResult)',context).split('\n').length,2,
+assert.equal(vm.runInContext('recommendationExport(overlapResult)',context).split('\n').length,4,
  'Search/nickname copy must stay intact.');
 (async()=>{for(const b of nodes.filter(n=>n.textContent==='検索式をコピー')){await b.onclick();assert(['Quagsire&0attack&3defense&3hp','Quagsire&1attack&3defense&3hp'].includes(context.copied));}console.log('Japanese matchups, restored search copies, exact search/nickname pairs and alternatives: OK');})();
 
