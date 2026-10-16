@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pvpoke_bridge_core as backend
 from pvpoke_iv_workflow import IVWorkflow
 from pvpoke_app_ui import HTML as APP_HTML
-from pvpoke_app_access import AppAccess
+from pvpoke_app_access import AppAccess, BrowserLogin
 from pvpoke_app_input import parse_import
 
 APP_ACCESS = AppAccess()
@@ -25,6 +25,7 @@ HOST, PORT = '0.0.0.0', int(os.environ.get('PORT', '8787'))
 API_KEY = os.environ.get('PVP_API_KEY', '')
 if len(API_KEY) < 32:
     raise SystemExit('PVP_API_KEY must be set to a random value at least 32 characters long')
+BROWSER_LOGIN = BrowserLogin(API_KEY)
 ALLOWED_ORIGINS = {'https://chatgpt.com', 'https://chat.openai.com', f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'}
 VERSION = '2025-06-18'
 # OAuth is enabled only when the authenticated user's Auth0 tenant is configured.
@@ -262,12 +263,14 @@ if AUTH0_ENABLED:
 
 class Handler(BaseHTTPRequestHandler):
     server_version = 'PvPokeMCPLite/0.1'
-    def respond(self, code, obj=None):
+    def respond(self, code, obj=None, cookie=None):
         data = b'' if obj is None else json.dumps(obj, ensure_ascii=False).encode('utf-8')
         self.send_response(code)
         if obj is not None:
             self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Cache-Control', 'no-store')
+        if cookie is not None:
+            self.send_header('Set-Cookie', cookie)
         self.send_header('Content-Length', str(len(data)))
         self.end_headers()
         if data: self.wfile.write(data)
@@ -296,7 +299,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def app_request(self):
         """Only explicit app operations; never proxy arbitrary backend paths."""
-        if self.path not in ('/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result'):
+        if self.path not in ('/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result',
+                             '/app-api/session', '/app-api/logout'):
             return self.respond(404, {'error': 'Not found'})
         origin = self.headers.get('Origin')
         if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'):
@@ -310,6 +314,12 @@ class Handler(BaseHTTPRequestHandler):
             args = json.loads(self.rfile.read(size))
             if not isinstance(args, dict):
                 raise ValueError('入力はJSONオブジェクトで指定してください')
+            if self.path == '/app-api/session':
+                return self.respond(200, {'expires_in_seconds': BROWSER_LOGIN.ttl},
+                                    cookie=BROWSER_LOGIN.issue(secure=APP_ORIGIN.startswith('https://')))
+            if self.path == '/app-api/logout':
+                return self.respond(200, {'logged_out': True},
+                                    cookie=BROWSER_LOGIN.clear(secure=APP_ORIGIN.startswith('https://')))
             if self.path == '/app-api/catalog':
                 result = backend._request('/api/catalog')
                 result.pop('saved', None)
@@ -358,11 +368,18 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         token = self.headers.get('Authorization', '')
         is_api_key = hmac.compare_digest(token, 'Bearer ' + API_KEY)
-        app_session = self.path.startswith('/app-api/') and APP_ACCESS.valid(token)
-        if not is_api_key and not app_session and not oauth_token_valid(token):
+        is_app = self.path.startswith('/app-api/')
+        app_session = is_app and APP_ACCESS.valid(token)
+        bearer_ok = is_api_key or app_session or oauth_token_valid(token)
+        cookie_ok = is_app and BROWSER_LOGIN.valid(self.headers.get('Cookie', ''))
+        if not (bearer_ok or cookie_ok):
             self.unauthorized()
             return
-        if self.path.startswith('/app-api/'):
+        # A remembered cookie cannot mint a new one: relogin requires a real key.
+        if self.path == '/app-api/session' and not bearer_ok:
+            self.unauthorized()
+            return
+        if is_app:
             self.app_request()
             return
         if self.path != '/mcp':
