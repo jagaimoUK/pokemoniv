@@ -48,7 +48,7 @@ function setBusy(value){active=value;for(const id of ['run','resume','disconnect
 function node(tag,text,parent,cls=''){const n=document.createElement(tag);n.textContent=text;if(cls)n.className=cls;parent.append(n);return n;}
 async function copy(text,button){try{await navigator.clipboard.writeText(text);button.textContent='コピーしました';}catch{const root=el('message');message('コピーできませんでした。下の欄から選択してコピーしてください。',true);const area=node('textarea',text,root);area.value=text;area.readOnly=true;area.focus();area.select();}}
 // Result labels are resolved against the active catalog, including form names.
-let nameEntries=[],displayedResults=[],opponentLabels=new Map();
+let nameEntries=[],displayedResults=[],opponentLabels=new Map(),nicknameBindings=[];
 function prepareLabels(){opponentLabels.clear();nameEntries=Object.entries(catalog).map(([sid,p])=>({sid,...p})).sort((a,b)=>(b.name||'').length-(a.name||'').length);}
 function opponentLabel(value){const text=String(value||'');if(opponentLabels.has(text))return opponentLabels.get(text);const found=nameEntries.find(p=>p.name&&(text===p.name||text.startsWith(p.name+' ')));const label=found?{name:found.name_ja||found.name,code:found.nickname_code||null,detail:text.slice(found.name.length)}:{name:text,code:null,detail:''};opponentLabels.set(text,label);return label;}
 function shieldCode(shield){return {s0:'00',s1:'11',s2:'22',i0y1:'01',i0y2:'02',i1y2:'12'}[shield]||'';}
@@ -57,35 +57,105 @@ function outcome(e){return e.rating>500?'勝ち':e.rating===500?'引き分け':'
 function evidenceText(e){const label=opponentLabel(e.opponent);return label.name+label.detail+'｜'+conditionLabel(e)+'｜'+outcome(e)+'・Rating '+e.rating+'（他候補の最高 '+(e.next_best??'比較なし')+'）';}
 function matchupNames(row,win){return [...new Set((row.evidence||[]).filter(e=>win?e.rating>500:e.rating===500).map(e=>opponentLabel(e.opponent).name))];}
 function primaryEvidence(row){return (row.evidence||[]).find(e=>e.rating>500)||(row.evidence||[])[0];}
-function nicknameFor(result,row){
- const e=primaryEvidence(row);
- const sid=result.candidate.species;
- const self=catalog[sid]?.nickname_code;
- const opponent=e&&opponentLabel(e.opponent);
- // Unknown species are explicit; do not invent a matchup abbreviation.
- if(!e||!self||!opponent.code||!shieldCode(e.shield))return null;
- const grade=String(row.grade||'?').startsWith('S')?'S':String(row.grade||'?').startsWith('A')?'A':'?';
- const nickname=grade+self+(e.rating>500?'>':e.rating===500?'=':'<')+opponent.code+shieldCode(e.shield);
- if(nickname.length>12||!/^[\x20-\x7e]+$/.test(nickname))return null;
- return {text:nickname,description:grade+'＝候補評価 / '+self+'＝'+(catalog[sid].name_ja||catalog[sid].name)+' / '+(e.rating>500?'>＝勝ち':e.rating===500?'=＝引き分け':'<＝負け')+' / '+opponent.code+'＝'+opponent.name+' / '+conditionLabel(e)};
+// Check assembled nicknames as well as individual codes; reject unknown patterns.
+const blockedNickname=/(anal|ass|bitch|cunt|dick|fuck|nazi|porn|sex|shit|slut)/i;
+function validNickname(t){return t.length<=12&&/^[A-Za-z0-9><=]+$/.test(t)&&!blockedNickname.test(t.replace(/[^A-Za-z]/g,''));}
+function codeChoices(sid,width){
+ const seed=String(catalog[sid]?.nickname_code||'').replace(/[^A-Za-z0-9]/g,'');
+ const name=sid.split('_')[0].replace(/[^A-Za-z]/g,'');
+ if(!seed||!name)return [];
+ const opts=[seed.slice(0,width),name.slice(0,width),
+  seed[0]+seed.slice(1).slice(-Math.max(0,width-1)),
+  name[0]+name.slice(1).slice(-Math.max(0,width-1)),
+  seed[0]+seed.slice(2,2+width-1),name[0]+name.slice(2,2+width-1)];
+ return [...new Set(opts.filter(x=>x.length>=Math.min(2,width)&&x.length<=width&&/^[A-Za-z0-9]+$/.test(x)))];
+}
+function nicknameMembers(result,row,ivs){
+ const members=[{result,row,sid:result.candidate.species}];
+ const sections=result.source_sections||[];
+ if(!sections.length)return members;
+ for(const other of displayedResults){
+  if(other===result||other.candidate?.species===result.candidate.species||
+   !(other.source_sections||[]).some(x=>sections.includes(x)))continue;
+  const match=(other.selection?.recommendations||[]).find(r=>
+   r.ivs===ivs||(r.equivalent_candidates||[]).some(x=>x.ivs===ivs));
+  if(match)members.push({result:other,row:match,sid:other.candidate.species});
+ }
+ members.sort((a,b)=>displayedResults.indexOf(a.result)-displayedResults.indexOf(b.result));
+ return members;
+}
+function nicknameFor(result,row,ivs=row.ivs){
+ const members=nicknameMembers(result,row,ivs);
+ // Only documented PvPoke evidence is compared; unseen battles are not inferred.
+ const matches=members.flatMap(member=>(member.row.evidence||[])
+  .filter(e=>Number.isFinite(e.rating)&&opponentLabel(e.opponent).code&&shieldCode(e.shield))
+  .map(e=>({member,e,opponent:opponentLabel(e.opponent)})))
+  .sort((a,b)=>(b.e.rating>500)-(a.e.rating>500)||b.e.rating-a.e.rating||
+    Number(String(b.member.row.grade||'').startsWith('S'))-Number(String(a.member.row.grade||'').startsWith('S')));
+ const best=matches[0];
+ if(!best||members.length>3)return null;
+ const grade=String(best.member.row.grade||'?').startsWith('S')?'S':String(best.member.row.grade||'?').startsWith('A')?'A':'?';
+ const sign=best.e.rating>500?'>':best.e.rating===500?'=':'<', suffix=sign+best.opponent.code+shieldCode(best.e.shield);
+ // Two stages: 3 letters for the best-Rating stage, 2 for the other.
+ // Three stages: 2 per stage, grade omitted to retain opponent and shields.
+ const widths=members.length===1?[4]:members.length===2?
+  members.map(m=>m===best.member?3:2):[2,2,2];
+ const candidates=members.map((m,i)=>codeChoices(m.sid,members.length===1?
+  Math.min(4,String(catalog[m.sid]?.nickname_code||'').length):widths[i]));
+ if(candidates.some(x=>!x.length))return null;
+ const prefix=members.length===3?'':grade;
+ function select(i,codes){
+  if(i===members.length){
+   if(new Set(codes.map(x=>x.toLowerCase())).size!==codes.length)return null;
+   const text=prefix+codes.join('')+suffix;
+   return validNickname(text)?{text,codes}:null;
+  }
+  for(const code of candidates[i]){
+   const picked=select(i+1,[...codes,code]);
+   if(picked)return picked;
+  }
+  return null;
+ }
+ const picked=select(0,[]);
+ if(!picked)return null;
+ const stages=members.map((m,i)=>picked.codes[i]+'＝'+(catalog[m.sid]?.name_ja||catalog[m.sid]?.name||m.sid));
+ return {text:picked.text,description:grade+'＝優先候補評価 / '+stages.join(' / ')+
+  ' / '+sign+'＝'+outcome(best.e)+' / '+best.opponent.code+'＝'+best.opponent.name+
+  ' / '+conditionLabel(best.e)+' / Rating '+best.e.rating+
+  (members.length>1?'（同じ個体値・同じ入力区間の'+members.length+'種類を比較）':'')};
 }
 function recommendationExport(result){
- return (result.selection?.recommendations||[]).flatMap(row=>{
-  const nick=nicknameFor(result,row);
-  if(!nick)throw Error('ニックネームを生成できない個体があります。再接続してカタログを更新してください。');
-  return [row,...(row.equivalent_candidates||[])].map(iv=>{
+ return (result.selection?.recommendations||[]).flatMap(row=>
+  [row,...(row.equivalent_candidates||[])].map(iv=>{
+   const nick=nicknameFor(result,row,iv.ivs);
+   if(!nick)throw Error('ニックネームを安全に生成できません。種名・略号を確認してください。');
    if(!iv.search_string)throw Error('検索式を確認できない個体があります。結果を再取得してください。');
    return iv.search_string+'\n'+nick.text;
-  });
- }).join('\n');
+  })).join('\n');
 }
 async function copyRecommendations(results,button){try{await copy(results.map(recommendationExport).filter(Boolean).join('\n'),button);}catch(e){message(e.message,true);}}
 function renderSearch(row,parent){if(!row.search_string)return;node('label','検索式',parent);node('code',row.search_string,parent,'search');const b=node('button','検索式をコピー',parent);b.onclick=()=>copy(row.search_string,b);}
-function renderNickname(result,row,parent){const nick=nicknameFor(result,row);if(!nick){node('p','略号を確認できないためニックネームを生成できません。再接続してカタログを更新してください。',parent,'note');return;}node('label','ニックネーム（'+nick.text.length+'/12文字）',parent);node('code',nick.text,parent,'search');const b=node('button','ニックネームをコピー',parent);b.onclick=()=>copy(nick.text,b);node('p',nick.description,parent,'note');}
+function refreshNicknames(){
+ for(const item of nicknameBindings){
+  const nick=nicknameFor(item.result,item.row,item.ivs);
+  item.label.textContent=nick?'ニックネーム（'+nick.text.length+'/12文字）':'ニックネーム（自動生成不可）';
+  item.code.textContent=nick?nick.text:'';
+  item.button.disabled=!nick;
+  item.button.textContent='ニックネームをコピー';
+  item.note.textContent=nick?nick.description:'安全な12文字以内の略号を生成できません。個体値と略号を確認してください。';
+ }
+}
+function renderNickname(result,row,parent,ivs=row.ivs){
+ const label=node('label','',parent),code=node('code','',parent,'search');
+ const button=node('button','ニックネームをコピー',parent),note=node('p','',parent,'note');
+ nicknameBindings.push({result,row,ivs,label,code,button,note});
+ button.onclick=()=>{const nick=nicknameFor(result,row,ivs);if(nick)copy(nick.text,button);};
+ refreshNicknames();
+}
 function updateAllCopy(){const box=el('allCopyActions');const available=displayedResults.filter(r=>r.selection?.recommendations?.length);box.hidden=available.length<2;}
 function render(result,append=false){
  lastResult=result;const root=el('results');
- if(!append){root.replaceChildren();displayedResults=[];const all=node('div','',root,'actions');all.id='allCopyActions';all.hidden=true;const b=node('button','全種類の検索式とニックネームをコピー',all);b.onclick=()=>copyRecommendations(displayedResults,b);}
+ if(!append){root.replaceChildren();displayedResults=[];nicknameBindings=[];const all=node('div','',root,'actions');all.id='allCopyActions';all.hidden=true;const b=node('button','全種類の検索式とニックネームをコピー',all);b.onclick=()=>copyRecommendations(displayedResults,b);}
  displayedResults.push(result);updateAllCopy();root.hidden=false;
  const panel=node('div','',root),sid=result.candidate.species;
  node('h2',result.display_name||catalog[sid]?.name_ja||result.selection?.english_name||sid,panel);
@@ -95,6 +165,7 @@ function render(result,append=false){
  node('p','S/Aは入力した候補内での暫定評価です。勝ち・引き分けは記載したシールド・相手IV条件での計算結果です。',panel,'note');
  if(selection.recommendations.length){const b=node('button','検索式とニックネームをすべてコピー',panel);b.onclick=()=>copyRecommendations([result],b);node('p','検索式→改行→ニックネームの順で、同じ性能の代替個体も含めてコピーします。',panel,'note');}
  if(selection.excluded&&(!Array.isArray(selection.excluded)||selection.excluded.length))node('p','計算対象から除外された対面があります：'+JSON.stringify(selection.excluded),panel);
+ const searchCounts=new Map();for(const r of selection.recommendations)for(const item of [r,...(r.equivalent_candidates||[])]){const v=searchCounts.get(item.search_string)||new Set();v.add(item.ivs);searchCounts.set(item.search_string,v);}if([...searchCounts.values()].some(x=>x.size>1))node('p','注意：同じ検索式に異なる個体値が含まれます。検索式は範囲指定なので、名前を付ける前に各個体の攻撃・防御・HPを確認してください。',panel,'note');
  if(selection.unmatched_focus.length)node('p','一致しなかった重要相手：'+selection.unmatched_focus.map(x=>opponentLabel(x).name).join('、'),panel);
  if(!selection.recommendations.length)node('p','自動推薦の根拠が十分な個体はありません。下の保留個体を確認してください。',panel);
  for(const row of selection.recommendations){
@@ -106,11 +177,12 @@ function render(result,append=false){
   renderSearch(row,card);
   renderNickname(result,row,card);
   if(row.tradeoff){const e=row.tradeoff;node('p','苦手になる対面：'+opponentLabel(e.opponent).name+'・'+conditionLabel(e)+' は '+outcome(e)+'（Rating '+e.rating+' / '+e.best_iv+' は '+e.best_rating+'）。',card,'note');}
-  if(row.equivalent_candidates.length){const d=node('details','',card);node('summary','全条件で同じ性能の代替個体',d);for(const e of row.equivalent_candidates){node('p',e.ivs,d);renderSearch(e,d);renderNickname(result,row,d);}}
+  if(row.equivalent_candidates.length){const d=node('details','',card);node('summary','全条件で同じ性能の代替個体',d);for(const e of row.equivalent_candidates){node('p',e.ivs,d);renderSearch(e,d);renderNickname(result,row,d,e.ivs);}}
   const details=node('details','',card);node('summary','推薦根拠をすべて見る（'+row.evidence_count+'条件）',details);node('pre',row.evidence.map(evidenceText).join('\n'),details);
  }
  if(selection.review_candidates.length){const d=node('details','',panel);node('summary','保留：'+selection.review_candidates.length+'個体',d);for(const row of selection.review_candidates){node('p',row.ivs+'：'+row.reason,d);if(row.equivalent_candidates.length)node('p','同じ性能：'+row.equivalent_candidates.map(x=>x.ivs).join(', '),d);}}
  const rejected=Object.entries(selection.dominated_by);if(rejected.length){const d=node('details','',panel);node('summary','全条件で他候補以下の個体（'+rejected.length+'）',d);for(const [iv,rivals] of rejected)node('p',iv+' → '+rivals.join(', '),d);}
+ refreshNicknames();
 }
 function metaNotice(text,error=false){el('metaNotice').textContent=text;el('metaNotice').style.color=error?'#ffb6b6':'';}
 function resetMetaUpload(){metaPending=null;el('metaApply').disabled=true;el('metaPreview').hidden=true;el('metaPreview').textContent='';el('metaFile').value='';}
@@ -169,7 +241,7 @@ el('metaApply').onclick=async()=>{
 function cacheBatch(){try{sessionStorage.setItem('pvpoke-app-batch',JSON.stringify(batchState));}catch{message('再開情報を保存できませんでした。計算が終わるまで画面を開いておいてください。',true);}}
 function setImportedJobs(jobs){importedJobs=jobs&&jobs.length>1?jobs:null;el('queuePanel').hidden=!importedJobs;for(const id of ['preset','allSpecies','species','fast','charged1','charged2','ivs'])el(id).disabled=!!importedJobs;if(importedJobs)el('queuePreview').textContent=jobs.map((j,i)=>(i+1)+'. '+j.name+'：'+j.candidate_count+'個体\n   '+[j.candidate.fast,j.candidate.charged1,j.candidate.charged2].join(' / ')+'\n'+j.warnings.join('\n')).join('\n\n');}
 async function finish(result){while(result.state==='running'){message('全対面を計算中です。'+(batchState?' '+(batchState.index+1)+' / '+batchState.jobs.length+'種類':''));result=await api('result',{run_ref:runRef,wait_seconds:12});}if(result.state!=='done'||!result.complete)throw Error(result.message||'計算が完了していません。');return result;}
-async function executeBatch(){for(;batchState.index<batchState.jobs.length;){const job=batchState.jobs[batchState.index];message(job.name+'を計算します（'+(batchState.index+1)+' / '+batchState.jobs.length+'）。');let result;if(batchState.run_ref){runRef=batchState.run_ref;result=await api('result',{run_ref:runRef,wait_seconds:12});}else{const data={candidate:job.candidate,ivs:job.ivs,batch_mode:batchState.batch_mode,focus_opponents:batchState.focus,report_format:batchState.report_format,selection_policy:batchState.policy,wait_seconds:0};if(batchState.meta_sha256)data.expected_meta_sha256=batchState.meta_sha256;result=await api('run',data);runRef=result.run_ref;batchState.run_ref=runRef;sessionStorage.setItem('pvpoke-app-run',runRef);cacheBatch();}result=await finish(result);result.display_name=job.name;batchState.meta_sha256=result.meta_sha256;batchState.results.push(result);render(result,batchState.index>0);batchState.index++;batchState.run_ref=null;runRef=null;sessionStorage.removeItem('pvpoke-app-run');cacheBatch();}message(batchState.jobs.length+'種類すべての計算と推薦が完了しました。');sessionStorage.removeItem('pvpoke-app-batch');batchState=null;runRef=null;el('resume').hidden=true;}
+async function executeBatch(){for(;batchState.index<batchState.jobs.length;){const job=batchState.jobs[batchState.index];message(job.name+'を計算します（'+(batchState.index+1)+' / '+batchState.jobs.length+'）。');let result;if(batchState.run_ref){runRef=batchState.run_ref;result=await api('result',{run_ref:runRef,wait_seconds:12});}else{const data={candidate:job.candidate,ivs:job.ivs,batch_mode:batchState.batch_mode,focus_opponents:batchState.focus,report_format:batchState.report_format,selection_policy:batchState.policy,wait_seconds:0};if(batchState.meta_sha256)data.expected_meta_sha256=batchState.meta_sha256;result=await api('run',data);runRef=result.run_ref;batchState.run_ref=runRef;sessionStorage.setItem('pvpoke-app-run',runRef);cacheBatch();}result=await finish(result);result.display_name=job.name;result.source_sections=job.source_sections||[];batchState.meta_sha256=result.meta_sha256;batchState.results.push(result);render(result,batchState.index>0);batchState.index++;batchState.run_ref=null;runRef=null;sessionStorage.removeItem('pvpoke-app-run');cacheBatch();}message(batchState.jobs.length+'種類すべての計算と推薦が完了しました。');sessionStorage.removeItem('pvpoke-app-batch');batchState=null;runRef=null;el('resume').hidden=true;}
 async function connect(auto=false){credential=auto?'':el('credential').value.trim();if(!auto&&!credential){message('接続キーを入力してください。',true);return;}el('connect').disabled=true;try{if(!auto&&el('remember').checked){await api('session');credential='';}const cat=await api('catalog');if(!cat.ready)throw Error(cat.error||'ゲームデータを読込中です。少し待って接続してください。');catalog=cat.species;prepareLabels();presets=cat.app_presets||cat.presets;el('credential').value='';el('login').hidden=true;el('workspace').hidden=false;const opts=el('preset');opts.replaceChildren();const custom=document.createElement('option');custom.value='';custom.textContent='直接指定・貼り付け';opts.append(custom);for(const p of presets){const o=document.createElement('option');o.value=presetKey(p);o.textContent=p.name+' / '+p.fast+' / '+p.charged1+' / '+p.charged2;opts.append(o);}el('presetHint').textContent='登録済みの技構成 '+presets.length+'件。プリセット外も、全ポケモンの選択・CSV貼り付けから計算できます。';const speciesOptions=Object.keys(catalog).sort((a,b)=>(catalog[a].name_ja||catalog[a].name||a).localeCompare(catalog[b].name_ja||catalog[b].name||b,'ja'));el('allSpecies').replaceChildren();el('speciesList').replaceChildren();for(const sid of speciesOptions){const label=(catalog[sid].name_ja||catalog[sid].name||sid)+' ('+sid+')';const o=document.createElement('option');o.value=sid;o.textContent=label;el('allSpecies').append(o);const hint=document.createElement('option');hint.value=sid;hint.label=label;el('speciesList').append(hint);}const preferred=presets.find(p=>p.species==='quagsire'&&p.charged2==='STONE_EDGE')||presets[0];if(preferred)setCandidate(preferred);runRef=sessionStorage.getItem('pvpoke-app-run');try{batchState=JSON.parse(sessionStorage.getItem('pvpoke-app-batch')||'null');}catch{batchState=null;}if(batchState?.jobs)setImportedJobs(batchState.jobs);if(batchState?.results?.length)batchState.results.forEach((r,i)=>render(r,i>0));el('resume').hidden=!(runRef||batchState);message('接続できました。');await refreshMetaStatus();}catch(e){credential='';if(!auto||e.status!==401)message(e.message,true);}finally{el('connect').disabled=false;}}
 el('connect').onclick=()=>connect(false);
 el('preset').onchange=setPreset;el('species').onchange=()=>{resolveTypedSpecies();el('allSpecies').value=el('species').value;el('preset').value='';moves();};
@@ -179,7 +251,7 @@ el('importInput').onclick=async()=>{if(active)return;setBusy(true);try{const par
 el('evaluation').onchange=()=>{el('run').textContent=el('evaluation').value==='app'?'計算して推薦を表示':'GPT評価用の比較情報を作成';};
 el('run').onclick=async()=>{if(active)return;setBusy(true);el('results').hidden=true;try{const jobs=importedJobs||[{candidate:currentCandidate(),ivs:el('ivs').value,name:catalog[el('species').value]?.name_ja||el('species').value}];batchState={jobs,index:0,results:[],run_ref:null,batch_mode:el('batchMode').value,focus:el('focus').value.split('\n').map(x=>x.trim()).filter(Boolean),report_format:el('evaluation').value==='app'?'app':'decision',policy:{meaningful_win_lead:Number(el('lead').value)}};cacheBatch();await executeBatch();}catch(e){message(e.message+'\n完了済みの結果は表示を保持しています。後続の対象は未実行です。',true);el('resume').hidden=!(runRef||batchState);}finally{setBusy(false);}};
 el('resume').onclick=async()=>{if(active||!(runRef||batchState))return;setBusy(true);try{if(batchState){await executeBatch();}else{render(await finish(await api('result',{run_ref:runRef,wait_seconds:12})));runRef=null;sessionStorage.removeItem('pvpoke-app-run');el('resume').hidden=true;message('計算と結果の確認が完了しました。');}}catch(e){message(e.message,true);}finally{setBusy(false);}};
-el('disconnect').onclick=async()=>{try{await api('logout');}catch(e){message('ログアウトできませんでした。再試行してください。',true);return;}credential='';catalog={};nameEntries=[];opponentLabels.clear();displayedResults=[];presets=[];lastResult=null;setImportedJobs(null);batchState=null;el('results').replaceChildren();el('workspace').hidden=true;el('login').hidden=false;resetMetaUpload();message('接続を解除しました。このブラウザのログイン情報も削除しました。');};
+el('disconnect').onclick=async()=>{try{await api('logout');}catch(e){message('ログアウトできませんでした。再試行してください。',true);return;}credential='';catalog={};nameEntries=[];opponentLabels.clear();displayedResults=[];nicknameBindings=[];presets=[];lastResult=null;setImportedJobs(null);batchState=null;el('results').replaceChildren();el('workspace').hidden=true;el('login').hidden=false;resetMetaUpload();message('接続を解除しました。このブラウザのログイン情報も削除しました。');};
 const access=new URLSearchParams(location.hash.slice(1)).get('access');
 if(access){history.replaceState(null,'',location.pathname);el('credential').value=access;connect(false);}else{connect(true);}
 </script></body></html>'''
