@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import patch
-from pvpoke_app_access import AppAccess
+from pvpoke_app_access import AppAccess, BrowserLogin
 
 
 class AppAccessTests(unittest.TestCase):
@@ -21,3 +21,29 @@ class AppAccessTests(unittest.TestCase):
         tokens = ['Bearer ' + x['url'].split('#access=')[1] for x in links]
         self.assertFalse(a.valid(tokens[0]))
         self.assertTrue(a.valid(tokens[-1]))
+
+
+class BrowserLoginTests(unittest.TestCase):
+    def test_persistent_cookie_does_not_reveal_root_key(self):
+        key = 'this-key-must-never-be-in-a-cookie-' + 'x' * 32
+        login = BrowserLogin(key)
+        with patch('pvpoke_app_access.time.time', return_value=1000):
+            header = login.issue()
+            cookie = header.split(';', 1)[0]
+            self.assertTrue(login.valid(cookie))
+        self.assertIn('Path=/app-api', header)
+        self.assertIn('HttpOnly', header)
+        self.assertIn('Secure', header)
+        self.assertIn('SameSite=Strict', header)
+        self.assertNotIn(key, header)
+        self.assertFalse(BrowserLogin('wrong-' + key).valid(cookie))
+        self.assertFalse(login.valid(cookie[:-1] + ('a' if cookie[-1] != 'a' else 'b')))
+        with patch('pvpoke_app_access.time.time', return_value=1000 + 30 * 24 * 60 * 60):
+            self.assertFalse(login.valid(cookie))
+        self.assertIn('Max-Age=0', login.clear())
+
+    def test_invalid_cookie_is_rejected(self):
+        login = BrowserLogin('x' * 40)
+        for cookie in ('', 'pvpoke_app_login=bogus', 'a=b', 'x' * 5000,
+                       'pvpoke_app_login=v1.invalid.abc.def'):
+            self.assertFalse(login.valid(cookie))
