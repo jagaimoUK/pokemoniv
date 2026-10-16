@@ -104,7 +104,7 @@ class AppSelectionTests(unittest.TestCase):
         a, b, redundant = '5/13/4', '4/10/6', '0/10/0'
         data = matrix({a: [511, 530], b: [511, 490],
                        redundant: [510, 480]}, ['Kingdra', 'Other'])
-        data.ratings['i0y0'][redundant] = [560, 480]
+        data.ratings['s0'][redundant] = [560, 480]
         data.ratings['i0y1'][a] = [511, 450]
         data.ratings['i0y1'][b] = [511, 550]
         result = recommend({'default': data}, CANDIDATE, 'Annihilape')
