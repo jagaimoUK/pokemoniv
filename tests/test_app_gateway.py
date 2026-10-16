@@ -145,7 +145,7 @@ class AppGatewayTests(unittest.TestCase):
         c.close()
 
     def test_meta_upload_requires_auth_and_explicit_review_hashes(self):
-        original = 'quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE\\n'
+        original = 'quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE\n'
         old_hash = 'a' * 64
         new_hash = 'b' * 64
         proposal = {
@@ -154,7 +154,7 @@ class AppGatewayTests(unittest.TestCase):
             'changed': True, 'added_count': 1, 'removed_count': 87,
             'added': [original.strip()], 'removed': [],
         }
-        with patch.object(remote.backend, 'preview_meta_opponents', return_value=proposal) as preview, \\
+        with patch.object(remote.backend, 'preview_meta_opponents', return_value=proposal) as preview, \
              patch.object(remote.backend, 'apply_meta_opponents', return_value={
                  'changed': True, 'rows': 1, 'sha256': new_hash,
              }) as apply:
