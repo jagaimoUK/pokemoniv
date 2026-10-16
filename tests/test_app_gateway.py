@@ -55,7 +55,8 @@ class AppGatewayTests(unittest.TestCase):
         self.assertNotIn(remote.API_KEY, page)
 
     def test_app_data_requires_current_mcp_authentication(self):
-        for path in ['/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result']:
+        for path in ['/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result',
+                     '/app-api/meta-status', '/app-api/meta-preview', '/app-api/meta-apply']:
             status, _ = self.request(path, {}, token=False)
             self.assertEqual(status, 401)
         self.assertEqual(self.backend.run_count, 0)
@@ -142,6 +143,52 @@ class AppGatewayTests(unittest.TestCase):
         self.assertIn('Max-Age=0', response.getheader('Set-Cookie'))
         response.read()
         c.close()
+
+    def test_meta_upload_requires_auth_and_explicit_review_hashes(self):
+        original = 'quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE\\n'
+        old_hash = 'a' * 64
+        new_hash = 'b' * 64
+        proposal = {
+            'rows': 1, 'current_rows': 87,
+            'previous_sha256': old_hash, 'sha256': new_hash,
+            'changed': True, 'added_count': 1, 'removed_count': 87,
+            'added': [original.strip()], 'removed': [],
+        }
+        with patch.object(remote.backend, 'preview_meta_opponents', return_value=proposal) as preview, \\
+             patch.object(remote.backend, 'apply_meta_opponents', return_value={
+                 'changed': True, 'rows': 1, 'sha256': new_hash,
+             }) as apply:
+            status, data = self.request('/app-api/meta-status', {})
+            self.assertEqual(status, 200)
+            self.assertIn('sha256', json.loads(data))
+            status, data = self.request('/app-api/meta-preview', {'csv': original})
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(data), proposal)
+            preview.assert_called_once_with(original)
+            apply.assert_not_called()
+
+            status, _ = self.request('/app-api/meta-apply', {'csv': original,
+                'expected_previous_sha256': old_hash,
+                'expected_sha256': new_hash}, origin=remote.APP_ORIGIN)
+            self.assertEqual(status, 200)
+            apply.assert_called_once_with(original, old_hash, new_hash)
+            self.assertEqual(self.request('/app-api/meta-apply', {'csv': original},
+                origin='https://attacker.example')[0], 403)
+        self.assertEqual(self.backend.run_count, 0)
+
+    def test_meta_upload_works_with_existing_remembered_browser_cookie(self):
+        cookie = remote.BROWSER_LOGIN.issue().split(';', 1)[0]
+        with patch.object(remote.backend, 'preview_meta_opponents', return_value={
+                'rows': 1, 'changed': False}) as preview:
+            c = http.client.HTTPConnection(*self.server.server_address)
+            h = {'Content-Type': 'application/json', 'Cookie': cookie,
+                 'Origin': remote.APP_ORIGIN}
+            c.request('POST', '/app-api/meta-preview', json.dumps({'csv': 'x,y,z,q'}), h)
+            response = c.getresponse()
+            self.assertEqual(response.status, 200)
+            response.read()
+            preview.assert_called_once_with('x,y,z,q')
+            c.close()
 
     def test_launch_poll_recommendations_and_gpt_mode(self):
         args = {'candidate': CANDIDATE, 'ivs': IVS, 'wait_seconds': 0}
