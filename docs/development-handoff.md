@@ -1,5 +1,5 @@
 # PvPoke個体値厳選アプリ・プラグイン 開発引継ぎ
-最終更新：2026年10月15日 20:42 JST時点の作業を反映
+最終更新：2026年10月16日（ブラウザ30日ログイン維持の提案PRを追加）
 対象：このチャットで進めたPvPoke厳選サーバー／ブラウザアプリ／GPT評価プラグイン。
 この文書の現在状態を優先する。末尾の過去計測は履歴であり、次の作業を最初からやり直す指示ではない。
 Android画面OCR・フロートボタンの別アプリは、本チャットの実装対象に含めていない。
@@ -486,3 +486,17 @@ Android側で保存・ランキング照合に使う `(シャドウ)` は維持�
 
 `IV text transfer contract` はmainへのpush・PR・手動実行で動く。Androidのリリース前は `tools/check_selection_contract.py --selection-root /path/to/pokemoniv`、JVMテスト、実機コピー・共有確認も必要。共通仕様だけを更新し片側を放置しない。AndroidソースZIPはGradle設定を含まないため、この環境からAPK作成や実機操作完了を主張しない。
 
+
+
+## 19. APIキー再入力を省くブラウザログイン（2026-10-16、PR段階）
+
+ユーザーから「毎回APIキーを入力するのが面倒」と要望があったため、`feature/remember-browser-login-20261016` に次を実装。本番main・Railwayへの反映、ブラウザ実機検証はPRのCIとレビュー後に判断する。
+
+- `pvpoke_app_access.py`: 既存PVP_API_KEYから分離導出したHMAC署名で30日間有効なブラウザ専用Cookieを発行。Cookieは `HttpOnly`、`SameSite=Strict`、`Path=/app-api`、本番HTTPSでは `Secure`。APIキーをlocalStorage/sessionStorageやHTMLへ保存・公開しない。Railway再起動後も署名検証でき、マスターキー変更で無効化する。
+- `pvpoke_mcp_remote.py`: `POST /app-api/session` で有効な従来Bearer認証を用いた初回ログイン、`POST /app-api/logout` でブラウザCookieを削除。Cookieは`/app-api/`のみ認証、`/mcp`では受理しない。Cookie単独では新たな30日Cookieを発行できない。既存のOriginとJSON Content-Type検証を維持する。
+- `pvpoke_app_ui.py`: 初回接続時の「このブラウザのログインを30日間維持する」は初期ON、共有端末はOFF。2回目以降にCookieが有効なら自動接続。ログアウト操作でCookieを削除。APIキーはメモリでの一時利用のみ、30日CookieはJSから読めない。Cookieがない／期限切れなら画面で接続キーを求める。
+- `tests/test_app_access.py` に署名・有効期限・改ざん・秘密情報の非露出テスト、`tests/test_app_gateway.py` にCookie認証・OAuth/MCP分離・Origin拒否・ログアウトのHTTPテストを追加。
+
+注意：ステートレスCookie方式では「ログアウト」は当該ブラウザのCookieを削除する操作。盗まれたCookieを個別に強制失効させる仕組みは未実装。即座に全端末を失効させたい場合はRailwayの `PVP_API_KEY` を更新する。機密用途や共有端末への永続ログインは避ける。ChromeプライベートモードやブラウザのCookie自動削除設定では30日維持されない場合がある。
+
+このPRは認証とUIのみ。PvPoke対戦計算、推薦、検索式、シャドウ入力の実装を変更しない。デプロイ成功を未確認のまま完了扱いしない。
