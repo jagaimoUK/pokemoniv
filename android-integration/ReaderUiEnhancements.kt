@@ -53,6 +53,7 @@ internal object ReaderUiEnhancements {
             }
         }
         clipboard.addPrimaryClipChangedListener(clipboardListener)
+        var listening = true
 
         var deleteButton: Button? = null
         val decor = activity.window.decorView
@@ -111,13 +112,23 @@ internal object ReaderUiEnhancements {
         activity.application.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
             override fun onActivityCreated(a: Activity, state: Bundle?) {}
             override fun onActivityStarted(a: Activity) {}
-            override fun onActivityResumed(a: Activity) {}
-            override fun onActivityPaused(a: Activity) {}
+            override fun onActivityResumed(a: Activity) {
+                if (a === activity && !listening) {
+                    clipboard.addPrimaryClipChangedListener(clipboardListener)
+                    listening = true
+                }
+            }
+            override fun onActivityPaused(a: Activity) {
+                if (a === activity && listening) {
+                    clipboard.removePrimaryClipChangedListener(clipboardListener)
+                    listening = false
+                }
+            }
             override fun onActivityStopped(a: Activity) {}
             override fun onActivitySaveInstanceState(a: Activity, state: Bundle) {}
             override fun onActivityDestroyed(a: Activity) {
                 if (a !== activity) return
-                clipboard.removePrimaryClipChangedListener(clipboardListener)
+                if (listening) clipboard.removePrimaryClipChangedListener(clipboardListener)
                 if (decor.viewTreeObserver.isAlive)
                     decor.viewTreeObserver.removeOnGlobalLayoutListener(listener)
                 activity.application.unregisterActivityLifecycleCallbacks(this)
