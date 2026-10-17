@@ -285,7 +285,10 @@ internal object AutoIvRecords {
         }.filter { it.targets.isNotEmpty() }
         return IvSelectionText.prompt(eligible.groupBy { it.targets }.map { (key, values) ->
             IvSelectionText.Group(key, values.map {
-                val source = if (it.shadow == ShadowRecognizer.State.SHADOW)
+                // Catalog IDs are PvPoke species IDs and avoid ambiguous form names.
+                val source = if (it.sourceId.isNotBlank()) {
+                    it.sourceId + if (it.shadow == ShadowRecognizer.State.SHADOW) "_shadow" else ""
+                } else if (it.shadow == ShadowRecognizer.State.SHADOW)
                     "シャドウ" + IvSelectionText.targetName(it.source).removePrefix("シャドウ")
                     else it.source
                 IvSelectionText.individual(it.iv, it.cp, source)

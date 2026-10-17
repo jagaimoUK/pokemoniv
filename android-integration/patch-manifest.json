@@ -4,7 +4,7 @@
     {
       "source": "AutoIvRecords.kt",
       "target": "app/src/main/java/com/example/pokemonivreader/AutoIvRecords.kt",
-      "sha256": "f8b12957c53f72800298c636e49c2d2b19f7b51fd89d1b16ee84d93d83b0e314",
+      "sha256": "4bb42e1b29f0dd970f617518aa64d33d4571da1eb615a4803da8959d26a3fb04",
       "accepted": [
         "67f99e4ff509d15a833ea7d7a816b38325e962128c96a309fff3206f5a295852"
       ]

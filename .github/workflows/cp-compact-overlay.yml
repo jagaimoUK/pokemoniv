@@ -20,6 +20,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m unittest discover -s tests -p 'test_observed_cp.py'
+      - run: python -m unittest discover -s tests -p 'test_overlay_migration.py'
       - run: python -m unittest discover -s tests -p 'test_app_input.py'
       - run: node tests/test_app_ui_share.js
       - run: node tests/test_app_ui_queue.js
