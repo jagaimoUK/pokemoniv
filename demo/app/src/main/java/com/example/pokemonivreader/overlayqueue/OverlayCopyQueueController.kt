@@ -34,6 +34,8 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
     private val placement = app.getSharedPreferences("overlay_queue_placement", Context.MODE_PRIVATE)
     private val manager = app.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private var bubble: TextView? = null
+    private var dropTarget: TextView? = null
+    private var dropParams: WindowManager.LayoutParams? = null
     private var panel: LinearLayout? = null
     private var panelParams: WindowManager.LayoutParams? = null
     private var list: ListView? = null
@@ -90,6 +92,52 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
         // Only one of bubble/panel is visible, so their opacity never accumulates.
         alpha = .8f
     }
+    /** Show a temporary dismiss target only while the selection bubble is being dragged. */
+    private fun showDropTarget() {
+        if (dropTarget != null) return
+        val m = app.resources.displayMetrics
+        val size = dp(66)
+        val p = params(size, size, ((m.widthPixels - size) / 2).coerceAtLeast(0),
+            (m.heightPixels - size - dp(64)).coerceAtLeast(0)).apply {
+            // This indicator must not steal touch events from the dragged bubble or the game.
+            flags = flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        }
+        val view = label("×", 30f).apply {
+            gravity = Gravity.CENTER
+            contentDescription = "ここへ厳選アイコンを移動すると終了"
+            background = background(Color.rgb(117, 38, 51))
+            elevation = dp(6).toFloat()
+        }
+        try {
+            manager.addView(view, p)
+            dropTarget = view
+            dropParams = p
+        } catch (_: Exception) {
+            dropTarget = null
+            dropParams = null
+        }
+    }
+
+    private fun isOverDropTarget(bubbleParams: WindowManager.LayoutParams): Boolean {
+        val target = dropParams ?: return false
+        val cx = bubbleParams.x + bubbleParams.width / 2
+        val cy = bubbleParams.y + bubbleParams.height / 2
+        return cx >= target.x && cx <= target.x + target.width &&
+            cy >= target.y && cy <= target.y + target.height
+    }
+
+    private fun updateDropTarget(bubbleParams: WindowManager.LayoutParams) {
+        val active = isOverDropTarget(bubbleParams)
+        dropTarget?.background = background(if (active) Color.rgb(188, 51, 67) else Color.rgb(117, 38, 51))
+        dropTarget?.text = if (active) "✓" else "×"
+    }
+
+    private fun hideDropTarget() {
+        dropTarget?.let { try { manager.removeView(it) } catch (_: Exception) {} }
+        dropTarget = null
+        dropParams = null
+    }
+
     fun show(): Boolean {
         if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(app)) return false
         if (bubble != null) return true
@@ -122,20 +170,29 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
                         val dx = event.rawX - downX; val dy = event.rawY - downY
                         if (abs(dx) > dp(8) || abs(dy) > dp(8)) { dragged = true; v.removeCallbacks(longPress) }
                         if (dragged) {
+                            showDropTarget()
                             p.x = (startX + dx.toInt()).coerceIn(0, maxX); p.y = (startY + dy.toInt()).coerceIn(0, maxY)
                             try { manager.updateViewLayout(v, p) } catch (_: Exception) {}
+                            updateDropTarget(p)
                         }
                         return true
                     }
                     MotionEvent.ACTION_UP -> {
                         v.removeCallbacks(longPress)
+                        val remove = dragged && isOverDropTarget(p)
+                        hideDropTarget()
+                        if (remove) {
+                            v.isPressed = false
+                            hide()
+                            return true
+                        }
                         if (dragged) placement.edit()
                             .putFloat("bubble_x_ratio", if (maxX == 0) 0f else p.x.toFloat() / maxX)
                             .putFloat("bubble_y_ratio", if (maxY == 0) 0f else p.y.toFloat() / maxY).apply()
                         else if (v.isPressed && bubble != null) v.performClick()
                         v.isPressed = false; return true
                     }
-                    MotionEvent.ACTION_CANCEL -> { v.removeCallbacks(longPress); v.isPressed = false; return true }
+                    MotionEvent.ACTION_CANCEL -> { hideDropTarget(); v.removeCallbacks(longPress); v.isPressed = false; return true }
                 }
                 return false
             }
@@ -264,6 +321,7 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
     fun togglePanel() { if (panel == null) openPanel() else closePanel() }
     /** Stop both windows; leave SQLite history and the independent OCR service intact. */
     fun hide() {
+        hideDropTarget()
         closePanel()
         bubble?.let { try { manager.removeView(it) } catch (_: Exception) {} }
         bubble = null
