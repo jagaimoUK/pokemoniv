@@ -327,8 +327,8 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
     fun onImported() {
         // A new import uses a different session; never restore another session's list offset.
         if (panel != null) {
-            list?.setSelectionFromTop(0, 0)
             refresh()
+            list?.setSelectionFromTop(0, 0)
         } else {
             openPanel()
         }
