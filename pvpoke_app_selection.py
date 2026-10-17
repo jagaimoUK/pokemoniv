@@ -11,11 +11,12 @@ from zipfile import ZipFile
 
 from pvpoke_selection_matrix import MODES, SHIELDS, SelectionMatrix, load_selection_matrix
 from pvpoke_app_sizes import pumpkin_search
+from pvpoke_classic_curator import curate_for_box
 
 
 @dataclass(frozen=True)
 class SelectionPolicy:
-    version: str = "roles-v2"
+    version: str = "box-first-v3"
     meaningful_win_lead: float = 20
 
 
@@ -174,6 +175,27 @@ def recommend(matrices: dict[str, SelectionMatrix], candidate: dict,
                         "reason": "勝ち・引き分けの全条件が、残した1個体でカバーされています。",
                         "equivalent_candidates": row["equivalent_candidates"]})
     recommendations = kept
+    # The full matrix/coverage audit stays unchanged, but copying to Pokémon GO
+    # gets a small S-led selection rather than all minor specialist results.
+    recommendations, held, additional = curate_for_box(
+        recommendations, held, outcomes, vectors, cells, focus,
+        english_name, candidate, search_string, shadow, limit=4, original_count=len(ivs))
+    selected_ivs = {row["ivs"] for row in recommendations}
+    # In box-first mode an old outcome-covering representative can itself be
+    # deprioritized. Do not misleadingly claim that a hidden IV is covered by
+    # an IV that the user was told to save.
+    visible_covered = []
+    for row in covered:
+        if row["covered_by"] in selected_ivs:
+            visible_covered.append(row)
+        else:
+            additional.append({
+                "ivs": row["ivs"],
+                "reason": "代表個体の役割と重複しますが、代表も今回の保存対象外です。",
+                "equivalent_candidates": row["equivalent_candidates"],
+            })
+    covered = visible_covered
+    order = {row["ivs"]: index for index, row in enumerate(recommendations)}
     # A surviving IV can look redundant when the UI shows a shared win.
     # Compare it to the MOST SIMILAR higher-ranked retained IV across all
     # opponents/modes/shields. A distinct outcome is required because otherwise
@@ -230,6 +252,7 @@ def recommend(matrices: dict[str, SelectionMatrix], candidate: dict,
             "total_ratings_checked": len(cells) * len(ivs),
             "focus_opponents": focus, "unmatched_focus": [x for x in focus if x not in matched_focus],
             "recommendations": recommendations, "review_candidates": held,
+            "additional_candidates": additional,
             "covered_candidates": covered,
             "dominated_by": {iv: by for iv, by in dominated.items() if by},
             "excluded": matrices["default"].manifest.get("excluded"),
