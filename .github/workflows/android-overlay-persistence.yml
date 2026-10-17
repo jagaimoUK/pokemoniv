@@ -1,0 +1,29 @@
+name: Overlay UX build and regression
+on:
+  push:
+    branches:
+      - feature/overlay-no-outside-dismiss-scroll-20261017
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Extract baseline and apply collision fix
+        run: |
+          tar -xJf android-overlay-copy-demo.tar.xz
+          python3 tests/patch_overlay_collision.py
+      - name: Inspect queue controller
+        run: |
+          nl -ba demo/app/src/main/java/com/example/pokemonivreader/overlayqueue/OverlayCopyQueueController.kt
+      - name: Build debug APK
+        run: gradle -p demo :app:assembleDebug --no-daemon --stacktrace
