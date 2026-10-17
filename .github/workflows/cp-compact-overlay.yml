@@ -8,6 +8,8 @@ on:
       - 'pvpoke_app_input.py'
       - 'pvpoke_app_ui.py'
       - 'tests/test_observed_cp.py'
+      - 'tests/test_overlay_migration.py'
+      - 'tests/fixtures/overlay-v1.sql'
       - 'tests/test_app_ui_share.js'
       - '.github/workflows/cp-compact-overlay.yml'
   workflow_dispatch:
