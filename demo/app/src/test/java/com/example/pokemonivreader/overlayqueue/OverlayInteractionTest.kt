@@ -98,7 +98,7 @@ class OverlayInteractionTest {
         val w = params().width; val h = params().height
         assertTrue(w > width); assertTrue(h > height)
         assertTrue(item().searchCopied)
-        controller.closePanel(); controller.openPanel()
+        controller.destroy(); controller = OverlayCopyQueueController.get(app); controller.openPanel()
         assertEquals(w, params().width); assertEquals(h, params().height)
         gesture(root().findViewWithTag("overlay_resize_handle"), 10000f, -10000f)
         assertTrue(params().width >= 196); assertTrue(params().height >= 180)
