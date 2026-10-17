@@ -65,6 +65,34 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
     private var showHistory = false
     private var resetConfirmationDeadline = 0L
 
+    // Scroll restoration is scoped to the current session, filter, search and history view.
+    // Keep it in preferences so collapsing/reopening (even after Activity recreation) is stable.
+    private fun scrollContextKey(): String =
+        "${store.currentSessionId}|${showHistory}|${filter.name}|${searchTerm}"
+
+    private fun saveScrollPosition() {
+        val view = list ?: return
+        placement.edit()
+            .putString("panel_scroll_context", scrollContextKey())
+            .putInt("panel_scroll_row", view.firstVisiblePosition)
+            .putInt("panel_scroll_offset", view.getChildAt(0)?.top ?: 0)
+            .apply()
+    }
+
+    private fun restoreScrollPosition() {
+        val view = list ?: return
+        val context = scrollContextKey()
+        if (placement.getString("panel_scroll_context", null) != context) return
+        val row = placement.getInt("panel_scroll_row", 0)
+        val offset = placement.getInt("panel_scroll_offset", 0)
+        // ListView positions should be applied after its adapter has laid out child rows.
+        view.post {
+            if (list !== view || scrollContextKey() != context) return@post
+            val count = view.adapter?.count ?: 0
+            if (count > 0) view.setSelectionFromTop(row.coerceIn(0, count - 1), offset)
+        }
+    }
+
     private fun dp(value: Int): Int = (value * app.resources.displayMetrics.density + 0.5f).toInt()
     private fun toast(text: String) = Toast.makeText(app, text, Toast.LENGTH_SHORT).show()
 
@@ -259,20 +287,28 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
         root.addView(foot)
 
         val params = overlayParams(width, WindowManager.LayoutParams.WRAP_CONTENT,
-            Gravity.TOP or Gravity.END, dp(7), dp(58))
+            Gravity.TOP or Gravity.END, dp(7), dp(58)).apply {
+            // Outside taps belong to Pokémon GO. Never subscribe to outside-touch dismissal.
+            flags = flags and WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH.inv()
+        }
         try {
             manager.addView(root, params)
             panel = root
+            // Prevent the floating toggle from overlapping the list and closing it during paste.
+            bubble?.visibility = View.GONE
             refresh(true)
+            restoreScrollPosition()
         } catch (e: Exception) {
             toast("一覧を表示できません: ${e.localizedMessage}")
         }
     }
 
     fun closePanel() {
+        saveScrollPosition()
         hideKeyboard()
         panel?.let { try { manager.removeView(it) } catch (_: Exception) {} }
         panel = null
+        bubble?.visibility = View.VISIBLE
         list = null
         title = null
         summary = null
