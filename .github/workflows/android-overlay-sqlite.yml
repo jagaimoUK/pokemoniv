@@ -1,0 +1,39 @@
+name: Android overlay SQLite instrumented regression
+on:
+  push:
+    branches: [feature/android-overlay-sqlite-test-20261017]
+  workflow_dispatch:
+jobs:
+  sqlite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Extract isolated overlay app and prepare test
+        run: |
+          tar -xJf android-overlay-copy-demo.tar.xz
+          mkdir -p demo/app/src/androidTest/java/com/example/pokemonivreader/overlayqueue
+          cp instrumentation/OverlayQueueStoreInstrumentedTest.kt demo/app/src/androidTest/java/com/example/pokemonivreader/overlayqueue/
+          sed -i '/applicationId = /a\        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"' demo/app/build.gradle.kts
+          cat >> demo/app/build.gradle.kts <<'GRADLE'
+          dependencies {
+              androidTestImplementation("androidx.test.ext:junit:1.2.1")
+              androidTestImplementation("androidx.test:runner:1.6.2")
+          }
+          GRADLE
+      - name: Run Android emulator and SQLite regression
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 32
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          disable-animations: true
+          script: gradle -p demo :app:connectedDebugAndroidTest --no-daemon --stacktrace
