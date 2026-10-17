@@ -11,6 +11,7 @@ import re
 import unicodedata
 
 from pvpoke_app_sizes import FAMILIES
+from pvpoke_app_selection import search_string
 
 FIELDS = ('species', 'fast', 'charged1', 'charged2')
 TRIPLE = re.compile(r'^\d{1,2}\s*[,/]\s*\d{1,2}\s*[,/]\s*\d{1,2}$')
@@ -86,7 +87,7 @@ def parse_import(text: str, catalog: dict, current: dict | None = None) -> dict:
             word = word[len(match):].lstrip(' ,、と・/')
         return found or None
     sections = []
-    section = {'species': None, 'moves': None, 'ivs': [], 'levels': False}
+    section = {'species': None, 'moves': None, 'ivs': [], 'levels': False, 'records': []}
     sections.append(section)
     mode, header = None, None
     def change_section(sids, moves=None, force=False):
@@ -94,7 +95,7 @@ def parse_import(text: str, catalog: dict, current: dict | None = None) -> dict:
         if not force and section['species'] is None:
             section['species'], section['moves'] = sids, moves or section['moves']
         else:
-            section = {'species': sids, 'moves': moves, 'ivs': [], 'levels': False}
+            section = {'species': sids, 'moves': moves, 'ivs': [], 'levels': False, 'records': []}
             sections.append(section)
     def add_iv(parts, line):
         if len(parts) != 3 or any(not re.fullmatch(r'\d{1,2}', x.strip()) for x in parts):
@@ -103,6 +104,19 @@ def parse_import(text: str, catalog: dict, current: dict | None = None) -> dict:
         if any(x > 15 for x in triple):
             raise ValueError(f'{line}行目: 個体値は0〜15です')
         section['ivs'].append(triple)
+        return triple
+
+    def add_record(iv, cp, source, line):
+        if not re.fullmatch(r'\d{1,5}', str(cp)) or not 1 <= int(cp) <= 10000:
+            raise ValueError(f'{line}行目: 読み取りCPは1〜10000です')
+        sid = resolve(source)
+        if sid is None:
+            raise ValueError(f'{line}行目: CPを読み取った元のポケモンを特定できません: {source}')
+        name = species[sid].get('name', sid).removesuffix(' (Shadow)')
+        iv_text = '/'.join(map(str, iv))
+        shadow = 'shadow' in sid
+        section['records'].append({'ivs': iv_text, 'cp': int(cp), 'species': sid,
+            'search_string': search_string(name, iv_text, shadow, sid) + f'&cp{int(cp)}'})
     text = unicodedata.normalize('NFKC', text).replace('\ufeff', '').replace('、', ',')
     # Hyphens separated by whitespace are list/paragraph separators, never a
     # negative-IV sign or the export spelling "_shadow-shadow".
@@ -119,6 +133,11 @@ def parse_import(text: str, catalog: dict, current: dict | None = None) -> dict:
                 if mode and mode != new_mode:
                     raise ValueError('計算モードが混在しています')
                 mode = new_mode
+            continue
+        observed = re.fullmatch(r'(' + iv_pattern + r')\s+CP\s*(\d+)\s*\|\s*(.+)', line, re.I)
+        if observed:
+            iv = add_iv(re.split(r'\s*[,/]\s*', observed[1]), number)
+            add_record(iv, observed[2], observed[3], number)
             continue
         groups = re.findall(iv_pattern, line)
         if groups and not re.sub(iv_pattern, '', line).strip():
@@ -154,6 +173,10 @@ def parse_import(text: str, catalog: dict, current: dict | None = None) -> dict:
                 raise ValueError(f'{number}行目: ポケモンが見つかりません')
             change_section([sid], tuple(row[k].upper() for k in FIELDS[1:]), force=True)
             add_iv([row[k] for k in ('atk', 'def', 'hp')], number)
+            # Only an explicitly observed CP is a search constraint. A simulator's
+            # generic `cp` column may be powered-up CP and must never be inferred.
+            if row.get('source_cp'):
+                add_record(section['ivs'][-1], row['source_cp'], row.get('source_species') or row['species'], number)
             section['levels'] = 'level' in row
             continue
         if len(fields) in (4, 7, 8) and resolve(fields[0]):
@@ -209,9 +232,10 @@ def parse_import(text: str, catalog: dict, current: dict | None = None) -> dict:
             key = (sid, *moves)
             if key not in jobs:
                 jobs[key] = {'candidate': dict(zip(FIELDS, key)), 'name': p.get('name_ja') or p.get('name') or sid,
-                             '_ivs': [], 'warnings': [], 'source_sections': [], 'moves_source': source}
+                             '_ivs': [], 'warnings': [], 'source_sections': [], 'moves_source': source, 'source_records': []}
             job = jobs[key]
             job['_ivs'].extend(part['ivs'])
+            job['source_records'].extend(part['records'])
             job['source_sections'].append(index)
             if part['levels']:
                 warnings.append('貼り付け元のレベルは使わず計算時にCP1500以下へ調整します')
@@ -219,6 +243,7 @@ def parse_import(text: str, catalog: dict, current: dict | None = None) -> dict:
     if not jobs:
         raise ValueError('個体値がありません。攻撃,防御,HPの順に貼り付けてください')
     for job in jobs.values():
+        job['source_records'] = list({(r['ivs'], r['species'], r['cp']): r for r in job['source_records']}.values())
         original = job.pop('_ivs')
         unique = list(dict.fromkeys(original))
         if len(unique) > 150:

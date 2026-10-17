@@ -1,0 +1,47 @@
+name: Observed CP and compact overlay
+on:
+  push:
+    branches: [feature/cp-compact-overlay-20261017, main]
+    paths:
+      - 'android-integration/**'
+      - 'demo/**'
+      - 'pvpoke_app_input.py'
+      - 'pvpoke_app_ui.py'
+      - 'tests/test_observed_cp.py'
+      - 'tests/test_app_ui_share.js'
+      - '.github/workflows/cp-compact-overlay.yml'
+  workflow_dispatch:
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s tests -p 'test_observed_cp.py'
+      - run: python -m unittest discover -s tests -p 'test_app_input.py'
+      - run: node tests/test_app_ui_share.js
+      - run: node tests/test_app_ui_queue.js
+      - run: node tests/test_app_ui_labels.js
+  android:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - run: cp android-integration/IvSelectionText.kt demo/app/src/main/java/com/example/pokemonivreader/
+      - run: gradle -p demo :app:assembleDebug :app:testDebugUnitTest --no-daemon --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: compact-overlay-demo-apk-and-tests
+          path: |
+            demo/app/build/outputs/apk/debug/app-debug.apk
+            demo/app/build/reports/tests/testDebugUnitTest/
