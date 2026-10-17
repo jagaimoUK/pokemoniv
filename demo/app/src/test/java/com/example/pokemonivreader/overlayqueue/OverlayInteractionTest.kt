@@ -112,12 +112,44 @@ class OverlayInteractionTest {
         assertTrue(p.x + p.width <= m.widthPixels)
         assertTrue(p.y + p.height <= m.heightPixels)
     }
-    @Test fun outsideTapStillCollapsesAndStopRemovesBubble() {
+    @Test fun outsideTapNeverClosesPanelAndCloseButtonOnlyCollapses() {
         val e = MotionEvent.obtain(0, 0, MotionEvent.ACTION_OUTSIDE, 0f, 0f, 0)
         root().dispatchTouchEvent(e); e.recycle()
-        assertNull(field("panel")); assertNotNull(field("bubble"))
+        assertNotNull(field("panel"))
+        assertNotNull(field("bubble"))
+        assertEquals(View.GONE, (field("bubble") as View).visibility)
+        assertEquals(0, params().flags and WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH)
+        buttons(root()).single { it.text == "×" }.performClick()
+        assertNull(field("panel"))
+        assertEquals(View.VISIBLE, (field("bubble") as View).visibility)
         controller.openPanel()
-        buttons(root()).single { it.text == "終了" }.performClick()
+        assertNotNull(field("panel"))
+        controller.hide()
         assertNull(field("panel")); assertNull(field("bubble"))
+    }
+    @Test fun savedScrollBelongsToSessionAndSurvivesPanelClose() {
+        controller.closePanel()
+        val many = (1..70).map { i -> OverlayPair("Wooper&cp${700+i}", "Woop${i}", "0/11/12") }
+        store.importPairs(many)
+        controller.openPanel()
+        val list = field("list") as ListView
+        list.measure(View.MeasureSpec.makeMeasureSpec(230, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(175, View.MeasureSpec.EXACTLY))
+        list.layout(0, 0, 230, 175)
+        list.setSelectionFromTop(21, -5)
+        list.layout(0, 0, 230, 175)
+        val row = list.firstVisiblePosition
+        assertTrue("Scroll setup should move beyond first item", row > 0)
+        controller.closePanel()
+        val prefs = app.getSharedPreferences("overlay_queue_placement", Context.MODE_PRIVATE)
+        assertEquals(row, prefs.getInt("scroll_row", -1))
+        assertEquals(store.currentSessionId, prefs.getLong("scroll_session_id", -1))
+        controller.openPanel()
+        val opened = field("list") as ListView
+        opened.measure(View.MeasureSpec.makeMeasureSpec(230, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(175, View.MeasureSpec.EXACTLY))
+        opened.layout(0, 0, 230, 175)
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertEquals(row, opened.firstVisiblePosition)
     }
 }
