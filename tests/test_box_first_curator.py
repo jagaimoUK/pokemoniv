@@ -21,8 +21,8 @@ class ClassicBoxTests(unittest.TestCase):
     def test_mainstay_without_single_best_event_is_promoted_to_s(self):
         m = matrix({
             "0/11/12": [525, 525, 525],
-            "3/13/8": [535, 500, 500],
-            "2/15/13": [500, 535, 500],
+            "3/13/8": [535, 510, 510],
+            "2/15/13": [510, 535, 510],
         }, ["Corviknight", "Quagsire", "Feraligatr"])
         r = recommend({"default": m}, CANDIDATE, "Quagsire")
         self.assertEqual(r["recommendations"][0]["ivs"], "0/11/12")
