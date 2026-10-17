@@ -62,16 +62,18 @@ internal object ReaderUiEnhancements {
                 if (deleteButton?.parent != null || activity.isFinishing || activity.isDestroyed) return
                 val copy = findCopyButton(decor) ?: return
                 // Insert in the same column immediately after the existing copy control.
-                val parent = copy.parent as? LinearLayout ?: return
-                val column: LinearLayout
-                val after: View
-                if (parent.orientation == LinearLayout.VERTICAL) {
-                    column = parent; after = copy
-                } else {
-                    column = parent.parent as? LinearLayout ?: return
-                    if (column.orientation != LinearLayout.VERTICAL) return
-                    after = parent
+                var after: View = copy
+                var ancestor: ViewGroup? = copy.parent as? ViewGroup
+                var column: LinearLayout? = null
+                while (ancestor != null) {
+                    if (ancestor is LinearLayout && ancestor.orientation == LinearLayout.VERTICAL) {
+                        column = ancestor
+                        break
+                    }
+                    after = ancestor
+                    ancestor = ancestor.parent as? ViewGroup
                 }
+                val targetColumn = column ?: return
                 val button = Button(activity).apply {
                     text = "自動履歴を全削除"
                     isAllCaps = false
@@ -99,9 +101,9 @@ internal object ReaderUiEnhancements {
                             }.show()
                     }
                 }
-                val place = column.indexOfChild(after)
+                val place = targetColumn.indexOfChild(after)
                 if (place < 0) return
-                column.addView(button, place + 1,
+                targetColumn.addView(button, place + 1,
                     LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT))
                 deleteButton = button
