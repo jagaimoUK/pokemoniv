@@ -18,6 +18,37 @@ class ObservedCPTests(unittest.TestCase):
             self.assertEqual([x['cp'] for x in job['source_records']], [717, 625])
             self.assertEqual(job['source_records'][0]['search_string'], 'Wooper&0attack&3defense&3hp&cp717')
 
+    def test_regional_source_cp_search_preserves_read_iv_and_exact_cp(self):
+        region_catalog = self.catalog()
+        region_catalog['species']['wooper_paldean'] = {
+            'name': 'Wooper (Paldean)',
+            'aliases': ['パルデアウパー', 'ウパー(パルデア)'],
+            'fastMoves': ['A'], 'chargedMoves': ['B', 'C'],
+            'default_moves': {'fast': 'A', 'charged1': 'B', 'charged2': 'C'},
+        }
+        r = parse_import(
+            '# パルデアウパー\n13,8,11 CP458 | wooper_paldean',
+            region_catalog)
+        self.assertEqual(r['source_records'][0]['species'], 'wooper_paldean')
+        self.assertEqual(
+            r['source_records'][0]['search_string'],
+            'Wooper&paldea&3attack&2defense&3hp&cp458')
+
+    def test_shadow_regional_source_cp_and_normal_source_remain_separate(self):
+        catalog = self.catalog()
+        catalog['species']['wooper_paldean_shadow'] = {
+            'name': 'Wooper (Paldean) (Shadow)',
+            'aliases': ['シャドウパルデアウパー'],
+            'fastMoves': ['A'], 'chargedMoves': ['B', 'C'],
+            'default_moves': {'fast': 'A', 'charged1': 'B', 'charged2': 'C'},
+        }
+        r = parse_import(
+            '# シャドウパルデアウパー\n13,8,11 CP458 | wooper_paldean_shadow',
+            catalog)
+        self.assertEqual(
+            r['source_records'][0]['search_string'],
+            'Wooper&paldea&3attack&2defense&3hp&shadow&cp458')
+
     def test_shadow_and_fullwidth(self):
         r = parse_import('# シャドウウパー\n０，１１，１２ ＣＰ７１７ | シャドウウパー', self.catalog())
         self.assertIn('&shadow&cp717', r['source_records'][0]['search_string'])

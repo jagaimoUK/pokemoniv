@@ -43,5 +43,14 @@ function flatten(e){return [e,...e.children.flatMap(flatten)];}
  assert.equal(shared.length,2,'Invalid search must never be shared');
  assert(elements.message.textContent.includes('検索式'));
  first.source_records=[{ivs:'0/11/12',cp:717,species:'wooper',search_string:'Wooper&0attack&3defense&3hp&cp717'},{ivs:'0/11/12',cp:625,species:'wooper',search_string:'Wooper&0attack&3defense&3hp&cp625'}];const cp=JSON.parse(vm.runInContext('overlayExport([first])',context));assert.equal(cp.items.length,3);assert.equal(cp.items[0].cp,717);assert(cp.items[0].search.startsWith('Wooper&'));assert.equal(cp.items[1].cp,625);assert.equal(cp.items[2].cp,null);assert(vm.runInContext('recommendationExport(first)',context).includes('&cp717'));
+ const oldRegional=result([row('13/8/11','Wooper (Paldean)&3attack&2defense&3hp')]);
+ oldRegional.source_records=[{ivs:'13/8/11',cp:458,species:'wooper_paldean',search_string:'Wooper (Paldean)&3attack&2defense&3hp&cp458'}];
+ const migrated=JSON.parse(vm.runInContext('overlayExport([oldRegional])',Object.assign(context,{oldRegional})));
+ assert.equal(migrated.items[0].search,'Wooper&paldea&3attack&2defense&3hp&cp458');
+ assert(vm.runInContext('recommendationExport(oldRegional)',context).startsWith('Wooper&paldea&3attack&2defense&3hp&cp458'));
+ for(const [name,region] of [['Raichu (Alolan)','alola'],['Zigzagoon (Galarian)','galar'],['Growlithe (Hisuian)','hisui']]){
+  const fixed=vm.runInContext('normalizedRegionalSearch('+JSON.stringify(name+'&1attack')+')',context);
+  assert.equal(fixed,name.split(' (')[0]+'&'+region+'&1attack');
+ }
  console.log('Android Web Share: exact pairs, multi-result, duplicate, fallback, cancel, error: PASS');
 })().catch(e=>{console.error(e);process.exitCode=1});

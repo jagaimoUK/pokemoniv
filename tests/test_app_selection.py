@@ -181,6 +181,39 @@ class AppSelectionTests(unittest.TestCase):
         self.assertEqual(search_string('Blastoise', '0/5/15', True), 'Blastoise&0attack&1defense&4hp&shadow')
         self.assertEqual(search_string('Quagsire', '6/11/14'), 'Quagsire&2attack&3defense&3hp')
 
+    def test_all_regional_forms_use_go_region_keyword_without_parentheses(self):
+        cases = [
+            ("Wooper (Paldean)", "wooper_paldean", "Wooper&paldea"),
+            ("Raichu (Alolan)", "raichu_alolan", "Raichu&alola"),
+            ("Zigzagoon (Galarian)", "zigzagoon_galarian", "Zigzagoon&galar"),
+            ("Growlithe (Hisuian)", "growlithe_hisuian", "Growlithe&hisui"),
+            ("Paldean Wooper", None, "Wooper&paldea"),
+            ("Alolan Raichu", None, "Raichu&alola"),
+            ("Zigzagoon", "zigzagoon_galarian", "Zigzagoon&galar"),
+            ("Wooper (Paldean)", None, "Wooper&paldea"),
+        ]
+        for name, sid, expected_prefix in cases:
+            with self.subTest(name=name, sid=sid):
+                result = search_string(name, "13/8/11", species_id=sid)
+                self.assertEqual(
+                    result, expected_prefix + "&3attack&2defense&3hp")
+
+    def test_shadow_regional_and_unrelated_forms_remain_distinct(self):
+        self.assertEqual(
+            search_string("Wooper (Paldean) (Shadow)", "13/8/11",
+                          True, "wooper_paldean_shadow"),
+            "Wooper&paldea&3attack&2defense&3hp&shadow")
+        self.assertEqual(
+            search_string("Wooper", "13/8/11", species_id="wooper"),
+            "Wooper&3attack&2defense&3hp")
+        self.assertEqual(
+            search_string("Dialga (Origin)", "13/8/11", species_id="dialga_origin"),
+            "Dialga (Origin)&3attack&2defense&3hp")
+        self.assertEqual(
+            search_string("Paldean Wooper", "13/8/11", True,
+                          "wooper_paldean_shadow"),
+            "Wooper&paldea&3attack&2defense&3hp&shadow")
+
     def test_verified_workflow_and_cached_app_results(self):
         backend = FakeBackend()
         backend.candidate_name = lambda sid: 'Quagsire'

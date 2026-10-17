@@ -145,9 +145,17 @@ function nicknameFor(result,row,ivs=row.ivs){
   (members.length>1?'（同じ個体値・同じ入力区間の'+members.length+'種類を比較）':'')};
 }
 // Source records describe the physical Pokemon before powering up/evolving.
+// Repair old saved selection results too, without changing the source CP or IV.
+// New server-generated searches already use &alola / &galar / &hisui / &paldea.
+function normalizedRegionalSearch(search){
+ if(typeof search!=='string')return search;
+ const terms={alolan:'alola',galarian:'galar',hisuian:'hisui',paldean:'paldea'};
+ return search.replace(/^(.+?)\s*\(\s*(Alolan|Galarian|Hisuian|Paldean)\s*\)(?:\s*\(\s*Shadow\s*\))?(?=&|$)/i,
+  (_match,base,adjective)=>base.trim()+'&'+terms[adjective.toLowerCase()]);
+}
 function individualSearches(result,iv){
  const records=(result.source_records||[]).filter(r=>r.ivs===iv.ivs);
- return records.length?records.map(r=>({search:r.search_string,cp:r.cp,species:r.species})):[{search:iv.search_string}];
+ return records.length?records.map(r=>({search:normalizedRegionalSearch(r.search_string),cp:r.cp,species:r.species})):[{search:normalizedRegionalSearch(iv.search_string)}];
 }
 function overlayExport(results){
  recommendationExportText(results); // Validate every pair before writing anything.
