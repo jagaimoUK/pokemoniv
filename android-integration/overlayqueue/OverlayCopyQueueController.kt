@@ -23,7 +23,7 @@ import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-/** Only the bounded panel receives touches. Outside taps collapse it and reach GO. */
+/** Only the bounded panel receives touches. Outside taps pass through to GO. */
 class OverlayCopyQueueController private constructor(private val app: Context) {
     companion object {
         @Volatile private var instance: OverlayCopyQueueController? = null
@@ -40,6 +40,30 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
     private var summary: TextView? = null
     private var adapter: QueueAdapter? = null
     private var rows: List<OverlayQueueStore.Item> = emptyList()
+
+    // Retain the last visible item and exact pixel offset when the panel is collapsed.
+    // A different import session starts at the top rather than an unrelated old row.
+    private fun saveListScroll() {
+        val currentList = list ?: return
+        placement.edit()
+            .putLong("scroll_session_id", store.currentSessionId)
+            .putInt("scroll_row", currentList.firstVisiblePosition)
+            .putInt("scroll_offset", currentList.getChildAt(0)?.top ?: 0)
+            .apply()
+    }
+
+    private fun restoreListScroll() {
+        val currentList = list ?: return
+        if (placement.getLong("scroll_session_id", -1L) != store.currentSessionId) return
+        val position = placement.getInt("scroll_row", 0)
+        val offset = placement.getInt("scroll_offset", 0)
+        val session = store.currentSessionId
+        currentList.post {
+            if (list !== currentList || store.currentSessionId != session) return@post
+            val count = currentList.adapter?.count ?: 0
+            if (count > 0) currentList.setSelectionFromTop(position.coerceIn(0, count - 1), offset)
+        }
+    }
     private fun dp(n: Int) = (n * app.resources.displayMetrics.density + .5f).toInt()
     private fun toast(s: String) = Toast.makeText(app, s, Toast.LENGTH_SHORT).show()
     private fun background(color: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(10).toFloat() }
@@ -58,8 +82,7 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
     private fun params(width: Int, height: Int, x: Int, y: Int) = WindowManager.LayoutParams(
         width, height,
         if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE,
-        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-            WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
         PixelFormat.TRANSLUCENT
     ).apply {
         gravity = Gravity.TOP or Gravity.START; this.x = x; this.y = y
@@ -137,9 +160,6 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
         val root = LinearLayout(app).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(6), dp(4), dp(6), dp(4))
             background = background(Color.rgb(24, 31, 41))
-            setOnTouchListener { _, event ->
-                if (event.actionMasked == MotionEvent.ACTION_OUTSIDE) { closePanel(); false } else false
-            }
         }
         val header = LinearLayout(app).apply { orientation = LinearLayout.HORIZONTAL }
         val moveHandle = label("厳選リスト ↔").apply {
@@ -148,7 +168,7 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
             setOnClickListener { toast("上部をドラッグして移動できます") }
         }
         header.addView(moveHandle, LinearLayout.LayoutParams(0, dp(34), 1f))
-        header.addView(button("終了") { hide() }, LinearLayout.LayoutParams(dp(48), dp(34)))
+        header.addView(button("×") { closePanel() }, LinearLayout.LayoutParams(dp(48), dp(34)))
         root.addView(header)
         summary = label("").also { root.addView(it, LinearLayout.LayoutParams(-1, dp(25))) }
         val l = ListView(app).apply { dividerHeight = dp(1); cacheColorHint = Color.TRANSPARENT }
@@ -169,7 +189,7 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
         try {
             // Hide the bubble before adding the panel (Android touch opacity limit).
             bubble?.visibility = View.GONE
-            manager.addView(root, p); panel = root; panelParams = p; refresh()
+            manager.addView(root, p); panel = root; panelParams = p; refresh(); restoreListScroll()
         } catch (e: Exception) { bubble?.visibility = View.VISIBLE; toast("一覧を表示できません: ${e.localizedMessage}") }
     }
     private fun clampPanel(p: WindowManager.LayoutParams) {
@@ -236,6 +256,7 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
         })
     }
     fun closePanel() {
+        saveListScroll()
         panel?.let { try { manager.removeView(it) } catch (_: Exception) {} }
         panel = null; panelParams = null; list = null; summary = null; adapter = null; rows = emptyList()
         bubble?.visibility = View.VISIBLE
