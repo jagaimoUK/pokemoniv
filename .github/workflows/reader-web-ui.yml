@@ -1,7 +1,7 @@
 name: Reader handoff and floating navigation
 on:
   push:
-    branches: [feature/reader-quicknav-20261017]
+    branches: [feature/reader-quicknav-20261017, feature/raise-top-button-20261017]
   workflow_dispatch:
 jobs:
   web-ui:
