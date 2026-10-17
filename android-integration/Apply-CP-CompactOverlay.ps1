@@ -24,11 +24,11 @@ foreach ($item in $manifest.files) {
 }
 if ($changes.Count -eq 0) { Write-Host 'This patch is already applied.'; exit 0 }
 # Resolve Java before modifying any source. Prefer Android Studio's bundled JBR.
-$javaCandidates = @(
+$javaCandidates = @(@(
     (Join-Path $env:ProgramFiles 'Android\Android Studio\jbr'),
     (Join-Path $env:LOCALAPPDATA 'Programs\Android Studio\jbr'),
     $env:JAVA_HOME
-) | Where-Object { $_ -and (Test-Path -LiteralPath (Join-Path $_ 'bin\java.exe')) }
+) | Where-Object { $_ -and (Test-Path -LiteralPath (Join-Path $_ 'bin\java.exe')) })
 if (!$javaCandidates) { throw 'Java was not found. Open Android Studio and use its bundled JBR, then retry.' }
 $env:JAVA_HOME = $javaCandidates[0]
 $env:Path = (Join-Path $env:JAVA_HOME 'bin') + ';' + $env:Path
