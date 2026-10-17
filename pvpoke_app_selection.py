@@ -180,6 +180,21 @@ def recommend(matrices: dict[str, SelectionMatrix], candidate: dict,
     recommendations, held, additional = curate_for_box(
         recommendations, held, outcomes, vectors, cells, focus,
         english_name, candidate, search_string, shadow, limit=4, original_count=len(ivs))
+    selected_ivs = {row["ivs"] for row in recommendations}
+    # In box-first mode an old outcome-covering representative can itself be
+    # deprioritized. Do not misleadingly claim that a hidden IV is covered by
+    # an IV that the user was told to save.
+    visible_covered = []
+    for row in covered:
+        if row["covered_by"] in selected_ivs:
+            visible_covered.append(row)
+        else:
+            additional.append({
+                "ivs": row["ivs"],
+                "reason": "代表個体の役割と重複しますが、代表も今回の保存対象外です。",
+                "equivalent_candidates": row["equivalent_candidates"],
+            })
+    covered = visible_covered
     order = {row["ivs"]: index for index, row in enumerate(recommendations)}
     # A surviving IV can look redundant when the UI shows a shared win.
     # Compare it to the MOST SIMILAR higher-ranked retained IV across all
