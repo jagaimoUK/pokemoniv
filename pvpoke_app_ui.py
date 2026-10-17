@@ -186,7 +186,7 @@ function launchAndroidOverlay(text){
  if(bytes.length>26000)return false;
  let binary='';
  for(let i=0;i<bytes.length;i+=4096)binary+=String.fromCharCode(...bytes.subarray(i,i+4096));
- const payload=btoa(binary).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');
+ const payload=btoa(binary).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'');
  const url='intent://import?payload='+payload+
   '#Intent;scheme=pokemonivreader;package=com.example.pokemonivreader;end';
  window.location.assign(url);
