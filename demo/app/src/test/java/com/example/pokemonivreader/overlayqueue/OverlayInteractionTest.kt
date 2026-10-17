@@ -152,4 +152,19 @@ class OverlayInteractionTest {
         org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
         assertEquals(row, opened.firstVisiblePosition)
     }
+
+    @Test fun compactPanelHidesTitleAndProgressWithoutLosingCopyActions() {
+        val root = root()
+        // Only move/close header, rows, and resize footer remain.
+        assertEquals(3, root.childCount)
+        val header = root.getChildAt(0) as LinearLayout
+        val contents = (0 until header.childCount).map { (header.getChildAt(it) as android.widget.TextView).text.toString() }
+        assertFalse(contents.any { it.contains("厳選リスト") })
+        assertFalse(contents.any { it.contains("件") || it.contains("検索✓") || it.contains("名前✓") })
+        assertEquals("↔", contents.first())
+        assertEquals(30, (header.getChildAt(0).layoutParams as LinearLayout.LayoutParams).height)
+        assertSame(field("list"), root.getChildAt(1))
+        assertNotNull(root.findViewWithTag<View>("overlay_resize_handle"))
+        assertEquals(2, buttons((field("list") as ListView).adapter.getView(0, null, field("list") as ListView)).size)
+    }
 }
