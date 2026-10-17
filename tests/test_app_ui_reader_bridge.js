@@ -5,6 +5,10 @@ const content=fs.readFileSync('pvpoke_app_ui.py','utf8');
 assert(content.includes('<nav class="quick-nav" aria-label="ページ内の移動">'));
 assert(content.includes('<a href="#pageTop" aria-label="ページ上部に戻る">'));
 assert(content.includes('<main id="pageTop">'));
+assert(content.includes('top:44vh'),'Desktop return-to-top should be near the middle');
+assert(content.includes('bottom:calc(clamp(96px,16vh,156px) + env(safe-area-inset-bottom,0px))'),
+  'Mobile button needs thumb reach clearance above the screen bottom');
+assert(content.includes('min-height:48px;min-width:48px'),'Touch target must remain comfortably tappable');
 const receiver=content.match(/function receiveReaderInput\(\)\{[\s\S]*?\n\}\nconst access=/);
 assert(receiver,'Reader receiver must be defined before access handling');
 const values={importText:{value:''}};
