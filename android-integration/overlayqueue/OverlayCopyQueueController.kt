@@ -324,7 +324,15 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
         bubble = null
     }
     fun destroy() { hide(); store.close(); instance = null }
-    fun onImported() { if (panel != null) refresh() else show() }
+    fun onImported() {
+        // A new import uses a different session; never restore another session's list offset.
+        if (panel != null) {
+            list?.setSelectionFromTop(0, 0)
+            refresh()
+        } else {
+            openPanel()
+        }
+    }
     private fun refresh() {
         val position = list?.firstVisiblePosition ?: 0
         val top = list?.getChildAt(0)?.top ?: 0
