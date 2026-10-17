@@ -242,6 +242,22 @@ internal object AutoIvRecords {
         } catch (_: Exception) { -1 }
     }
 
+    /** Delete all auto-recognition records as one reversible batch.
+     * Selection identity is resolved under the same lock as late OCR writes.
+     */
+    fun deleteAll(context: Context): Int = synchronized(lock) {
+        try {
+            val all = records(context)
+            val keys = (0 until all.length()).mapNotNull { all.optJSONObject(it) }
+                .map(::selectionKey).toSet()
+            deleteMany(context, keys)
+        } catch (_: Exception) { -1 }
+    }
+
+    fun count(context: Context): Int = synchronized(lock) {
+        try { records(context).length() } catch (_: Exception) { -1 }
+    }
+
     fun delete(context: Context, index: Int): Boolean = synchronized(lock) {
         try {
             val item = records(context).optJSONObject(index) ?: return@synchronized false
