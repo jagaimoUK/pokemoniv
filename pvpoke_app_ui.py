@@ -239,9 +239,9 @@ function render(result,append=false){
  node('p',[result.candidate.fast,result.candidate.charged1,result.candidate.charged2].join(' / '),panel,'note');const selection=result.selection;
  if(!selection){node('h2','GPT評価用の比較情報',panel);node('p','今回の比較情報をコピーしてGPTに評価を依頼できます。',panel);const b=node('button','比較情報をコピー',panel);b.onclick=()=>copy('以下のPvPoke実測比較を、個体値厳選の基準で評価してください。おすすめ個体と英語検索式を示してください。\n'+JSON.stringify(result),b);return;}
  node('h2','おすすめ個体',panel);
- node('p','S/Aは入力した候補内での暫定評価です。勝ち・引き分けは記載したシールド・相手IV条件での計算結果です。',panel,'note');
- if(selection.policy?.version&&selection.explanation_version!=='pairwise-v1'){
-  node('p','保存済みの結果は旧版の推薦説明です。ページを再読み込みし、同じ入力を再計算すると最新の重複判定と比較説明を確認できます。',panel,'note');
+ node('p','Sは総合本命、Aはその本命にない実戦上の役割を補う個体です。通常は最大4体に絞ります。S/Aは入力候補内の暫定評価で、実際の勝敗を保証するものではありません。',panel,'note');
+ if(selection.policy?.version&&selection.policy.version!=='box-first-v3'){
+  node('p','保存済みの結果は以前の推薦基準です。最新のS本命・少数厳選を使うには、同じ入力を再計算してください。',panel,'note');
  }
  if(selection.recommendations.length){const actions=node('div','',panel,'actions');const b=node('button','検索式とニックネームをすべてコピー',actions);b.onclick=()=>copyRecommendations([result],b);const overlayCopy=node('button','オーバーレイ用にコピー',actions,'secondary');overlayCopy.onclick=()=>copyOverlay([result],overlayCopy);const share=node('button','Androidへ送る',actions,'secondary');share.onclick=()=>shareRecommendations([result],share);node('p','検索式→改行→ニックネームの順で、同じ性能の代替個体も含めてコピーします。Androidへの送信は共有先で「厳選コピーリスト」を選んでください。Android Chromeではインストール済みの読み取りアプリを直接開きます。その他は共有メニューを使います。個体値の見出しを引き継ぐ場合は「Androidへ送る」か「オーバーレイ用にコピー」を使ってください。',panel,'note');}
  if(selection.excluded&&(!Array.isArray(selection.excluded)||selection.excluded.length))node('p','計算対象から除外された対面があります：'+JSON.stringify(selection.excluded),panel);
@@ -274,6 +274,7 @@ function render(result,append=false){
   if(row.tradeoff){const e=row.tradeoff;node('p','苦手になる対面：'+opponentLabel(e.opponent).name+'・'+conditionLabel(e)+' は '+outcome(e)+'（Rating '+e.rating+' / '+e.best_iv+' は '+e.best_rating+'）。',details,'note');}
  }
  if(selection.covered_candidates?.length){const d=node('details','',panel);node('summary','役割が重複する個体（'+selection.covered_candidates.length+'）',d);for(const row of selection.covered_candidates){node('p',row.ivs+' → '+row.covered_by+'で全条件をカバー',d);if(row.equivalent_candidates?.length)node('p','同じ性能：'+row.equivalent_candidates.map(x=>x.ivs).join(', '),d);}}
+ if(selection.additional_candidates?.length){const d=node('details','',panel);node('summary','参考：今回は保存を見送る候補（'+selection.additional_candidates.length+'）',d);node('p','細かな勝敗差も計算していますが、ボックス整理を優先して一括コピーには含めません。',d,'note');for(const row of selection.additional_candidates){node('p',row.ivs+'：'+row.reason+(row.new_win_conditions?'（追加勝利 '+row.new_win_conditions+'条件）':''),d);if(row.equivalent_candidates?.length)node('p','同じ性能：'+row.equivalent_candidates.map(x=>x.ivs).join(', '),d);}}
  if(selection.review_candidates.length){const d=node('details','',panel);node('summary','保留：'+selection.review_candidates.length+'個体',d);for(const row of selection.review_candidates){node('p',row.ivs+'：'+row.reason,d);if(row.equivalent_candidates.length)node('p','同じ性能：'+row.equivalent_candidates.map(x=>x.ivs).join(', '),d);}}
  const rejected=Object.entries(selection.dominated_by);if(rejected.length){const d=node('details','',panel);node('summary','全条件で他候補以下の個体（'+rejected.length+'）',d);for(const [iv,rivals] of rejected)node('p',iv+' → '+rivals.join(', '),d);}
  refreshNicknames();
