@@ -9,6 +9,7 @@ on:
       - 'pvpoke_app_ui.py'
       - 'tests/test_observed_cp.py'
       - 'tests/test_overlay_migration.py'
+      - 'tests/test_one_tap_overlay.py'
       - 'tests/fixtures/overlay-v1.sql'
       - 'tests/test_app_ui_share.js'
       - '.github/workflows/cp-compact-overlay.yml'
@@ -23,6 +24,7 @@ jobs:
           python-version: '3.12'
       - run: python -m unittest discover -s tests -p 'test_observed_cp.py'
       - run: python -m unittest discover -s tests -p 'test_overlay_migration.py'
+      - run: python -m unittest discover -s tests -p 'test_one_tap_overlay.py'
       - run: python -m unittest discover -s tests -p 'test_app_input.py'
       - run: node tests/test_app_ui_share.js
       - run: node tests/test_app_ui_queue.js
