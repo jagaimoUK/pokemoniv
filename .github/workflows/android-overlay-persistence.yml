@@ -8,7 +8,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -22,16 +22,27 @@ jobs:
         run: |
           tar -xJf android-overlay-copy-demo.tar.xz
           python3 tests/patch_overlay_collision.py
-      - name: Export isolated demo controller for review
+      - name: Apply UX patch and compare reviewed source
+        run: python3 tests/patch_overlay_persistence.py
+      - name: Verify overlay tap and scroll invariants
         run: |
-          mkdir -p android-overlay-snapshot
-          cp demo/app/src/main/java/com/example/pokemonivreader/overlayqueue/OverlayCopyQueueController.kt android-overlay-snapshot/OverlayCopyQueueController.kt
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add android-overlay-snapshot/OverlayCopyQueueController.kt
-          if ! git diff --cached --quiet; then
-            git commit -m 'Add reproducible overlay controller snapshot for UX patch'
-            git push origin HEAD:feature/overlay-no-outside-dismiss-scroll-20261017
-          fi
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path("demo/app/src/main/java/com/example/pokemonivreader/overlayqueue/OverlayCopyQueueController.kt").read_text()
+          assert 'FLAG_NOT_TOUCH_MODAL' in s
+          assert 'FLAG_WATCH_OUTSIDE_TOUCH.inv()' in s
+          assert 'bubble?.visibility = View.GONE' in s
+          assert 'bubble?.visibility = View.VISIBLE' in s
+          assert 'restoreScrollPosition()' in s
+          assert 'saveScrollPosition()' in s
+          assert 'ACTION_OUTSIDE' not in s
+          print("Overlay UX invariants passed")
+          PY
       - name: Build debug APK
         run: gradle -p demo :app:assembleDebug --no-daemon --stacktrace
+      - name: Retain CI demo APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: overlay-ux-demo-debug
+          path: demo/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
