@@ -1,0 +1,18 @@
+name: Reader handoff and floating navigation
+on:
+  push:
+    branches: [feature/reader-quicknav-20261017]
+  workflow_dispatch:
+jobs:
+  web-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python3 -m py_compile pvpoke_app_ui.py
+      - run: node tests/test_app_ui_reader_bridge.js
+      - run: node tests/test_app_ui_queue.js
+      - run: node tests/test_app_ui_share.js
+      - run: node tests/test_app_ui_labels.js
