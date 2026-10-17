@@ -85,7 +85,7 @@ def curate_for_box(recommendations, held, outcomes, vectors, cells, focus,
         missing = []
         for i, result in enumerate(outcomes[iv]):
             best_saved = max(outcomes[s["ivs"]][i] for s in selected)
-            if result > best_saved and result == 2:
+            if result > best_saved and result >= 1:
                 missing.append(i)
         opponents = {cells[i][3] for i in missing}
         shields = {cells[i][1] for i in missing}
@@ -96,12 +96,13 @@ def curate_for_box(recommendations, held, outcomes, vectors, cells, focus,
             if vectors[iv][i] >= 540
             and max(vectors[s["ivs"]][i] for s in selected) <= 500
         ]
-        # Rating differences within already-won matches never count as gains.
+        # New draws also count: the project's goal is a viable >=500 matchup.
+        # Rating improvements that do not cross an outcome boundary never count.
         meaningful = (bool(priority) or len(opponents) >= 2
                       or bool(high_disadv)
                       or (len(shields) >= 2 and len(missing) >= 3))
         ranking = (bool(priority), len(opponents), bool(high_disadv),
-                   sum(weight(i) for i in missing), len(disadv),
+                   sum(weight(i) * (2 if outcomes[iv][i] == 2 else 1) for i in missing), len(disadv),
                    global_score(iv))
         return missing, meaningful, ranking
 
@@ -114,19 +115,19 @@ def curate_for_box(recommendations, held, outcomes, vectors, cells, focus,
         r = pending.pop(iv)
         r["grade"] = "Aランク"
         r["role"] = "本命にない重要対面・特殊条件を補完"
-        r["box_reason"] = f"保存済み個体では拾えない勝利 {len(missing)}条件"
-        r["new_win_conditions"] = len(missing)
+        r["box_reason"] = f"保存済み個体では互角以上にできない {len(missing)}条件"
+        r["new_viable_conditions"] = len(missing)
         selected.append(r)
 
     for iv, r in pending.items():
         missing, meaningful, _ = gains(iv)
-        reason = ("保存済みの個体で勝利をカバーできるため"
+        reason = ("保存済みの個体で互角以上の対面をカバーできるため"
                   if not missing else
                   "保存枠上限に達したため" if meaningful else
-                  "独自の勝利が限定的で、保存優先度が低いため")
+                  "独自の互角以上の対面が限定的で、保存優先度が低いため")
         additional.append({
             "ivs": iv, "reason": reason,
-            "new_win_conditions": len(missing),
+            "new_viable_conditions": len(missing),
             "equivalent_candidates": r.get("equivalent_candidates", []),
         })
     # Keep original order for a stable audit list.
