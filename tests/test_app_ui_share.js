@@ -16,7 +16,7 @@ function flatten(e){return [e,...e.children.flatMap(flatten)];}
  context.first=first; context.second=second;
  vm.runInContext('render(first);render(second,true)',context);
  const buttons=flatten(elements.results).filter(e=>e.textContent==='Androidへ送る');
- assert.equal(buttons.length,2, 'Single result and all results sharing are both present');
+ assert.equal(buttons.length,3, 'Two single-result buttons and one all-results button are present');
  await buttons[0].onclick();
  assert.equal(shared.length,1);
  const expected='Quagsire&0attack&3defense&3hp\\nAQuag>Cor01\\nQuagsire&1attack&3defense&3hp\\nAQuag>Cor01';
