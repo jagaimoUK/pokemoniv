@@ -20,16 +20,16 @@ function flatten(e){return [e,...e.children.flatMap(flatten)];}
  await buttons[1].onclick();
  assert.equal(shared.length,1);
  const expected='Quagsire&0attack&3defense&3hp\nAQuag>Cor01\nQuagsire&1attack&3defense&3hp\nAQuag>Cor01';
- assert.equal(shared[0].text,expected);
+ const payload=JSON.parse(shared[0].text);assert.equal(payload.format,'pokemoniv-overlay-v2');assert.equal(payload.items.length,2);assert.equal(payload.items[0].ivs,'0/11/12');assert.equal(payload.items.map(x=>x.search+'\n'+x.nickname).join('\n'),expected);
  assert.equal(shared[0].title,'厳選コピーリスト');
  assert.equal(copied.length,0);
- await elements.allCopyActions.children[1].onclick();
+ await elements.allCopyActions.children.find(x=>x.textContent==='Androidへ送る').onclick();
  assert.equal(shared.length,2);
- assert.equal(shared[1].text,expected+'\nQuagsire&0attack&3defense&3hp\nAQuag>Cor01');
- assert.equal(shared[1].text.split('\n').length,6);
+ assert.equal(JSON.parse(shared[1].text).items.map(x=>x.search+'\n'+x.nickname).join('\n'),expected+'\nQuagsire&0attack&3defense&3hp\nAQuag>Cor01');
+ assert.equal(JSON.parse(shared[1].text).items.length,3);
  navigator.share=undefined;
  await buttons[1].onclick();
- assert.equal(copied.at(-1),expected,'Unsupported share must retain legacy copy fallback');
+ assert.equal(copied.at(-1),shared[0].text,'Fallback preserves exact IV metadata');await vm.runInContext('copyRecommendations([first],{})',context);assert.equal(copied.at(-1),expected,'Legacy two-line copy is preserved');
  navigator.share=async()=>{let e=Error('user cancelled');e.name='AbortError';throw e};
  const beforeCount=copied.length;
  await buttons[1].onclick();
@@ -42,5 +42,6 @@ function flatten(e){return [e,...e.children.flatMap(flatten)];}
  await vm.runInContext('shareRecommendations([bad],{})',context);
  assert.equal(shared.length,2,'Invalid search must never be shared');
  assert(elements.message.textContent.includes('検索式'));
+ first.source_records=[{ivs:'0/11/12',cp:717,species:'wooper',search_string:'Wooper&0attack&3defense&3hp&cp717'},{ivs:'0/11/12',cp:625,species:'wooper',search_string:'Wooper&0attack&3defense&3hp&cp625'}];const cp=JSON.parse(vm.runInContext('overlayExport([first])',context));assert.equal(cp.items.length,3);assert.equal(cp.items[0].cp,717);assert(cp.items[0].search.startsWith('Wooper&'));assert.equal(cp.items[1].cp,625);assert.equal(cp.items[2].cp,null);assert(vm.runInContext('recommendationExport(first)',context).includes('&cp717'));
  console.log('Android Web Share: exact pairs, multi-result, duplicate, fallback, cancel, error: PASS');
 })().catch(e=>{console.error(e);process.exitCode=1});

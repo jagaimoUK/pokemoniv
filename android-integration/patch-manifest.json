@@ -1,0 +1,54 @@
+{
+  "version": "cp-compact-20261017",
+  "files": [
+    {
+      "source": "AutoIvRecords.kt",
+      "target": "app/src/main/java/com/example/pokemonivreader/AutoIvRecords.kt",
+      "sha256": "4bb42e1b29f0dd970f617518aa64d33d4571da1eb615a4803da8959d26a3fb04",
+      "accepted": [
+        "67f99e4ff509d15a833ea7d7a816b38325e962128c96a309fff3206f5a295852"
+      ]
+    },
+    {
+      "source": "IvSelectionText.kt",
+      "target": "app/src/main/java/com/example/pokemonivreader/IvSelectionText.kt",
+      "sha256": "e7093333d2079184f04414fd6d9f9f499ff8eedbf863ef4122551fefdd1b197d",
+      "accepted": [
+        "f4baeed9413e48d38b9c1d864b5a39680b42ba4e299669fe6f6e3610383123d5"
+      ]
+    },
+    {
+      "source": "overlayqueue/OverlayCopyQueueController.kt",
+      "target": "app/src/main/java/com/example/pokemonivreader/overlayqueue/OverlayCopyQueueController.kt",
+      "sha256": "489802e6215664791f39d0aea868961733741be8c6ed04b1aa8e087b584131b8",
+      "accepted": [
+        "8e6f0097c7891cfe1acea41a4ae60204ef0b40d0a4066ee0a1106a6887b7c062",
+        "5588f235c5232e2e67c64be5a726fa7422e0fcd894f390f1255582fa8a469705"
+      ]
+    },
+    {
+      "source": "overlayqueue/OverlayCopyQueueImportActivity.kt",
+      "target": "app/src/main/java/com/example/pokemonivreader/overlayqueue/OverlayCopyQueueImportActivity.kt",
+      "sha256": "e103c0728bd709776fb66a3d3379fba10c772a604a3755382dafd22097025ddf",
+      "accepted": [
+        "9b1aaf164a73680dfe2e239076b58291bb969323647f936c2c8a4ee4a21edcb9"
+      ]
+    },
+    {
+      "source": "overlayqueue/OverlayPairParser.kt",
+      "target": "app/src/main/java/com/example/pokemonivreader/overlayqueue/OverlayPairParser.kt",
+      "sha256": "a2b4b03ea83b8677c4ee09080498419ccaa73a2cfd195c243f9362fc1544b134",
+      "accepted": [
+        "b48816f6a89f0146953084c70af1c3c8b776e0b388b27d94aac1003d021940c2"
+      ]
+    },
+    {
+      "source": "overlayqueue/OverlayQueueStore.kt",
+      "target": "app/src/main/java/com/example/pokemonivreader/overlayqueue/OverlayQueueStore.kt",
+      "sha256": "63f2ebefa6cd18785ab11cfe1ceb1754299029305d5384186efff36ea8d3693c",
+      "accepted": [
+        "357dd6759cfe883e2d0c85eeb3a3e65473ed2ad6554c3a4ca95f8fd54f6c5097"
+      ]
+    }
+  ]
+}
