@@ -4,6 +4,12 @@
         <activity android:name="com.example.pokemonivreader.overlayqueue.OverlayCopyQueueImportActivity"
                   android:label="厳選検索式を取り込む" android:exported="true" android:launchMode="singleTop">
             <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="pokemonivreader" android:host="import" />
+            </intent-filter>
+            <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
