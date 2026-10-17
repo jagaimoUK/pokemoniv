@@ -1,0 +1,21 @@
+name: Android Web Share contract
+on:
+  push:
+    paths:
+      - 'pvpoke_app_ui.py'
+      - 'tests/test_app_ui_share.js'
+      - '.github/workflows/android-web-share.yml'
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: |
+          node tests/test_app_ui_share.js
+          node tests/test_app_ui_queue.js
+          node tests/test_app_ui_labels.js
+          node tests/test_app_meta_ui.js

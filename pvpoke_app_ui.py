@@ -148,7 +148,28 @@ function recommendationExport(result){
    return iv.search_string+'\n'+nick.text;
   })).join('\n');
 }
-async function copyRecommendations(results,button){try{await copy(results.map(recommendationExport).filter(Boolean).join('\n'),button);}catch(e){message(e.message,true);}}
+function recommendationExportText(results){
+ const available=results.filter(r=>r.selection?.recommendations?.length);
+ if(!available.length)throw Error('共有する推薦個体がありません。');
+ return available.map(recommendationExport).join('\n');
+}
+async function copyRecommendations(results,button){try{await copy(recommendationExportText(results),button);}catch(e){message(e.message,true);}}
+async function shareRecommendations(results,button){
+ let text;
+ try{text=recommendationExportText(results);}catch(e){message(e.message,true);return;}
+ if(typeof navigator.share!=='function'){
+  await copy(text,button);
+  message('このブラウザは直接共有に対応していません。コピーした内容をAndroidの「厳選コピーリスト」で貼り付けてください。');
+  return;
+ }
+ try{
+  await navigator.share({title:'厳選コピーリスト',text});
+  message('Androidの共有先で「厳選コピーリスト」を選び、内容を確認して「取り込む」を押してください。');
+ }catch(e){
+  if(e?.name==='AbortError')return;
+  message('Androidへの共有を開始できませんでした。既存の「すべてコピー」ボタンから取り込めます。',true);
+ }
+}
 function renderSearch(row,parent){if(!row.search_string)return;node('label','検索式',parent);node('code',row.search_string,parent,'search');const b=node('button','検索式をコピー',parent);b.onclick=()=>copy(row.search_string,b);}
 function refreshNicknames(){
  for(const item of nicknameBindings){
@@ -172,7 +193,7 @@ function renderNickname(result,row,parent,ivs=row.ivs){
 function updateAllCopy(){const box=el('allCopyActions');const available=displayedResults.filter(r=>r.selection?.recommendations?.length);box.hidden=available.length<2;}
 function render(result,append=false){
  lastResult=result;const root=el('results');
- if(!append){root.replaceChildren();displayedResults=[];nicknameBindings=[];const all=node('div','',root,'actions');all.id='allCopyActions';all.hidden=true;const b=node('button','全種類の検索式とニックネームをコピー',all);b.onclick=()=>copyRecommendations(displayedResults,b);}
+ if(!append){root.replaceChildren();displayedResults=[];nicknameBindings=[];const all=node('div','',root,'actions');all.id='allCopyActions';all.hidden=true;const b=node('button','全種類の検索式とニックネームをコピー',all);b.onclick=()=>copyRecommendations(displayedResults,b);const share=node('button','Androidへ送る',all,'secondary');share.onclick=()=>shareRecommendations(displayedResults,share);}
  displayedResults.push(result);updateAllCopy();root.hidden=false;
  const panel=node('div','',root),sid=result.candidate.species;
  node('h2',result.display_name||catalog[sid]?.name_ja||result.selection?.english_name||sid,panel);
@@ -183,7 +204,7 @@ function render(result,append=false){
  if(selection.policy?.version&&selection.explanation_version!=='pairwise-v1'){
   node('p','保存済みの結果は旧版の推薦説明です。ページを再読み込みし、同じ入力を再計算すると最新の重複判定と比較説明を確認できます。',panel,'note');
  }
- if(selection.recommendations.length){const b=node('button','検索式とニックネームをすべてコピー',panel);b.onclick=()=>copyRecommendations([result],b);node('p','検索式→改行→ニックネームの順で、同じ性能の代替個体も含めてコピーします。',panel,'note');}
+ if(selection.recommendations.length){const actions=node('div','',panel,'actions');const b=node('button','検索式とニックネームをすべてコピー',actions);b.onclick=()=>copyRecommendations([result],b);const share=node('button','Androidへ送る',actions,'secondary');share.onclick=()=>shareRecommendations([result],share);node('p','検索式→改行→ニックネームの順で、同じ性能の代替個体も含めてコピーします。Androidへの送信は共有先で「厳選コピーリスト」を選んでください。共有に非対応の端末ではコピーに切り替わります。',panel,'note');}
  if(selection.excluded&&(!Array.isArray(selection.excluded)||selection.excluded.length))node('p','計算対象から除外された対面があります：'+JSON.stringify(selection.excluded),panel);
  const searchCounts=new Map();for(const r of selection.recommendations)for(const item of [r,...(r.equivalent_candidates||[])]){const v=searchCounts.get(item.search_string)||new Set();v.add(item.ivs);searchCounts.set(item.search_string,v);}if([...searchCounts.values()].some(x=>x.size>1))node('p','注意：同じ検索式に異なる個体値が含まれます。検索式は範囲指定なので、名前を付ける前に各個体の攻撃・防御・HPを確認してください。',panel,'note');
  if(selection.unmatched_focus.length)node('p','一致しなかった重要相手：'+selection.unmatched_focus.map(x=>opponentLabel(x).name).join('、'),panel);
