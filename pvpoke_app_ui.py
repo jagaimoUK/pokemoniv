@@ -8,7 +8,7 @@ HTML = r'''<!doctype html>
 .quick-nav{position:fixed;right:12px;top:44vh;z-index:30;display:flex;flex-direction:column;gap:6px;align-items:center}
 .quick-nav a{display:flex;align-items:center;justify-content:center;min-height:48px;min-width:54px;padding:8px 7px;border:1px solid #76b1dc;border-radius:12px;background:#1d4768;color:#fff;font-size:12px;font-weight:650;text-decoration:none;box-shadow:0 4px 14px #0008}
 .quick-nav a:focus-visible{outline:3px solid #90ddbc;outline-offset:3px}
-@media(max-width:560px){.quick-nav{right:6px;top:auto;bottom:calc(clamp(96px,16vh,156px) + env(safe-area-inset-bottom,0px))}.quick-nav a{min-height:48px;min-width:48px;padding:9px 5px;font-size:11px}}
+@media(max-width:560px){.quick-nav{right:6px;top:58vh;bottom:auto}.quick-nav a{min-height:48px;min-width:48px;padding:9px 5px;font-size:11px}}
 main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin:4px 0 8px}h2{font-size:20px;margin:0 0 12px}p{line-height:1.65;color:#afc0d6}.eyebrow{color:#90ddbc;font-size:12px;letter-spacing:.15em}.card{background:#1a2637;border:1px solid #33465d;border-radius:16px;padding:20px;margin-top:18px}label{display:block;font-size:14px;margin:14px 0 6px}input,select,textarea,button{font:inherit;border-radius:9px}input,select,textarea{width:100%;padding:12px;border:1px solid #49627d;background:#101c2b;color:#ecf3ff}input[type=checkbox]{width:auto;margin:0 8px 0 0;accent-color:#90ddbc}.checkline{display:flex;align-items:center;gap:3px;cursor:pointer}textarea{min-height:142px;line-height:1.7}button{padding:12px 18px;border:1px solid #76b1dc;background:#266b9b;color:white;cursor:pointer}button:disabled{opacity:.5;cursor:wait}.row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}.secondary{background:transparent;border-color:#597086}.note{font-size:13px}.status{background:#21374a;border-radius:10px;padding:14px;white-space:pre-wrap;line-height:1.7}.error{background:#5a303a}.badge{color:#96e8c4;font-size:13px}.recommendation{border-top:1px solid #3c5068;padding-top:18px;margin-top:18px}.search{display:block;background:#0d1726;padding:12px;border-radius:8px;overflow-wrap:anywhere;font-size:14px;color:#b1e5ff}summary{cursor:pointer;color:#a4cdff}details{margin-top:14px}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;font-size:12px}[hidden]{display:none!important}@media(max-width:560px){.row{grid-template-columns:1fr}.card{padding:16px}main{padding-top:22px}.actions button{flex:1}}
 </style></head><body><nav class="quick-nav" aria-label="ページ内の移動"><a href="#pageTop" aria-label="ページ上部に戻る">↑<br>上へ</a></nav><main id="pageTop">
 <header><div class="eyebrow">PVP IV SELECTION</div><h1>役割から選ぶ、個体値厳選</h1><p>対戦計算からおすすめ・理由・検索式まで。アプリの自動推薦と、これまでのGPT評価を使い分けられます。</p></header>
@@ -177,9 +177,25 @@ function recommendationExportText(results){
  return available.map(recommendationExport).join('\n');
 }
 async function copyRecommendations(results,button){try{await copy(recommendationExportText(results),button);}catch(e){message(e.message,true);}}
+// Chrome on Android can open an installed reader directly from the user's click.
+// Keep the Sharesheet path for other browsers and payloads that are too long for an Intent URL.
+function launchAndroidOverlay(text){
+ if(!/Android/i.test(navigator.userAgent||'')||!/Chrome|EdgA/i.test(navigator.userAgent||''))return false;
+ if(typeof window==='undefined'||typeof window.location?.assign!=='function'||typeof TextEncoder==='undefined'||typeof btoa!=='function')return false;
+ const bytes=new TextEncoder().encode(text);
+ if(bytes.length>26000)return false;
+ let binary='';
+ for(let i=0;i<bytes.length;i+=4096)binary+=String.fromCharCode(...bytes.subarray(i,i+4096));
+ const payload=btoa(binary).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'');
+ const url='intent://import?payload='+payload+
+  '#Intent;scheme=pokemonivreader;package=com.example.pokemonivreader;end';
+ window.location.assign(url);
+ return true;
+}
 async function shareRecommendations(results,button){
  let text;
  try{text=overlayExport(results);}catch(e){message(e.message,true);return;}
+ try{if(launchAndroidOverlay(text))return;}catch(e){/* use the standard Sharesheet */}
  if(typeof navigator.share!=='function'){
   await copy(text,button);
   message('このブラウザは直接共有に対応していません。コピーした内容をAndroidの「厳選コピーリスト」で貼り付けてください。');
@@ -187,7 +203,7 @@ async function shareRecommendations(results,button){
  }
  try{
   await navigator.share({title:'厳選コピーリスト',text});
-  message('Androidの共有先で「厳選コピーリスト」を選び、内容を確認して「取り込む」を押してください。');
+  message('Androidの共有先で「厳選コピーリスト」を選ぶと、自動保存してオーバーレイを表示します。');
  }catch(e){
   if(e?.name==='AbortError')return;
   message('Androidへの共有を開始できませんでした。既存の「すべてコピー」ボタンから取り込めます。',true);
@@ -227,7 +243,7 @@ function render(result,append=false){
  if(selection.policy?.version&&selection.explanation_version!=='pairwise-v1'){
   node('p','保存済みの結果は旧版の推薦説明です。ページを再読み込みし、同じ入力を再計算すると最新の重複判定と比較説明を確認できます。',panel,'note');
  }
- if(selection.recommendations.length){const actions=node('div','',panel,'actions');const b=node('button','検索式とニックネームをすべてコピー',actions);b.onclick=()=>copyRecommendations([result],b);const overlayCopy=node('button','オーバーレイ用にコピー',actions,'secondary');overlayCopy.onclick=()=>copyOverlay([result],overlayCopy);const share=node('button','Androidへ送る',actions,'secondary');share.onclick=()=>shareRecommendations([result],share);node('p','検索式→改行→ニックネームの順で、同じ性能の代替個体も含めてコピーします。Androidへの送信は共有先で「厳選コピーリスト」を選んでください。共有に非対応の端末ではコピーに切り替わります。個体値の見出しを引き継ぐ場合は「Androidへ送る」か「オーバーレイ用にコピー」を使ってください。',panel,'note');}
+ if(selection.recommendations.length){const actions=node('div','',panel,'actions');const b=node('button','検索式とニックネームをすべてコピー',actions);b.onclick=()=>copyRecommendations([result],b);const overlayCopy=node('button','オーバーレイ用にコピー',actions,'secondary');overlayCopy.onclick=()=>copyOverlay([result],overlayCopy);const share=node('button','Androidへ送る',actions,'secondary');share.onclick=()=>shareRecommendations([result],share);node('p','検索式→改行→ニックネームの順で、同じ性能の代替個体も含めてコピーします。Androidへの送信は共有先で「厳選コピーリスト」を選んでください。Android Chromeではインストール済みの読み取りアプリを直接開きます。その他は共有メニューを使います。個体値の見出しを引き継ぐ場合は「Androidへ送る」か「オーバーレイ用にコピー」を使ってください。',panel,'note');}
  if(selection.excluded&&(!Array.isArray(selection.excluded)||selection.excluded.length))node('p','計算対象から除外された対面があります：'+JSON.stringify(selection.excluded),panel);
  const searchCounts=new Map();for(const r of selection.recommendations)for(const item of [r,...(r.equivalent_candidates||[])]){for(const source of individualSearches(result,item)){const v=searchCounts.get(source.search)||new Set();v.add(item.ivs);searchCounts.set(source.search,v);}}if([...searchCounts.values()].some(x=>x.size>1))node('p','注意：同じ検索式に異なる個体値が含まれます。検索式は範囲指定なので、名前を付ける前に各個体の攻撃・防御・HPを確認してください。',panel,'note');
  if(selection.unmatched_focus.length)node('p','一致しなかった重要相手：'+selection.unmatched_focus.map(x=>opponentLabel(x).name).join('、'),panel);

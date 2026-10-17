@@ -1,7 +1,7 @@
 name: Reader handoff and floating navigation
 on:
   push:
-    branches: [feature/reader-quicknav-20261017, feature/raise-top-button-20261017]
+    branches: [feature/reader-quicknav-20261017, feature/raise-top-button-20261017, feature/web-thumb-direct-send-20261017]
   workflow_dispatch:
 jobs:
   web-ui:
@@ -13,6 +13,7 @@ jobs:
           node-version: '22'
       - run: python3 -m py_compile pvpoke_app_ui.py
       - run: node tests/test_app_ui_reader_bridge.js
+      - run: node tests/test_app_android_direct_send.js
       - run: node tests/test_app_ui_queue.js
       - run: node tests/test_app_ui_share.js
       - run: node tests/test_app_ui_labels.js
