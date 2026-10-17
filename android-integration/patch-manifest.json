@@ -1,5 +1,5 @@
 {
-  "version": "cp-compact-20261017",
+  "version": "overlay-adjustable-20261017",
   "files": [
     {
       "source": "AutoIvRecords.kt",
@@ -20,8 +20,9 @@
     {
       "source": "overlayqueue/OverlayCopyQueueController.kt",
       "target": "app/src/main/java/com/example/pokemonivreader/overlayqueue/OverlayCopyQueueController.kt",
-      "sha256": "489802e6215664791f39d0aea868961733741be8c6ed04b1aa8e087b584131b8",
+      "sha256": "c0e0901053931046f3a58a8cda9d92e51d903c4e834b5c74a2956b16a0c024f9",
       "accepted": [
+        "489802e6215664791f39d0aea868961733741be8c6ed04b1aa8e087b584131b8",
         "8e6f0097c7891cfe1acea41a4ae60204ef0b40d0a4066ee0a1106a6887b7c062",
         "5588f235c5232e2e67c64be5a726fa7422e0fcd894f390f1255582fa8a469705"
       ]

@@ -34,6 +34,7 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
     private val manager = app.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private var bubble: TextView? = null
     private var panel: LinearLayout? = null
+    private var panelParams: WindowManager.LayoutParams? = null
     private var list: ListView? = null
     private var summary: TextView? = null
     private var adapter: QueueAdapter? = null
@@ -120,8 +121,18 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
     fun openPanel() {
         if (!show() || panel != null) return
         val m = app.resources.displayMetrics
-        val width = min(dp(240), (m.widthPixels * .62f).toInt()).coerceAtLeast(1)
-        val height = min(dp(280), (m.heightPixels * .32f).toInt()).coerceAtLeast(1)
+        val defaultWidth = min(dp(240), (m.widthPixels * .62f).toInt()).coerceAtLeast(1)
+        val defaultHeight = min(dp(280), (m.heightPixels * .32f).toInt()).coerceAtLeast(1)
+        val density = m.density
+        val width = (placement.getFloat("panel_width_dp", defaultWidth / density) * density).toInt()
+        val height = (placement.getFloat("panel_height_dp", defaultHeight / density) * density).toInt()
+        val p = params(width, height, 0, 0)
+        clampPanel(p)
+        p.x = (placement.getFloat("panel_x_ratio", 1f).coerceIn(0f, 1f) * (m.widthPixels - p.width - dp(10)).coerceAtLeast(0)).toInt() + dp(5)
+        p.y = if (placement.contains("panel_y_ratio"))
+            (placement.getFloat("panel_y_ratio", 0f).coerceIn(0f, 1f) * (m.heightPixels - p.height - dp(10)).coerceAtLeast(0)).toInt() + dp(5)
+            else dp(58)
+        clampPanel(p)
         val root = LinearLayout(app).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(6), dp(4), dp(6), dp(4))
             background = background(Color.rgb(24, 31, 41))
@@ -130,23 +141,102 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
             }
         }
         val header = LinearLayout(app).apply { orientation = LinearLayout.HORIZONTAL }
-        header.addView(label("厳選リスト"), LinearLayout.LayoutParams(0, dp(34), 1f))
+        val moveHandle = label("厳選リスト ↔").apply {
+            tag = "overlay_move_handle"
+            contentDescription = "ドラッグして一覧を移動"
+            setOnClickListener { toast("上部をドラッグして移動できます") }
+        }
+        header.addView(moveHandle, LinearLayout.LayoutParams(0, dp(34), 1f))
         header.addView(button("終了") { hide() }, LinearLayout.LayoutParams(dp(48), dp(34)))
         root.addView(header)
         summary = label("").also { root.addView(it, LinearLayout.LayoutParams(-1, dp(25))) }
         val l = ListView(app).apply { dividerHeight = dp(1); cacheColorHint = Color.TRANSPARENT }
         list = l; adapter = QueueAdapter(); l.adapter = adapter
         root.addView(l, LinearLayout.LayoutParams(-1, 0, 1f))
-        val p = params(width, height, (m.widthPixels - width - dp(5)).coerceAtLeast(0), dp(58))
+        val footer = LinearLayout(app).apply { orientation = LinearLayout.HORIZONTAL }
+        val resizeHandle = label("↙", 20f).apply {
+            tag = "overlay_resize_handle"
+            gravity = Gravity.CENTER
+            contentDescription = "ドラッグしてサイズ変更。左へ広げる、下へ伸ばす"
+            setOnClickListener { toast("左下のつまみをドラッグしてサイズ変更できます") }
+        }
+        footer.addView(resizeHandle, LinearLayout.LayoutParams(dp(36), dp(30)))
+        footer.addView(label("長押し: 再コピー", 10f), LinearLayout.LayoutParams(0, dp(30), 1f))
+        root.addView(footer)
+        attachPanelGesture(moveHandle, root, p, resize = false)
+        attachPanelGesture(resizeHandle, root, p, resize = true)
         try {
             // Hide the bubble before adding the panel (Android touch opacity limit).
             bubble?.visibility = View.GONE
-            manager.addView(root, p); panel = root; refresh()
+            manager.addView(root, p); panel = root; panelParams = p; refresh()
         } catch (e: Exception) { bubble?.visibility = View.VISIBLE; toast("一覧を表示できません: ${e.localizedMessage}") }
+    }
+    private fun clampPanel(p: WindowManager.LayoutParams) {
+        val m = app.resources.displayMetrics
+        val margin = min(dp(5), min(m.widthPixels, m.heightPixels) / 4)
+        val maxWidth = (m.widthPixels - margin * 2).coerceAtLeast(1)
+        val maxHeight = min((m.heightPixels - margin * 2).coerceAtLeast(1), min(dp(640), (m.heightPixels * .8f).toInt()).coerceAtLeast(1))
+        p.width = p.width.coerceIn(min(dp(196), maxWidth), maxWidth)
+        p.height = p.height.coerceIn(min(dp(180), maxHeight), maxHeight)
+        p.x = p.x.coerceIn(margin, (m.widthPixels - p.width - margin).coerceAtLeast(margin))
+        p.y = p.y.coerceIn(margin, (m.heightPixels - p.height - margin).coerceAtLeast(margin))
+    }
+    private fun savePanel(p: WindowManager.LayoutParams) {
+        val m = app.resources.displayMetrics
+        val maxX = (m.widthPixels - p.width - dp(10)).coerceAtLeast(0)
+        val maxY = (m.heightPixels - p.height - dp(10)).coerceAtLeast(0)
+        placement.edit()
+            .putFloat("panel_width_dp", p.width / m.density)
+            .putFloat("panel_height_dp", p.height / m.density)
+            .putFloat("panel_x_ratio", if (maxX == 0) 0f else ((p.x - dp(5)).toFloat() / maxX).coerceIn(0f, 1f))
+            .putFloat("panel_y_ratio", if (maxY == 0) 0f else ((p.y - dp(5)).toFloat() / maxY).coerceIn(0f, 1f))
+            .apply()
+    }
+    private fun attachPanelGesture(handle: View, root: View, p: WindowManager.LayoutParams, resize: Boolean) {
+        handle.setOnTouchListener(object : View.OnTouchListener {
+            var downX = 0f; var downY = 0f
+            var startX = 0; var startY = 0; var startWidth = 0; var startHeight = 0
+            var dragged = false
+            override fun onTouch(v: View, event: MotionEvent): Boolean {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        downX = event.rawX; downY = event.rawY
+                        startX = p.x; startY = p.y; startWidth = p.width; startHeight = p.height
+                        dragged = false; return true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = event.rawX - downX; val dy = event.rawY - downY
+                        if (abs(dx) > dp(5) || abs(dy) > dp(5)) dragged = true
+                        if (dragged) {
+                            // Bottom-left resizing grows toward the free area to the left
+                            // when the panel starts against the right edge.
+                            p.x = startX + dx.toInt()
+                            p.y = if (resize) startY else startY + dy.toInt()
+                            if (resize) {
+                                p.width = startWidth - dx.toInt()
+                                p.height = startHeight + dy.toInt()
+                                clampPanel(p)
+                                p.x = startX + startWidth - p.width
+                                p.y = startY
+                            }
+                            clampPanel(p)
+                            try { manager.updateViewLayout(root, p) } catch (_: Exception) {}
+                        }
+                        return true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        if (dragged) savePanel(p)
+                        else if (event.actionMasked == MotionEvent.ACTION_UP) v.performClick()
+                        return true
+                    }
+                }
+                return false
+            }
+        })
     }
     fun closePanel() {
         panel?.let { try { manager.removeView(it) } catch (_: Exception) {} }
-        panel = null; list = null; summary = null; adapter = null; rows = emptyList()
+        panel = null; panelParams = null; list = null; summary = null; adapter = null; rows = emptyList()
         bubble?.visibility = View.VISIBLE
     }
     fun togglePanel() { if (panel == null) openPanel() else closePanel() }
@@ -168,7 +258,17 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
         adapter?.notifyDataSetChanged()
         if (rows.isNotEmpty()) list?.setSelectionFromTop(position.coerceAtMost(rows.lastIndex), top)
     }
+    private fun toggleCopy(item: OverlayQueueStore.Item, search: Boolean) {
+        // Resolve current state rather than a recycled row's captured snapshot.
+        // Two quick taps must work even before ListView redraws the first check.
+        val current = rows.firstOrNull { it.id == item.id } ?: return
+        if (if (search) current.searchCopied else current.nicknameCopied) {
+            try { store.setCopied(current.id, search, false); refresh() }
+            catch (e: Exception) { toast("チェックを外せません: ${e.localizedMessage}") }
+        } else copy(current, search)
+    }
     private fun copy(item: OverlayQueueStore.Item, search: Boolean) {
+        if (rows.none { it.id == item.id }) return
         try {
             (app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(
                 ClipData.newPlainText(if (search) "検索式" else "ニックネーム", if (search) item.search else item.nickname))
@@ -199,8 +299,10 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
                 val done = if (isSearch) item.searchCopied else item.nicknameCopied
                 b.text = (if (done) "✓ " else "") + if (isSearch) "検索式" else "名前"
                 b.background = background(if (done) Color.rgb(24, 103, 68) else Color.rgb(55, 76, 99))
-                b.setOnClickListener { copy(item, isSearch) }
-                b.setOnLongClickListener { store.setCopied(item.id, isSearch, false); refresh(); true }
+                b.contentDescription = if (done) "${b.text}。タップでチェック解除、長押しで再コピー"
+                    else "${b.text}をコピー"
+                b.setOnClickListener { toggleCopy(item, isSearch) }
+                b.setOnLongClickListener { copy(item, isSearch); true }
             }
             return root
         }
