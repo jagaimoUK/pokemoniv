@@ -8,6 +8,7 @@ import android.content.Intent
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
+import android.util.Base64
 import android.provider.Settings
 import android.net.Uri
 import android.view.Gravity
@@ -26,6 +27,8 @@ class OverlayCopyQueueImportActivity : Activity() {
     private lateinit var entry: EditText
     private lateinit var submit: Button
     private val store by lazy { OverlayQueueStore(this) }
+    private var pendingOverlayPermission = false
+    private var importing = false
     private fun dp(n: Int): Int = (resources.displayMetrics.density * n + .5f).toInt()
     private fun notifyUser(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
 
@@ -101,17 +104,46 @@ class OverlayCopyQueueImportActivity : Activity() {
         val scroll = ScrollView(this)
         scroll.addView(body)
         setContentView(scroll)
-        applySharedText(intent)
+        if (savedInstanceState == null) applyIncoming(intent)
     }
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        applySharedText(intent)
+        applyIncoming(intent)
     }
-    private fun applySharedText(intent: Intent?) {
-        if (intent?.action == Intent.ACTION_SEND && intent.type?.startsWith("text/") == true) {
-            val incoming = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
-            if (!incoming.isNullOrBlank()) entry.setText(incoming)
+    override fun onResume() {
+        super.onResume()
+        if (pendingOverlayPermission && Settings.canDrawOverlays(this)) {
+            pendingOverlayPermission = false
+            OverlayCopyQueueController.get(this).onImported()
+            returnToGame()
+        }
+    }
+
+    /** Direct links and share-sheet inputs follow the same validated import path. */
+    private fun applyIncoming(intent: Intent?) {
+        if (intent == null) return
+        val incoming = when {
+            intent.action == Intent.ACTION_SEND && intent.type?.startsWith("text/") == true ->
+                intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+            intent.action == Intent.ACTION_VIEW &&
+                intent.data?.scheme == "pokemonivreader" && intent.data?.host == "import" -> {
+                try {
+                    val encoded = intent.data?.getQueryParameter("payload") ?: ""
+                    require(encoded.length in 1..240000)
+                    val decoded = Base64.decode(encoded, Base64.URL_SAFE or Base64.NO_WRAP)
+                    require(decoded.size in 1..180000)
+                    String(decoded, Charsets.UTF_8)
+                } catch (_: Exception) {
+                    notifyUser("送信データを読み取れません。共有メニューから送り直してください。")
+                    null
+                }
+            }
+            else -> null
+        }
+        if (!incoming.isNullOrBlank()) {
+            entry.setText(incoming)
+            importRaw(incoming)
         }
     }
     private fun showOrRequestOverlay() {
@@ -121,33 +153,52 @@ class OverlayCopyQueueImportActivity : Activity() {
                 Uri.parse("package:$packageName")))
         } else {
             val controller = OverlayCopyQueueController.get(this)
-            if (controller.show()) { returnToGame(); controller.openPanel() }
+            if (controller.show()) { controller.openPanel(); returnToGame() }
         }
     }
     private fun returnToGame() { moveTaskToBack(true); finish() }
-    private fun import() {
-        val raw = entry.text.toString()
-        if (raw.length > 2_000_000) { notifyUser("入力が大きすぎます。分けて取り込んでください"); return }
+    private fun import() = importRaw(entry.text.toString())
+    private fun importRaw(raw: String) {
+        if (importing) { notifyUser("前の取り込みを保存中です"); return }
+        if (raw.length > 2_000_000) {
+            notifyUser("入力が大きすぎます。分けて取り込んでください")
+            return
+        }
         val parsed = try { OverlayPairParser.parse(raw) }
-        catch (e: OverlayPairFormatException) { entry.error = e.message; notifyUser(e.message ?: "入力形式に問題があります"); return }
-        if (parsed.size > 10_000) { notifyUser("1回の取り込み上限は10,000件です"); return }
+        catch (e: Exception) {
+            entry.error = e.message
+            notifyUser(e.message ?: "入力形式に問題があります")
+            return
+        }
+        if (parsed.size > 10_000) {
+            notifyUser("1回の取り込み上限は10,000件です")
+            return
+        }
+        importing = true
         submit.isEnabled = false
         Thread {
             try {
                 store.importPairs(parsed)
                 runOnUiThread {
                     if (isFinishing || isDestroyed) return@runOnUiThread
+                    importing = false
                     submit.isEnabled = true
-                    notifyUser("${parsed.size}件を保存しました。チェック履歴は端末内に残ります")
-                    OverlayCopyQueueController.get(this).onImported()
+                    // Reuse saved panel position/size; show the newly imported items immediately.
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-                        showOrRequestOverlay()
-                    } else returnToGame()
+                        pendingOverlayPermission = true
+                        notifyUser("保存しました。オーバーレイの表示を1回だけ許可してください。")
+                        startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:" + packageName)))
+                    } else {
+                        OverlayCopyQueueController.get(this).onImported()
+                        returnToGame()
+                    }
                 }
             } catch (e: Exception) {
                 runOnUiThread {
+                    importing = false
                     submit.isEnabled = true
-                    notifyUser("保存に失敗しました: ${e.localizedMessage}")
+                    notifyUser("保存に失敗しました: " + e.localizedMessage)
                 }
             }
         }.start()
