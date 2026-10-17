@@ -39,7 +39,6 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
     private var panel: LinearLayout? = null
     private var panelParams: WindowManager.LayoutParams? = null
     private var list: ListView? = null
-    private var summary: TextView? = null
     private var adapter: QueueAdapter? = null
     private var rows: List<OverlayQueueStore.Item> = emptyList()
 
@@ -215,19 +214,18 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
             else dp(58)
         clampPanel(p)
         val root = LinearLayout(app).apply {
-            orientation = LinearLayout.VERTICAL; setPadding(dp(6), dp(4), dp(6), dp(4))
+            orientation = LinearLayout.VERTICAL; setPadding(dp(6), dp(3), dp(6), dp(3))
             background = background(Color.rgb(24, 31, 41))
         }
         val header = LinearLayout(app).apply { orientation = LinearLayout.HORIZONTAL }
-        val moveHandle = label("厳選リスト ↔").apply {
+        val moveHandle = label("↔", 17f).apply {
             tag = "overlay_move_handle"
             contentDescription = "ドラッグして一覧を移動"
             setOnClickListener { toast("上部をドラッグして移動できます") }
         }
-        header.addView(moveHandle, LinearLayout.LayoutParams(0, dp(34), 1f))
-        header.addView(button("×") { closePanel() }, LinearLayout.LayoutParams(dp(48), dp(34)))
+        header.addView(moveHandle, LinearLayout.LayoutParams(0, dp(30), 1f))
+        header.addView(button("×") { closePanel() }, LinearLayout.LayoutParams(dp(42), dp(30)))
         root.addView(header)
-        summary = label("").also { root.addView(it, LinearLayout.LayoutParams(-1, dp(25))) }
         val l = ListView(app).apply { dividerHeight = dp(1); cacheColorHint = Color.TRANSPARENT }
         list = l; adapter = QueueAdapter(); l.adapter = adapter
         root.addView(l, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -238,8 +236,7 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
             contentDescription = "ドラッグしてサイズ変更。左へ広げる、下へ伸ばす"
             setOnClickListener { toast("左下のつまみをドラッグしてサイズ変更できます") }
         }
-        footer.addView(resizeHandle, LinearLayout.LayoutParams(dp(36), dp(30)))
-        footer.addView(label("長押し: 再コピー", 10f), LinearLayout.LayoutParams(0, dp(30), 1f))
+        footer.addView(resizeHandle, LinearLayout.LayoutParams(dp(36), dp(24)))
         root.addView(footer)
         attachPanelGesture(moveHandle, root, p, resize = false)
         attachPanelGesture(resizeHandle, root, p, resize = true)
@@ -315,7 +312,7 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
     fun closePanel() {
         saveListScroll()
         panel?.let { try { manager.removeView(it) } catch (_: Exception) {} }
-        panel = null; panelParams = null; list = null; summary = null; adapter = null; rows = emptyList()
+        panel = null; panelParams = null; list = null; adapter = null; rows = emptyList()
         bubble?.visibility = View.VISIBLE
     }
     fun togglePanel() { if (panel == null) openPanel() else closePanel() }
@@ -333,8 +330,6 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
         val top = list?.getChildAt(0)?.top ?: 0
         // Completed rows stay in place and remain available for repeated copying.
         rows = store.items(filter = OverlayQueueStore.Filter.ALL)
-        val p = store.progress()
-        summary?.text = "${p.total}件  検索✓${p.searchDone}  名前✓${p.nicknameDone}"
         adapter?.notifyDataSetChanged()
         if (rows.isNotEmpty()) list?.setSelectionFromTop(position.coerceAtMost(rows.lastIndex), top)
     }
