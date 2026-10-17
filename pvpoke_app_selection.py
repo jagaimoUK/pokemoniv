@@ -179,7 +179,7 @@ def recommend(matrices: dict[str, SelectionMatrix], candidate: dict,
     # gets a small S-led selection rather than all minor specialist results.
     recommendations, held, additional = curate_for_box(
         recommendations, held, outcomes, vectors, cells, focus,
-        english_name, candidate, search_string, shadow, limit=4)
+        english_name, candidate, search_string, shadow, limit=4, original_count=len(ivs))
     order = {row["ivs"]: index for index, row in enumerate(recommendations)}
     # A surviving IV can look redundant when the UI shows a shared win.
     # Compare it to the MOST SIMILAR higher-ranked retained IV across all
