@@ -21,6 +21,7 @@ import android.widget.TextView
 import android.widget.Toast
 import kotlin.math.abs
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /** Only the bounded panel receives touches. Outside taps collapse it and reach GO. */
 class OverlayCopyQueueController private constructor(private val app: Context) {
@@ -124,13 +125,13 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
         val defaultWidth = min(dp(240), (m.widthPixels * .62f).toInt()).coerceAtLeast(1)
         val defaultHeight = min(dp(280), (m.heightPixels * .32f).toInt()).coerceAtLeast(1)
         val density = m.density
-        val width = (placement.getFloat("panel_width_dp", defaultWidth / density) * density).toInt()
-        val height = (placement.getFloat("panel_height_dp", defaultHeight / density) * density).toInt()
+        val width = (placement.getFloat("panel_width_dp", defaultWidth / density) * density).roundToInt()
+        val height = (placement.getFloat("panel_height_dp", defaultHeight / density) * density).roundToInt()
         val p = params(width, height, 0, 0)
         clampPanel(p)
-        p.x = (placement.getFloat("panel_x_ratio", 1f).coerceIn(0f, 1f) * (m.widthPixels - p.width - dp(10)).coerceAtLeast(0)).toInt() + dp(5)
+        p.x = (placement.getFloat("panel_x_ratio", 1f).coerceIn(0f, 1f) * (m.widthPixels - p.width - dp(10)).coerceAtLeast(0)).roundToInt() + dp(5)
         p.y = if (placement.contains("panel_y_ratio"))
-            (placement.getFloat("panel_y_ratio", 0f).coerceIn(0f, 1f) * (m.heightPixels - p.height - dp(10)).coerceAtLeast(0)).toInt() + dp(5)
+            (placement.getFloat("panel_y_ratio", 0f).coerceIn(0f, 1f) * (m.heightPixels - p.height - dp(10)).coerceAtLeast(0)).roundToInt() + dp(5)
             else dp(58)
         clampPanel(p)
         val root = LinearLayout(app).apply {
