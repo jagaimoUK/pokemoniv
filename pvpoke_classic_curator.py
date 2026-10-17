@@ -9,7 +9,7 @@ from __future__ import annotations
 
 
 def curate_for_box(recommendations, held, outcomes, vectors, cells, focus,
-                   english_name, candidate, make_search, shadow, limit=4):
+                   english_name, candidate, make_search, shadow, limit=4, original_count=None):
     """Return (box_rows, held_rows, additional_rows) without editing source rows.
 
     Outcomes represent win=2/draw=1/loss=0 and distinguish opponent mode,
@@ -72,8 +72,8 @@ def curate_for_box(recommendations, held, outcomes, vectors, cells, focus,
         holding = [x for x in holding if x["ivs"] != champion]
     else:
         row = original_by_iv[champion]
-    row["grade"] = "Sランク" if len(eligible) >= 2 else "Aランク"
-    row["role"] = ("総合本命（保存最優先）" if len(eligible) >= 2
+    row["grade"] = "Sランク" if (original_count or len(eligible)) >= 2 else "Aランク"
+    row["role"] = ("総合本命（保存最優先）" if (original_count or len(eligible)) >= 2
                    else "単独の比較候補")
     row["box_reason"] = "全条件の勝利数を重視した総合本命"
     row["win_conditions"] = sum(x == 2 for x in outcomes[champion])
