@@ -6,6 +6,7 @@ plugins {
 dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+    testImplementation("org.robolectric:robolectric:4.14.1")
 }
 
 android {
@@ -23,4 +24,5 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    testOptions { unitTests.isIncludeAndroidResources = true }
 }

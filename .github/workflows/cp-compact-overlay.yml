@@ -1,7 +1,7 @@
 name: Observed CP and compact overlay
 on:
   push:
-    branches: [feature/cp-compact-overlay-20261017, main]
+    branches: [feature/cp-compact-overlay-20261017, feature/overlay-adjustable-20261017, main]
     paths:
       - 'android-integration/**'
       - 'demo/**'
