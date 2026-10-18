@@ -5,6 +5,8 @@ plugins {
 android {
     namespace = "com.example.pokemonivreader.overlayqueue"
     compileSdk = 35
+    compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+    kotlinOptions { jvmTarget = "17" }
     defaultConfig { applicationId = "com.example.pokemonivreader.queueverification"; minSdk = 23; targetSdk = 35 }
     sourceSets["main"].java.srcDir("../../../overlayqueue")
     testOptions.unitTests.isIncludeAndroidResources = true
