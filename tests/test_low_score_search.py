@@ -148,7 +148,7 @@ class LowScoreSearchTests(unittest.TestCase):
             f"species_{n}": {"dex": 20000 + n, "name": f"Testmon{n:03d}"}
             for n in range(60)
         }
-        with patch("pvpoke_score_search.load_snapshot", return_value=("2026-10-15", mock_rows)), \\
+        with patch("pvpoke_score_search.load_snapshot", return_value=("2026-10-15", mock_rows)), \
              patch("pvpoke_score_search.evolution_descendants",
                    return_value={20000 + n: () for n in range(60)}):
             result = search_low_scores(species_catalog=mock_catalog)
@@ -172,7 +172,7 @@ class LowScoreSearchTests(unittest.TestCase):
             "alpha_shadow": {"dex": 50000, "name": "Alpha (Shadow)"},
             "beta": {"dex": 50002, "name": "Beta"},
         }
-        with patch("pvpoke_score_search.load_snapshot", return_value=("2026-10-15", rows)), \\
+        with patch("pvpoke_score_search.load_snapshot", return_value=("2026-10-15", rows)), \
              patch("pvpoke_score_search.evolution_descendants",
                    return_value={50000: (), 50002: ()}):
             result = search_low_scores(species_catalog=cat)
