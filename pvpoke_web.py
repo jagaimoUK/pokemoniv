@@ -82,6 +82,7 @@ def load_catalog():
         payload = {
             sid: {
                 'name': p.get('speciesName'),
+                'dex': p.get('dex'),
                 'fastMoves': p.get('fastMoves', []),
                 'chargedMoves': p.get('chargedMoves', []),
             }
