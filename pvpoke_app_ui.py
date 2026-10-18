@@ -355,6 +355,7 @@ function statusLabel(status){return {normal:'通常',shadow:'シャドウ',purif
 function variantSpecies(sid,status){
  const base=sid.replace(/_shadow$/, '');
  const target=status==='shadow'?base+'_shadow':base;
+ if(status==='purified'&&!catalog[base+'_shadow'])throw Error((catalog[sid]?.name_ja||sid)+'：リトレーン可能なシャドウのデータがありません。全体の変更を中止しました。');
  if(!catalog[target])throw Error((catalog[sid]?.name_ja||sid)+'：'+statusLabel(status)+'のデータがありません。全体の変更を中止しました。');
  return target;
 }
@@ -395,7 +396,7 @@ el('bulkStatusUndo').onclick=()=>{
  if(batchState||runRef){message('再開待ちの計算を完了してから元に戻してください。',true);return;}
  const old=bulkStatusUndo;
  setCandidate(old.jobs[0].candidate);el('ivs').value=old.jobs[0].ivs;setImportedJobs(old.jobs);inputPokemonStatus=old.status;
- bulkStatusUndo=null;el('bulkStatusUndo').hidden=true;el('bulkStatusNote').textContent='直前の区分変更を元に戻しました。';message(el('bulkStatusNote').textContent);
+ bulkStatusUndo=null;el('bulkStatusUndo').hidden=true;el('results').hidden=true;el('bulkStatusNote').textContent='直前の区分変更を元に戻しました。';message(el('bulkStatusNote').textContent);
 };
 
 function cacheBatch(){try{sessionStorage.setItem('pvpoke-app-batch',JSON.stringify(batchState));}catch{message('再開情報を保存できませんでした。計算が終わるまで画面を開いておいてください。',true);}}

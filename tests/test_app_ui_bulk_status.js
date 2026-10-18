@@ -16,10 +16,11 @@ vm.runInContext('applyBulkStatus("shadow");applyBulkStatus("shadow")',c);assert.
 // Unsupported variants must leave ALL jobs unchanged.
 c.bad=[job('wooper',451),job('mew',450)];vm.runInContext('setImportedJobs(bad);applyBulkStatus("shadow")',c);
 assert.equal(vm.runInContext('importedJobs[0].candidate.species',c),'wooper');assert(els.message.textContent.includes('全体の変更を中止'));
+vm.runInContext('applyBulkStatus("purified")',c);assert.equal(vm.runInContext('importedJobs[0].candidate.species',c),'wooper');assert(els.message.textContent.includes('リトレーン可能'));
 // Source species also require a valid variant, even when a final evolution exists.
-vm.runInContext('delete catalog.wooper_shadow;setImportedJobs([jobs[1]]);applyBulkStatus("shadow")',c);assert.equal(vm.runInContext('importedSingle.candidate.species',c),'quagsire_shadow');
+vm.runInContext('const shadowWooper=catalog.wooper_shadow;delete catalog.wooper_shadow;setImportedJobs([jobs[1]]);applyBulkStatus("shadow")',c);assert.equal(vm.runInContext('importedSingle.candidate.species',c),'quagsire_shadow');
 // Single-form data and copied searches preserve IV and CP; status survives the run job.
-vm.runInContext('setImportedJobs(null);setCandidate({species:"wooper",fast:"FAST",charged1:"C1",charged2:"C2"});el("ivs").value="1,2,3";applyBulkStatus("purified")',c);
+vm.runInContext('catalog.wooper_shadow=shadowWooper;setImportedJobs(null);setCandidate({species:"wooper",fast:"FAST",charged1:"C1",charged2:"C2"});el("ivs").value="1,2,3";applyBulkStatus("purified")',c);
 assert.equal(vm.runInContext('inputPokemonStatus',c),'purified');assert.equal(els.ivs.value,'1,2,3');
 c.result={pokemon_status:'purified',source_records:[{species:'wooper',ivs:'1/2/3',cp:500,search_string:'Wooper&shadow&1attack&1defense&1hp&cp500'}]};c.iv={ivs:'1/2/3',search_string:'Quagsire&shadow&1attack&1defense&1hp'};
 assert.equal(vm.runInContext('individualSearches(result,iv)[0].search',c),'Wooper&1attack&1defense&1hp&cp500&purified');
