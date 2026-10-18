@@ -13,7 +13,7 @@ const navigator={clipboard:{async writeText(t){clipboard.push(t)}}};
 const fake={
  source_date:'2026-10-15',overall_under_threshold:431,selected_count:211,
  searchable_count:210,manual_review_count:1,preserved_by_other_roles:220,
- queries:[{index:1,query:'アギルダー,マケンカニ&!shadow&cp-1500&!favorite',species_count:2}],
+ queries:[{index:1,query:'Accelgor,Crabominable&!shadow&cp-1500&!favorite',species_count:2}],
  manual_review:[{name:'デオキシス (スピード)',overall:44,reason:'姿を区別できません'}],
 };
 const ctx={document:{getElementById(id){return els[id]??=element()},createElement:element},
