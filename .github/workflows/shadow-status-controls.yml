@@ -1,0 +1,24 @@
+name: Shadow status controls
+on:
+  push:
+    branches: [feature/shadow-status-controls-20261018]
+  pull_request:
+    paths:
+      - 'pvpoke_app_ui.py'
+      - 'tests/test_app_ui_bulk_status.js'
+      - 'android-integration/shadow-toggle/**'
+  workflow_dispatch:
+jobs:
+  web-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python3 -m py_compile pvpoke_app_ui.py
+      - run: node tests/test_app_ui_bulk_status.js
+      - run: node tests/test_app_ui_share.js
+      - run: node tests/test_app_ui_queue.js
+      - run: node tests/test_app_ui_labels.js
+      - run: node tests/test_app_android_direct_send.js
