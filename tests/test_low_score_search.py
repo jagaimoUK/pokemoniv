@@ -89,7 +89,8 @@ class LowScoreSearchTests(unittest.TestCase):
         self.assertTrue(all(not re.search(r"[\u3040-\u30ff\u3400-\u9fff]", q) for q in searches))
         self.assertEqual(
             result["selected_count"],
-            result["searchable_count"] + result["manual_review_count"])
+            result["searchable_count"] + result["manual_review_count"] +
+            result["evolution_protected_count"])
         self.assertTrue(any(x["name"] == "ゴチルゼル" and "英語名" in x["reason"]
                             for x in result["manual_review"]))
 
