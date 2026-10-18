@@ -24,7 +24,15 @@ Expand-Archive -LiteralPath $zip.FullName -DestinationPath $dir
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dir 'Apply-QueueFlow.ps1')
 ```
 
-すべての差分を事前に照合し、不明なソースは変更前に停止します。元の変更箇所だけに差分を当てるので、OneTap受信や外側タップ等のほかの箇所はそのままです。変更前バックアップを作り、ビルド失敗時は元へ戻します。同じ修正の再適用は不要と判定します。
+## 2026-10-18 互換性修正版
+
+前のZIPで出た `Unsupported controller source` は、ユーザーの最新版に入っているごみ箱終了・スクロール位置保存・外側タップで閉じない操作を、旧版用の部分一致が認識できなかったためです。前の処理は変更前に停止しており、その失敗でソースを書き換えてはいません。
+
+今回はユーザーが提供した `QueueFlow_CurrentSource.zip` 内のControllerに合わせた修正版を用意しました。適用前にファイル全体のSHA256を照合し、一致する検証済みの版だけを更新します。ユーザー提供版では、ごみ箱へのドラッグ終了・スクロール保存・外側タップの通過・OneTap受信・移動とサイズ変更を保持します。古いコンパクト版とOneTap版にもそれぞれの操作を保った専用の修正版を選びます。未知の版を強制上書きしません。
+
+Controller・新規helper・既存Store/Parserを変更前に検証します。バックアップ後に元プロジェクトをビルドし、失敗したら元のソースのバイト列へ復元し、今回作ったhelperを削除します。再適用時は適用済みと判定します。`-VerifyOnly` は照合だけを行い、プロジェクトの変更やバックアップ作成は行いません。
+
+ZIPは必ず今回ダウンロードしたものを新しいフォルダへ展開してください。前の展開フォルダのスクリプトは使わないでください。
 
 `BUILD SUCCESSFUL` 後、`C:\Users\kuros\AndroidStudioProjects\PokemonIVReader` を開き、Runで端末へ反映してください。アンインストールは不要です。
 

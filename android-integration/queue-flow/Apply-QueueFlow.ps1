@@ -1,7 +1,8 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 param(
     [string]$Project = "$env:USERPROFILE\AndroidStudioProjects\PokemonIVReader",
-    [string]$BackupRoot = 'C:\new_folder\code\backups'
+    [string]$BackupRoot = 'C:\new_folder\code\backups',
+    [switch]$VerifyOnly
 )
 $ErrorActionPreference = 'Stop'
 $utf8 = New-Object Text.UTF8Encoding($false)
@@ -10,31 +11,35 @@ $controller = Join-Path $Project (Join-Path $relative 'OverlayCopyQueueControlle
 $helper = Join-Path $Project (Join-Path $relative 'OverlayQueueFlow.kt')
 $gradle = Join-Path $Project 'gradlew.bat'
 foreach($p in @($controller,$gradle)) { if(!(Test-Path -LiteralPath $p -PathType Leaf)){throw "Required file missing: $p. No file changed."} }
-$original = [IO.File]::ReadAllText($controller)
-$text = $original.Replace("`r`n","`n")
-$replacements = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'controller-replacements.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-foreach($patch in $replacements) {
-    $before = [string]$patch.before
-    $after = [string]$patch.after
-    $done = $text.IndexOf($after,[StringComparison]::Ordinal)
-    if($done -ge 0) {
-        if($text.IndexOf($after,$done+$after.Length,[StringComparison]::Ordinal) -ge 0){throw 'Ambiguous patched source. No file changed.'}
-        continue
-    }
-    $at = $text.IndexOf($before,[StringComparison]::Ordinal)
-    if($at -ge 0) {
-        if($text.IndexOf($before,$at+$before.Length,[StringComparison]::Ordinal) -ge 0){throw 'Ambiguous source. No file changed.'}
-        $text = $text.Substring(0,$at)+$after+$text.Substring($at+$before.Length)
-    } else {
-        $at = $text.IndexOf($after,[StringComparison]::Ordinal)
-        if($at -lt 0 -or $text.IndexOf($after,$at+$after.Length,[StringComparison]::Ordinal) -ge 0){throw 'Unsupported controller source. No file changed. Keep the output and current source for review.'}
-    }
+function Get-CanonicalText([string]$Path) {
+    return [IO.File]::ReadAllText($Path).Replace("`r`n","`n").TrimEnd([char[]]"`r`n") + "`n"
 }
-$helperSource = Join-Path $PSScriptRoot 'OverlayQueueFlow.kt'
+function Get-CanonicalHash([string]$Path) {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes((Get-CanonicalText $Path))))).Replace('-', '').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
+$manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'queue-flow-manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$original = [IO.File]::ReadAllText($controller)
+$inputHash = Get-CanonicalHash $controller
+$matchingProfiles = @($manifest.profiles | Where-Object { $_.accepted -contains $inputHash })
+if($matchingProfiles.Count -ne 1) { throw "Unsupported controller SHA256: $inputHash. No file changed. Please provide the current controller for review." }
+$profile = $matchingProfiles[0]
+$source = Join-Path $PSScriptRoot $profile.source
+if((Get-CanonicalHash $source) -ne $profile.sha256) { throw 'Patch controller checksum mismatch. No file changed.' }
+foreach($dependency in $manifest.dependencies) {
+    $path = Join-Path (Split-Path $controller -Parent) $dependency.name
+    if(!(Test-Path -LiteralPath $path) -or (Get-CanonicalHash $path) -ne $dependency.sha256) { throw "Dependency differs: $($dependency.name). No file changed." }
+}
+$text = Get-CanonicalText $source
+$helperSource = Join-Path $PSScriptRoot $manifest.helper.source
 if(!(Test-Path -LiteralPath $helperSource)) { $helperSource = Join-Path $PSScriptRoot '..\overlayqueue\OverlayQueueFlow.kt' }
+if((Get-CanonicalHash $helperSource) -ne $manifest.helper.sha256) { throw 'Patch helper checksum mismatch. No file changed.' }
 $newHelper = [IO.File]::ReadAllText($helperSource)
 $helperExisted = Test-Path -LiteralPath $helper
-if($helperExisted -and [IO.File]::ReadAllText($helper).Replace("`r`n","`n").TrimEnd() -ne $newHelper.Replace("`r`n","`n").TrimEnd()) {throw 'Existing helper differs. No file changed.'}
+if($helperExisted -and (Get-CanonicalHash $helper) -ne $manifest.helper.sha256) { throw 'Existing helper differs. No file changed.' }
+Write-Host "Verified controller profile: $($profile.name)"
+if($VerifyOnly) { Write-Host 'VERIFY ONLY PASSED. No project file changed.'; exit 0 }
 if($original.Contains("`r`n")) { $text = $text.Replace("`n","`r`n") }
 if($text -eq $original -and $helperExisted) {Write-Host 'Already applied. Use Run in the ORIGINAL Android Studio project.'; exit 0}
 $candidates = @(@(

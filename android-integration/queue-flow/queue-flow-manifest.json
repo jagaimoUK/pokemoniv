@@ -1,0 +1,46 @@
+{
+  "version": "queue-flow-compatible-20261018",
+  "profiles": [
+    {
+      "name": "uploaded-current",
+      "source": "profiles/uploaded-current.kt.txt",
+      "sha256": "279341e75f450424f8d2f3f0021d94a0c2cdc0d76622fcee0b9698b62698efcf",
+      "accepted": [
+        "f53cc4194040081dac1fa0d775b3c579296bcd4688550fdce0221f677fddc869",
+        "279341e75f450424f8d2f3f0021d94a0c2cdc0d76622fcee0b9698b62698efcf"
+      ]
+    },
+    {
+      "name": "compact",
+      "source": "profiles/compact.kt.txt",
+      "sha256": "7986984900192b5f758284161461999f69c604f3d793d806a43ed85b9acc74dc",
+      "accepted": [
+        "ad8e507f660c07950bca152d547ce85dc62da653d5fb584f5ed0383f5d2b90eb",
+        "7986984900192b5f758284161461999f69c604f3d793d806a43ed85b9acc74dc"
+      ]
+    },
+    {
+      "name": "compact-onetap",
+      "source": "profiles/compact-onetap.kt.txt",
+      "sha256": "c1e27b96d39ff551321575bf9b1cbc731f10cc776c45d12b56f7e6c36727c85d",
+      "accepted": [
+        "bc038db001e75795d27231dc748bcc57a200410ade085196b7ee344e06c76782",
+        "c1e27b96d39ff551321575bf9b1cbc731f10cc776c45d12b56f7e6c36727c85d"
+      ]
+    }
+  ],
+  "helper": {
+    "source": "OverlayQueueFlow.kt",
+    "sha256": "431fe76fefdc11cebe1b119981303571c3904915577f8831aa4ea074dca6c470"
+  },
+  "dependencies": [
+    {
+      "name": "OverlayQueueStore.kt",
+      "sha256": "63f2ebefa6cd18785ab11cfe1ceb1754299029305d5384186efff36ea8d3693c"
+    },
+    {
+      "name": "OverlayPairParser.kt",
+      "sha256": "a2b4b03ea83b8677c4ee09080498419ccaa73a2cfd195c243f9362fc1544b134"
+    }
+  ]
+}
