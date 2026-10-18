@@ -12,7 +12,10 @@ function element(){
 const navigator={clipboard:{async writeText(t){clipboard.push(t)}}};
 const fake={
  source_date:'2026-10-15',overall_under_threshold:431,selected_count:211,
- searchable_count:210,manual_review_count:1,preserved_by_other_roles:220,
+ searchable_count:208,manual_review_count:1,preserved_by_other_roles:220,
+ evolution_protected_count:2,evolution_high_cp_count:1,
+ evolution_protected:[{name:'シュシュプ',evolves_to:['フレフワン']},{name:'ヒトツキ',evolves_to:['ニダンギル','ギルガルド']}],
+ evolution_high_cp_exceptions:[{name:'メノクラゲ',minimum_cp:1333}],
  queries:[{index:1,query:'Accelgor,Crabominable&!shadow&cp-1500&!favorite',species_count:2}],
  manual_review:[{name:'デオキシス (スピード)',overall:44,reason:'姿を区別できません'}],
 };
@@ -27,7 +30,7 @@ const ctx={document:{getElementById(id){return els[id]??=element()},createElemen
  }};
 vm.createContext(ctx);vm.runInContext(script,ctx);
 (async()=>{
- for(const id of ['lowMode','lowThreshold','lowExcludeFavorites','lowScorePanel','lowSendAndroid','lowCopyQueue'])ctx.document.getElementById(id);
+ for(const id of ['lowMode','lowThreshold','lowExcludeFavorites','lowScorePanel','lowSendAndroid','lowCopyQueue','lowEvolutionProtected','lowEvolutionNames'])ctx.document.getElementById(id);
  els.lowMode.value='practical';els.lowThreshold.value='70';els.lowExcludeFavorites.checked=true;
  await vm.runInContext('loadLowScores()',ctx);
  assert.equal(requests.length,1);
@@ -35,6 +38,9 @@ vm.createContext(ctx);vm.runInContext(script,ctx);
  assert.equal(requests[0].exclude_favorites,true);
  assert(els.lowScoreSummary.textContent.includes('211件'));
  assert(els.lowScoreSummary.textContent.includes('2026-10-15'));
+ assert(els.lowScoreSummary.textContent.includes('進化先の評価で 2件'));
+ assert(els.lowEvolutionProtected.hidden===false);
+ assert(els.lowEvolutionNames.textContent.includes('シュシュプ'));
  const card=els.lowScoreQueries.children[0];
  assert.equal(card.children[1].textContent,fake.queries[0].query);
  await card.children[2].onclick();

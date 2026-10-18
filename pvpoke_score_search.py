@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 
 DATA_PATH = Path(__file__).resolve().parent / "data" / "cp1500_role_scores_20261015.json"
+EVOLUTIONS_PATH = Path(__file__).resolve().parent / "data" / "pokemon_species_evolutions_20261019.json"
 ROLES = ("overall", "leads", "closers", "switches", "chargers", "attackers", "consistency")
 PRESETS = {
     "practical": ("overall", "leads", "closers", "switches", "chargers", "attackers"),
@@ -47,6 +48,89 @@ def load_snapshot():
         seen.add(name)
     return raw["source_date"], entries
 
+
+
+@lru_cache(maxsize=1)
+def evolution_descendants():
+    """Full forward evolution chain keyed by National Pokédex number.
+
+    Unknown branches fail closed: we never assume an unranked evolved Pokémon
+    is bad enough to include its pre-evolution in the cleanup list.
+    """
+    raw = json.loads(EVOLUTIONS_PATH.read_text(encoding="utf-8"))
+    if raw.get("schema") != "pokemon-species-evolution-v1":
+        raise ValueError("進化系統データを確認できません")
+    children = {}
+    seen = set()
+    for dex, parent in raw["nodes"]:
+        if not isinstance(dex, int) or dex < 1 or dex in seen:
+            raise ValueError("進化系統の図鑑番号が不正です")
+        seen.add(dex)
+        if parent is not None:
+            if not isinstance(parent, int) or parent < 1 or parent == dex:
+                raise ValueError("進化系統の親番号が不正です")
+            children.setdefault(parent, set()).add(dex)
+    if not all(parent in seen for parent in children):
+        raise ValueError("進化系統データに欠損があります")
+    result = {}
+    for dex in seen:
+        visited, queue = set(), list(children.get(dex, ()))
+        while queue:
+            child = queue.pop()
+            if child == dex or child in visited:
+                continue
+            visited.add(child)
+            queue.extend(children.get(child, ()))
+        result[dex] = tuple(sorted(visited))
+    return result
+
+
+def _stats_by_dex(species_catalog):
+    """Extremes across all forms, preventing optimistic CP thresholds."""
+    result = {}
+    for row in (species_catalog or {}).values():
+        if not isinstance(row, dict):
+            continue
+        dex, base = row.get("dex"), row.get("baseStats")
+        if isinstance(dex, bool) or not isinstance(dex, int) or not isinstance(base, dict):
+            continue
+        if any(isinstance(base.get(k), bool) or not isinstance(base.get(k), (int, float))
+               or not math.isfinite(base[k]) or base[k] <= 0 for k in ("atk", "def", "hp")):
+            continue
+        old = result.get(dex, [])
+        old.append((float(base["atk"]), float(base["def"]), float(base["hp"])))
+        result[dex] = old
+    return result
+
+
+def _certainly_over_cap_cp(dex, descendants, stats, cp_cap=1500):
+    """Find a source CP where *every possible* evolved form exceeds CP cap.
+
+    CP floats are monotonic in same-level IVs. Min evolved numerator divided
+    by MAX unevolved numerator provides a safe (possibly conservative) floor.
+    This cannot rely on a single form, rank-1 IV or guessed source level.
+    """
+    sources = stats.get(dex)
+    if not sources or any(not stats.get(child) for child in descendants):
+        return None
+    src_atk = max(x[0] for x in sources) + 15
+    src_def = max(x[1] for x in sources) + 15
+    src_hp = max(x[2] for x in sources) + 15
+    lower = 1.0
+    limits = []
+    for child in descendants:
+        ratio = min(
+            a / src_atk * math.sqrt(d / src_def) * math.sqrt(h / src_hp)
+            for a, d, h in stats[child]
+        )
+        if ratio <= 0:
+            return None
+        # Use a strictly greater integer threshold to absorb rounding error.
+        limits.append(math.floor((cp_cap + 1) / ratio) + 1)
+    if not limits:
+        return None
+    cutoff = max(limits)
+    return cutoff if 1 <= cutoff <= cp_cap else None
 
 def english_names_by_dex(species_catalog):
     """Resolve English base names using GameMaster dex, never Japanese transliteration.
@@ -131,9 +215,43 @@ def search_low_scores(params=None, species_catalog=None):
                 forms_by_dex.setdefault(r["dex"], set()).add(keyword)
 
     english_by_dex = english_names_by_dex(species_catalog)
+    descendants_map = evolution_descendants()
+    ranked_by_dex = {}
+    for entry in all_rows:
+        ranked_by_dex.setdefault(entry["dex"], []).append(entry)
+    stats = _stats_by_dex(species_catalog)
     groups = {}
     manual = []
+    evolution_protected = []
+    high_cp_exceptions = []
     for entry in selected:
+        if entry["dex"] not in descendants_map:
+            evolution_protected.append({
+                "name": entry["name"], "reason": "進化系統データを確認できません",
+                "evolves_to": ["要確認"]
+            })
+            continue
+        # Protect every later stage, including alternative branches and
+        # intermediate evolutions, regardless of the source's weak rating.
+        descendant_ids = descendants_map.get(entry["dex"], ())
+        relevant = [
+            d for d in descendant_ids
+            if d not in ranked_by_dex or any(
+                row[k] >= threshold for row in ranked_by_dex[d]
+                for k in PRESETS["practical"])
+        ]
+        cp_cutoff = None
+        if relevant:
+            cp_cutoff = _certainly_over_cap_cp(entry["dex"], relevant, stats)
+            if cp_cutoff is None:
+                evolution_protected.append({
+                    "name": entry["name"],
+                    "reason": "進化先に高スコア・未評価の種類があり、CP1500超過を保証できません",
+                    "evolves_to": [ranked_by_dex[d][0]["name"] if d in ranked_by_dex
+                                   else "図鑑No." + str(d) for d in relevant]
+                })
+                continue
+            high_cp_exceptions.append({"name": entry["name"], "minimum_cp": cp_cutoff})
         english = english_by_dex.get(entry["dex"])
         if english is None:
             item, reason = None, "図鑑データの英語名を照合できません"
@@ -144,7 +262,8 @@ def search_low_scores(params=None, species_catalog=None):
                            "reason": reason})
         else:
             base, suffix = item
-            suffix = (*suffix, "cp-1500", *(("!favorite",) if exclude_favorites else ()))
+            cp_filter = ("cp" + str(cp_cutoff) + "-1500") if cp_cutoff else "cp-1500"
+            suffix = (*suffix, cp_filter, *(("!favorite",) if exclude_favorites else ()))
             groups.setdefault(suffix, []).append((base, entry))
 
     queries = []
@@ -165,7 +284,7 @@ def search_low_scores(params=None, species_catalog=None):
                             "species_count": len(chunk)})
             searched += len(chunk)
     # No names should be silently excluded; the user needs all missing forms.
-    if searched + len(manual) != len(selected):
+    if searched + len(manual) + len(evolution_protected) != len(selected):
         raise RuntimeError("検索対象の件数が合いません")
     for i, query in enumerate(queries, 1):
         query["index"] = i
@@ -179,6 +298,10 @@ def search_low_scores(params=None, species_catalog=None):
         "overall_under_threshold": sum(x["overall"] < threshold for x in all_rows),
         "selected_count": len(selected), "searchable_count": searched,
         "manual_review_count": len(manual), "manual_review": manual,
+        "evolution_protected_count": len(evolution_protected),
+        "evolution_protected": evolution_protected,
+        "evolution_high_cp_count": len(high_cp_exceptions),
+        "evolution_high_cp_exceptions": high_cp_exceptions,
         "queries": queries, "preserved_by_other_roles": len(preserved),
         "selected_preview": [{"name": x["name"], "overall": x["overall"]}
                              for x in selected[:15]],

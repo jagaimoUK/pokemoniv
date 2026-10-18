@@ -83,6 +83,7 @@ def load_catalog():
             sid: {
                 'name': p.get('speciesName'),
                 'dex': p.get('dex'),
+                'baseStats': p.get('baseStats'),
                 'fastMoves': p.get('fastMoves', []),
                 'chargedMoves': p.get('chargedMoves', []),
             }
