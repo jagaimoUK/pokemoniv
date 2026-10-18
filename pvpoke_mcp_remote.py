@@ -16,6 +16,7 @@ from pvpoke_iv_workflow import IVWorkflow
 from pvpoke_app_ui import HTML as APP_HTML
 from pvpoke_app_access import AppAccess, BrowserLogin
 from pvpoke_app_input import parse_import
+from pvpoke_score_search import search_low_scores
 
 APP_ACCESS = AppAccess()
 
@@ -301,7 +302,7 @@ class Handler(BaseHTTPRequestHandler):
         """Only explicit app operations; never proxy arbitrary backend paths."""
         if self.path not in ('/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result',
                              '/app-api/session', '/app-api/logout', '/app-api/meta-status',
-                             '/app-api/meta-preview', '/app-api/meta-apply'):
+                             '/app-api/meta-preview', '/app-api/meta-apply', '/app-api/low-score'):
             return self.respond(404, {'error': 'Not found'})
         origin = self.headers.get('Origin')
         if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'):
@@ -321,6 +322,8 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == '/app-api/logout':
                 return self.respond(200, {'logged_out': True},
                                     cookie=BROWSER_LOGIN.clear(secure=APP_ORIGIN.startswith('https://')))
+            if self.path == '/app-api/low-score':
+                return self.respond(200, search_low_scores(args))
             if self.path == '/app-api/meta-status':
                 return self.respond(200, backend.meta_status())
             if self.path == '/app-api/meta-preview':
@@ -359,7 +362,7 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(500, {'error': 'アプリの処理に失敗しました'})
 
     def do_GET(self):
-        if self.path in ('/', '/app'):
+        if self.path in ('/', '/app') or self.path.startswith('/app?'):
             self.app_page()
             return
         if self.path in ('/.well-known/oauth-protected-resource',
