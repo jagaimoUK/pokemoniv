@@ -61,11 +61,17 @@ class LowScoreSearchTests(unittest.TestCase):
         }
         result = search_low_scores({"mode": "practical"}, game_master)
         searches = [q["query"] for q in result["queries"]]
-        self.assertTrue(any("Spritzee&" in q for q in searches))
-        self.assertTrue(any("Entei&shadow&" in q for q in searches))
-        self.assertTrue(any("Entei&!shadow&" in q for q in searches))
-        self.assertTrue(any("Darumaka&galar&" in q for q in searches))
-        self.assertTrue(any("Ho-Oh&shadow&" in q for q in searches))
+        def matching(name, *terms):
+            return any(
+                name in q.split("&")[0].split(",")
+                and all(term in q.split("&")[1:] for term in terms)
+                for q in searches
+            )
+        self.assertTrue(matching("Spritzee", "!shadow"))
+        self.assertTrue(matching("Entei", "shadow"))
+        self.assertTrue(matching("Entei", "!shadow"))
+        self.assertTrue(matching("Darumaka", "galar", "!shadow"))
+        self.assertTrue(matching("Ho-Oh", "shadow"))
         self.assertTrue(all(not re.search(r"[\u3040-\u30ff\u3400-\u9fff]", q) for q in searches))
         self.assertEqual(
             result["selected_count"],
