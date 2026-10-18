@@ -366,7 +366,7 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
         val all = store.items(filter = OverlayQueueStore.Filter.ALL)
         val byId = all.associateBy { it.id }
         rows = flow.visible(all.map { it.id }, all.filter { it.complete }.map { it.id }.toSet()).mapNotNull { byId[it] }
-        cleanupBases = all.mapNotNull { OverlayCleanupSearch.base(it.search) }.distinct()
+        cleanupBases = all.filter { it.nickname.isNotBlank() }.mapNotNull { OverlayCleanupSearch.base(it.search) }.distinct()
         previousButton?.isEnabled = all.isNotEmpty()
         nextButton?.isEnabled = rows.isNotEmpty()
         adapter?.notifyDataSetChanged()
@@ -429,7 +429,9 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
             }
             val h = root.tag as Holder; val item = rows[position]
             val cp = Regex("(?:^|&)cp([0-9]+)(?:&|$)", RegexOption.IGNORE_CASE).find(item.search)?.groupValues?.get(1)
-            h.title.text = "${item.ivs ?: OverlayPairParser.legacyIvLabel(item.search)}${cp?.let { "  CP$it" } ?: ""}"
+            h.title.text = if (item.nickname.isBlank()) "低スコア検索式 ${item.sequence}"
+                else "${item.ivs ?: OverlayPairParser.legacyIvLabel(item.search)}${cp?.let { "  CP$it" } ?: ""}"
+            h.nick.visibility = if (item.nickname.isBlank()) View.GONE else View.VISIBLE
             h.title.contentDescription = "${item.speciesLabel} ${h.title.text}"
             for ((b, isSearch) in listOf(h.search to true, h.nick to false)) {
                 val done = flow.marked(item.id, isSearch, if (isSearch) item.searchCopied else item.nicknameCopied)
