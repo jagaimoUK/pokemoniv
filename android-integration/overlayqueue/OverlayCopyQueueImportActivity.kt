@@ -73,6 +73,24 @@ class OverlayCopyQueueImportActivity : Activity() {
             text = "オーバーレイを表示"
             setOnClickListener { showOrRequestOverlay() }
         })
+        // Web-only ranking logic updates without reinstalling this Android APK.
+        // Use the default browser; no API key or score data is bundled in Android.
+        body.addView(Button(this).apply {
+            text = "低スコア個体を検索（Web）"
+            setTextColor(Color.rgb(232, 241, 234))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(Color.rgb(73, 103, 91))
+                cornerRadius = dp(24).toFloat()
+            }
+            setOnClickListener {
+                val url = Uri.parse("https://pokemoniv-production.up.railway.app/app?tool=low-score")
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, url).addCategory(Intent.CATEGORY_BROWSABLE))
+                } catch (_: Exception) {
+                    notifyUser("ブラウザを開けませんでした。厳選Webアプリを直接開いてください。")
+                }
+            }
+        })
         body.addView(Button(this).apply {
             text = "履歴から選ぶ"
             setOnClickListener {
