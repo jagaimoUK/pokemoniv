@@ -50,8 +50,9 @@ class LowScoreSearchTests(unittest.TestCase):
                              result["evolution_protected_count"])
             self.assertEqual(len(result["queries"]), len({q["query"] for q in result["queries"]}))
             for q in result["queries"]:
-                self.assertLessEqual(len(q["query"]), 420)
-                self.assertLessEqual(q["species_count"], 18)
+                self.assertLessEqual(len(q["query"]), 1200)
+                self.assertLessEqual(q["species_count"], 90)
+                self.assertNotIn("+", q["query"], "進化系統を含む検索は禁止")
                 self.assertRegex(q["query"], r"&cp(?:-1500|[1-9][0-9]*-1500)&!favorite$")
                 self.assertEqual(q["query"].count("&cp"), 1)
                 self.assertEqual(q["query"].count("&!shadow") + q["query"].count("&shadow"), 1)
@@ -132,6 +133,52 @@ class LowScoreSearchTests(unittest.TestCase):
         lower_ratio = (240 / 115) ** 2
         self.assertGreaterEqual(int(cutoff * lower_ratio), 1501)
         self.assertLess(int((cutoff - 2) * lower_ratio), 1501)
+
+    def test_compacts_species_with_identical_filters_into_one_query(self):
+        # The previous 18-species limit unnecessarily required 4 separate
+        # copy-paste steps for 60 otherwise identical search terms.
+        from unittest.mock import patch
+        mock_rows = [
+            {"name": f"test_{n}", "dex": 20000 + n,
+             **{role: 1 for role in ("overall", "leads", "closers", "switches",
+                                    "chargers", "attackers", "consistency")}}
+            for n in range(60)
+        ]
+        mock_catalog = {
+            f"species_{n}": {"dex": 20000 + n, "name": f"Testmon{n:03d}"}
+            for n in range(60)
+        }
+        with patch("pvpoke_score_search.load_snapshot", return_value=("2026-10-15", mock_rows)), \\
+             patch("pvpoke_score_search.evolution_descendants",
+                   return_value={20000 + n: () for n in range(60)}):
+            result = search_low_scores(species_catalog=mock_catalog)
+        self.assertEqual(len(result["queries"]), 1)
+        self.assertEqual(result["queries"][0]["species_count"], 60)
+        self.assertEqual(result["searchable_count"], 60)
+        self.assertEqual(result["queries"][0]["query"].count(","), 59)
+        self.assertTrue(result["queries"][0]["query"].endswith("&!shadow&cp-1500&!favorite"))
+
+    def test_does_not_combine_different_cp_or_shadow_status_conditions(self):
+        from unittest.mock import patch
+        rows = [
+            {"name": label, "dex": 50000 + i,
+             **{role: 1 for role in ("overall", "leads", "closers", "switches",
+                                    "chargers", "attackers", "consistency")}}
+            for i, label in enumerate(("イー", "イー (シャドウ)", "アー"))
+        ]
+        rows[1]["dex"] = rows[0]["dex"]
+        cat = {
+            "alpha": {"dex": 50000, "name": "Alpha"},
+            "alpha_shadow": {"dex": 50000, "name": "Alpha (Shadow)"},
+            "beta": {"dex": 50002, "name": "Beta"},
+        }
+        with patch("pvpoke_score_search.load_snapshot", return_value=("2026-10-15", rows)), \\
+             patch("pvpoke_score_search.evolution_descendants",
+                   return_value={50000: (), 50002: ()}):
+            result = search_low_scores(species_catalog=cat)
+        self.assertEqual(len(result["queries"]), 2)
+        self.assertTrue(any("&shadow&" in x["query"] for x in result["queries"]))
+        self.assertTrue(any("&!shadow&" in x["query"] for x in result["queries"]))
 
     def test_safety_and_validation(self):
         result = search_low_scores({"exclude_favorites": False})
