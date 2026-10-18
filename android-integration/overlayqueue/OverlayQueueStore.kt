@@ -59,7 +59,7 @@ class OverlayQueueStore(context: Context) :
                 put("created_at", System.currentTimeMillis())
             })
             val statement = db.compileStatement("""INSERT INTO items
-                (session_id, sequence, search_text, nickname, ivs) VALUES (?, ?, ?, ?, ?)""")
+                (session_id, sequence, search_text, nickname, ivs, nickname_copied) VALUES (?, ?, ?, ?, ?, ?)""")
             pairs.forEachIndexed { i, pair ->
                 statement.clearBindings()
                 statement.bindLong(1, id)
@@ -67,6 +67,8 @@ class OverlayQueueStore(context: Context) :
                 statement.bindString(3, pair.searchText)
                 statement.bindString(4, pair.nickname)
                 if (pair.ivs == null) statement.bindNull(5) else statement.bindString(5, pair.ivs)
+                // Search-only queue is complete after copying just its search.
+                statement.bindLong(6, if (pair.nickname.isBlank()) 1L else 0L)
                 statement.executeInsert()
             }
             db.setTransactionSuccessful()

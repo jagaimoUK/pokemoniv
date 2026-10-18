@@ -12,7 +12,22 @@ object OverlayPairParser {
     private fun parseStructured(text: String): List<OverlayPair> {
         try {
             val root = JSONObject(text)
-            require(root.getString("format") == "pokemoniv-overlay-v2") { "対応していない形式です" }
+            val format = root.getString("format")
+            // Search-only cleanup batches never invent a nickname or an IV.
+            // Keeping this distinct from the two-line nickname contract prevents
+            // accidental renaming from the cleanup overlay.
+            if (format == "pokemoniv-search-queue-v1") {
+                val items = root.getJSONArray("items")
+                require(items.length() in 1..10000) { "検索式は1〜10000件です" }
+                return (0 until items.length()).map { i ->
+                    val item = items.getJSONObject(i)
+                    val search = item.getString("search")
+                    require(search.isNotBlank() && search.length <= 2000 &&
+                        search.none { it == '\n' || it == '\r' }) { "検索式が不正です" }
+                    OverlayPair(search, "", "低スコア検索 ${i + 1}")
+                }
+            }
+            require(format == "pokemoniv-overlay-v2") { "対応していない形式です" }
             val items = root.getJSONArray("items")
             require(items.length() in 1..10000) { "取り込みは1〜10000件です" }
             return (0 until items.length()).map { i ->

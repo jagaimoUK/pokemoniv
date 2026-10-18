@@ -1,0 +1,58 @@
+name: Low-score Pokémon GO search
+on:
+  push:
+    branches: [feature/low-score-search-20261018]
+    paths:
+      - 'data/cp1500_role_scores_20261015.json'
+      - 'pvpoke_score_search.py'
+      - 'pvpoke_mcp_remote.py'
+      - 'pvpoke_app_ui.py'
+      - 'android-integration/overlayqueue/**'
+      - 'tests/test_low_score_search.py'
+      - 'tests/test_app_ui_low_score.js'
+      - 'demo/app/src/test/java/com/example/pokemonivreader/overlayqueue/LowScoreQueueTest.kt'
+      - '.github/workflows/low-score-search.yml'
+  pull_request:
+    paths:
+      - 'pvpoke_score_search.py'
+      - 'pvpoke_mcp_remote.py'
+      - 'pvpoke_app_ui.py'
+      - 'android-integration/overlayqueue/OverlayCopyQueueImportActivity.kt'
+      - 'tests/test_low_score_search.py'
+      - 'tests/test_app_ui_low_score.js'
+  workflow_dispatch:
+jobs:
+  server-and-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m unittest discover -s tests -p 'test_low_score_search.py' -v
+      - run: python -m py_compile pvpoke_mcp_remote.py pvpoke_app_ui.py pvpoke_score_search.py
+      - run: node tests/test_app_ui_low_score.js
+      - run: node tests/test_app_ui_share.js
+      - run: node tests/test_app_ui_queue.js
+      - run: node tests/test_app_ui_bulk_status.js
+  android-integration-demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Verify reader entry against demo compile (NOT a production reader APK)
+        run: |
+          cp android-integration/IvSelectionText.kt demo/app/src/main/java/com/example/pokemonivreader/
+          cp android-integration/overlayqueue/OverlayPairParser.kt demo/app/src/main/java/com/example/pokemonivreader/overlayqueue/
+          cp android-integration/overlayqueue/OverlayQueueStore.kt demo/app/src/main/java/com/example/pokemonivreader/overlayqueue/
+          cp android-integration/overlayqueue/OverlayCopyQueueImportActivity.kt demo/app/src/main/java/com/example/pokemonivreader/overlayqueue/
+          gradle -p demo :app:assembleDebug :app:testDebugUnitTest --no-daemon --stacktrace
