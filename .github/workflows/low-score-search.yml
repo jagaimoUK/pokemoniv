@@ -5,6 +5,8 @@ on:
     paths:
       - 'Dockerfile'
       - 'data/cp1500_role_scores_20261015.json'
+      - 'data/pokemon_species_evolutions_20261019.json'
+      - 'pvpoke_web.py'
       - 'pvpoke_score_search.py'
       - 'pvpoke_mcp_remote.py'
       - 'pvpoke_app_ui.py'
