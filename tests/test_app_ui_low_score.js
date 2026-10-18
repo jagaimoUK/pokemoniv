@@ -27,7 +27,7 @@ const ctx={document:{getElementById(id){return els[id]??=element()},createElemen
  }};
 vm.createContext(ctx);vm.runInContext(script,ctx);
 (async()=>{
- for(const id of ['lowMode','lowThreshold','lowExcludeFavorites','lowScorePanel'])ctx.document.getElementById(id);
+ for(const id of ['lowMode','lowThreshold','lowExcludeFavorites','lowScorePanel','lowSendAndroid','lowCopyQueue'])ctx.document.getElementById(id);
  els.lowMode.value='practical';els.lowThreshold.value='70';els.lowExcludeFavorites.checked=true;
  await vm.runInContext('loadLowScores()',ctx);
  assert.equal(requests.length,1);
@@ -42,5 +42,15 @@ vm.createContext(ctx);vm.runInContext(script,ctx);
  assert.equal(els.lowManual.hidden,false);
  assert(els.lowManualNames.textContent.includes('デオキシス'));
  assert(els.lowSearchRun.disabled===false);
- console.log('Low-score reader deep link UI and per-chunk copy: PASS');
+ assert.equal(els.lowSendAndroid.disabled,false);
+ const payload=JSON.parse(vm.runInContext('scoreQueuePayload()',ctx));
+ assert.equal(payload.format,'pokemoniv-search-queue-v1');
+ assert.equal(payload.items.length,1);
+ assert.equal(payload.items[0].search,fake.queries[0].query);
+ assert(!JSON.stringify(payload).includes('nickname'),'Cleanup searches must never introduce a nickname');
+ await els.lowCopyQueue.onclick();
+ assert.equal(JSON.parse(clipboard.at(-1)).format,'pokemoniv-search-queue-v1');
+ await els.lowSendAndroid.onclick();
+ assert.equal(JSON.parse(clipboard.at(-1)).format,'pokemoniv-search-queue-v1');
+ console.log('Low-score reader deep link UI, search-only overlay payload and copying: PASS');
 })().catch(err=>{console.error(err);process.exitCode=1});
