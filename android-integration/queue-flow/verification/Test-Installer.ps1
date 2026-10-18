@@ -34,8 +34,8 @@ function Invoke-Installer([string]$Project,[bool]$Success,[switch]$VerifyOnly) {
         throw "Unexpected installer exit code: $($result.ExitCode)"
     }
 }
-foreach($profile in $manifest.profiles){
-    $project=New-Fixture $profile.name $profile.name
+foreach($entryProfile in $manifest.profiles){
+    $project=New-Fixture $entryProfile.name $entryProfile.name
     $controller=Join-Path $project (Join-Path $relative 'OverlayCopyQueueController.kt')
     $helper=Join-Path $project (Join-Path $relative 'OverlayQueueFlow.kt')
     $original=(Get-FileHash -LiteralPath $controller -Algorithm SHA256).Hash
@@ -44,12 +44,12 @@ foreach($profile in $manifest.profiles){
     Assert (!(Test-Path -LiteralPath $helper)) 'Verify-only created helper'
     Assert (!(Test-Path -LiteralPath (Join-Path $project 'backups'))) 'Verify-only created backup'
     Invoke-Installer $project $true
-    Assert ((CanonicalHash $controller) -eq $profile.sha256) 'Wrong patched controller'
+    Assert ((CanonicalHash $controller) -eq $entryProfile.sha256) 'Wrong patched controller'
     Assert ((CanonicalHash $helper) -eq $manifest.helper.sha256) 'Wrong helper'
     $backupCount=@(Get-ChildItem -LiteralPath (Join-Path $project 'backups') -Directory).Count
     Invoke-Installer $project $true
     Assert (@(Get-ChildItem -LiteralPath (Join-Path $project 'backups') -Directory).Count -eq $backupCount) 'Repeat apply created extra backup'
-    Write-Host "PASS: $($profile.name) verify-only, apply and repeat"
+    Write-Host "PASS: $($entryProfile.name) verify-only, apply and repeat"
 }
 $project=New-Fixture 'rollback' 'uploaded-current'
 $controller=Join-Path $project (Join-Path $relative 'OverlayCopyQueueController.kt')

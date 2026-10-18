@@ -24,9 +24,9 @@ $original = [IO.File]::ReadAllText($controller)
 $inputHash = Get-CanonicalHash $controller
 $matchingProfiles = @($manifest.profiles | Where-Object { $_.accepted -contains $inputHash })
 if($matchingProfiles.Count -ne 1) { throw "Unsupported controller SHA256: $inputHash. No file changed. Please provide the current controller for review." }
-$profile = $matchingProfiles[0]
-$source = Join-Path $PSScriptRoot $profile.source
-if((Get-CanonicalHash $source) -ne $profile.sha256) { throw 'Patch controller checksum mismatch. No file changed.' }
+$selectedProfile = $matchingProfiles[0]
+$source = Join-Path $PSScriptRoot $selectedProfile.source
+if((Get-CanonicalHash $source) -ne $selectedProfile.sha256) { throw 'Patch controller checksum mismatch. No file changed.' }
 foreach($dependency in $manifest.dependencies) {
     $path = Join-Path (Split-Path $controller -Parent) $dependency.name
     if(!(Test-Path -LiteralPath $path) -or (Get-CanonicalHash $path) -ne $dependency.sha256) { throw "Dependency differs: $($dependency.name). No file changed." }
@@ -38,7 +38,7 @@ if((Get-CanonicalHash $helperSource) -ne $manifest.helper.sha256) { throw 'Patch
 $newHelper = [IO.File]::ReadAllText($helperSource)
 $helperExisted = Test-Path -LiteralPath $helper
 if($helperExisted -and (Get-CanonicalHash $helper) -ne $manifest.helper.sha256) { throw 'Existing helper differs. No file changed.' }
-Write-Host "Verified controller profile: $($profile.name)"
+Write-Host "Verified controller profile: $($selectedProfile.name)"
 if($VerifyOnly) { Write-Host 'VERIFY ONLY PASSED. No project file changed.'; exit 0 }
 if($original.Contains("`r`n")) { $text = $text.Replace("`n","`r`n") }
 if($text -eq $original -and $helperExisted) {Write-Host 'Already applied. Use Run in the ORIGINAL Android Studio project.'; exit 0}
