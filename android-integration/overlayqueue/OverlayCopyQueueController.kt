@@ -40,9 +40,43 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
     private var summary: TextView? = null
     private var adapter: QueueAdapter? = null
     private var rows: List<OverlayQueueStore.Item> = emptyList()
+    private var cleanupBases: List<String> = emptyList()
+    private var flowSession = Long.MIN_VALUE
+    private var flow = OverlayQueueFlow()
+    private var previousButton: Button? = null
+    private var nextButton: Button? = null
+    private fun flowKey(suffix: String) = "flow_${store.currentSessionId}_$suffix"
+    private fun loadFlow() {
+        if (flowSession == store.currentSessionId) return
+        flowSession = store.currentSessionId
+        fun ids(key: String) = placement.getString(flowKey(key), "").orEmpty()
+            .split(',').mapNotNull { it.toLongOrNull() }
+        flow = OverlayQueueFlow(ids("skipped"), ids("history"),
+            placement.getLong(flowKey("review"), -1L).takeIf { it >= 0 },
+            placement.getInt(flowKey("review_mask"), 0))
+    }
+    private fun saveFlow() {
+        placement.edit().putString(flowKey("skipped"), flow.skipped.joinToString(","))
+            .putString(flowKey("history"), flow.history.joinToString(","))
+            .putLong(flowKey("review"), flow.reviewId ?: -1L)
+            .putInt(flowKey("review_mask"), flow.reviewMask).apply()
+    }
+    private fun previousIndividual() {
+        loadFlow()
+        val all = store.items(filter = OverlayQueueStore.Filter.ALL)
+        if (flow.back(all.map { it.id }, all.filter { it.complete }.map { it.id }.toSet()) == null) {
+            toast("前の個体はありません"); return
+        }
+        all.firstOrNull { it.id == flow.reviewId }?.let { flow.seedReview(it.searchCopied, it.nicknameCopied) }
+        saveFlow(); refresh(); list?.setSelectionFromTop(0, 0)
+    }
+    private fun nextIndividual() {
+        val item = rows.getOrNull(list?.firstVisiblePosition ?: 0) ?: return
+        flow.advance(item.id, item.complete); saveFlow(); refresh()
+    }
     private fun dp(n: Int) = (n * app.resources.displayMetrics.density + .5f).toInt()
     private fun toast(s: String) = Toast.makeText(app, s, Toast.LENGTH_SHORT).show()
-    private fun background(color: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(10).toFloat() }
+    private fun background(color: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(24).toFloat() }
     private fun label(s: String, size: Float = 12f) = TextView(app).apply {
         text = s; textSize = size; setTextColor(Color.WHITE)
         gravity = Gravity.CENTER_VERTICAL
@@ -52,7 +86,7 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
         text = s; textSize = 12f; isAllCaps = false
         minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
         setPadding(dp(3), 0, dp(3), 0); setTextColor(Color.WHITE)
-        background = background(Color.rgb(55, 76, 99))
+        background = background(Color.rgb(79, 96, 88))
         setOnClickListener { action() }
     }
     private fun params(width: Int, height: Int, x: Int, y: Int) = WindowManager.LayoutParams(
@@ -151,6 +185,14 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
         header.addView(button("終了") { hide() }, LinearLayout.LayoutParams(dp(48), dp(34)))
         root.addView(header)
         summary = label("").also { root.addView(it, LinearLayout.LayoutParams(-1, dp(25))) }
+        val navigation = LinearLayout(app).apply { orientation = LinearLayout.HORIZONTAL }
+        previousButton = button("前に戻す") { previousIndividual() }.also {
+            navigation.addView(it, LinearLayout.LayoutParams(0, dp(34), 1f).apply { marginEnd = dp(4) })
+        }
+        nextButton = button("次へ") { nextIndividual() }.also {
+            navigation.addView(it, LinearLayout.LayoutParams(0, dp(34), 1f))
+        }
+        root.addView(navigation)
         val l = ListView(app).apply { dividerHeight = dp(1); cacheColorHint = Color.TRANSPARENT }
         list = l; adapter = QueueAdapter(); l.adapter = adapter
         root.addView(l, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -178,7 +220,7 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
         val maxWidth = (m.widthPixels - margin * 2).coerceAtLeast(1)
         val maxHeight = min((m.heightPixels - margin * 2).coerceAtLeast(1), min(dp(640), (m.heightPixels * .8f).toInt()).coerceAtLeast(1))
         p.width = p.width.coerceIn(min(dp(196), maxWidth), maxWidth)
-        p.height = p.height.coerceIn(min(dp(180), maxHeight), maxHeight)
+        p.height = p.height.coerceIn(min(dp(220), maxHeight), maxHeight)
         p.x = p.x.coerceIn(margin, (m.widthPixels - p.width - margin).coerceAtLeast(margin))
         p.y = p.y.coerceIn(margin, (m.heightPixels - p.height - margin).coerceAtLeast(margin))
     }
@@ -238,6 +280,7 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
     fun closePanel() {
         panel?.let { try { manager.removeView(it) } catch (_: Exception) {} }
         panel = null; panelParams = null; list = null; summary = null; adapter = null; rows = emptyList()
+        previousButton = null; nextButton = null; cleanupBases = emptyList()
         bubble?.visibility = View.VISIBLE
     }
     fun togglePanel() { if (panel == null) openPanel() else closePanel() }
@@ -252,19 +295,28 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
     private fun refresh() {
         val position = list?.firstVisiblePosition ?: 0
         val top = list?.getChildAt(0)?.top ?: 0
-        // Completed rows stay in place and remain available for repeated copying.
-        rows = store.items(filter = OverlayQueueStore.Filter.ALL)
+        loadFlow()
+        val all = store.items(filter = OverlayQueueStore.Filter.ALL)
+        val byId = all.associateBy { it.id }
+        rows = flow.visible(all.map { it.id }, all.filter { it.complete }.map { it.id }.toSet()).mapNotNull { byId[it] }
+        cleanupBases = all.mapNotNull { OverlayCleanupSearch.base(it.search) }.distinct()
+        previousButton?.isEnabled = all.isNotEmpty()
+        nextButton?.isEnabled = rows.isNotEmpty()
         val p = store.progress()
-        summary?.text = "${p.total}件  検索✓${p.searchDone}  名前✓${p.nicknameDone}"
+        summary?.text = "未完了${p.total - p.complete}/${p.total}件  両方✓${p.complete}"
         adapter?.notifyDataSetChanged()
-        if (rows.isNotEmpty()) list?.setSelectionFromTop(position.coerceAtMost(rows.lastIndex), top)
+        val count = rows.size + cleanupBases.size
+        if (count > 0) list?.setSelectionFromTop(position.coerceAtMost(count - 1), top)
     }
     private fun toggleCopy(item: OverlayQueueStore.Item, search: Boolean) {
         // Resolve current state rather than a recycled row's captured snapshot.
         // Two quick taps must work even before ListView redraws the first check.
         val current = rows.firstOrNull { it.id == item.id } ?: return
-        if (if (search) current.searchCopied else current.nicknameCopied) {
-            try { store.setCopied(current.id, search, false); refresh() }
+        if (flow.marked(current.id, search, if (search) current.searchCopied else current.nicknameCopied)) {
+            try {
+                store.setCopied(current.id, search, false)
+                flow.markReview(current.id, search, false); saveFlow(); refresh()
+            }
             catch (e: Exception) { toast("チェックを外せません: ${e.localizedMessage}") }
         } else copy(current, search)
     }
@@ -274,16 +326,34 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
             (app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(
                 ClipData.newPlainText(if (search) "検索式" else "ニックネーム", if (search) item.search else item.nickname))
         } catch (e: Exception) { toast("コピーできません: ${e.localizedMessage}"); return }
-        try { store.setCopied(item.id, search, true); refresh() }
+        try {
+            val current = rows.firstOrNull { it.id == item.id } ?: return
+            store.setCopied(item.id, search, true)
+            flow.markReview(item.id, search, true)
+            val completed = if (flow.reviewId == item.id) flow.reviewMask == 3
+                else (search && current.nicknameCopied) || (!search && current.searchCopied)
+            if (completed) flow.advance(item.id, complete = true)
+            saveFlow(); refresh()
+        }
         catch (e: Exception) { toast("コピーしましたが記録できません: ${e.localizedMessage}") }
     }
+    private fun copyCleanup(value: String) {
+        try {
+            (app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
+                .setPrimaryClip(ClipData.newPlainText("整理用検索式", value))
+        } catch (e: Exception) { toast("コピーできません: ${e.localizedMessage}") }
+    }
+    private data class CleanupHolder(val title: TextView, val buttons: List<Button>)
     private data class Holder(val title: TextView, val search: Button, val nick: Button)
     private inner class QueueAdapter : BaseAdapter() {
-        override fun getCount() = rows.size
-        override fun getItem(position: Int) = rows[position]
-        override fun getItemId(position: Int) = rows[position].id
+        override fun getCount() = rows.size + cleanupBases.size
+        override fun getItem(position: Int): Any = if (position < rows.size) rows[position] else cleanupBases[position - rows.size]
+        override fun getItemId(position: Int) = if (position < rows.size) rows[position].id else -(position - rows.size + 1L)
+        override fun getViewTypeCount() = 2
+        override fun getItemViewType(position: Int) = if (position < rows.size) 0 else 1
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-            val root = convertView as? LinearLayout ?: LinearLayout(app).apply {
+            if (position >= rows.size) return cleanupView(position - rows.size, convertView)
+            val root = (convertView as? LinearLayout)?.takeIf { it.tag is Holder } ?: LinearLayout(app).apply {
                 orientation = LinearLayout.VERTICAL; setPadding(0, dp(2), 0, dp(5))
                 val title = label("", 13f); addView(title, LinearLayout.LayoutParams(-1, dp(30)))
                 val buttons = LinearLayout(app).apply { orientation = LinearLayout.HORIZONTAL }
@@ -297,13 +367,35 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
             h.title.text = "${item.ivs ?: OverlayPairParser.legacyIvLabel(item.search)}${cp?.let { "  CP$it" } ?: ""}"
             h.title.contentDescription = "${item.speciesLabel} ${h.title.text}"
             for ((b, isSearch) in listOf(h.search to true, h.nick to false)) {
-                val done = if (isSearch) item.searchCopied else item.nicknameCopied
+                val done = flow.marked(item.id, isSearch, if (isSearch) item.searchCopied else item.nicknameCopied)
                 b.text = (if (done) "✓ " else "") + if (isSearch) "検索式" else "名前"
-                b.background = background(if (done) Color.rgb(24, 103, 68) else Color.rgb(55, 76, 99))
+                b.background = background(if (done) Color.rgb(91, 115, 99) else Color.rgb(79, 96, 88))
                 b.contentDescription = if (done) "${b.text}。タップでチェック解除、長押しで再コピー"
                     else "${b.text}をコピー"
                 b.setOnClickListener { toggleCopy(item, isSearch) }
                 b.setOnLongClickListener { copy(item, isSearch); true }
+            }
+            return root
+        }
+        private fun cleanupView(position: Int, recycled: View?): View {
+            val root = (recycled as? LinearLayout)?.takeIf { it.tag is CleanupHolder } ?: LinearLayout(app).apply {
+                orientation = LinearLayout.VERTICAL; setPadding(0, dp(6), 0, dp(6))
+                val title = label("", 12f); addView(title)
+                val buttons = (0..2).map {
+                    button("") {}.also { b ->
+                        b.maxLines = 3
+                        addView(b, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4); b.minimumHeight = dp(40) })
+                    }
+                }
+                tag = CleanupHolder(title, buttons)
+            }
+            val h = root.tag as CleanupHolder
+            val base = cleanupBases[position]
+            h.title.text = "整理用 · $base"
+            OverlayCleanupSearch.expressions(base).forEachIndexed { i, expression ->
+                h.buttons[i].text = expression
+                h.buttons[i].contentDescription = "$expression をコピー"
+                h.buttons[i].setOnClickListener { copyCleanup(expression) }
             }
             return root
         }
