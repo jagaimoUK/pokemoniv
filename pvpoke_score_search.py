@@ -22,8 +22,11 @@ PRESETS = {
     "strict": ROLES,
 }
 REGIONAL = {"アローラ": "alola", "ガラル": "galar", "ヒスイ": "hisui", "パルデア": "paldea"}
-MAX_QUERY_CHARS = 420
-MAX_NAMES_PER_QUERY = 18
+# Keep one search per shared status/form/CP condition whenever practical.
+# The Android search-only overlay accepts up to 2,000 characters per query;
+# stay comfortably below that bound and split only when necessary.
+MAX_QUERY_CHARS = 1200
+MAX_NAMES_PER_QUERY = 90
 
 
 @lru_cache(maxsize=1)
