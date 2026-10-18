@@ -4,12 +4,30 @@ package com.example.pokemonivreader.overlayqueue
 class OverlayQueueFlow(
     skipped: List<Long> = emptyList(),
     history: List<Long> = emptyList(),
-    reviewId: Long? = null
+    reviewId: Long? = null,
+    reviewMask: Int = 0
 ) {
     val skipped = skipped.toMutableSet()
     val history = history.toMutableList()
     var reviewId: Long? = reviewId
         private set
+
+    var reviewMask: Int = reviewMask and 3
+        private set
+
+    fun seedReview(searchCopied: Boolean, nicknameCopied: Boolean) {
+        reviewMask = if (searchCopied && nicknameCopied) 0
+            else (if (searchCopied) 1 else 0) or (if (nicknameCopied) 2 else 0)
+    }
+
+    fun marked(id: Long, search: Boolean, original: Boolean): Boolean =
+        if (reviewId == id) (reviewMask and (if (search) 1 else 2)) != 0 else original
+
+    fun markReview(id: Long, search: Boolean, copied: Boolean) {
+        if (reviewId != id) return
+        val bit = if (search) 1 else 2
+        reviewMask = if (copied) reviewMask or bit else reviewMask and bit.inv()
+    }
 
     fun visible(ids: List<Long>, complete: Set<Long>): List<Long> {
         val review = reviewId?.takeIf { it in ids }
@@ -20,6 +38,7 @@ class OverlayQueueFlow(
         if (!complete) skipped.add(id)
         if (history.lastOrNull() != id) history.add(id)
         reviewId = null
+        reviewMask = 0
     }
 
     fun back(ids: List<Long>, complete: Set<Long>): Long? {
@@ -30,6 +49,7 @@ class OverlayQueueFlow(
             if (id !in valid || id == reviewId) continue
             skipped.remove(id)
             reviewId = id
+            reviewMask = 0
             return id
         }
         // Also recover the last completed individual from older app versions.
@@ -37,6 +57,7 @@ class OverlayQueueFlow(
         val boundary = if (current == null) ids.size else ids.indexOf(current)
         val id = ids.take(boundary.coerceAtLeast(0)).lastOrNull { it in complete } ?: return null
         reviewId = id
+        reviewMask = 0
         return id
     }
 }

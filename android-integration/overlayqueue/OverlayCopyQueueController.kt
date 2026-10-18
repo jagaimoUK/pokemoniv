@@ -52,12 +52,14 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
         fun ids(key: String) = placement.getString(flowKey(key), "").orEmpty()
             .split(',').mapNotNull { it.toLongOrNull() }
         flow = OverlayQueueFlow(ids("skipped"), ids("history"),
-            placement.getLong(flowKey("review"), -1L).takeIf { it >= 0 })
+            placement.getLong(flowKey("review"), -1L).takeIf { it >= 0 },
+            placement.getInt(flowKey("review_mask"), 0))
     }
     private fun saveFlow() {
         placement.edit().putString(flowKey("skipped"), flow.skipped.joinToString(","))
             .putString(flowKey("history"), flow.history.joinToString(","))
-            .putLong(flowKey("review"), flow.reviewId ?: -1L).apply()
+            .putLong(flowKey("review"), flow.reviewId ?: -1L)
+            .putInt(flowKey("review_mask"), flow.reviewMask).apply()
     }
     private fun previousIndividual() {
         loadFlow()
@@ -65,6 +67,7 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
         if (flow.back(all.map { it.id }, all.filter { it.complete }.map { it.id }.toSet()) == null) {
             toast("前の個体はありません"); return
         }
+        all.firstOrNull { it.id == flow.reviewId }?.let { flow.seedReview(it.searchCopied, it.nicknameCopied) }
         saveFlow(); refresh(); list?.setSelectionFromTop(0, 0)
     }
     private fun nextIndividual() {
@@ -309,8 +312,11 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
         // Resolve current state rather than a recycled row's captured snapshot.
         // Two quick taps must work even before ListView redraws the first check.
         val current = rows.firstOrNull { it.id == item.id } ?: return
-        if (if (search) current.searchCopied else current.nicknameCopied) {
-            try { store.setCopied(current.id, search, false); refresh() }
+        if (flow.marked(current.id, search, if (search) current.searchCopied else current.nicknameCopied)) {
+            try {
+                store.setCopied(current.id, search, false)
+                flow.markReview(current.id, search, false); saveFlow(); refresh()
+            }
             catch (e: Exception) { toast("チェックを外せません: ${e.localizedMessage}") }
         } else copy(current, search)
     }
@@ -323,10 +329,11 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
         try {
             val current = rows.firstOrNull { it.id == item.id } ?: return
             store.setCopied(item.id, search, true)
-            if ((search && current.nicknameCopied) || (!search && current.searchCopied)) {
-                flow.advance(item.id, complete = true); saveFlow()
-            }
-            refresh()
+            flow.markReview(item.id, search, true)
+            val completed = if (flow.reviewId == item.id) flow.reviewMask == 3
+                else (search && current.nicknameCopied) || (!search && current.searchCopied)
+            if (completed) flow.advance(item.id, complete = true)
+            saveFlow(); refresh()
         }
         catch (e: Exception) { toast("コピーしましたが記録できません: ${e.localizedMessage}") }
     }
@@ -360,7 +367,7 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
             h.title.text = "${item.ivs ?: OverlayPairParser.legacyIvLabel(item.search)}${cp?.let { "  CP$it" } ?: ""}"
             h.title.contentDescription = "${item.speciesLabel} ${h.title.text}"
             for ((b, isSearch) in listOf(h.search to true, h.nick to false)) {
-                val done = if (isSearch) item.searchCopied else item.nicknameCopied
+                val done = flow.marked(item.id, isSearch, if (isSearch) item.searchCopied else item.nicknameCopied)
                 b.text = (if (done) "✓ " else "") + if (isSearch) "検索式" else "名前"
                 b.background = background(if (done) Color.rgb(91, 115, 99) else Color.rgb(79, 96, 88))
                 b.contentDescription = if (done) "${b.text}。タップでチェック解除、長押しで再コピー"

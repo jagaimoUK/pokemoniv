@@ -52,6 +52,8 @@ class QueueControllerTest {
         assertEquals(first.id, rows().first().id)
         assertTrue(rows().first().complete)
         copy(rows().first(), true)
+        assertEquals(3, rows().size)
+        copy(rows().first(), false)
         assertEquals(2, rows().size)
         val second = rows().first()
         copy(second, false); assertEquals(2, rows().size)
