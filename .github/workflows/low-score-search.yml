@@ -1,8 +1,9 @@
 name: Low-score Pokémon GO search
 on:
   push:
-    branches: [feature/low-score-search-20261018]
+    branches: [main]
     paths:
+      - 'Dockerfile'
       - 'data/cp1500_role_scores_20261015.json'
       - 'pvpoke_score_search.py'
       - 'pvpoke_mcp_remote.py'
@@ -14,6 +15,7 @@ on:
       - '.github/workflows/low-score-search.yml'
   pull_request:
     paths:
+      - 'Dockerfile'
       - 'pvpoke_score_search.py'
       - 'pvpoke_mcp_remote.py'
       - 'pvpoke_app_ui.py'
