@@ -7,7 +7,7 @@ on:
       - 'pvpoke_score_search.py'
       - 'pvpoke_mcp_remote.py'
       - 'pvpoke_app_ui.py'
-      - 'android-integration/overlayqueue/OverlayCopyQueueImportActivity.kt'
+      - 'android-integration/overlayqueue/**'
       - 'tests/test_low_score_search.py'
       - 'tests/test_app_ui_low_score.js'
       - '.github/workflows/low-score-search.yml'
@@ -50,5 +50,7 @@ jobs:
           gradle-version: '8.9'
       - name: Verify reader entry against demo compile (NOT a production reader APK)
         run: |
+          cp android-integration/overlayqueue/OverlayPairParser.kt demo/app/src/main/java/com/example/pokemonivreader/overlayqueue/
+          cp android-integration/overlayqueue/OverlayQueueStore.kt demo/app/src/main/java/com/example/pokemonivreader/overlayqueue/
           cp android-integration/overlayqueue/OverlayCopyQueueImportActivity.kt demo/app/src/main/java/com/example/pokemonivreader/overlayqueue/
           gradle -p demo :app:assembleDebug :app:testDebugUnitTest --no-daemon --stacktrace
