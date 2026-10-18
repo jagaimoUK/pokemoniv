@@ -1,0 +1,78 @@
+{
+  "ScreenCaptureService.kt": [
+    {
+      "before": "    private var overlay: TextView? = null",
+      "after": "    private var overlay: TextView? = null\n    private var shadowOverlayRoot: android.widget.LinearLayout? = null\n    @Volatile private var activeShadowMode = ShadowRecognizer.Mode.AUTO"
+    },
+    {
+      "before": "                            val samples=shadowBurst.latest()",
+      "after": "                            val samples=shadowBurst.latest()\n                            val capturedShadowMode = activeShadowMode"
+    },
+    {
+      "before": "OverlayIvProcessor.process(this,image,samples,",
+      "after": "OverlayIvProcessor.process(this,image,samples,\n                                    scanModeOverride=capturedShadowMode,"
+    },
+    {
+      "before": "        var startRawX = 0f",
+      "after": "        val shadowRoot = ReaderShadowControls.wrap(this, button)\n        var startRawX = 0f"
+    },
+    {
+      "before": "wm.updateViewLayout(button, params)",
+      "after": "wm.updateViewLayout(shadowRoot, params)"
+    },
+    {
+      "before": "            wm.addView(button, params)",
+      "after": "            wm.addView(shadowRoot, params)\n            shadowOverlayRoot = shadowRoot"
+    },
+    {
+      "before": "        activeCaptureId=id",
+      "after": "        activeShadowMode = ReaderShadowControls.mode(this)\n        activeCaptureId=id"
+    },
+    {
+      "before": "        val bubble = overlay ?: return false",
+      "after": "        val bubble = shadowOverlayRoot ?: return false"
+    },
+    {
+      "before": "        overlay?.let { view ->",
+      "after": "        shadowOverlayRoot?.let { view ->"
+    },
+    {
+      "before": "        overlay = null",
+      "after": "        shadowOverlayRoot = null\n        overlay = null"
+    }
+  ],
+  "OverlayIvProcessor.kt": [
+    {
+      "before": "                onCaptured: () -> Unit = {}, onProgress: (Outcome) -> Unit = {}, done: (Outcome) -> Unit) {",
+      "after": "                onCaptured: () -> Unit = {}, onProgress: (Outcome) -> Unit = {},\n                scanModeOverride: ShadowRecognizer.Mode? = null, done: (Outcome) -> Unit) {"
+    },
+    {
+      "before": "        val scanMode = ShadowRecognizer.Mode.fromStored(prefs.getString(ShadowRecognizer.MODE_KEY, null))",
+      "after": "        val scanMode = scanModeOverride ?: ShadowRecognizer.Mode.fromStored(prefs.getString(ShadowRecognizer.MODE_KEY, null))"
+    },
+    {
+      "before": "val decision = ShadowRecognizer.decide(scanMode, ocr.purifyAction, shadowProvider())",
+      "after": "val decision = if (scanModeOverride != null) ReaderShadowControls.decide(scanMode, ocr.purifyAction, shadowProvider())\n                        else ShadowRecognizer.decide(scanMode, ocr.purifyAction, shadowProvider())"
+    }
+  ],
+  "MainActivity.kt": [
+    {
+      "before": "ShadowRecognizer.State.NORMAL -> \"通常\"",
+      "after": "ShadowRecognizer.State.NORMAL -> \"通常に変更\""
+    },
+    {
+      "before": "ShadowRecognizer.State.SHADOW -> \"シャドウ\"",
+      "after": "ShadowRecognizer.State.SHADOW -> \"シャドウに変更\""
+    }
+  ],
+  "AutoIvRecords.kt": [
+    {
+      "before": "            item.put(\"shadowMethod\", \"manual\")",
+      "after": "            item.put(\"shadowMethod\", \"manual\")\n            item.put(\"shadowDecision\", \"手動で${state.label}に変更\")"
+    },
+    {
+      "before": "                updated.put(\"shadowMethod\", \"manual\")",
+      "after": "                updated.put(\"shadowMethod\", \"manual\")\n                updated.put(\"shadowDecision\", old.optString(\"shadowDecision\"))"
+    }
+  ]
+}
