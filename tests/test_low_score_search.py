@@ -3,7 +3,7 @@ import unittest
 import re
 from pathlib import Path
 
-from pvpoke_score_search import english_names_by_dex, load_snapshot, search_low_scores
+from pvpoke_score_search import english_names_by_dex, evolution_descendants, load_snapshot, search_low_scores
 
 
 class LowScoreSearchTests(unittest.TestCase):
@@ -20,6 +20,13 @@ class LowScoreSearchTests(unittest.TestCase):
             "from pvpoke_score_search import load_snapshot", dockerfile,
             "Validate the packaged scores during the Docker build",
         )
+        evolutions = "data/pokemon_species_evolutions_20261019.json"
+        self.assertTrue((project_root / evolutions).is_file())
+        self.assertIn(f"COPY {evolutions} /app/{evolutions}", dockerfile)
+        self.assertIn("evolution_descendants", dockerfile)
+        self.assertEqual(len(evolution_descendants()), 1025)
+        self.assertIn(683, evolution_descendants()[682])
+        self.assertIn(681, evolution_descendants()[679])
 
     def test_snapshot_alignment_and_expected_counts(self):
         date, rows = load_snapshot()
@@ -39,13 +46,14 @@ class LowScoreSearchTests(unittest.TestCase):
         for mode in ("practical", "overall", "battle", "strict"):
             result = search_low_scores({"mode": mode})
             self.assertEqual(result["selected_count"],
-                             result["searchable_count"] + result["manual_review_count"])
+                             result["searchable_count"] + result["manual_review_count"] +
+                             result["evolution_protected_count"])
             self.assertEqual(len(result["queries"]), len({q["query"] for q in result["queries"]}))
             for q in result["queries"]:
                 self.assertLessEqual(len(q["query"]), 420)
                 self.assertLessEqual(q["species_count"], 18)
-                self.assertTrue(q["query"].endswith("&cp-1500&!favorite"))
-                self.assertEqual(q["query"].count("&cp-1500"), 1)
+                self.assertRegex(q["query"], r"&cp(?:-1500|[1-9][0-9]*-1500)&!favorite$")
+                self.assertEqual(q["query"].count("&cp"), 1)
                 self.assertEqual(q["query"].count("&!shadow") + q["query"].count("&shadow"), 1)
                 self.assertTrue(q["query"].split("&")[0])
             for item in result["manual_review"]:
@@ -53,7 +61,8 @@ class LowScoreSearchTests(unittest.TestCase):
 
     def test_english_names_and_status_are_preserved(self):
         game_master = {
-            "spritzee": {"dex": 682, "name": "Spritzee"},
+            "spritzee": {"dex": 682, "name": "Spritzee", "baseStats": {"atk": 100, "def": 100, "hp": 100}},
+            "aromatisse": {"dex": 683, "name": "Aromatisse", "baseStats": {"atk": 240, "def": 240, "hp": 240}},
             "entei": {"dex": 244, "name": "Entei"},
             "entei_shadow": {"dex": 244, "name": "Entei (Shadow)"},
             "ho_oh_shadow": {"dex": 250, "name": "Ho-Oh (Shadow)"},
@@ -67,10 +76,15 @@ class LowScoreSearchTests(unittest.TestCase):
                 and all(term in q.split("&")[1:] for term in terms)
                 for q in searches
             )
-        self.assertTrue(matching("Spritzee", "!shadow"))
+        self.assertTrue(any(
+            "Spritzee" in q.split("&")[0].split(",")
+            and re.search(r"&cp[0-9]+-1500&", q) for q in searches))
+        self.assertTrue(any(x["name"] == "シュシュプ" for x in result["evolution_high_cp_exceptions"]))
+        # Galar Darumaka is protected: its evolved CP cannot be bounded here.
+        self.assertFalse(matching("Darumaka", "galar", "!shadow"))
+        self.assertTrue(any(x["name"] == "ダルマッカ (ガラル)" for x in result["evolution_protected"]))
         self.assertTrue(matching("Entei", "shadow"))
         self.assertTrue(matching("Entei", "!shadow"))
-        self.assertTrue(matching("Darumaka", "galar", "!shadow"))
         self.assertTrue(matching("Ho-Oh", "shadow"))
         self.assertTrue(all(not re.search(r"[\u3040-\u30ff\u3400-\u9fff]", q) for q in searches))
         self.assertEqual(
@@ -90,6 +104,33 @@ class LowScoreSearchTests(unittest.TestCase):
         self.assertNotIn(244, english_names_by_dex(cases))
         result = search_low_scores({"mode": "practical"}, cases)
         self.assertEqual(result["searchable_count"], 0)
+        self.assertTrue(any(x["name"] == "シュシュプ" for x in result["evolution_protected"]))
+
+    def test_protects_gl_ranked_descendants_when_source_cp_is_unknown(self):
+        catalog = {"spritzee": {"dex": 682, "name": "Spritzee"}}
+        result = search_low_scores({"mode": "practical"}, catalog)
+        self.assertFalse(any("Spritzee" in item["query"] for item in result["queries"]))
+        self.assertTrue(any(x["name"] == "シュシュプ" for x in result["evolution_protected"]))
+
+    def test_high_cp_exception_is_only_for_guaranteed_evolution_over_cap(self):
+        stats = {"atk": 100, "def": 100, "hp": 100}
+        evolved = {"atk": 240, "def": 240, "hp": 240}
+        catalog = {
+            "spritzee": {"name": "Spritzee", "dex": 682, "baseStats": stats},
+            "aromatisse": {"name": "Aromatisse", "dex": 683, "baseStats": evolved},
+        }
+        result = search_low_scores({"mode": "practical"}, catalog)
+        exceptions = [x for x in result["evolution_high_cp_exceptions"] if x["name"] == "シュシュプ"]
+        self.assertEqual(len(exceptions), 1)
+        cutoff = exceptions[0]["minimum_cp"]
+        self.assertGreater(cutoff, 1)
+        self.assertLessEqual(cutoff, 1500)
+        matching = [q["query"] for q in result["queries"] if
+                    "Spritzee" in q["query"].split("&")[0].split(",")]
+        self.assertTrue(any(f"cp{cutoff}-1500" in q for q in matching))
+        lower_ratio = (240 / 115) ** 2
+        self.assertGreaterEqual(int(cutoff * lower_ratio), 1501)
+        self.assertLess(int((cutoff - 2) * lower_ratio), 1501)
 
     def test_safety_and_validation(self):
         result = search_low_scores({"exclude_favorites": False})
