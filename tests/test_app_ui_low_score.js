@@ -27,6 +27,7 @@ const ctx={document:{getElementById(id){return els[id]??=element()},createElemen
  }};
 vm.createContext(ctx);vm.runInContext(script,ctx);
 (async()=>{
+ for(const id of ['lowMode','lowThreshold','lowExcludeFavorites','lowScorePanel'])ctx.document.getElementById(id);
  els.lowMode.value='practical';els.lowThreshold.value='70';els.lowExcludeFavorites.checked=true;
  await vm.runInContext('loadLowScores()',ctx);
  assert.equal(requests.length,1);
