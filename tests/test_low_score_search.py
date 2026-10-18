@@ -1,10 +1,25 @@
 """Regression checks for low-score box searches and ranking snapshots."""
 import unittest
+from pathlib import Path
 
 from pvpoke_score_search import load_snapshot, search_low_scores
 
 
 class LowScoreSearchTests(unittest.TestCase):
+    def test_snapshot_is_packaged_in_runtime_docker_image(self):
+        project_root = Path(__file__).resolve().parent.parent
+        dockerfile = (project_root / "Dockerfile").read_text(encoding="utf-8")
+        asset = "data/cp1500_role_scores_20261015.json"
+        self.assertTrue((project_root / asset).is_file())
+        self.assertIn(
+            f"COPY {asset} /app/{asset}", dockerfile,
+            "Ranking scores must be installed into the runtime Docker image",
+        )
+        self.assertIn(
+            "from pvpoke_score_search import load_snapshot", dockerfile,
+            "Validate the packaged scores during the Docker build",
+        )
+
     def test_snapshot_alignment_and_expected_counts(self):
         date, rows = load_snapshot()
         self.assertEqual(date, "2026-10-15")
