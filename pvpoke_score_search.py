@@ -225,6 +225,12 @@ def search_low_scores(params=None, species_catalog=None):
     evolution_protected = []
     high_cp_exceptions = []
     for entry in selected:
+        if entry["dex"] not in descendants_map:
+            evolution_protected.append({
+                "name": entry["name"], "reason": "進化系統データを確認できません",
+                "evolves_to": ["要確認"]
+            })
+            continue
         # Protect every later stage, including alternative branches and
         # intermediate evolutions, regardless of the source's weak rating.
         descendant_ids = descendants_map.get(entry["dex"], ())
