@@ -50,6 +50,7 @@ jobs:
           gradle-version: '8.9'
       - name: Verify reader entry against demo compile (NOT a production reader APK)
         run: |
+          cp android-integration/IvSelectionText.kt demo/app/src/main/java/com/example/pokemonivreader/
           cp android-integration/overlayqueue/OverlayPairParser.kt demo/app/src/main/java/com/example/pokemonivreader/overlayqueue/
           cp android-integration/overlayqueue/OverlayQueueStore.kt demo/app/src/main/java/com/example/pokemonivreader/overlayqueue/
           cp android-integration/overlayqueue/OverlayCopyQueueImportActivity.kt demo/app/src/main/java/com/example/pokemonivreader/overlayqueue/
