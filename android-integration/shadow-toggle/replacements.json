@@ -39,6 +39,22 @@
     {
       "before": "        overlay = null",
       "after": "        shadowOverlayRoot = null\n        overlay = null"
+    },
+    {
+      "before": "setColor(Color.rgb(44, 108, 207))",
+      "after": "setColor(Color.rgb(66, 84, 76))"
+    },
+    {
+      "before": "OverlayIvProcessor.Phase.SAVED -> Color.rgb(27,125,73)",
+      "after": "OverlayIvProcessor.Phase.SAVED -> Color.rgb(72, 94, 79)"
+    },
+    {
+      "before": "OverlayIvProcessor.Phase.REVIEW,OverlayIvProcessor.Phase.FAILED -> Color.rgb(160,80,12)",
+      "after": "OverlayIvProcessor.Phase.REVIEW,OverlayIvProcessor.Phase.FAILED -> Color.rgb(101, 94, 78)"
+    },
+    {
+      "before": "else -> Color.rgb(44,108,207)",
+      "after": "else -> Color.rgb(66, 84, 76)"
     }
   ],
   "OverlayIvProcessor.kt": [
@@ -63,6 +79,26 @@
     {
       "before": "ShadowRecognizer.State.SHADOW -> \"シャドウ\"",
       "after": "ShadowRecognizer.State.SHADOW -> \"シャドウに変更\""
+    },
+    {
+      "before": "import androidx.compose.runtime.remember\n",
+      "after": "import androidx.compose.runtime.remember\nimport androidx.compose.runtime.rememberCoroutineScope\n"
+    },
+    {
+      "before": "import kotlinx.coroutines.Dispatchers\n",
+      "after": "import kotlinx.coroutines.Dispatchers\nimport kotlinx.coroutines.launch\n"
+    },
+    {
+      "before": "    var actionMessage by rememberSaveable { mutableStateOf(\"\") }",
+      "after": "    var actionMessage by rememberSaveable { mutableStateOf(\"\") }\n    var historyShadowBusy by remember { mutableStateOf(false) }\n    val historyShadowScope = rememberCoroutineScope()\n    fun changeHistoryShadow(state: ShadowRecognizer.State) {\n        if (historyShadowBusy) return\n        val keys = if (selectedRecords.isEmpty()) autoRecords.map { it.selectionKey }.toSet() else selectedRecords.toSet()\n        if (keys.isEmpty()) return\n        historyShadowBusy = true\n        historyShadowScope.launch {\n            try {\n                val changed = withContext(Dispatchers.IO) { AutoIvRecords.setShadowMany(context, keys, state) }\n                actionMessage = if (changed >= 0) \"${changed}件を${state.label}に変更しました\" else \"一括変更を保存できませんでした。履歴を読み直してください\"\n                autoRecordRevision++\n            } finally { historyShadowBusy = false }\n        }\n    }"
+    },
+    {
+      "before": "            Text(\"ポケモン図鑑データ：${catalogCount}種類\", style = MaterialTheme.typography.bodySmall)",
+      "after": "            val shadowScopeCount = if (selectedRecords.isEmpty()) autoRecords.size else selectedRecords.size\n            val shadowScopeLabel = if (selectedRecords.isEmpty()) \"全${shadowScopeCount}件\" else \"選択${shadowScopeCount}件\"\n            Text(\"履歴を一括変更（未選択ならすべて、チェックがあれば選択分）\", style = MaterialTheme.typography.bodySmall)\n            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {\n                Button(onClick = { changeHistoryShadow(ShadowRecognizer.State.NORMAL) }, enabled = shadowScopeCount > 0 && !historyShadowBusy,\n                    modifier = Modifier.weight(1f)) { Text(\"${shadowScopeLabel}を通常に\") }\n                Button(onClick = { changeHistoryShadow(ShadowRecognizer.State.SHADOW) }, enabled = shadowScopeCount > 0 && !historyShadowBusy,\n                    modifier = Modifier.weight(1f)) { Text(\"${shadowScopeLabel}をシャドウに\") }\n            }\n            if (historyShadowBusy) Text(\"まとめて変更しています…\", style = MaterialTheme.typography.bodySmall)\n            Text(\"ポケモン図鑑データ：${catalogCount}種類\", style = MaterialTheme.typography.bodySmall)"
+    },
+    {
+      "before": "enabled = row.shadow != choice",
+      "after": "enabled = row.shadow != choice && !historyShadowBusy"
     }
   ],
   "AutoIvRecords.kt": [
@@ -73,6 +109,10 @@
     {
       "before": "                updated.put(\"shadowMethod\", \"manual\")",
       "after": "                updated.put(\"shadowMethod\", \"manual\")\n                updated.put(\"shadowDecision\", old.optString(\"shadowDecision\"))"
+    },
+    {
+      "before": "    fun setGender(context: Context, row: Row, gender: GenderRecognizer.Gender): Boolean = synchronized(lock) {",
+      "after": "    /** All selected rows are validated and refreshed before one preference write. */\n    fun setShadowMany(context: Context, keys: Set<String>, state: ShadowRecognizer.State): Int = synchronized(lock) {\n        try {\n            val entries = records(context)\n            val changed = HistoryShadowBatch.update(entries, keys, state, ::selectionKey) { refresh(context, it) }\n            if (changed <= 0) return@synchronized changed\n            if (prefs(context).edit().putString(KEY, entries.toString()).commit()) changed else -1\n        } catch (_: Exception) { -1 }\n    }\n\n    fun setGender(context: Context, row: Row, gender: GenderRecognizer.Gender): Boolean = synchronized(lock) {"
     }
   ]
 }

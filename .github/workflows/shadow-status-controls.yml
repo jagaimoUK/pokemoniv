@@ -1,7 +1,7 @@
 name: Shadow status controls
 on:
   push:
-    branches: [feature/shadow-status-controls-20261018]
+    branches: [feature/shadow-status-controls-20261018, feature/reader-bulk-rounded-20261018]
   pull_request:
     paths:
       - 'pvpoke_app_ui.py'
@@ -22,3 +22,12 @@ jobs:
       - run: node tests/test_app_ui_queue.js
       - run: node tests/test_app_ui_labels.js
       - run: node tests/test_app_android_direct_send.js
+  android-helper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: bash android-integration/shadow-toggle/verification/check.sh

@@ -1,25 +1,35 @@
-# 読み取りアプリ：通常／シャドウ切り替え
+# 読み取り履歴の一括変更・丸いオーバーレイ
 
-- 読み取り用フロートの下にスイッチを追加。オンでシャドウ、オフで通常（リトレーン済みを含む）。次に読み取る個体に適用し、設定を保存します。
-- 既存の自動判定設定を使っていた場合、最初は「自動判定」と表示します。スイッチを操作するまでは自動判定を維持します。アプリの設定から自動判定へ戻せます。
-- 読み取りを押した時点の設定を固定し、解析中のスイッチ変更は次の個体へ適用します。
-- 履歴の「通常に変更」「シャドウに変更」で各個体の登録区分を修正。個体値・CP・性別・サイズを保ち、進化先の候補を再判定します。遅れて完了したOCRで手動修正を上書きしません。
-- 既存の厳選コピーオーバーレイ、ドラッグ、サイズ変更、共有機能への変更はありません。
+## 履歴の一括変更
+
+自動読み取り履歴の上部に「全○件を通常に」「全○件をシャドウに」を追加します。
+
+- 何もチェックしていなければ、履歴すべてを変更。
+- チェックした個体があれば、「選択○件を通常に」「選択○件をシャドウに」と表示され、選択分だけを変更。
+- 個体値・CP・性別・サイズ・その他の履歴情報は保持し、対象の進化先候補を再評価。
+- 全対象を準備してから一度に保存。削除済みの個体が混ざる場合や再評価が失敗する場合は、一部だけを保存しない。
+- 個別変更ボタンも引き続き利用可能。
+
+## オーバーレイ
+
+外枠と読み取りボタンを十分に丸いカプセル形に変更。スイッチのつまみは円、トラックも丸くします。外枠からはみ出さないようにクリップし、四角いスイッチ背景を除去。低彩度の灰緑と控えめな灰茶色を使い、保存後の緑やエラー時のオレンジも強い色から変更します。
+
+次の読み取りに通常／シャドウを指定する機能、自動判定、ドラッグ、CP・IV表示は維持します。
 
 ## 適用（Windows PowerShell）
 
-ZIPを `C:\new_folder\code` に保存。Android Studioを閉じ、以下をPowerShellへ一度に貼り付けてください。
+`PokemonIVReader_BulkShadow_Rounded_20261018.zip` を `C:\new_folder\code` に保存。Android Studioを閉じ、PowerShellへ以下を一度に貼り付けます。
 
 ```powershell
-$zip='C:\new_folder\code\PokemonIVReader_ShadowToggle_20261018.zip'; $dir='C:\new_folder\code\PokemonIVReader_ShadowToggle_20261018'; Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force; & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dir 'Apply-ShadowToggle.ps1')
+$zip='C:\new_folder\code\PokemonIVReader_BulkShadow_Rounded_20261018.zip'; $dir='C:\new_folder\code\PokemonIVReader_BulkShadow_Rounded_20261018'; Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force; & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dir 'Apply-BulkShadowRounded.ps1')
 ```
 
-更新対象は元の `C:\Users\kuros\AndroidStudioProjects\PokemonIVReader`。新しいプロジェクトは作りません。4ファイルの該当箇所だけを更新し、`ReaderShadowControls.kt` を追加します。全置換箇所を先に検査し、未知の版は書き換えず停止します。バックアップ後にビルドし、失敗した場合は元のソースに戻します。
+元の `C:\Users\kuros\AndroidStudioProjects\PokemonIVReader` を更新します。直前のShadowToggle版を適用済みでも、まだ未適用でも使えます。新しいプロジェクトは作りません。過去のReaderUX・コンパクト表示・厳選コピーリストには対象箇所の差分だけを適用し、無関係のコードを上書きしません。
 
-`BUILD SUCCESSFUL` の後、Android Studioで元のプロジェクトを開いてRunしてください。アプリのアンインストールは不要です。既存履歴を残してください。
+全変更箇所を事前検証し、未知のソースは書き換えず停止。元ファイルをバックアップしてビルドし、失敗すれば復元します。`BUILD SUCCESSFUL` の後、元のプロジェクトをAndroid Studioで開いてRunしてください。アンインストールは不要です。
 
-## 検証状態
+## 検証
 
-手動指定のKotlinコードをコンパイルし、通常指定が画像判定より優先すること、シャドウ指定、自動判定の保持を実行確認。4ファイルへの差分適用と再実行時の同一結果を確認。Androidアプリ全体のビルド、Windows PowerShellでの実行、実機テストは未実施です。
+Kotlinで新規ヘルパーをコンパイルし、選択分・全件変更、IV/CP等の保持、候補再評価、対象不一致・重複ID・途中例外時に変更されないことをテスト済み。元の版／直前の版／再適用で同じ修正結果になることを確認。`verification` 配下はCI専用の読み取り専用参照ソースであり、適用スクリプトはコピーしません。
 
-実機で、通常→シャドウ→通常の読み取り、履歴の通常への訂正、再起動後の保持、読取ボタンの移動、スイッチを含む範囲がOCR領域と重なる際の検出を確認してください。
+Androidアプリ全体のビルド、Windows上での適用、端末での表示・操作は未確認です。実機で一括変更の対象件数と、角や色合いの見え方を確認してください。

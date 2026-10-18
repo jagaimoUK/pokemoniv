@@ -5,5 +5,5 @@ fun main() {
     check(ReaderShadowControls.decide(ShadowRecognizer.Mode.SHADOW_ONLY, false, empty).state == ShadowRecognizer.State.SHADOW)
     check(ReaderShadowControls.decide(ShadowRecognizer.Mode.AUTO, true, empty).state == ShadowRecognizer.State.SHADOW)
     check(ReaderShadowControls.decide(ShadowRecognizer.Mode.AUTO, false, empty).state == ShadowRecognizer.State.UNKNOWN)
-    println("Manual normal/shadow override, automatic mode and captured mode: PASS")
+    println("Manual normal/shadow override, automatic mode: PASS")
 }

@@ -3,6 +3,8 @@ package com.example.pokemonivreader
 import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.StateListDrawable
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.Switch
@@ -21,11 +23,32 @@ internal object ReaderShadowControls {
             ShadowRecognizer.Mode.AUTO -> ShadowRecognizer.decide(mode, purify, samples)
         }
 
+    private fun capsule(color: Int, density: Float) = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = 1000f * density
+    }
+
     fun wrap(context: Context, capture: TextView): LinearLayout {
         val prefs = context.getSharedPreferences("pokemon_iv_reader", Context.MODE_PRIVATE)
         val density = context.resources.displayMetrics.density
+        capture.setTextColor(Color.rgb(232, 239, 232))
+        capture.background = capsule(Color.rgb(66, 84, 76), density)
         val toggle = Switch(context).apply {
-            setTextColor(Color.WHITE)
+            setTextColor(Color.rgb(232, 239, 232))
+            background = null
+            thumbDrawable = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setSize((24 * density).toInt(), (24 * density).toInt())
+                setColor(Color.rgb(213, 225, 211))
+            }
+            trackDrawable = StateListDrawable().apply {
+                addState(intArrayOf(android.R.attr.state_checked), capsule(Color.rgb(133, 155, 138), density).apply {
+                    setSize((44 * density).toInt(), (16 * density).toInt())
+                })
+                addState(intArrayOf(), capsule(Color.rgb(93, 110, 98), density).apply {
+                    setSize((44 * density).toInt(), (16 * density).toInt())
+                })
+            }
             textSize = 11f
             minHeight = (48 * density).toInt()
             setPadding((6 * density).toInt(), 0, (6 * density).toInt(), 0)
@@ -58,7 +81,10 @@ internal object ReaderShadowControls {
         }
         return LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(35, 58, 91))
+            background = capsule(Color.rgb(66, 84, 76), density)
+            clipToOutline = true
+            val inset = (6 * density).toInt()
+            setPadding(inset, inset, inset, inset)
             addView(capture, LinearLayout.LayoutParams(-1, -2))
             addView(toggle, LinearLayout.LayoutParams(-1, -2))
             addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
