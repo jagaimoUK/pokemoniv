@@ -16,7 +16,7 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <section class="card" id="login"><h2>アプリに接続</h2><p class="note">初回だけ接続キー、または有効なアクセストークンを入力してください。APIキー自体は端末へ保存しません。</p><label for="credential">接続キー</label><input id="credential" type="password" autocomplete="off"><label class="checkline" for="remember"><input id="remember" type="checkbox" checked>このブラウザのログインを30日間維持する</label><p class="note">共有端末ではチェックを外してください。ログアウトでこのブラウザの保存情報を削除できます。</p><div class="actions"><button id="connect">接続する</button></div></section>
 <div id="message" class="status" role="status" aria-live="polite" hidden></div>
 <div id="workspace" hidden>
-<section class="card" id="lowScorePanel"><h2>低スコア個体の一括検索</h2><p class="note">CP1500・7役割のランキングを使います。既定ではOverall・先発・終盤・交代・ゲージ技・攻撃の6項目が70未満の個体を抽出し、安定性（Consistency）単独では除外しません。計算やボックスの変更は行いません。</p><div class="low-score-tools"><div><label for="lowMode">抽出ルール</label><select id="lowMode"><option value="practical">推奨：総合＋実戦5役割すべて70未満</option><option value="overall">総合スコアだけ70未満</option><option value="battle">総合＋先発・終盤・交代すべて70未満</option><option value="strict">全7項目すべて70未満</option></select></div><div><label for="lowThreshold">スコア未満（同点は対象外）</label><input id="lowThreshold" type="number" value="70" min="1" max="100" step="0.1"></div></div><label class="checkline" for="lowExcludeFavorites"><input id="lowExcludeFavorites" type="checkbox" checked>検索時にお気に入りを除外（誤操作防止）</label><div class="actions"><button id="lowSearchRun">検索式を作成</button></div><p id="lowScoreSummary" class="note" aria-live="polite">検索式は複数に分割して、個別にコピーできます。</p><div id="lowScoreQueries" class="low-score-list"></div><details id="lowManual" hidden><summary>検索式で厳密に区別できない姿（要確認）</summary><div id="lowManualNames" class="note"></div></details></section>
+<section class="card" id="lowScorePanel"><h2>低スコア個体の一括検索</h2><p class="note">CP1500・7役割のランキングを使います。既定ではOverall・先発・終盤・交代・ゲージ技・攻撃の6項目が70未満の個体を抽出し、安定性（Consistency）単独では除外しません。計算やボックスの変更は行いません。</p><div class="low-score-tools"><div><label for="lowMode">抽出ルール</label><select id="lowMode"><option value="practical">推奨：総合＋実戦5役割すべて70未満</option><option value="overall">総合スコアだけ70未満</option><option value="battle">総合＋先発・終盤・交代すべて70未満</option><option value="strict">全7項目すべて70未満</option></select></div><div><label for="lowThreshold">スコア未満（同点は対象外）</label><input id="lowThreshold" type="number" value="70" min="1" max="100" step="0.1"></div></div><label class="checkline" for="lowExcludeFavorites"><input id="lowExcludeFavorites" type="checkbox" checked>検索時にお気に入りを除外（誤操作防止）</label><div class="actions"><button id="lowSearchRun">検索式を作成</button><button id="lowSendAndroid" class="secondary" disabled>Androidオーバーレイへ送る（対応版）</button><button id="lowCopyQueue" class="secondary" disabled>オーバーレイ用データをコピー</button></div><p class="note">Androidへのまとめ送りは、検索式だけを扱う新形式に対応した読み取りアプリが必要です。旧版では上の個別コピーを使ってください。ニックネームは変更しません。</p><p id="lowScoreSummary" class="note" aria-live="polite">検索式は複数に分割して、個別にコピーできます。</p><div id="lowScoreQueries" class="low-score-list"></div><details id="lowManual" hidden><summary>検索式で厳密に区別できない姿（要確認）</summary><div id="lowManualNames" class="note"></div></details></section>
 <section class="card"><h2>まとめて貼り付け</h2><p class="note">ポケモン・技・個体値をまとめて取り込めます。読み取りCP付きの「0,11,12 CP717 | ヌオー」にも対応します。日本語の種名、技省略、複数の進化先を含む「個体値リスト」「個体値厳選」、CSVに対応します。</p><label for="importText">コマンドまたはCSV</label><textarea id="importText" spellcheck="false" placeholder="個体値厳選&#10;quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE&#10;0,11,12&#10;3,13,8&#10;2,15,13"></textarea><div class="actions"><button id="importInput" class="secondary">貼り付けた内容を取り込む</button></div><p class="note">取り込みだけでは計算を開始しません。# クルマユ ハハコモリ のような見出しは、次の個体値を両方へ割り当てます。省略した技は種類ごとに補って表示します。</p></section>
 <section class="card" id="queuePanel" hidden><h2>連続計算するポケモン</h2><pre id="queuePreview"></pre><p class="note">表示した順にすべて計算します。複数種の内容は上の貼り付け欄から編集できます。</p><button id="singleForm" class="secondary">単一種のフォームに戻す</button></section>
 <section class="card"><h2>1. ポケモンと個体値</h2><label for="preset">登録プリセット（任意）</label><select id="preset"></select><p class="note" id="presetHint"></p><label for="allSpecies">全ポケモンから選ぶ</label><select id="allSpecies"></select><label for="species">ポケモン名・英語ID（直接入力）</label><input id="species" list="speciesList" value="quagsire" autocomplete="off"><datalist id="speciesList"></datalist>
@@ -45,11 +45,33 @@ const el=id=>document.getElementById(id);let importedSingle=null;let credential=
 function message(s,error=false){const x=el('message');x.hidden=false;x.textContent=s;x.className='status'+(error?' error':'');}
 async function api(path,data={}){const headers={'Content-Type':'application/json'};if(credential)headers.Authorization='Bearer '+credential;const r=await fetch('/app-api/'+path,{method:'POST',credentials:'same-origin',headers,body:JSON.stringify(data)});if(r.status===401){const e=Error('ログインの有効期限が切れました。接続キーで再接続してください。');e.status=401;throw e;}let out;try{out=await r.json();}catch{throw Error('応答を確認できません。接続を確認してください。');}if(!r.ok){const e=Error(out.error||'通信エラー');e.status=r.status;throw e;}return out;}
 let lowScoreResults=null;
+function scoreQueuePayload(){
+ if(!lowScoreResults?.queries?.length)throw Error('先に検索式を作成してください。');
+ return JSON.stringify({format:'pokemoniv-search-queue-v1',
+  source_date:lowScoreResults.source_date,
+  items:lowScoreResults.queries.map(item=>({search:item.query}))});
+}
+async function shareLowScoreQueue(){
+ try{
+  const text=scoreQueuePayload();
+  if(launchAndroidOverlay(text))return;
+  if(typeof navigator.share==='function'){
+   try{await navigator.share({title:'低スコア検索式リスト',text});return;}
+   catch(e){if(e?.name==='AbortError')return;}
+  }
+  await copy(text,el('lowCopyQueue'));
+  el('lowScoreSummary').textContent+=' 共有できなかったため、取り込み用データをコピーしました。対応Android版の取り込み欄に貼り付けてください。';
+ }catch(e){message(e.message,true);}
+}
+el('lowSendAndroid').onclick=()=>shareLowScoreQueue();
+el('lowCopyQueue').onclick=async()=>{try{await copy(scoreQueuePayload(),el('lowCopyQueue'));}catch(e){message(e.message,true);}};
 async function loadLowScores(){
  const button=el('lowSearchRun');button.disabled=true;button.textContent='集計中…';
  try{
   const result=await api('low-score',{mode:el('lowMode').value,threshold:Number(el('lowThreshold').value),exclude_favorites:el('lowExcludeFavorites').checked});
   lowScoreResults=result;
+  el('lowSendAndroid').disabled=!result.queries.length;
+  el('lowCopyQueue').disabled=!result.queries.length;
   el('lowScoreSummary').textContent='保存データ '+result.source_date+' / 総合スコアが基準未満 '+result.overall_under_threshold+'件 / 抽出 '+result.selected_count+'件 / 自動検索 '+result.searchable_count+'件 / 要確認 '+result.manual_review_count+'件。検索式 '+result.queries.length+'個。'+result.preserved_by_other_roles+'件は選んだ他の役割が基準以上なので保護しました。';
   const root=el('lowScoreQueries');root.replaceChildren();
   for(const item of result.queries){
