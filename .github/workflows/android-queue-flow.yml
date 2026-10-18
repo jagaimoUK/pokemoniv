@@ -1,0 +1,22 @@
+name: Android queue flow
+on:
+  push:
+    branches: [feature/overlay-queue-flow-20261018]
+  pull_request:
+    paths: ['android-integration/overlayqueue/**', 'android-integration/queue-flow/**', '.github/workflows/android-queue-flow.yml']
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '17'}
+      - uses: gradle/actions/setup-gradle@v4
+        with: {gradle-version: '8.9'}
+      - run: gradle -p android-integration/queue-flow/verification :app:testDebugUnitTest :app:assembleDebug --stacktrace
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: queue-flow-test-results
+          path: android-integration/queue-flow/verification/app/build/reports/tests/
