@@ -1,8 +1,9 @@
 """Regression checks for low-score box searches and ranking snapshots."""
 import unittest
+import re
 from pathlib import Path
 
-from pvpoke_score_search import load_snapshot, search_low_scores
+from pvpoke_score_search import english_names_by_dex, load_snapshot, search_low_scores
 
 
 class LowScoreSearchTests(unittest.TestCase):
@@ -49,6 +50,46 @@ class LowScoreSearchTests(unittest.TestCase):
                 self.assertTrue(q["query"].split("&")[0])
             for item in result["manual_review"]:
                 self.assertTrue(item["reason"])
+
+    def test_english_names_and_status_are_preserved(self):
+        game_master = {
+            "spritzee": {"dex": 682, "name": "Spritzee"},
+            "entei": {"dex": 244, "name": "Entei"},
+            "entei_shadow": {"dex": 244, "name": "Entei (Shadow)"},
+            "ho_oh_shadow": {"dex": 250, "name": "Ho-Oh (Shadow)"},
+            "darumaka_galarian": {"dex": 554, "name": "Darumaka (Galarian)"},
+        }
+        result = search_low_scores({"mode": "practical"}, game_master)
+        searches = [q["query"] for q in result["queries"]]
+        def matching(name, *terms):
+            return any(
+                name in q.split("&")[0].split(",")
+                and all(term in q.split("&")[1:] for term in terms)
+                for q in searches
+            )
+        self.assertTrue(matching("Spritzee", "!shadow"))
+        self.assertTrue(matching("Entei", "shadow"))
+        self.assertTrue(matching("Entei", "!shadow"))
+        self.assertTrue(matching("Darumaka", "galar", "!shadow"))
+        self.assertTrue(matching("Ho-Oh", "shadow"))
+        self.assertTrue(all(not re.search(r"[\u3040-\u30ff\u3400-\u9fff]", q) for q in searches))
+        self.assertEqual(
+            result["selected_count"],
+            result["searchable_count"] + result["manual_review_count"])
+        self.assertTrue(any(x["name"] == "ゴチルゼル" and "英語名" in x["reason"]
+                            for x in result["manual_review"]))
+
+    def test_ambiguous_and_unverified_english_names_are_not_guessed(self):
+        cases = {
+            "spritzee": {"dex": 682, "name": "Spritzee"},
+            "broken": {"dex": 682, "name": "AnotherSpecies"},
+            "non_english": {"dex": 244, "name": "エンテイ"},
+            "no_dex": {"name": "Spritzee"},
+        }
+        self.assertNotIn(682, english_names_by_dex(cases))
+        self.assertNotIn(244, english_names_by_dex(cases))
+        result = search_low_scores({"mode": "practical"}, cases)
+        self.assertEqual(result["searchable_count"], 0)
 
     def test_safety_and_validation(self):
         result = search_low_scores({"exclude_favorites": False})

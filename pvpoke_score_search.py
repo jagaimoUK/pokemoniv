@@ -48,7 +48,40 @@ def load_snapshot():
     return raw["source_date"], entries
 
 
-def _search_term(entry, forms_by_dex):
+def english_names_by_dex(species_catalog):
+    """Resolve English base names using GameMaster dex, never Japanese transliteration.
+
+    More than one distinct base name for the same dex is ambiguous. Return
+    no value for that dex instead of guessing or leaking a Japanese term.
+    """
+    possible = {}
+    if not isinstance(species_catalog, dict):
+        return {}
+    for species_id, row in species_catalog.items():
+        if not isinstance(row, dict):
+            continue
+        dex = row.get("dex")
+        english = row.get("name")
+        if (isinstance(dex, bool) or not isinstance(dex, int)
+                or not isinstance(english, str) or not english.strip()):
+            continue
+        # GameMaster uses parenthetical form labels and sometimes regional
+        # prefixes. Pokémon GO needs the species name plus &region instead.
+        english = re.sub(r"\s*\([^()]*\)", "", english).strip()
+        english = re.sub(r"^(?:Alolan|Galarian|Hisuian|Paldean)\s+", "",
+                         english, flags=re.I)
+        english = re.sub(r"\s+(?:Alolan|Galarian|Hisuian|Paldean)$", "",
+                         english, flags=re.I)
+        if (not english or any(ch in english for ch in ",:;|&!\n\r")
+                or re.search(r"[\u3040-\u30ff\u3400-\u9fff]", english)):
+            continue
+        possible.setdefault(dex, set()).add(english)
+    # A unique, validated base English name is required per dex.
+    return {dex: next(iter(names)) for dex, names in possible.items()
+            if len({name.casefold() for name in names}) == 1}
+
+
+def _search_term(entry, forms_by_dex, english_species):
     """Return (literal species search, identical-filter suffix) or manual reason.
 
     Commas in Pokémon GO bind before ampersands, so it is NOT safe to join
@@ -56,7 +89,7 @@ def _search_term(entry, forms_by_dex):
     """
     name = entry["name"]
     labels = re.findall(r"\(([^()]*)\)", name)
-    species = re.sub(r"\s*\([^()]*\)", "", name).strip()
+    species = english_species
     shadow = "シャドウ" in labels
     regions = [REGIONAL[x] for x in labels if x in REGIONAL]
     unknown = [x for x in labels if x != "シャドウ" and x not in REGIONAL]
@@ -75,7 +108,7 @@ def _search_term(entry, forms_by_dex):
     return (species, tuple(suffix)), None
 
 
-def search_low_scores(params=None):
+def search_low_scores(params=None, species_catalog=None):
     args = params if isinstance(params, dict) else {}
     mode = args.get("mode", "practical")
     if mode not in PRESETS:
@@ -97,10 +130,15 @@ def search_low_scores(params=None):
             if "(" + regional_ja + ")" in r["name"]:
                 forms_by_dex.setdefault(r["dex"], set()).add(keyword)
 
+    english_by_dex = english_names_by_dex(species_catalog)
     groups = {}
     manual = []
     for entry in selected:
-        item, reason = _search_term(entry, forms_by_dex)
+        english = english_by_dex.get(entry["dex"])
+        if english is None:
+            item, reason = None, "図鑑データの英語名を照合できません"
+        else:
+            item, reason = _search_term(entry, forms_by_dex, english)
         if reason:
             manual.append({"name": entry["name"], "overall": entry["overall"],
                            "reason": reason})

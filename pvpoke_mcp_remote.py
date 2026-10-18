@@ -323,7 +323,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, {'logged_out': True},
                                     cookie=BROWSER_LOGIN.clear(secure=APP_ORIGIN.startswith('https://')))
             if self.path == '/app-api/low-score':
-                return self.respond(200, search_low_scores(args))
+                ranking_catalog = backend._request('/api/catalog')
+                if not ranking_catalog.get('ready'):
+                    raise ValueError('英語名の図鑑データを準備中です。少し待ってから再実行してください')
+                return self.respond(200, search_low_scores(args, ranking_catalog.get('species')))
             if self.path == '/app-api/meta-status':
                 return self.respond(200, backend.meta_status())
             if self.path == '/app-api/meta-preview':
