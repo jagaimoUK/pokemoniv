@@ -1,5 +1,6 @@
 """Regression checks for low-score box searches and ranking snapshots."""
 import unittest
+import re
 from pathlib import Path
 
 from pvpoke_score_search import english_names_by_dex, load_snapshot, search_low_scores
@@ -65,7 +66,7 @@ class LowScoreSearchTests(unittest.TestCase):
         self.assertTrue(any("Entei&!shadow&" in q for q in searches))
         self.assertTrue(any("Darumaka&galar&" in q for q in searches))
         self.assertTrue(any("Ho-Oh&shadow&" in q for q in searches))
-        self.assertTrue(all(not __import__("re").search(r"[\\u3040-\\u30ff\\u3400-\\u9fff]", q) for q in searches))
+        self.assertTrue(all(not re.search(r"[\u3040-\u30ff\u3400-\u9fff]", q) for q in searches))
         self.assertEqual(
             result["selected_count"],
             result["searchable_count"] + result["manual_review_count"])
