@@ -10,6 +10,7 @@ on:
       - 'android-integration/overlayqueue/**'
       - 'tests/test_low_score_search.py'
       - 'tests/test_app_ui_low_score.js'
+      - 'demo/app/src/test/java/com/example/pokemonivreader/overlayqueue/LowScoreQueueTest.kt'
       - '.github/workflows/low-score-search.yml'
   pull_request:
     paths:
