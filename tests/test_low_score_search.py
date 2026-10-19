@@ -180,6 +180,54 @@ class LowScoreSearchTests(unittest.TestCase):
         self.assertTrue(any("&shadow&" in x["query"] for x in result["queries"]))
         self.assertTrue(any("&!shadow&" in x["query"] for x in result["queries"]))
 
+    def test_one_query_is_conservative_for_every_form_and_evolution(self):
+        from unittest.mock import patch
+        roles = ("overall", "leads", "closers", "switches",
+                 "chargers", "attackers", "consistency")
+        def row(name, dex, value):
+            return {"name": name, "dex": dex,
+                    **{role: value for role in roles}}
+        ranked = [
+            row("アー", 12, 30),                      # one safe normal form
+            row("イー", 13, 35),                      # normal safe
+            row("イー (シャドウ)", 13, 40),           # shadow safe too
+            row("ウー", 14, 25),                      # ranked, but evolved species strong
+            row("エー", 15, 25),                      # weak normal, strong regional
+            row("エー (アローラ)", 15, 81),
+        ]
+        gm = {
+            "a": {"dex": 12, "name": "Alpha"},
+            "b": {"dex": 13, "name": "Beta"},
+            "b_shadow": {"dex": 13, "name": "Beta (Shadow)"},
+            "c": {"dex": 14, "name": "Gamma"},
+            "d": {"dex": 15, "name": "Delta"},
+            "d_alolan": {"dex": 15, "name": "Delta (Alolan)"},
+            # Unranked form makes the whole dex unsafe even if only normal ranked
+            "a_shadow": {"dex": 12, "name": "Alpha (Shadow)"},
+        }
+        with patch("pvpoke_score_search.load_snapshot", return_value=("2026-10-15", ranked)), \
+             patch("pvpoke_score_search.evolution_descendants",
+                   return_value={12: (), 13: (), 14: (1414,), 15: ()}):
+            out = search_low_scores(species_catalog=gm)
+            self.assertEqual(out["quick_query"], "13&cp-1500&!favorite")
+            self.assertEqual(out["quick_species_count"], 1)
+            self.assertEqual(out["quick_covered_rows"], 2)
+            self.assertEqual(out["quick_omitted_rows"], 3)
+            off = search_low_scores({"exclude_favorites": False}, gm)
+            self.assertEqual(off["quick_query"], "13&cp-1500")
+            self.assertFalse(off["excluded_favorites"])
+            self.assertNotIn("!favorite", off["quick_query"])
+
+    def test_one_query_uses_numeric_names_for_evolution_toggle_safety(self):
+        out = search_low_scores()
+        self.assertRegex(out["quick_query"], r"^[0-9,]+&cp-1500&!favorite$")
+        self.assertLessEqual(len(out["quick_query"]), 1200)
+        self.assertNotIn("+", out["quick_query"])
+        self.assertEqual(out["quick_covered_rows"] + out["quick_omitted_rows"],
+                         out["selected_count"])
+        # Single-query mode does not pretend to include heterogeneous high-CP
+        # exception filters, or otherwise incompletely specified species.
+
     def test_safety_and_validation(self):
         result = search_low_scores({"exclude_favorites": False})
         self.assertTrue(all("!favorite" not in q["query"] for q in result["queries"]))
