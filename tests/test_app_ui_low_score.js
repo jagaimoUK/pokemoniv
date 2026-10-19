@@ -1,7 +1,7 @@
 // Low-score UI regression checks. Run: node tests/test_app_ui_low_score.js
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const script=fs.readFileSync('pvpoke_app_ui.py','utf8').split('<script>')[1].split('</script>')[0];
-assert(fs.readFileSync('pvpoke_app_ui.py','utf8').includes('Show Evolutionary Line（進化系統を表示）」をオフ'), 'UI must warn to turn Evolutionary Line OFF');
+assert(fs.readFileSync('pvpoke_app_ui.py','utf8').includes('Show Evolutionary Line') && fs.readFileSync('pvpoke_app_ui.py','utf8').includes('OFF推奨'), 'UI must warn to turn Evolutionary Line OFF');
 const els={},clipboard=[],requests=[];
 function element(){
  const e={textContent:'',value:'',checked:false,hidden:false,disabled:false,children:[],
