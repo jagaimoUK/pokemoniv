@@ -227,6 +227,7 @@ def search_low_scores(params=None, species_catalog=None):
     manual = []
     evolution_protected = []
     high_cp_exceptions = []
+    directly_searchable_by_dex = {}
     for entry in selected:
         if entry["dex"] not in descendants_map:
             evolution_protected.append({
@@ -268,6 +269,39 @@ def search_low_scores(params=None, species_catalog=None):
             cp_filter = ("cp" + str(cp_cutoff) + "-1500") if cp_cutoff else "cp-1500"
             suffix = (*suffix, cp_filter, *(("!favorite",) if exclude_favorites else ()))
             groups.setdefault(suffix, []).append((base, entry))
+            directly_searchable_by_dex.setdefault(entry["dex"], []).append(
+                {"name": entry["name"], "high_cp_only": cp_cutoff is not None}
+            )
+
+    # A one-copy search cannot express separate OR-of-AND conditions in GO.
+    # Use exact National Dex terms ONLY for species where ALL known forms are
+    # eligible, AND none need a special CP condition. Numeric terms reportedly
+    # avoid the Show Evolutionary Line toggle's name-family expansion.
+    # If any form is incomplete, uncertain or better ranked, omit the dex.
+    catalog_form_counts = {}
+    if isinstance(species_catalog, dict):
+        for record in species_catalog.values():
+            if isinstance(record, dict) and type(record.get("dex")) is int:
+                dex = record["dex"]
+                catalog_form_counts[dex] = catalog_form_counts.get(dex, 0) + 1
+    safe_dex = []
+    quick_covered_rows = 0
+    for dex, ranked_forms in ranked_by_dex.items():
+        included = directly_searchable_by_dex.get(dex, [])
+        if (included and len(included) == len(ranked_forms)
+                and len(ranked_forms) >= catalog_form_counts.get(dex, 1)
+                and not any(row["high_cp_only"] for row in included)):
+            safe_dex.append(dex)
+            quick_covered_rows += len(included)
+    safe_dex.sort()
+    one_query = (",".join(map(str, safe_dex)) + "&cp-1500"
+                 + ("&!favorite" if exclude_favorites else "")) if safe_dex else ""
+    # The single search is always complete for its own conservative subset.
+    # Never silently cut it to satisfy UI/import restrictions.
+    if len(one_query) > MAX_QUERY_CHARS:
+        one_query = ""
+        quick_covered_rows = 0
+        safe_dex = []
 
     queries = []
     searched = 0
@@ -306,6 +340,11 @@ def search_low_scores(params=None, species_catalog=None):
         "evolution_high_cp_count": len(high_cp_exceptions),
         "evolution_high_cp_exceptions": high_cp_exceptions,
         "queries": queries, "preserved_by_other_roles": len(preserved),
+        "quick_query": one_query,
+        "quick_species_count": len(safe_dex),
+        "quick_covered_rows": quick_covered_rows,
+        "quick_omitted_rows": len(selected) - quick_covered_rows,
+        "quick_requires_exact_dex": True,
         "selected_preview": [{"name": x["name"], "overall": x["overall"]}
                              for x in selected[:15]],
         "notice": "CP1500向けの保存済みランキングです。削除の安全性・他リーグでの性能は保証しません。",
