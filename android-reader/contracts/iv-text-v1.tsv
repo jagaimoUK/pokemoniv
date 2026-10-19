@@ -1,0 +1,9 @@
+case	stored_targets	canonical_heading	species_ids	ivs
+shadow_pair	キバニア (シャドウ)|サメハダー (シャドウ)	シャドウキバニア シャドウサメハダー	carvanha_shadow|sharpedo_shadow	15,11,11|7,11,14|15,13,10|14,11,10|8,14,8|7,13,8|2,10,10|3,4,14|5,4,11|6,5,6|5,0,5|3,0,6
+canonical_pair	シャドウキバニア|シャドウサメハダー	シャドウキバニア シャドウサメハダー	carvanha_shadow|sharpedo_shadow	15,11,11
+fullwidth_suffix	キバニア（シャドウ）|サメハダー（シャドウ）	シャドウキバニア シャドウサメハダー	carvanha_shadow|sharpedo_shadow	0,15,15
+normal_pair	キバニア|サメハダー	キバニア サメハダー	carvanha|sharpedo	15,11,11
+normal_and_shadow	キバニア|サメハダー (シャドウ)	キバニア シャドウサメハダー	carvanha|sharpedo_shadow	7,11,14
+regional_shadow	ラッタ（アローラ） (シャドウ)	シャドウラッタ（アローラ）	raticate_alolan_shadow	0,11,12
+regional_normal	ラッタ（アローラ）	ラッタ（アローラ）	raticate_alolan	0,11,12
+region_prefix_shadow	アローララッタ (シャドウ)	シャドウアローララッタ	raticate_alolan_shadow	1,2,3

@@ -1,0 +1,19 @@
+name: Reader regional forms
+on:
+  push:
+    paths: ['android-reader/**', '.github/workflows/reader-regional-forms.yml']
+  pull_request:
+    paths: ['android-reader/**', '.github/workflows/reader-regional-forms.yml']
+  workflow_dispatch:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Compile production OCR and catalog, verify forms and transfer contract
+        run: bash android-reader/verification/check.sh
