@@ -219,7 +219,11 @@ class LowScoreSearchTests(unittest.TestCase):
             self.assertNotIn("!favorite", off["quick_query"])
 
     def test_one_query_uses_numeric_names_for_evolution_toggle_safety(self):
-        out = search_low_scores()
+        gm = {
+            "entei": {"dex": 244, "name": "Entei"},
+            "entei_shadow": {"dex": 244, "name": "Entei (Shadow)"},
+        }
+        out = search_low_scores(species_catalog=gm)
         self.assertRegex(out["quick_query"], r"^[0-9,]+&cp-1500&!favorite$")
         self.assertLessEqual(len(out["quick_query"]), 1200)
         self.assertNotIn("+", out["quick_query"])
