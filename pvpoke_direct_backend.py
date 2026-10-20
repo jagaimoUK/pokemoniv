@@ -78,6 +78,36 @@ def matrix_from_response(payload: dict, candidates: list, opponents: list) -> li
     return [["", *headers, "Wins", "Losses", "Draws", "Average"], *output]
 
 
+def validate_minior_strategies(payload: dict, candidate_count: int, opponent_count: int):
+    """Fail closed if the strategy evidence disagrees with the ratings in the Matrix."""
+    result = payload.get('result') or {}
+    model = result.get('minior_policy_model')
+    if model is None:
+        return None
+    if model != 'experimental-max-per-matchup-v1':
+        raise DirectMatrixError('Unsupported Minior strategy version')
+    rows = result.get('candidates')
+    if not isinstance(rows, list) or len(rows) != candidate_count:
+        raise DirectMatrixError('Missing Minior candidate evidence')
+    valid_policies = ('instant', 'hold', 'adaptive')
+    for row in rows:
+        chosen, by_policy, ratings = row.get('policies'), row.get('strategy_ratings'), row.get('ratings')
+        if (not isinstance(chosen, list) or len(chosen) != opponent_count or
+            not isinstance(by_policy, dict) or set(by_policy) != set(valid_policies)):
+            raise DirectMatrixError('Incomplete Minior strategy evidence')
+        for policy in valid_policies:
+            values = by_policy[policy]
+            if (not isinstance(values, list) or len(values) != opponent_count or
+                any(type(value) is not int or not 0 <= value <= 1000 for value in values)):
+                raise DirectMatrixError('Invalid Minior policy ratings')
+        for i, policy in enumerate(chosen):
+            if policy not in valid_policies or ratings[i] != by_policy[policy][i] or (
+                ratings[i] != max(by_policy[name][i] for name in valid_policies)
+            ):
+                raise DirectMatrixError('Minior policy and chosen Rating disagree')
+    return rows
+
+
 class DirectMatrixClient:
     def __init__(self, *, gamemaster: Path, log_dir: Path, source: Path | None = None,
                  timeout_seconds: int = 120):
@@ -95,6 +125,7 @@ class DirectMatrixClient:
         self._log_file = None
         self.proc = None
         self.memory_samples = []
+        self.last_minior_data = None
         log_dir = Path(log_dir)
         log_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -129,7 +160,10 @@ class DirectMatrixClient:
             line = self.proc.stdout.readline()
             if not line:
                 raise DirectMatrixError("PvPoke Node exited without a Matrix response")
-            matrix = matrix_from_response(json.loads(line), candidates, opponents)
+            response = json.loads(line)
+            matrix = matrix_from_response(response, candidates, opponents)
+            self.last_minior_data = validate_minior_strategies(
+                response, len(candidates), len(opponents))
             after = linux_process_rss_mb(self.proc.pid)
             if before is not None and after is not None:
                 self.memory_samples.append({
