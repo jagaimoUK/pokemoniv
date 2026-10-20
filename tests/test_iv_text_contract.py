@@ -23,6 +23,15 @@ def sample_catalog():
             payload[sid] = {'name': name + (' (Shadow)' if suffix else ''),
                             'fastMoves': ['BITE'], 'chargedMoves': ['CRUNCH', 'POISON_FANG'],
                             'default_moves': {'fast': 'BITE', 'charged1': 'CRUNCH', 'charged2': 'POISON_FANG'}}
+    for sid, name in [('minior_meteor', 'Minior (Meteor)'),
+                      ('minior_core', 'Minior (Core)')]:
+        raw[sid] = {'dex': 774}
+        payload[sid] = {
+            'name': name, 'fastMoves': ['ROLLOUT'],
+            'chargedMoves': ['POWER_GEM', 'ACROBATICS'],
+            'default_moves': {'fast': 'ROLLOUT', 'charged1': 'POWER_GEM',
+                              'charged2': 'ACROBATICS'},
+        }
     enrich_catalog(payload, raw)
     return {'species': payload}
 
