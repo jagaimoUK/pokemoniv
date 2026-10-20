@@ -42,17 +42,33 @@ def enrich_catalog(payload: dict, species: dict) -> None:
             if suffix:
                 aliases.append(ja + suffix)
             entry['name_ja'] = ja + japanese_form_suffix(suffix) if suffix else ja + ((' (' + region + ')') if region else '')
+            # Minior begins PvP battles in Meteor Form and changes to Core mid-battle.
+            # Unlike regional forms, an unqualified Japanese name is unambiguous here.
+            if sid == 'minior_meteor':
+                entry['name_ja'] = ja + ' (流星)'
+                aliases.extend([ja, ja + '(流星)', ja + ' (流星)',
+                                ja + ' 流星', ja + ' 流星フォルム'])
+            elif sid == 'minior_core':
+                entry['name_ja'] = ja + ' (コア)'
+                aliases.extend([ja + '(コア)', ja + ' (コア)',
+                                ja + ' コア', ja + ' コアフォルム'])
         pumpkin_name = pumpkin_display_name(sid)
         if pumpkin_name:
             entry['name_ja'] = pumpkin_name
             aliases.extend(pumpkin_aliases(sid))
         entry['aliases'] = list(dict.fromkeys(aliases))
         moves = GL_MOVES.get(sid)
+        move_source = 'PvPoke GL overall / ' + SOURCES['retrieved']
+        if not moves and sid == 'minior_meteor':
+            # An explicit, GameMaster-validated provisional moveset until a
+            # curated PvPoke GL recommendation becomes available.
+            moves = ('ROLLOUT', 'POWER_GEM', 'ACROBATICS')
+            move_source = 'メテノ暫定技（最適技を保証しない）'
         if (moves and moves[0] in entry.get('fastMoves', [])
                 and all(m in entry.get('chargedMoves', []) for m in moves[1:])
                 and moves[1] != moves[2]):
             entry['default_moves'] = dict(zip(('fast', 'charged1', 'charged2'), moves))
-            entry['default_moves_source'] = 'PvPoke GL overall / ' + SOURCES['retrieved']
+            entry['default_moves_source'] = move_source
 
     assign_nickname_codes(payload)
 

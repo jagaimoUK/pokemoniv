@@ -1,5 +1,7 @@
 import unittest
+from unittest.mock import patch
 
+from pvpoke_app_catalog import enrich_catalog
 from pvpoke_app_input import app_presets, parse_import
 
 
@@ -91,6 +93,51 @@ class AppInputTests(unittest.TestCase):
         self.assertEqual(len({r['key'] for r in rows}), 4)
         self.assertEqual(rows[0]['name'], 'ヌオー')
         self.assertEqual(sum(r['species'] == 'quagsire' for r in rows), 2)
+
+    def test_minior_generic_japanese_name_uses_meteor_and_validated_default_moves(self):
+        species = {
+            'minior_meteor': {'dex': 774, 'name': 'Minior (Meteor)',
+                'fastMoves': ['ROLLOUT', 'TAKE_DOWN'],
+                'chargedMoves': ['POWER_GEM', 'ANCIENT_POWER', 'ACROBATICS']},
+            'minior_core': {'dex': 774, 'name': 'Minior (Core)',
+                'fastMoves': ['ROLLOUT', 'TAKE_DOWN'],
+                'chargedMoves': ['POWER_GEM', 'ANCIENT_POWER', 'ACROBATICS']},
+        }
+        payload = {sid: dict(p) for sid, p in species.items()}
+        with patch.dict('pvpoke_app_catalog.NAMES_JA', {774: 'メテノ'}):
+            enrich_catalog(payload, species)
+        self.assertIn('メテノ', payload['minior_meteor']['aliases'])
+        self.assertNotIn('メテノ', payload['minior_core']['aliases'])
+        self.assertEqual(payload['minior_meteor']['name_ja'], 'メテノ (流星)')
+        self.assertEqual(payload['minior_core']['name_ja'], 'メテノ (コア)')
+
+        # An ambiguously named old preset must not redirect to Core.
+        payload['minior_core']['aliases'].append('メテノ')
+        catalog = {'species': payload, 'presets': [
+            {'species': 'minior_core', 'name': 'メテノ',
+             'fast': 'ROLLOUT', 'charged1': 'POWER_GEM', 'charged2': 'ACROBATICS'}]}
+        for name in ('メテノ', 'Minior', 'メテノ (流星)'):
+            with self.subTest(name=name):
+                result = parse_import('個体値厳選\n#' + name + '\n0,11,12', catalog)
+                self.assertEqual(result['candidate']['species'], 'minior_meteor')
+                self.assertEqual(result['candidate_count'], 1)
+                chosen = result['candidate']
+                self.assertIn(chosen['fast'], species['minior_meteor']['fastMoves'])
+                self.assertIn(chosen['charged1'], species['minior_meteor']['chargedMoves'])
+                self.assertIn(chosen['charged2'], species['minior_meteor']['chargedMoves'])
+
+        explicit = parse_import('#メテノ (コア)\nROLLOUT,POWER_GEM,ACROBATICS\n0,11,12', catalog)
+        self.assertEqual(explicit['candidate']['species'], 'minior_core')
+
+    def test_other_ambiguous_forms_are_not_auto_guessed(self):
+        species = {
+            'zigzagoon': {'name': 'Zigzagoon', 'aliases': ['ジグザグマ'],
+                'fastMoves': ['TACKLE'], 'chargedMoves': ['DIG', 'BODY_SLAM']},
+            'zigzagoon_galarian': {'name': 'Zigzagoon (Galarian)', 'aliases': ['ジグザグマ'],
+                'fastMoves': ['TACKLE'], 'chargedMoves': ['DIG', 'BODY_SLAM']},
+        }
+        with self.assertRaisesRegex(ValueError, '種名・フォルムを特定できません'):
+            parse_import('#ジグザグマ\n0,11,12', {'species': species, 'presets': []})
 
 
 if __name__ == '__main__':
