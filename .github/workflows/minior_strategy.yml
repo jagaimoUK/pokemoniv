@@ -50,4 +50,4 @@ jobs:
           PY
       - name: Real pinned PvPoke Minior integration smoke
         run: |
-          python tests/smoke_minior_direct.py
+          PYTHONPATH=. python tests/smoke_minior_direct.py
