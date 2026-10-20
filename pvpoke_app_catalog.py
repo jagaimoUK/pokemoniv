@@ -59,7 +59,7 @@ def enrich_catalog(payload: dict, species: dict) -> None:
         entry['aliases'] = list(dict.fromkeys(aliases))
         moves = GL_MOVES.get(sid)
         move_source = 'PvPoke GL overall / ' + SOURCES['retrieved']
-        if not moves and sid == 'minior_meteor':
+        if not moves and sid in ('minior_meteor', 'minior_core'):
             # An explicit, GameMaster-validated provisional moveset until a
             # curated PvPoke GL recommendation becomes available.
             moves = ('ROLLOUT', 'POWER_GEM', 'ACROBATICS')
