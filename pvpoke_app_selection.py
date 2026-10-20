@@ -99,6 +99,11 @@ def search_string(name: str, iv: str, shadow: bool = False, species_id: str | No
     # GO expects the shadow keyword as its own filter too.
     if shadow:
         name = re.sub(r"\s*\(Shadow\)\s*$", "", name, flags=re.I)
+    # Pokémon GO storage/search sees Minior (Core), while this simulator uses
+    # the temporary Meteor battle form. Don't copy the PvPoke form label into
+    # GO's text search: it could fail to match the user's actual Minior.
+    if species_id in ('minior_meteor', 'minior_core'):
+        name = 'Minior'
     form_search = pumpkin_search(species_id)
     if form_search:
         name, size_filter = form_search
