@@ -48,3 +48,6 @@ jobs:
           except Exception as exc:
               print('Diagnostic download unavailable:',type(exc).__name__,str(exc)[:160])
           PY
+      - name: Real pinned PvPoke Minior integration smoke
+        run: |
+          python tests/smoke_minior_direct.py
