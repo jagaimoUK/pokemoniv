@@ -127,7 +127,19 @@ class AppInputTests(unittest.TestCase):
                 self.assertIn(chosen['charged2'], species['minior_meteor']['chargedMoves'])
 
         explicit = parse_import('#メテノ (コア)\nROLLOUT,POWER_GEM,ACROBATICS\n0,11,12', catalog)
-        self.assertEqual(explicit['candidate']['species'], 'minior_core')
+        self.assertEqual(explicit['candidate']['species'], 'minior_meteor')
+        self.assertTrue(any('コア' in w and '流星' in w for w in explicit['warnings']))
+
+        # GO reader exports a form-labelled *inventory* Pokémon, while PvP
+        # battle always starts Minior in its Meteor form.
+        for name in ('メテノ（コア）', 'メテノ (コア)', 'Minior (Core)'):
+            with self.subTest(name=name):
+                output = parse_import('#' + name + '\n0,11,12', catalog)
+                self.assertEqual(output['candidate']['species'], 'minior_meteor')
+                self.assertEqual(output['candidate']['fast'], 'ROLLOUT')
+                self.assertEqual(output['candidate']['charged1'], 'POWER_GEM')
+                self.assertTrue(any('流星' in w for w in output['warnings']))
+
 
     def test_other_ambiguous_forms_are_not_auto_guessed(self):
         species = {
