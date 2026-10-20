@@ -312,6 +312,7 @@ function render(result,append=false){
  node('p',[result.candidate.fast,result.candidate.charged1,result.candidate.charged2].join(' / '),panel,'note');const selection=result.selection;
  if(!selection){node('h2','GPT評価用の比較情報',panel);node('p','今回の比較情報をコピーしてGPTに評価を依頼できます。',panel);const b=node('button','比較情報をコピー',panel);b.onclick=()=>copy('以下のPvPoke実測比較を、個体値厳選の基準で評価してください。おすすめ個体と英語検索式を示してください。\n'+JSON.stringify(result),b);return;}
  node('h2','おすすめ個体',panel);
+ if(selection.minior_experimental)node('p','メテノの戦術比較（試験版）：流星で即撃ち／コアまで温存／状況判断を同じ条件で比較。表示Ratingは各対面で最良の戦術を選んだ上限値です。実機のCP・レベル調整が未検証のため、この結果だけで個体を博士に送らないでください。',panel,'note');
  node('p','Sは総合本命、Aはその本命にない実戦上の役割を補う個体です。通常は最大4体に絞ります。S/Aは入力候補内の暫定評価で、実際の勝敗を保証するものではありません。',panel,'note');
  if(selection.policy?.version&&selection.policy.version!=='box-first-v3'){
   node('p','保存済みの結果は以前の推薦基準です。最新のS本命・少数厳選を使うには、同じ入力を再計算してください。',panel,'note');
@@ -323,6 +324,19 @@ function render(result,append=false){
  if(!selection.recommendations.length)node('p','自動推薦の根拠が十分な個体はありません。下の保留個体を確認してください。',panel);
  for(const row of selection.recommendations){
   const card=node('article','',panel,'recommendation');node('h2',row.rank+'位｜'+row.ivs+'｜'+row.grade,card);node('div',row.role,card,'badge');
+  if(row.minior_strategy){
+   const m=row.minior_strategy,parts=[];
+   if(m.hold_win_flip_count)parts.push('コアまでゲージ温存で新たに勝ち '+m.hold_win_flip_count+'条件');
+   if(m.adaptive_win_flip_count)parts.push('状況判断で新たに勝ち '+m.adaptive_win_flip_count+'条件');
+   if(parts.length){
+    node('p',parts.join(' ／ ')+'（戦術選択の試験的評価）',card,'note');
+    if(m.hold_win_flip_examples?.length){
+     const details=node('details','',card);
+     node('summary','ゲージ温存で逆転する対面（例）',details);
+     for(const e of m.hold_win_flip_examples)node('p',opponentLabel(e.opponent).name+'・'+e.shield+'：即撃ち '+e.instant+' → 温存 '+e.hold,details,'note');
+    }
+   }
+  }
   // Prefer the actual WIN/DRAW differences from a similar higher-ranked IV.
   // Sharing a displayed opponent or even Rating 511 is not a distinct role.
   const comparison=Boolean(row.comparison_peer),seenNames=new Set(),summary=[];

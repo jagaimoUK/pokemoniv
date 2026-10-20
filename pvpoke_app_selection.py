@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import math
 import re
+import json
 from zipfile import ZipFile
 
 from pvpoke_selection_matrix import MODES, SHIELDS, SelectionMatrix, load_selection_matrix
@@ -317,6 +318,51 @@ def recommendations_from_zip(archive: ZipFile, candidate: dict, english_name: st
     if batch_mode not in ("simple", "detailed"):
         raise ValueError("batch_mode must be simple or detailed")
     modes = ("default",) if batch_mode == "simple" else MODES
-    return recommend({mode: load_selection_matrix(archive, mode) for mode in modes},
-                     candidate, english_name, focus_opponents, policy)
+    selection = recommend({mode: load_selection_matrix(archive, mode) for mode in modes},
+                          candidate, english_name, focus_opponents, policy)
+    if not str(candidate.get('species', '')).lower().startswith('minior'):
+        return selection
+    # The oracle scores are only an optimistic experimental comparison of
+    # three fixed tactical policies. Never hide that from someone deciding
+    # which physical Pokemon to keep.
+    name = 'minior_strategy_evidence.json'
+    if name not in archive.namelist():
+        raise ValueError('メテノ戦術比較データが欠けています。古い計算結果を推薦に使用しません')
+    evidence = json.loads(archive.read(name).decode('utf-8'))
+    if evidence.get('version') != 'experimental-max-per-matchup-v1' or not isinstance(evidence.get('rows'), list):
+        raise ValueError('メテノ戦術比較データの形式が不正です')
+    rows = evidence['rows']
+    valid_ivs = set(selection['candidate_ivs'])
+    expected = len(valid_ivs) * len(modes) * 6 * len(load_selection_matrix(archive, modes[0]).opponents)
+    if len(rows) != expected or any(
+        entry.get('candidate_iv') not in valid_ivs or
+        entry.get('selected') not in ('instant', 'hold', 'adaptive') or
+        not all(type(entry.get(key)) in (int, float) and 0 <= entry[key] <= 1000
+                for key in ('rating', 'instant', 'hold', 'adaptive')) or
+        entry['rating'] != max(entry['instant'], entry['hold'], entry['adaptive'])
+        for entry in rows
+    ):
+        raise ValueError('メテノ戦術比較データが計算条件と一致しません')
+    for recommendation in selection['recommendations']:
+        iv_rows = [entry for entry in rows if entry['candidate_iv'] == recommendation['ivs']]
+        hold_flips = [entry for entry in iv_rows if entry['hold'] > 500 >= entry['instant']]
+        smart_flips = [entry for entry in iv_rows if entry['adaptive'] > 500 >= max(entry['instant'], entry['hold'])]
+        examples = sorted(hold_flips, key=lambda e: (
+            -int(e['selected'] == 'hold'), -(e['hold'] - e['instant']),
+            e['opponent'], e['shield']))[:3]
+        recommendation['minior_strategy'] = {
+            'hold_win_flip_count': len(hold_flips),
+            'adaptive_win_flip_count': len(smart_flips),
+            'hold_win_flip_examples': [{
+                'opponent': e['opponent'], 'shield': e['shield'],
+                'instant': e['instant'], 'hold': e['hold'],
+            } for e in examples],
+        }
+    selection['minior_experimental'] = {
+        'version': evidence['version'],
+        'verified_live': False,
+        'optimistic_oracle': True,
+        'note': '各対面の戦術を後から選んだ上限評価です。実機のCP・レベル変動と戦術再現性は未検証です。',
+    }
+    return selection
 

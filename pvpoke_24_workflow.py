@@ -277,6 +277,25 @@ def main():
             'S/Aランクを決める際は、採用候補の先頭ポケモンとその裏を想定してください。\n'
             'rating_gt500等はBattle Ratingに基づく参考値であり、PvPoke自身の勝敗数とは区別してください。\n'
             '情報源個体値は自動採用していません。\n', encoding='utf-8')
+        strategy_file = latest / 'minior_strategy_evidence.json'
+        if own['species'].startswith('minior'):
+            if not strategy_file.is_file():
+                raise RuntimeError('メテノ戦術比較の根拠データがありません')
+            # Archive the full per-opponent choice together with the 24 matrices.
+            evidence = json.loads(strategy_file.read_text(encoding='utf-8'))
+            if evidence.get('version') != 'experimental-max-per-matchup-v1':
+                raise ValueError('未対応のメテノ戦術比較バージョンです')
+            target_evidence = target / strategy_file.name
+            shutil.copyfile(strategy_file, target_evidence)
+            outfiles.append(target_evidence)
+            manifest_path = target / 'manifest.json'
+            manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+            manifest['minior_strategy'] = {
+                'version': evidence['version'],
+                'evidence_file': target_evidence.name,
+                'per_matchup_oracle': True, 'verified_live': False,
+            }
+            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
         outfiles += [target/'opponent_modes_report.csv', target/'excluded_rows.json',
                      target/'manifest.json', target/'GPT_REVIEW.txt']
         zip_path = target / 'pvpoke_24_conditions.zip'

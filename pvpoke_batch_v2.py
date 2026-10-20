@@ -488,6 +488,7 @@ def chunks(array, size):
 def run(refresh=False, shield_set='all'):
     run_started = time.monotonic()
     gm, candidates, opponents = prepare(refresh=refresh)
+    minior_batch = any(str(row['species']).lower().startswith('minior') for row in candidates)
     pairs = SCENARIOS[shield_set]
     OUT.mkdir(parents=True, exist_ok=True)
     # Either engine starts lazily: cached jobs launch neither Node nor Chromium.
@@ -495,6 +496,8 @@ def run(refresh=False, shield_set='all'):
     if selected_engine not in ('direct', 'node', 'browser'):
         raise ValueError('PVP_ENGINE must be direct or browser')
     use_direct = selected_engine in ('direct', 'node')
+    if minior_batch and not use_direct:
+        raise ValueError('メテノのフォルム連動計算にはDirect Nodeエンジンが必要です')
     backend_fallbacks = 0
     print(f'PvPoke Matrix engine selected: {selected_engine}', flush=True)
     # A fresh cache ID whenever game data, inputs, or scenario choices change.
@@ -505,7 +508,7 @@ def run(refresh=False, shield_set='all'):
         'cp_cap': CP_CAP, 'max_level': MAX_LEVEL,
         'gamemaster_hash': gamemaster_hash, 'pokemonjs_hash': pokemonjs_hash,
         'pairs': pairs, 'candidate_chunk': CAND_CHUNK,
-        'opponent_chunk': OPP_CHUNK, 'version': 5
+        'opponent_chunk': OPP_CHUNK, 'version': 'minior-hp-3policies-v1' if minior_batch else 5
     }, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
     parts_dir = OUT / ('parts_' + fingerprint)
     parts_dir.mkdir(parents=True, exist_ok=True)
@@ -514,7 +517,9 @@ def run(refresh=False, shield_set='all'):
     data = {pair: {'labels': [None] * len(candidates), 'ratings': [[] for _ in candidates],
                    'counts': [[0,0,0] for _ in candidates], 'headers': []} for pair in pairs}
     cache = None
-    if os.environ.get('PVP_MATCHUP_CACHE', '1').lower() not in ('0', 'false', 'off'):
+    # The current SQLite cache only stores ratings, not policy provenance.
+    # Never silently reuse old or unannotated Minior matchups.
+    if not minior_batch and os.environ.get('PVP_MATCHUP_CACHE', '1').lower() not in ('0', 'false', 'off'):
         try:
             ns = matchup_cache.cache_namespace(
                 gamemaster_hash=gamemaster_hash, pokemonjs_hash=pokemonjs_hash,
@@ -535,6 +540,7 @@ def run(refresh=False, shield_set='all'):
     node_client = None
     direct_calculations = 0
     node_memory_samples = []
+    minior_strategy_rows = []
 
     def simulate_rows(crows, orows, pair):
         nonlocal page, reuse_enabled, current_selection, node_client
@@ -546,6 +552,22 @@ def run(refresh=False, shield_set='all'):
                         gamemaster=DATA / 'gamemaster.json', log_dir=DIR)
                 started = time.monotonic()
                 rows = node_client.simulate(crows, orows, pair)
+                if minior_batch:
+                    evidence = node_client.last_minior_data
+                    if evidence is None or len(evidence) != len(crows):
+                        raise RuntimeError('メテノの戦術比較結果が欠落しています')
+                    for i, item in enumerate(evidence):
+                        for j, opp in enumerate(orows):
+                            minior_strategy_rows.append({
+                                'shield': result_filename(pair).removeprefix('pvpoke_').removesuffix('.csv'),
+                                'candidate_iv': '/'.join(str(crows[i][k]) for k in ('atk','def','hp')),
+                                'opponent': item['opponents'][j],
+                                'selected': item['policies'][j],
+                                'rating': item['ratings'][j],
+                                'instant': item['strategy_ratings']['instant'][j],
+                                'hold': item['strategy_ratings']['hold'][j],
+                                'adaptive': item['strategy_ratings']['adaptive'][j],
+                            })
                 direct_calculations += len(crows) * len(orows)
                 if node_client.memory_samples:
                     sample = node_client.memory_samples[-1]
@@ -558,6 +580,9 @@ def run(refresh=False, shield_set='all'):
                       f'({len(crows)}x{len(orows)})', flush=True)
                 return rows
             except (OSError, ValueError, RuntimeError) as error:
+                if minior_batch:
+                    # Browser fallback lacks our Minior HP and charge policy hooks.
+                    raise RuntimeError(f'メテノ戦術比較失敗（通常PvPoke結果へフォールバックしません）: {error}') from error
                 print(f'  Direct engine rejected batch; using Chromium fallback: {error}', flush=True)
                 backend_fallbacks += 1
                 use_direct = False
@@ -606,7 +631,7 @@ def run(refresh=False, shield_set='all'):
                 rows_by_pair = {}
                 pending = []
                 for pair, path in part_paths.items():
-                    if path.exists():
+                    if path.exists() and not minior_batch:
                         with path.open(encoding='utf-8-sig', newline='') as f:
                             rows_by_pair[pair] = list(csv.reader(f))
                         print(f'  保存済み {result_filename(pair)} を再利用')
@@ -695,6 +720,17 @@ def run(refresh=False, shield_set='all'):
         temp.replace(dest)
         exports.append(dest)
         print('保存:', dest)
+    minior_evidence_file = None
+    if minior_batch:
+        expected = len(candidates) * len(opponents) * len(pairs)
+        if len(minior_strategy_rows) != expected:
+            raise RuntimeError(f'メテノ戦術履歴の件数不一致: {len(minior_strategy_rows)} / {expected}')
+        minior_evidence_file = run_dir / 'minior_strategy_evidence.json'
+        minior_evidence_file.write_text(json.dumps({
+            'version': 'experimental-max-per-matchup-v1',
+            'note': 'Per-matchup optimistic max of instant/hold/adaptive; NOT live PvP validated',
+            'rows': minior_strategy_rows,
+        }, ensure_ascii=False), encoding='utf-8')
     manifest = {
         'created_at': datetime.now(timezone.utc).isoformat(),
         'cp_cap': CP_CAP, 'max_level': MAX_LEVEL,
@@ -703,6 +739,12 @@ def run(refresh=False, shield_set='all'):
         'candidate_count': len(candidates), 'opponent_count': len(opponents),
         'shield_pairs': [list(p) for p in pairs], 'fingerprint': fingerprint,
         'matchup_cache': cache.stats if cache is not None else {'enabled': False},
+        'minior_strategy': {
+            'version': 'experimental-max-per-matchup-v1',
+            'per_matchup_oracle': True,
+            'verified_live': False,
+            'evidence_file': 'minior_strategy_evidence.json',
+        } if minior_batch else None,
         'engine': {'selected': selected_engine,
                    'direct_calculations': direct_calculations,
                    'browser_fallbacks': backend_fallbacks,
@@ -711,6 +753,8 @@ def run(refresh=False, shield_set='all'):
     }
     (run_dir/'manifest.json').write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding='utf-8')
     archive = run_dir / 'pvpoke_results.zip'
+    if minior_evidence_file is not None:
+        exports.append(minior_evidence_file)
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as z:
         for path in exports + [run_dir/'manifest.json', CAND, OPPS,
                                DIR/'prepared_candidates.csv', DIR/'prepared_opponents.csv']:

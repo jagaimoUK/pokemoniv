@@ -15,6 +15,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const readline = require("node:readline");
+const minior = require("./pvpoke_minior_strategy.js");
 
 const ROOT = process.env.PVP_PVPOKE_SOURCE || "";
 if (!ROOT || !fs.existsSync(path.join(ROOT, "src/js/battle/Battle.js"))) {
@@ -155,6 +156,7 @@ function createPokemon(row, index, battle) {
       poke.chargedMoves[1]?.moveId !== row.charged2) {
     throw Error("Move import mismatch: " + row.species);
   }
+  minior.preparePokemon(poke, gm.data);
   return poke;
 }
 
@@ -181,13 +183,48 @@ function matrix(req) {
   ranker.applySettings(selfSettings,1);
   ranker.applySettings(oppSettings,0);
   ranker.setTargets(candidates);
-  const result = ranker.rank(opponents, 1500, {name:"all",include:[],exclude:[]}, [], "matrix");
-  if (!result || !Array.isArray(result.rankings) ||
-      result.rankings.length !== candidates.length) {
-    throw Error("PvPoke TeamRanker did not return a complete Matrix");
+  const isMiniorBatch = candidates.some(p => minior.isMinior(p.speciesId));
+  const modes = isMiniorBatch ? minior.POLICIES : ["instant"];
+  const originalBattle = Battle;
+  const allRankings = [];
+  let lastRankings = null;
+  try {
+    for (const policy of modes) {
+      // Restore upstream behavior for every non-Minior candidate.
+      if (isMiniorBatch) Battle = minior.installBattleHook(originalBattle, policy, DamageCalculator);
+      const result = ranker.rank(opponents, 1500, {name:"all",include:[],exclude:[]}, [], "matrix");
+      if (!result || !Array.isArray(result.rankings) ||
+          result.rankings.length !== candidates.length) {
+        throw Error("PvPoke TeamRanker did not return a complete Matrix");
+      }
+      lastRankings = result.rankings;
+      allRankings.push(result.rankings.map(row => {
+        if (row.matchups.length !== opponents.length) throw Error("Incomplete opponent matchups");
+        return row.matchups.map(m => m.rating);
+      }));
+    }
+  } finally {
+    Battle = originalBattle;
   }
+  const choices = isMiniorBatch ? minior.bestOfPolicies(allRankings) :
+    allRankings[0].map(row => row.map(rating => ({rating,policy:"instant"})));
+  const initialNames = req.candidates.map(r => {
+    const entry = gm.getPokemonById(r.species);
+    return entry.speciesName;
+  });
+  const opponentNames = req.opponents.map(r => gm.getPokemonById(r.species).speciesName);
   return {
-    candidates:result.rankings.map(r => ({
+    minior_policy_model: isMiniorBatch ? "experimental-max-per-matchup-v1" : null,
+    candidates: isMiniorBatch ? req.candidates.map((r,i) => ({
+      label:initialNames[i]+" "+[r.fast,r.charged1,r.charged2].join("/")+" "+
+        r.atk+"/"+r.def+"/"+r.hp,
+      ratings:choices[i].map(c=>c.rating),
+      policies:choices[i].map(c=>c.policy),
+      strategy_ratings:Object.fromEntries(modes.map((name,n) => [name,allRankings[n][i]])),
+      opponents:req.opponents.map((opp,j) =>
+        opponentNames[j]+" "+[opp.fast,opp.charged1,opp.charged2].join("/")+" "+
+        opp.atk+"/"+opp.def+"/"+opp.hp)
+    })) : lastRankings.map(r => ({
       label:r.pokemon.speciesName+" "+r.pokemon.generateMovesetStr()+" "+
         r.pokemon.ivs.atk+"/"+r.pokemon.ivs.def+"/"+r.pokemon.ivs.hp,
       ratings:r.matchups.map(m=>m.rating),
