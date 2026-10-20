@@ -118,7 +118,7 @@ class AppInputTests(unittest.TestCase):
              'fast': 'ROLLOUT', 'charged1': 'POWER_GEM', 'charged2': 'ACROBATICS'}]}
         for name in ('メテノ', 'Minior', 'メテノ (流星)'):
             with self.subTest(name=name):
-                result = parse_import('個体値厳選\\n#' + name + '\\n0,11,12', catalog)
+                result = parse_import('個体値厳選\n#' + name + '\n0,11,12', catalog)
                 self.assertEqual(result['candidate']['species'], 'minior_meteor')
                 self.assertEqual(result['candidate_count'], 1)
                 chosen = result['candidate']
@@ -126,7 +126,7 @@ class AppInputTests(unittest.TestCase):
                 self.assertIn(chosen['charged1'], species['minior_meteor']['chargedMoves'])
                 self.assertIn(chosen['charged2'], species['minior_meteor']['chargedMoves'])
 
-        explicit = parse_import('#メテノ (コア)\\nROLLOUT,POWER_GEM,ACROBATICS\\n0,11,12', catalog)
+        explicit = parse_import('#メテノ (コア)\nROLLOUT,POWER_GEM,ACROBATICS\n0,11,12', catalog)
         self.assertEqual(explicit['candidate']['species'], 'minior_core')
 
     def test_other_ambiguous_forms_are_not_auto_guessed(self):
@@ -137,7 +137,7 @@ class AppInputTests(unittest.TestCase):
                 'fastMoves': ['TACKLE'], 'chargedMoves': ['DIG', 'BODY_SLAM']},
         }
         with self.assertRaisesRegex(ValueError, '種名・フォルムを特定できません'):
-            parse_import('#ジグザグマ\\n0,11,12', {'species': species, 'presets': []})
+            parse_import('#ジグザグマ\n0,11,12', {'species': species, 'presets': []})
 
 
 if __name__ == '__main__':
