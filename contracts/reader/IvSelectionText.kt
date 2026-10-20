@@ -7,9 +7,20 @@ package com.example.pokemonivreader
 internal object IvSelectionText {
     data class Group(val targets: List<String>, val ivs: List<String>)
     private val shadowSuffix = Regex("\\s*[（(]\\s*シャドウ\\s*[）)]$")
+    private val miniorForm = Regex(
+        "^(?:メテノ|Minior)\\s*[（(]\\s*(コア(?:フォルム)?|流星(?:フォルム)?|Core|Meteor)\\s*[）)]$",
+        RegexOption.IGNORE_CASE
+    )
 
     fun targetName(name: String): String {
         val value = name.trim()
+        // Stored source names stay untouched; only the exported heading is normalized.
+        miniorForm.matchEntire(value)?.let { match ->
+            return when (match.groupValues[1].lowercase()) {
+                "core", "コア", "コアフォルム" -> "メテノ（コア）"
+                else -> "メテノ（流星）"
+            }
+        }
         return if (shadowSuffix.containsMatchIn(value)) {
             "シャドウ" + value.replace(shadowSuffix, "").trim().removePrefix("シャドウ")
         } else value
