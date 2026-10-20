@@ -9,7 +9,7 @@ const core = {speciesId:"minior_core_blue",speciesName:"Minior Core Blue",
 assert.deepEqual(m.resolveForms(meteor,[meteor,core]),
   {meteorId:meteor.speciesId,coreId:core.speciesId});
 assert.equal(m.resolveForms({speciesId:"azumarill"},[meteor,core]),null);
-assert.throws(()=>m.resolveForms({...meteor,speciesId:"minior_core_blue"},[meteor,core]),/Meteor Form/);
+assert.throws(()=>m.resolveForms({...meteor,speciesId:"minior_core_blue",speciesName:"Minior Core Blue"},[meteor,core]),/Meteor Form/);
 assert.throws(()=>m.resolveForms(meteor,[meteor]),/missing or ambiguous/);
 
 function makePokemon() {
