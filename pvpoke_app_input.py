@@ -11,6 +11,7 @@ import re
 import unicodedata
 
 from pvpoke_app_sizes import FAMILIES
+from pvpoke_form_rules import battle_entry_species, battle_entry_notice
 from pvpoke_app_selection import search_string
 
 FIELDS = ('species', 'fast', 'charged1', 'charged2')
@@ -210,10 +211,14 @@ def parse_import(text: str, catalog: dict, current: dict | None = None) -> dict:
                 raise ValueError('技を指定した区間に個体値がありません。対象の見出しと同じ区間に置いてください')
             continue
         sids = part['species'] or [current.get('species')]
-        for sid in sids:
+        for observed_sid in sids:
+            sid = battle_entry_species(observed_sid, species)
             if sid not in species:
                 raise ValueError('個体値に対応するポケモンを指定してください')
             p, warnings = species[sid], []
+            entry_notice = battle_entry_notice(observed_sid)
+            if entry_notice:
+                warnings.append(entry_notice)
             if part['species'] is None:
                 warnings.append('ポケモン名の指定がないため現在フォームの種類を使います')
             moves, source = part['moves'], '入力で指定'

@@ -96,6 +96,14 @@ class FakeBackend:
 
 
 class IVWorkflowTests(unittest.TestCase):
+    def test_direct_core_form_runs_battle_with_meteor_identity(self):
+        backend = FakeBackend()
+        runner = IVWorkflow(backend)
+        core = {**CANDIDATE, "species": "minior_core"}
+        result = runner.run(core, IVS, wait_seconds=0)
+        self.assertEqual(result["state"], "running")
+        self.assertEqual(backend.inputs[0][0]["species"], "minior_meteor")
+
     def test_launch_and_resume_with_exact_ticket(self):
         backend = FakeBackend()
         workflow = IVWorkflow(backend)

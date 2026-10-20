@@ -18,6 +18,7 @@ from zipfile import ZipFile
 from pvpoke_selection_digest import build_selection_digest
 from pvpoke_decision_digest import decision_digest, decision_digest_v2
 from pvpoke_app_selection import recommendations_from_zip, validate_policy
+from pvpoke_form_rules import battle_entry_species, battle_entry_notice
 
 MODES = ("default", "rank1", "attack", "defense")
 IV_LINE = re.compile(r"^(\d{1,2}),(\d{1,2}),(\d{1,2})$")
@@ -103,6 +104,8 @@ class IVWorkflow:
             raise ValueError("report_format must be decision, decision-v1, compact or app")
         validate_policy(selection_policy)
         own, normalized, rows = _canonical(candidate, ivs, batch_mode)
+        inventory_form_notice = battle_entry_notice(own['species'])
+        own['species'] = battle_entry_species(own['species'])
         if not isinstance(wait_seconds, int) or not 0 <= wait_seconds <= 20:
             raise ValueError("wait_seconds must be 0..20")
         if (expected_meta_sha256 is not None and
@@ -156,6 +159,7 @@ class IVWorkflow:
                 "focus_limit": focus_limit,
                 "report_format": report_format,
                 "english_name": english_name, "selection_policy": selection_policy,
+                "inventory_form_notice": inventory_form_notice,
                 "requested_at": requested_at,
                 "completed_result": None,
             }
@@ -249,6 +253,8 @@ class IVWorkflow:
                 },
             }
             if app_selection is not None:
+                if ticket.get('inventory_form_notice'):
+                    app_selection.setdefault('input_notices', []).append(ticket['inventory_form_notice'])
                 output["selection"] = app_selection
                 output["complete"] = app_selection["complete"]
                 output["total_ratings_checked"] = app_selection["total_ratings_checked"]

@@ -40,7 +40,9 @@ def enrich_catalog(payload: dict, species: dict) -> None:
             english = entry.get('name') or sid
             suffix = english[english.find('('):] if '(' in english else ''
             if suffix:
-                aliases.append(ja + suffix)
+                # Accept the source display form with or without the space
+                # preceding parentheses, regardless of Japanese/English suffix.
+                aliases.extend([ja + suffix, ja + ' ' + suffix])
             entry['name_ja'] = ja + japanese_form_suffix(suffix) if suffix else ja + ((' (' + region + ')') if region else '')
             # Minior begins PvP battles in Meteor Form and changes to Core mid-battle.
             # Unlike regional forms, an unqualified Japanese name is unambiguous here.
@@ -59,7 +61,7 @@ def enrich_catalog(payload: dict, species: dict) -> None:
         entry['aliases'] = list(dict.fromkeys(aliases))
         moves = GL_MOVES.get(sid)
         move_source = 'PvPoke GL overall / ' + SOURCES['retrieved']
-        if not moves and sid == 'minior_meteor':
+        if not moves and sid in ('minior_meteor', 'minior_core'):
             # An explicit, GameMaster-validated provisional moveset until a
             # curated PvPoke GL recommendation becomes available.
             moves = ('ROLLOUT', 'POWER_GEM', 'ACROBATICS')

@@ -198,6 +198,21 @@ class AppSelectionTests(unittest.TestCase):
                 self.assertEqual(
                     result, expected_prefix + "&3attack&2defense&3hp")
 
+    def test_pvpoke_parenthetical_form_labels_are_not_go_search_names(self):
+        cases = [
+            ("Minior (Core)", "minior_core", "Minior"),
+            ("Minior (Meteor)", "minior_meteor", "Minior"),
+            ("Minior（Core）", "minior_core", "Minior"),
+            ("Rotom (Wash)", "rotom_wash", "Rotom"),
+            ("Dialga (Origin)", "dialga_origin", "Dialga"),
+            ("Deoxys (Defense)", "deoxys_defense", "Deoxys"),
+        ]
+        for name, sid, expected in cases:
+            with self.subTest(name=name):
+                self.assertEqual(
+                    search_string(name, "0/11/12", species_id=sid),
+                    expected + "&0attack&3defense&3hp")
+
     def test_shadow_regional_and_unrelated_forms_remain_distinct(self):
         self.assertEqual(
             search_string("Wooper (Paldean) (Shadow)", "13/8/11",
@@ -208,7 +223,7 @@ class AppSelectionTests(unittest.TestCase):
             "Wooper&3attack&2defense&3hp")
         self.assertEqual(
             search_string("Dialga (Origin)", "13/8/11", species_id="dialga_origin"),
-            "Dialga (Origin)&3attack&2defense&3hp")
+            "Dialga&3attack&2defense&3hp")
         self.assertEqual(
             search_string("Paldean Wooper", "13/8/11", True,
                           "wooper_paldean_shadow"),

@@ -106,6 +106,14 @@ def search_string(name: str, iv: str, shadow: bool = False, species_id: str | No
     else:
         size_filter = ""
         name, regional_filter = _regional_go_name(name, species_id)
+    # PvPoke UI names contain display-only form labels. GO species searches
+    # do not accept literal "(Core)", "(Meteor)", "(Origin)", etc. as names.
+    # Keep verified filters (region, pumpkin size, shadow) separate; for other
+    # forms search broadly by the actual species name rather than return a
+    # silently broken literal query. Internal species IDs remain unchanged.
+    name = re.sub(r"(?:\s*[(（][^()（）]*[)）]\s*)+$", "", name).strip()
+    if not name:
+        raise ValueError("Pokémon GO search requires an unqualified species name")
     def bucket(x):
         return 0 if x == 0 else 1 if x <= 5 else 2 if x <= 10 else 3 if x < 15 else 4
     return name + regional_filter + "".join(f"&{bucket(x)}{label}" for x, label in zip(values, ("attack", "defense", "hp"))) + size_filter + ("&shadow" if shadow else "")
