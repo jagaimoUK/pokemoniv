@@ -41,7 +41,17 @@ def enrich_catalog(payload: dict, species: dict) -> None:
             suffix = english[english.find('('):] if '(' in english else ''
             if suffix:
                 aliases.append(ja + suffix)
+            # GO owns Minior in Core Form, but the GL engine starts in Meteor Form.
+            # A plain 'メテノ' paste must unambiguously select the experimental
+            # Meteor battle representation, never the standalone Core entry.
+            if sid == 'minior_meteor':
+                aliases.extend((ja, ja + '(流星)', ja + '（流星）',
+                                ja + '(りゅうせいのすがた)', ja + '（りゅうせいのすがた）'))
             entry['name_ja'] = ja + japanese_form_suffix(suffix) if suffix else ja + ((' (' + region + ')') if region else '')
+            if sid == 'minior_meteor':
+                entry['name_ja'] = ja + '（りゅうせいのすがた・試験版）'
+            elif sid == 'minior_core':
+                entry['name_ja'] = ja + '（コアのすがた）'
         pumpkin_name = pumpkin_display_name(sid)
         if pumpkin_name:
             entry['name_ja'] = pumpkin_name
