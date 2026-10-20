@@ -111,7 +111,7 @@ def search_string(name: str, iv: str, shadow: bool = False, species_id: str | No
     # Keep verified filters (region, pumpkin size, shadow) separate; for other
     # forms search broadly by the actual species name rather than return a
     # silently broken literal query. Internal species IDs remain unchanged.
-    name = re.sub(r"(?:\s*\([^()]*\)\s*)+$", "", name).strip()
+    name = re.sub(r"(?:\s*[(（][^()（）]*[)）]\s*)+$", "", name).strip()
     if not name:
         raise ValueError("Pokémon GO search requires an unqualified species name")
     def bucket(x):
