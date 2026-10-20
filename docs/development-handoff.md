@@ -1,3 +1,7 @@
+# 2026-10-20 見本バックアップの追加
+
+Railway Bucket iv-visual-backupsを追加。所有者専用のバックアップAPIと接続コード発行画面 /reader-backupを実装。既存の厳選API・認証を維持し、専用トークンの権限を見本保存だけに限定する。S3設定はVISUAL_BACKUP_S3_*で分離し、後日R2へデータを移せる。[詳細・移行・実機確認](visual-backup-20261020.md)。Android正式ソースは別リポジトリjagaimoUK/PokemonIVReader、1.3.0 / versionCode 9。
+
 # PvPoke個体値厳選アプリ・プラグイン 開発引継ぎ
 最終更新：2026年10月16日（メタ任意アップロード機能のCI成功・本番反映確認）
 対象：このチャットで進めたPvPoke厳選サーバー／ブラウザアプリ／GPT評価プラグイン。

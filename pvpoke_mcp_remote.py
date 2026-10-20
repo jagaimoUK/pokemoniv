@@ -4,6 +4,8 @@ Test protocol compliance with real ChatGPT MCP client before relying on it.
 Not a hardened multi-tenant production service.
 """
 import json
+import base64
+import threading
 import logging
 import os
 import hmac
@@ -27,6 +29,11 @@ API_KEY = os.environ.get('PVP_API_KEY', '')
 if len(API_KEY) < 32:
     raise SystemExit('PVP_API_KEY must be set to a random value at least 32 characters long')
 BROWSER_LOGIN = BrowserLogin(API_KEY)
+from visual_backup import VisualBackup, BackupTokens, BackupError, BACKUP_HTML, MAX_ARCHIVE
+VISUAL_BACKUP = VisualBackup()
+BACKUP_TOKENS = BackupTokens(API_KEY)
+if VISUAL_BACKUP.enabled:
+    threading.Thread(target=VISUAL_BACKUP.probe, daemon=True).start()
 ALLOWED_ORIGINS = {'https://chatgpt.com', 'https://chat.openai.com', f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'}
 VERSION = '2025-06-18'
 # OAuth is enabled only when the authenticated user's Auth0 tenant is configured.
@@ -302,7 +309,7 @@ class Handler(BaseHTTPRequestHandler):
         """Only explicit app operations; never proxy arbitrary backend paths."""
         if self.path not in ('/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result',
                              '/app-api/session', '/app-api/logout', '/app-api/meta-status',
-                             '/app-api/meta-preview', '/app-api/meta-apply', '/app-api/low-score'):
+                             '/app-api/meta-preview', '/app-api/meta-apply', '/app-api/low-score', '/app-api/visual-backup-token'):
             return self.respond(404, {'error': 'Not found'})
         origin = self.headers.get('Origin')
         if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'):
@@ -322,6 +329,10 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == '/app-api/logout':
                 return self.respond(200, {'logged_out': True},
                                     cookie=BROWSER_LOGIN.clear(secure=APP_ORIGIN.startswith('https://')))
+            if self.path == '/app-api/visual-backup-token':
+                if not VISUAL_BACKUP.enabled:
+                    return self.respond(503, {'error':'バックアップ保存先を準備中です'})
+                return self.respond(200, {'connection':'pivbackup1.' + BACKUP_TOKENS.issue()})
             if self.path == '/app-api/low-score':
                 ranking_catalog = backend._request('/api/catalog')
                 if not ranking_catalog.get('ready'):
@@ -364,7 +375,48 @@ class Handler(BaseHTTPRequestHandler):
             logging.exception('App request failed')
             self.respond(500, {'error': 'アプリの処理に失敗しました'})
 
+    def visual_backup_request(self):
+        token = self.headers.get('Authorization','').removeprefix('Bearer ')
+        if not BACKUP_TOKENS.valid(token):
+            return self.unauthorized()
+        origin=self.headers.get('Origin')
+        if origin and origin != APP_ORIGIN:
+            return self.respond(403, {'error':'Origin not allowed'})
+        if self.headers.get('Content-Type','').split(';')[0].strip().lower() != 'application/json':
+            return self.respond(415, {'error':'Content-Type must be application/json'})
+        try:
+            if self.path not in ('/visual-backup/v1/status','/visual-backup/v1/upload','/visual-backup/v1/download'):
+                return self.respond(404, {'error':'Not found'})
+            limit=(MAX_ARCHIVE*4//3+4096) if self.path.endswith('/upload') else 4096
+            size=int(self.headers.get('Content-Length','0'))
+            if not 0 < size <= limit:
+                return self.respond(413, {'error':'バックアップの容量上限を超えています'})
+            args=json.loads(self.rfile.read(size))
+            if not isinstance(args,dict):
+                raise ValueError()
+            if self.path.endswith('/status'):
+                return self.respond(200,VISUAL_BACKUP.head())
+            if self.path.endswith('/download'):
+                return self.respond(200,VISUAL_BACKUP.download())
+            data=base64.b64decode(args.get('archive',''),validate=True)
+            return self.respond(200,VISUAL_BACKUP.upload(data,args.get('expectedEtag')))
+        except BackupError as exc:
+            return self.respond(exc.status, {'error':str(exc)})
+        except (ValueError,TypeError,KeyError):
+            return self.respond(400, {'error':'バックアップの入力が正しくありません'})
+        except Exception as exc:
+            logging.warning('Visual backup request failed: %s',type(exc).__name__)
+            return self.respond(503, {'error':'保存先に接続できません。端末内の見本は残っています'})
+
     def do_GET(self):
+        if self.path == '/reader-backup':
+            data=BACKUP_HTML.encode('utf-8')
+            self.send_response(200)
+            for name,value in [('Content-Type','text/html; charset=utf-8'),('Cache-Control','no-store'),('Referrer-Policy','no-referrer'),('X-Frame-Options','DENY'),('Content-Length',str(len(data)))]:
+                self.send_header(name,value)
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if self.path in ('/', '/app') or self.path.startswith('/app?'):
             self.app_page()
             return
@@ -377,10 +429,12 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
         if self.path == '/health':
-            self.respond(200, {'ok':True, 'version':'0.2-cloud-prototype'})
+            self.respond(200, {'ok':True, 'version':'0.2-cloud-prototype','visual_backup':{'enabled':VISUAL_BACKUP.enabled,'storage_probe':VISUAL_BACKUP.probe_ok}})
         else:
             self.respond(405, {'error': 'POST /mcp for MCP requests'})
     def do_POST(self):
+        if self.path.startswith('/visual-backup/v1/'):
+            return self.visual_backup_request()
         token = self.headers.get('Authorization', '')
         is_api_key = hmac.compare_digest(token, 'Bearer ' + API_KEY)
         is_app = self.path.startswith('/app-api/')
