@@ -35,3 +35,9 @@ Androidの接続先URLとZIP形式は維持する。移行時に自動保存を�
 ## 検証と残る確認
 
 ローカルでコア1,153項目、JUnit32件（新規バックアップ4件含む）、サーバーの保存・復元・認証を含む20件が成功。ZIP往復後の再起動・通常／ガラルの比較、破損ZIP時の既存保持、復元の件数上限・手動優先を検証した。Androidフルビルド・署名APK、Railway本番ストレージの結果はGitHub Actionsと本番healthで確認する。スマートフォンでの接続・Wi-Fiバックアップ・認識精度は実機確認が必要。
+
+## Railway本番の確認結果
+
+デプロイ117787fb-9b35-4e52-b332-2143699af639（コミット2477266）がSUCCESS。実Bucketで条件付き保存・取得・削除の起動プローブがPASS。公開healthはenabled=true / storage_probe=true、接続画面はHTTP 200、未認証の保存APIはHTTP 401を確認した。Bucket IDは17520f30-acc8-4394-b23e-a4084c7b50e8、環境production。検証用オブジェクトは削除済みで、利用者の見本はまだ端末から接続・保存していない。秘密鍵はBucket変数参照で管理する。
+
+新規7件のバックアップテストをGitHub Actions「Visual reference backup」に追加。Androidのビルド状況は https://github.com/jagaimoUK/PokemonIVReader/actions/runs/39447857066 と https://github.com/jagaimoUK/PokemonIVReader/actions/runs/39447864213 。

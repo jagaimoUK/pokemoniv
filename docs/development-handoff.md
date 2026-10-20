@@ -1,5 +1,7 @@
 # 2026-10-20 見本バックアップの追加
 
+本番2477266のデプロイSUCCESS、実Bucketの条件付き保存・取得・削除PASS。healthのvisual_backupはenabled=true / storage_probe=true。初回はAndroidで接続・保存が必要。GitHub Actionsにバックアップの7テストを追加。
+
 Railway Bucket iv-visual-backupsを追加。所有者専用のバックアップAPIと接続コード発行画面 /reader-backupを実装。既存の厳選API・認証を維持し、専用トークンの権限を見本保存だけに限定する。S3設定はVISUAL_BACKUP_S3_*で分離し、後日R2へデータを移せる。[詳細・移行・実機確認](visual-backup-20261020.md)。Android正式ソースは別リポジトリjagaimoUK/PokemonIVReader、1.3.0 / versionCode 9。
 
 # PvPoke個体値厳選アプリ・プラグイン 開発引継ぎ
