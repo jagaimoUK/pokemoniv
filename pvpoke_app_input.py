@@ -67,6 +67,10 @@ def parse_import(text: str, catalog: dict, current: dict | None = None) -> dict:
             raise ValueError(f'{word}: サイズを指定してください（こだましゅ/XS、ちゅうだましゅ/通常、おおだましゅ/XL、ギガだましゅ/XXL）')
         if key.endswith('_shadow-shadow'):
             key = key[:-7]
+        # A generic Minior name refers to its in-battle starting (Meteor)
+        # form, even if a preset happens to label Core simply as "メテノ".
+        if key in ('メテノ', 'minior') and 'minior_meteor' in species:
+            return 'minior_meteor'
         matches = aliases.get(key, set())
         return next(iter(matches)) if len(matches) == 1 else None
     ordered_aliases = sorted((x for x in aliases if len(aliases[x]) == 1), key=len, reverse=True)
