@@ -187,6 +187,7 @@ function matrix(req) {
   const modes = isMiniorBatch ? minior.POLICIES : ["instant"];
   const originalBattle = Battle;
   const allRankings = [];
+  let lastRankings = null;
   try {
     for (const policy of modes) {
       // Restore upstream behavior for every non-Minior candidate.
@@ -196,6 +197,7 @@ function matrix(req) {
           result.rankings.length !== candidates.length) {
         throw Error("PvPoke TeamRanker did not return a complete Matrix");
       }
+      lastRankings = result.rankings;
       allRankings.push(result.rankings.map(row => {
         if (row.matchups.length !== opponents.length) throw Error("Incomplete opponent matchups");
         return row.matchups.map(m => m.rating);
@@ -213,16 +215,22 @@ function matrix(req) {
   const opponentNames = req.opponents.map(r => gm.getPokemonById(r.species).speciesName);
   return {
     minior_policy_model: isMiniorBatch ? "experimental-max-per-matchup-v1" : null,
-    candidates:req.candidates.map((r,i) => ({
+    candidates: isMiniorBatch ? req.candidates.map((r,i) => ({
       label:initialNames[i]+" "+[r.fast,r.charged1,r.charged2].join("/")+" "+
         r.atk+"/"+r.def+"/"+r.hp,
       ratings:choices[i].map(c=>c.rating),
       policies:choices[i].map(c=>c.policy),
-      strategy_ratings:isMiniorBatch ? Object.fromEntries(modes.map((name,n) =>
-        [name,allRankings[n][i]])) : undefined,
+      strategy_ratings:Object.fromEntries(modes.map((name,n) => [name,allRankings[n][i]])),
       opponents:req.opponents.map((opp,j) =>
         opponentNames[j]+" "+[opp.fast,opp.charged1,opp.charged2].join("/")+" "+
         opp.atk+"/"+opp.def+"/"+opp.hp)
+    })) : lastRankings.map(r => ({
+      label:r.pokemon.speciesName+" "+r.pokemon.generateMovesetStr()+" "+
+        r.pokemon.ivs.atk+"/"+r.pokemon.ivs.def+"/"+r.pokemon.ivs.hp,
+      ratings:r.matchups.map(m=>m.rating),
+      opponents:r.matchups.map(m=>m.opponent.speciesName+" "+
+        m.opponent.generateMovesetStr()+" "+
+        m.opponent.ivs.atk+"/"+m.opponent.ivs.def+"/"+m.opponent.ivs.hp)
     }))
   };
 }
