@@ -8,6 +8,10 @@ COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 COPY *.py /app/
 COPY pvpoke_node_matrix.js /app/pvpoke_node_matrix.js
+COPY pvpoke_minior_strategy.js /app/pvpoke_minior_strategy.js
+# Node loads this module at startup for *every* matrix, not just Minior.
+# Validate the deployed image here so missing modules cannot reach production.
+RUN node -e "const s=require('./pvpoke_minior_strategy.js'); if (s.POLICIES.join(',') !== 'instant,hold,adaptive') process.exit(1)"
 COPY vendor/pvpoke /app/vendor/pvpoke
 COPY pvpoke_meta_opponents.csv /app/pvpoke_meta_opponents.csv
 # Low-score CP1500 snapshot is a build-time immutable asset, not the Railway /data volume.
