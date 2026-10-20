@@ -38,10 +38,8 @@ def main():
 
         own = [prepared("minior_meteor",meteor,0,14,15)]
         opp = [prepared("quagsire",other,0,14,15)]
-        with_client = DirectMatrixClient(gamemaster=engine.DATA / "gamemaster.json",
+        with_client = DirectMatrixClient(gamemaster=folder / "game_data" / "gamemaster.json",
                                          log_dir=folder, timeout_seconds=60)
-        # DirectMatrixClient requires the downloaded GM, not restored engine.DATA.
-        with_client.gamemaster = folder / "game_data" / "gamemaster.json"
         try:
             for shields in ((0,0),(1,1),(0,1)):
                 matrix = with_client.simulate(own,opp,shields)
