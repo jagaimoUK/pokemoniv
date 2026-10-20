@@ -7,3 +7,9 @@ normal_and_shadow	キバニア|サメハダー (シャドウ)	キバニア シ�
 regional_shadow	ラッタ（アローラ） (シャドウ)	シャドウラッタ（アローラ）	raticate_alolan_shadow	0,11,12
 regional_normal	ラッタ（アローラ）	ラッタ（アローラ）	raticate_alolan	0,11,12
 region_prefix_shadow	アローララッタ (シャドウ)	シャドウアローララッタ	raticate_alolan_shadow	1,2,3
+minior_core_japanese	メテノ（コア）	メテノ（コア）	minior_meteor	0,11,12
+minior_core_english	Minior (Core)	メテノ（コア）	minior_meteor	2,15,13
+minior_core_mixed	メテノ (Core)	メテノ（コア）	minior_meteor	3,14,11
+minior_meteor_english	Minior (Meteor)	メテノ（流星）	minior_meteor	0,14,15
+minior_meteor_japanese	メテノ (流星)	メテノ（流星）	minior_meteor	1,15,12
+minior_unspecified	メテノ	メテノ	minior_meteor	0,11,12
