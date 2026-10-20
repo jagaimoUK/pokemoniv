@@ -30,3 +30,21 @@ jobs:
           node tests/test_minior_strategy.cjs
           python -m py_compile pvpoke_direct_backend.py pvpoke_batch_v2.py pvpoke_24_workflow.py pvpoke_app_selection.py pvpoke_app_ui.py
           python -m unittest discover -s tests -p 'test_minior_evidence.py' -v
+      - name: Inspect current PvPoke Minior form data (diagnostic only)
+        run: |
+          python - <<'PY'
+          import json, urllib.request
+          from pvpoke_batch_v2 import RAW
+          try:
+              with urllib.request.urlopen(RAW+'data/gamemaster.json',timeout=30) as response:
+                  gm=json.load(response)
+              rows=[p for p in gm['pokemon'] if str(p.get('speciesId','')).startswith('minior')]
+              for p in rows:
+                  print(json.dumps({'id':p.get('speciesId'), 'name':p.get('speciesName'),
+                      'dex':p.get('dex'),'baseStats':p.get('baseStats'),
+                      'formChange':p.get('formChange'),
+                      'originalFormId':p.get('originalFormId')},ensure_ascii=False))
+              if not rows: print('NO MINIOR IN REMOTE GAMEMASTER')
+          except Exception as exc:
+              print('Diagnostic download unavailable:',type(exc).__name__,str(exc)[:160])
+          PY
