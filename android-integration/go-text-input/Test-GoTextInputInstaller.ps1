@@ -41,3 +41,6 @@ if([IO.File]::ReadAllText((Join-Path $failedJava 'OverlayCopyQueueController.kt'
 if(Test-Path (Join-Path $failedJava 'GoTextInputAccessibilityService.kt')) { throw 'Rollback did not delete new service' }
 if([IO.File]::ReadAllText((Join-Path $failed 'app\src\main\AndroidManifest.xml')) -cne $manifest) { throw 'Rollback did not restore manifest' }
 Write-Host 'Installer preflight, patch, idempotency, and rollback succeeded.'
+
+# The intentionally failed mock gradlew left LASTEXITCODE=1; the rollback test passed.
+$global:LASTEXITCODE = 0
