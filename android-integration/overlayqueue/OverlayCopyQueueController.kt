@@ -3,6 +3,7 @@ package com.example.pokemonivreader.overlayqueue
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
@@ -402,6 +403,24 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
         }
         catch (e: Exception) { toast("コピーしましたが記録できません: ${e.localizedMessage}") }
     }
+    /**
+     * Input is intentionally separate from 'copied': editing GO does not
+     * establish that a nickname was saved or a Pokemon was processed.
+     */
+    private fun requestGoInput(item: OverlayQueueStore.Item, search: Boolean) {
+        if (rows.none { it.id == item.id }) return
+        val value = if (search) item.search else item.nickname
+        val target = if (search) GoTextInputAccessibilityService.Target.SEARCH
+            else GoTextInputAccessibilityService.Target.NICKNAME
+        if (!GoTextInputAccessibilityService.request(target, value) { _, message -> toast(message) }) {
+            toast("自動入力を使うにはAndroidのユーザー補助で「厳選テキスト入力」を有効にしてください")
+            try {
+                app.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+            } catch (_: Exception) { /* Keep the original copy buttons available. */ }
+        }
+    }
     private fun copyCleanup(value: String) {
         try {
             (app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
@@ -409,7 +428,7 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
         } catch (e: Exception) { toast("コピーできません: ${e.localizedMessage}") }
     }
     private data class CleanupHolder(val title: TextView, val buttons: List<Button>)
-    private data class Holder(val title: TextView, val search: Button, val nick: Button)
+    private data class Holder(val title: TextView, val search: Button, val nick: Button, val inputSearch: Button, val inputNick: Button)
     private inner class QueueAdapter : BaseAdapter() {
         override fun getCount() = rows.size + cleanupBases.size
         override fun getItem(position: Int): Any = if (position < rows.size) rows[position] else cleanupBases[position - rows.size]
@@ -425,13 +444,24 @@ class OverlayCopyQueueController private constructor(private val app: Context) {
                 val a = button("検索式") {}; val b = button("名前") {}
                 buttons.addView(a, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(3) })
                 buttons.addView(b, LinearLayout.LayoutParams(0, dp(40), 1f)); addView(buttons)
-                tag = Holder(title, a, b)
+                val inputButtons = LinearLayout(app).apply { orientation = LinearLayout.HORIZONTAL }
+                val inputSearch = button("検索入力") {}
+                val inputNick = button("名前入力") {}
+                inputButtons.addView(inputSearch, LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginEnd = dp(3) })
+                inputButtons.addView(inputNick, LinearLayout.LayoutParams(0, dp(36), 1f))
+                addView(inputButtons)
+                tag = Holder(title, a, b, inputSearch, inputNick)
             }
             val h = root.tag as Holder; val item = rows[position]
             val cp = Regex("(?:^|&)cp([0-9]+)(?:&|$)", RegexOption.IGNORE_CASE).find(item.search)?.groupValues?.get(1)
             h.title.text = if (item.nickname.isBlank()) "低スコア検索式 ${item.sequence}"
                 else "${item.ivs ?: OverlayPairParser.legacyIvLabel(item.search)}${cp?.let { "  CP$it" } ?: ""}"
             h.nick.visibility = if (item.nickname.isBlank()) View.GONE else View.VISIBLE
+            h.inputNick.visibility = if (item.nickname.isBlank()) View.GONE else View.VISIBLE
+            h.inputSearch.contentDescription = "Pokémon GOの検索欄に検索式を入力。失敗時は手動コピー"
+            h.inputNick.contentDescription = "Pokémon GOの名前編集欄にニックネームを入力。保存は手動"
+            h.inputSearch.setOnClickListener { requestGoInput(item, true) }
+            h.inputNick.setOnClickListener { requestGoInput(item, false) }
             h.title.contentDescription = "${item.speciesLabel} ${h.title.text}"
             for ((b, isSearch) in listOf(h.search to true, h.nick to false)) {
                 val done = flow.marked(item.id, isSearch, if (isSearch) item.searchCopied else item.nicknameCopied)
