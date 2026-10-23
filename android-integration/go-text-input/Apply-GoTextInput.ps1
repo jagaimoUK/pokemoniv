@@ -66,6 +66,9 @@ if(-not $newController.Contains('private fun requestGoInput(')) {
                 addView(inputButtons)
                 tag = Holder(title, a, b, inputSearch, inputNick)
 '@
+    # Here-strings use CRLF on Windows; the source was normalized to LF above.
+    $before = $before -replace '\r\n?', $LF
+    $after = $after -replace '\r\n?', $LF
     $newController = Replace-ExactlyOnce $newController $before $after
     $newController = Replace-ExactlyOnce $newController '            h.nick.visibility = if (item.nickname.isBlank()) View.GONE else View.VISIBLE' @'
             h.nick.visibility = if (item.nickname.isBlank()) View.GONE else View.VISIBLE
