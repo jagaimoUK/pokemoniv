@@ -1,1 +1,15 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:label="Queue verification" /></manifest>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:label="Queue verification">
+        <service
+            android:name="com.example.pokemonivreader.overlayqueue.GoTextInputAccessibilityService"
+            android:label="厳選テキスト入力"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data android:name="android.accessibilityservice"
+                android:resource="@xml/go_text_input_service" />
+        </service>
+    </application>
+</manifest>
