@@ -18,3 +18,12 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: '8.9' }
       - run: gradle -p android-integration/queue-flow/verification :app:testDebugUnitTest :app:assembleDebug --stacktrace
+  windows-installer:
+    runs-on: windows-latest
+    permissions: { contents: read }
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Verify PowerShell installer against baseline and rollback
+        shell: powershell
+        run: .\android-integration\go-text-input\Test-GoTextInputInstaller.ps1
