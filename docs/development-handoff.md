@@ -1,4 +1,4 @@
-> 2026-10-26 JST 更新: 推薦後処理高速化、GO検索生成の分離、フラベベの検索を669に統一。詳細・測定範囲は [performance-go-search-20261026.md](performance-go-search-20261026.md)。専用ブランチの修正であり、本番反映とは別。
+> 2026-10-26 JST 更新: 推薦後処理高速化、GO検索生成の分離、フラベベの検索を669に統一。詳細・測定範囲は [performance-go-search-20261026.md](performance-go-search-20261026.md)。コード3e9d93aはmain取り込み・Railwayデプロイ39052624-4f27-41bd-8448-502dc578540eのSUCCESS・公開health/HTML確認まで完了。文書更新は別コミット。
 
 # 2026-10-20 見本バックアップの追加
 

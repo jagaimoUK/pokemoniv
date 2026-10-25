@@ -37,7 +37,13 @@ Python 225テスト（1件は既存の実コンテナ依存のためskip）と�
 
 ## 適用状態
 
-専用ブランチに保存。PRで確認し、本番への反映状況はコミット・デプロイと分けて記録する。公開Webへの配備やGO実機検索成功は、この資料のローカル検証結果からは断定しない。
+コード `3e9d93afb2fe9f92e0bb15226c54fe3de78fc2f3` は関連CI全成功後、mainへfast-forwardで取り込み済み。PR #56は取り込み済みとしてクローズ。
+
+Railway production `39052624-4f27-41bd-8448-502dc578540e` が **SUCCESS**、対象コミット一致を確認。公開 `/health` はHTTP200・ok=true、`/app` の配信HTMLにもFlabébé修復コードがあることを確認済み。今回の文書更新はコード本体と別コミット。
+
+GitHub CIでもPython225件（skipなし）・JS9ファイルが合格: https://github.com/jagaimoUK/pokemoniv/actions/runs/40212364528
+
+GO実機の検索成功や対戦開始からの全体時間は未測定。
 
 ## 公式確認先
 
