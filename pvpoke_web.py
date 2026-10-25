@@ -6,6 +6,8 @@ Starts a local HTTP server on 127.0.0.1:8765, never exposed to a LAN.
 """
 from __future__ import annotations
 
+from pvpoke_input_limits import MAX_CANDIDATES, MAX_IMPORT_CHARS, MAX_APP_REQUEST_BYTES
+
 import argparse
 import csv
 from collections import deque
@@ -41,7 +43,7 @@ LAST_CONFIG = WORK / 'last_input.json'
 LATEST_ZIP = WORK / 'pvpoke_results_latest.zip'
 BATCH_CONFIG = WORK / 'batch24_input.json'
 BATCH_OUTPUT = WORK / 'batch24_results'
-MAX_CAND = 150
+MAX_CAND = MAX_CANDIDATES
 MAX_OPPS = 100
 PRESETS = [
     ('マリルリ', 'azumarill', 'BUBBLE', 'ICE_BEAM', 'PLAY_ROUGH'),
@@ -356,7 +358,7 @@ label{display:block;font-size:13px;color:#d0ddec;font-weight:650;margin:10px 0 5
 <label for="preset">よく使うポケモンから選ぶ</label><select id="preset"><option value="">読み込み中…</option></select>
 <label for="species">PvPokeの英語ID（直接入力も可能）</label><input id="species" list="species-list" value="azumarill" autocomplete="off"/><datalist id="species-list"></datalist>
 <label>技構成</label><div class="three"><div><label for="fast">通常技</label><select id="fast"></select></div><div><label for="charged1">ゲージ技①</label><select id="charged1"></select></div><div><label for="charged2">ゲージ技②</label><select id="charged2"></select></div></div></section>
-<section class="card"><div class="head"><div class="num">2</div><h2>個体値を貼り付け</h2></div><p class="tiny">攻撃,防御,HP の順。1行1体、最大150体。重複している個体値はエラーとして表示するよ。</p><textarea id="ivs" spellcheck="false" placeholder="0,15,15&#10;1,15,14&#10;0,14,15">0,15,15&#10;1,15,14</textarea></section>
+<section class="card"><div class="head"><div class="num">2</div><h2>個体値を貼り付け</h2></div><p class="tiny">攻撃,防御,HP の順。1行1体、最大4,096通り。重複している個体値はエラーとして表示するよ。</p><textarea id="ivs" spellcheck="false" placeholder="0,15,15&#10;1,15,14&#10;0,14,15">0,15,15&#10;1,15,14</textarea></section>
 <section class="card"><div class="head"><div class="num">3</div><h2>対戦相手</h2></div><p class="tiny">自動切り替えは4種類。情報源の個体値は各相手の「手動」設定でのみ使用するよ。最大100体。</p><label for="opponentIVMode">対戦相手の共通個体値設定</label><select id="opponentIVMode"><option value="default">PvPokeデフォルト</option><option value="rank1">総合1位（Stat Product）</option><option value="attack">攻撃最大</option><option value="defense">防御最大</option></select><div id="opponents"></div>
 <div class="two"><select id="add-preset" aria-label="追加する対戦相手"><option value="">相手を選ぶ</option></select><button type="button" id="addOpp">＋ 対戦相手を追加</button></div></section>
 <section class="card"><div class="head"><div class="num">4</div><h2>計算する</h2></div>
@@ -540,7 +542,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(415, {'error':'JSONで送信してください'})
         try:
             n = int(self.headers.get('Content-Length','0'))
-            if n < 2 or n > 140000:
+            if n < 2 or n > MAX_APP_REQUEST_BYTES:
                 raise ValueError('入力が大きすぎるか空です')
             payload = json.loads(self.rfile.read(n))
             with LOCK:

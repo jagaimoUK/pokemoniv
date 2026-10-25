@@ -6,6 +6,8 @@ created: the already existing single PvPoke worker does the calculations.
 """
 from __future__ import annotations
 
+from pvpoke_input_limits import MAX_CANDIDATES, MAX_IMPORT_CHARS, MAX_APP_REQUEST_BYTES
+
 import csv
 from copy import deepcopy
 import io
@@ -47,8 +49,8 @@ def _canonical(candidate: dict, ivs: str, batch_mode: str) -> tuple[dict, str, t
         if not match or any(int(x) > 15 for x in match.groups()):
             raise ValueError(f"Invalid IV at line {index} (ATK,DEF,HP must be 0..15)")
         rows.append(tuple(int(x) for x in match.groups()))
-    if not 1 <= len(rows) <= 150:
-        raise ValueError("ivs must have 1..150 triplets")
+    if not 1 <= len(rows) <= MAX_CANDIDATES:
+        raise ValueError(f"ivs must have 1..{MAX_CANDIDATES} triplets")
     if len(set(rows)) != len(rows):
         raise ValueError("Duplicate IV triplets")
     return own, "\n".join(",".join(str(x) for x in row) for row in rows), tuple(rows)

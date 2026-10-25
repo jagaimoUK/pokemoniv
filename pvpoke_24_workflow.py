@@ -12,6 +12,8 @@ Optionally --config JSON of web app's last_input.json and --meta path/to/meta.cs
 """
 from __future__ import annotations
 
+from pvpoke_input_limits import MAX_CANDIDATES, MAX_IMPORT_CHARS, MAX_APP_REQUEST_BYTES
+
 import argparse
 import csv
 import io
@@ -87,8 +89,8 @@ def input_config(path: Path) -> tuple[dict, str]:
             raise ValueError(f'自分の{number}行目が重複しています: {item}')
         seen.add(item)
         parsed.append(item)
-    if not 1 <= len(parsed) <= 150:
-        raise ValueError('自分の個体値は1〜150体にしてください')
+    if not 1 <= len(parsed) <= MAX_CANDIDATES:
+        raise ValueError(f'自分の個体値は1〜{MAX_CANDIDATES}体にしてください')
     return {k: str(cand[k]).strip() for k in POKE_FIELDS}, '\n'.join(','.join(map(str, iv)) for iv in parsed)
 
 

@@ -5,6 +5,8 @@ It never starts a battle, guesses unknown species, or mixes species' ratings.
 """
 from __future__ import annotations
 
+from pvpoke_input_limits import MAX_CANDIDATES, MAX_IMPORT_CHARS, MAX_APP_REQUEST_BYTES
+
 import csv
 import io
 import re
@@ -45,7 +47,7 @@ def app_presets(species: dict, legacy: list[dict], meta_text: str) -> list[dict]
 
 
 def parse_import(text: str, catalog: dict, current: dict | None = None) -> dict:
-    if not isinstance(text, str) or not text.strip() or len(text) > 140000:
+    if not isinstance(text, str) or not text.strip() or len(text) > MAX_IMPORT_CHARS:
         raise ValueError('ポケモン名と個体値、またはCSVを貼り付けてください')
     species = catalog.get('species', {})
     presets = catalog.get('app_presets') or catalog.get('presets', [])
@@ -255,8 +257,8 @@ def parse_import(text: str, catalog: dict, current: dict | None = None) -> dict:
         job['source_records'] = list({(r['ivs'], r['species'], r['cp']): r for r in job['source_records']}.values())
         original = job.pop('_ivs')
         unique = list(dict.fromkeys(original))
-        if len(unique) > 150:
-            raise ValueError(job['name'] + ': 1種類・1技構成につき150体までです。切り捨てずに入力を分けてください')
+        if len(unique) > MAX_CANDIDATES:
+            raise ValueError(job['name'] + f': 1種類・1技構成につき{MAX_CANDIDATES}通りまでです。切り捨てずに入力を分けてください')
         if len(unique) != len(original):
             job['warnings'].append(f'重複する個体値{len(original)-len(unique)}件をまとめました')
         job.update(ivs='\n'.join(','.join(map(str, iv)) for iv in unique),

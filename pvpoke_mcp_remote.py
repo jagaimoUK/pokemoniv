@@ -4,6 +4,7 @@ Test protocol compliance with real ChatGPT MCP client before relying on it.
 Not a hardened multi-tenant production service.
 """
 import json
+from pvpoke_input_limits import MAX_APP_REQUEST_BYTES
 import base64
 import threading
 import logging
@@ -318,7 +319,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(415, {'error': 'Content-Type must be application/json'})
         try:
             size = int(self.headers.get('Content-Length', '0'))
-            if not 0 < size <= 140000:
+            if not 0 < size <= MAX_APP_REQUEST_BYTES:
                 return self.respond(413, {'error': 'Invalid body size'})
             args = json.loads(self.rfile.read(size))
             if not isinstance(args, dict):
