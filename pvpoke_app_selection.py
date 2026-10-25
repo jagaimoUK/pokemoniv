@@ -7,12 +7,12 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import math
-import re
 import json
 from zipfile import ZipFile
 
 from pvpoke_selection_matrix import MODES, SHIELDS, SelectionMatrix, load_selection_matrix
-from pvpoke_app_sizes import pumpkin_search
+from pvpoke_go_search import search_string
+from pvpoke_candidate_comparison import rating_dominators, rival_summaries
 from pvpoke_classic_curator import curate_for_box
 
 
@@ -43,82 +43,6 @@ def validate_focus(focus: list[str] | None) -> list[str]:
     return [x.strip() for x in focus]
 
 
-# Pokémon GO searches by a region keyword, not the PvPoke display-name suffix.
-# E.g. "Wooper (Paldean)" means "Wooper&paldea", not a literal nickname.
-# Only regional *forms* get the extra term. Newly introduced species from
-# these regions keep their ordinary species-name search unchanged.
-REGIONAL_FORM_TERMS = {
-    "alolan": "alola",
-    "galarian": "galar",
-    "hisuian": "hisui",
-    "paldean": "paldea",
-}
-
-
-def _regional_go_name(name: str, species_id: str | None = None) -> tuple[str, str]:
-    """Return base GO name and &region, handling English form aliases.
-
-    The PvPoke species ID is authoritative if present; fallback to the
-    catalog name for callers without an ID. Non-regional form labels stay
-    untouched rather than being silently interpreted as regional variants.
-    """
-    sid_parts = set(re.split(r"[_-]", (species_id or "").casefold()))
-    region_from_id = next(
-        (region for adjective, region in REGIONAL_FORM_TERMS.items()
-         if adjective in sid_parts), None)
-    found = []
-    for adjective, region in REGIONAL_FORM_TERMS.items():
-        names = (adjective, region)
-        tokens = "|".join(re.escape(token) for token in names)
-        if (re.search(r"^\s*(?:" + tokens + r")\s+", name, re.I)
-                or re.search(r"\s*\(\s*(?:" + tokens + r")\s*\)\s*$", name, re.I)
-                or re.search(r"\s+(?:" + tokens + r")\s*$", name, re.I)):
-            found.append((region, tokens))
-    region = region_from_id or (found[0][0] if found else None)
-    if not region:
-        return name, ""
-    tokens = "|".join(re.escape(token) for token, code in
-                      REGIONAL_FORM_TERMS.items() if code == region)
-    tokens += "|" + re.escape(region)
-    cleaned = re.sub(r"^\s*(?:" + tokens + r")\s+", "", name, flags=re.I)
-    cleaned = re.sub(r"\s*\(\s*(?:" + tokens + r")\s*\)\s*$",
-                     "", cleaned, flags=re.I)
-    cleaned = re.sub(r"\s+(?:" + tokens + r")\s*$", "", cleaned, flags=re.I)
-    if not cleaned.strip():
-        raise ValueError("Regional Pokémon search requires a species name")
-    return cleaned.strip(), "&" + region
-
-
-def search_string(name: str, iv: str, shadow: bool = False, species_id: str | None = None) -> str:
-    values = [int(x) for x in iv.split("/")]
-    if len(values) != 3 or any(not 0 <= x <= 15 for x in values):
-        raise ValueError("Invalid candidate IV")
-    if not name or any(x in name for x in "&\r\n"):
-        raise ValueError("A valid English species name is required")
-    # The catalog may label shadows as "Wooper (Paldean) (Shadow)".
-    # GO expects the shadow keyword as its own filter too.
-    if shadow:
-        name = re.sub(r"\s*\(Shadow\)\s*$", "", name, flags=re.I)
-    form_search = pumpkin_search(species_id)
-    if form_search:
-        name, size_filter = form_search
-        regional_filter = ""
-    else:
-        size_filter = ""
-        name, regional_filter = _regional_go_name(name, species_id)
-    # PvPoke UI names contain display-only form labels. GO species searches
-    # do not accept literal "(Core)", "(Meteor)", "(Origin)", etc. as names.
-    # Keep verified filters (region, pumpkin size, shadow) separate; for other
-    # forms search broadly by the actual species name rather than return a
-    # silently broken literal query. Internal species IDs remain unchanged.
-    name = re.sub(r"(?:\s*[(（][^()（）]*[)）]\s*)+$", "", name).strip()
-    if not name:
-        raise ValueError("Pokémon GO search requires an unqualified species name")
-    def bucket(x):
-        return 0 if x == 0 else 1 if x <= 5 else 2 if x <= 10 else 3 if x < 15 else 4
-    return name + regional_filter + "".join(f"&{bucket(x)}{label}" for x, label in zip(values, ("attack", "defense", "hp"))) + size_filter + ("&shadow" if shadow else "")
-
-
 def recommend(matrices: dict[str, SelectionMatrix], candidate: dict,
               english_name: str, focus_opponents: list[str] | None = None,
               policy: dict | None = None) -> dict:
@@ -134,10 +58,6 @@ def recommend(matrices: dict[str, SelectionMatrix], candidate: dict,
              for shield in SHIELDS for pos, opponent in enumerate(matrices[mode].opponents)]
     vectors = {iv: tuple(matrices[mode].ratings[shield][iv][pos]
                         for mode, shield, pos, _ in cells) for iv in ivs}
-    dominated = {iv: [other for other in ivs if other != iv
-                     and all(a >= b for a, b in zip(vectors[other], vectors[iv]))
-                     and any(a > b for a, b in zip(vectors[other], vectors[iv]))]
-                 for iv in ivs}
     equivalents: dict[str, list[str]] = {}
     owners = {}
     for iv in sorted(ivs, key=lambda v: tuple(map(int, v.split("/")))):
@@ -147,30 +67,31 @@ def recommend(matrices: dict[str, SelectionMatrix], candidate: dict,
         else:
             owners[vector] = iv
             equivalents[iv] = []
+    dominated = rating_dominators(ivs, vectors, equivalents)
     reps = [iv for iv in equivalents if not dominated[iv]]
+    focus_terms = tuple(term.casefold() for term in focus)
     events = {iv: [] for iv in reps}
     losses = {iv: [] for iv in reps}
     for index, (mode, shield, pos, opponent) in enumerate(cells):
         scores = [(iv, vectors[iv][index]) for iv in reps]
         best = max(r for _, r in scores)
         best_iv = next(iv for iv, r in scores if r == best)
-        focused = any(term.casefold() in opponent.casefold() for term in focus)
+        focused = any(term in opponent.casefold() for term in focus_terms)
+        rivals = rival_summaries({iv: vectors[iv][index] for iv in equivalents})
         for iv, rating in scores:
             # "Unique >500" means every other supplied performance group is
             # <=500, including dominated candidates. Equivalent IVs are an
             # explicitly displayed alternative, not a distinct role.
-            others = [vectors[other][index] for other in ivs
-                      if other != iv and other not in equivalents[iv]]
-            second = max(others) if others else None
+            second, losing_rival = rivals[iv]
             kind = None
-            if not others and rating >= 500:
+            if second is None and rating >= 500:
                 kind = "available_matchup"
             elif second is not None:
                 if rating > 500 and second <= 500:
                     kind = "unique_gt500"
                 elif rating == 500 and second < 500:
                     kind = "unique_eq500"
-                elif rating > 500 and rating == best and any(r <= 500 for r in others):
+                elif rating > 500 and rating == best and losing_rival:
                     kind = "best_crossover"
                 elif rating > 500 and rating - second >= rules.meaningful_win_lead:
                     kind = "winning_margin"
@@ -282,7 +203,7 @@ def recommend(matrices: dict[str, SelectionMatrix], candidate: dict,
             differences.append({
                 "mode": mode, "shield": shield, "opponent": opponent,
                 "rating": vectors[iv][index], "peer_rating": vectors[peer_iv][index],
-                "focus": any(term.casefold() in opponent.casefold() for term in focus),
+                "focus": any(term in opponent.casefold() for term in focus_terms),
                 "disadvantage": shield in SHIELDS[3:]})
         # Prefer meaningful conditions; show at most three different opponent
         # records, leaving the full recommendation evidence untouched.

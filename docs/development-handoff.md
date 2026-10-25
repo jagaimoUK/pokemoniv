@@ -1,3 +1,5 @@
+> 2026-10-26 JST 更新: 推薦後処理高速化、GO検索生成の分離、フラベベの検索を669に統一。詳細・測定範囲は [performance-go-search-20261026.md](performance-go-search-20261026.md)。専用ブランチの修正であり、本番反映とは別。
+
 # 2026-10-20 見本バックアップの追加
 
 本番2477266のデプロイSUCCESS、実Bucketの条件付き保存・取得・削除PASS。healthのvisual_backupはenabled=true / storage_probe=true。初回はAndroidで接続・保存が必要。GitHub Actionsにバックアップの7テストを追加。

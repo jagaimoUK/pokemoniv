@@ -207,7 +207,7 @@ function nicknameFor(result,row,ivs=row.ivs){
 function normalizedRegionalSearch(search){
  if(typeof search!=='string')return search;
  const terms={alolan:'alola',galarian:'galar',hisuian:'hisui',paldean:'paldea'};
- return search.replace(/^(.+?)\s*\(\s*(Alolan|Galarian|Hisuian|Paldean)\s*\)(?:\s*\(\s*Shadow\s*\))?(?=&|$)/i,
+ return search.replace(/^flab(?:é|e\u0301|e)b(?:é|e\u0301|e)(?=&|$)/i,'669').replace(/^(.+?)\s*\(\s*(Alolan|Galarian|Hisuian|Paldean)\s*\)(?:\s*\(\s*Shadow\s*\))?(?=&|$)/i,
   (_match,base,adjective)=>base.trim()+'&'+terms[adjective.toLowerCase()]);
 }
 function statusSearch(search,status){

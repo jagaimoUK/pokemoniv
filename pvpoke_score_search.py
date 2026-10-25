@@ -6,6 +6,8 @@ are surfaced for manual review rather than silently broadened.
 """
 from __future__ import annotations
 
+from pvpoke_go_search import species_search_term
+
 from functools import lru_cache
 import json
 import math
@@ -176,7 +178,7 @@ def _search_term(entry, forms_by_dex, english_species):
     """
     name = entry["name"]
     labels = re.findall(r"\(([^()]*)\)", name)
-    species = english_species
+    species = species_search_term(english_species)
     shadow = "シャドウ" in labels
     regions = [REGIONAL[x] for x in labels if x in REGIONAL]
     unknown = [x for x in labels if x != "シャドウ" and x not in REGIONAL]
