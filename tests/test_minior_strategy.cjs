@@ -36,6 +36,16 @@ function FakeBattle(poke) {
 const calculator = {damage:(_att,_def,move)=>move.energy===40?100:8};
 const opponent={fastMove:{energyGain:6},hp:150,shields:1};
 const poke=makePokemon();
+const liveRule={type:"set",trigger:"hp",amount:0.5,alternativeFormId:core.speciesId,animationTime:5000};
+const current=makePokemon();
+current.formChange={...liveRule};
+assert.equal(m.preparePokemon(current,{pokemon:[meteor,core]}),true);
+assert.equal(current.formChange.trigger,"hp_threshold");
+assert.equal(current.formChange.alternativeFormId,core.speciesId);
+for (const changed of [{amount:0.4},{type:"toggle"},{alternativeFormId:"unknown"},{trigger:"battle_start"}]) {
+  const invalid=makePokemon();invalid.formChange={...liveRule,...changed};
+  assert.throws(()=>m.preparePokemon(invalid,{pokemon:[meteor,core]}),/Conflicting Minior form rule/);
+}
 const Hold=m.installBattleHook(function(){return new FakeBattle(poke)},"hold",calculator);
 const battle=new Hold();
 assert.equal(battle.getTurnAction(poke,opponent).type,"fast");
