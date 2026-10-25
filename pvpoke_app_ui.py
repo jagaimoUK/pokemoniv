@@ -22,7 +22,7 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <section class="card"><h2>1. ポケモンと個体値</h2><label for="preset">登録プリセット（任意）</label><select id="preset"></select><p class="note" id="presetHint"></p><label for="allSpecies">全ポケモンから選ぶ</label><select id="allSpecies"></select><label for="species">ポケモン名・英語ID（直接入力）</label><input id="species" list="speciesList" value="quagsire" autocomplete="off"><datalist id="speciesList"></datalist>
 <div class="row"><div><label for="fast">通常技</label><select id="fast"></select></div><div><label for="charged1">ゲージ技1</label><select id="charged1"></select></div><div><label for="charged2">ゲージ技2</label><select id="charged2"></select></div></div>
 <div class="actions" role="group" aria-label="登録区分を一括変更"><button id="bulkNormal" class="secondary">すべて通常に変更</button><button id="bulkShadow" class="secondary">すべてシャドウに変更</button><button id="bulkPurified" class="secondary">すべてリトレーンに変更</button><button id="bulkStatusUndo" class="secondary" hidden>区分変更を元に戻す</button></div><p class="note" id="bulkStatusNote">対象：フォーム、または取り込み済みの全種類。区分だけを修正し、個体値・CPは変えません。リトレーン済みの個体値・CPを入力してください。変更後に再計算します。</p>
-<label for="ivs">攻撃,防御,HP（1行1体・最大150体）</label><textarea id="ivs" spellcheck="false" placeholder="0,11,12&#10;3,13,8&#10;2,15,13"></textarea></section>
+<label for="ivs">攻撃,防御,HP（1行1体・最大4,096通り）</label><textarea id="ivs" spellcheck="false" placeholder="0,11,12&#10;3,13,8&#10;2,15,13"></textarea></section>
 <section class="card"><h2>2. 比較と推薦の設定</h2><label for="batchMode">計算条件</label><select id="batchMode"><option value="simple">簡易：Default × 6条件</option><option value="detailed">詳細：4つの相手IV × 6条件</option></select>
 <label for="evaluation">評価方法</label><select id="evaluation"><option value="app">アプリで自動推薦</option><option value="gpt">GPTで評価（比較情報を作成）</option></select>
 <label for="focus">重要な相手（英語名・1行1つ、省略可）</label><textarea id="focus" style="min-height:80px" placeholder="Corviknight&#10;Feraligatr"></textarea><p class="note">名前が一致する技構成をすべて重視します。省略時は独自の役割を全対面から探します。</p>
@@ -492,11 +492,11 @@ function receiveReaderInput(){
  // Remove imported data from the address bar before parsing or showing it.
  history.replaceState(null,'',location.pathname+location.search);
  try{
-  if(encoded.length>32000||!/^[A-Za-z0-9_-]+$/.test(encoded))throw Error('Invalid payload');
+  if(encoded.length>512000||!/^[A-Za-z0-9_-]+$/.test(encoded))throw Error('Invalid payload');
   const pad='='.repeat((4-encoded.length%4)%4);
   const bytes=Uint8Array.from(atob(encoded.replace(/-/g,'+').replace(/_/g,'/')+pad),c=>c.charCodeAt(0));
   const value=new TextDecoder('utf-8',{fatal:true}).decode(bytes);
-  if(value.length>24000||!value.startsWith('個体値厳選')||!/(?:^|\n)#\s*\S/.test(value))throw Error('Invalid IV input');
+  if(bytes.length>384000||!value.startsWith('個体値厳選')||!/(?:^|\n)#\s*\S/.test(value))throw Error('Invalid IV input');
   el('importText').value=value;
   message('読み取りアプリから個体値を受け取りました。「貼り付けた内容を取り込む」を押すと確認できます。');
   return true;

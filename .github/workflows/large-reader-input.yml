@@ -1,0 +1,23 @@
+name: Large reader import and handoff
+on:
+  push:
+    branches: [feature/bulk-reader-transfer-20261025]
+  pull_request:
+    paths: ['pvpoke_input_limits.py', 'pvpoke_app_input.py', 'pvpoke_app_ui.py', 'pvpoke_iv_workflow.py', 'pvpoke_24_workflow.py', 'pvpoke_web.py', 'pvpoke_mcp_remote.py', 'tests/test_large_input.py', 'tests/test_app_ui_reader_bridge.js']
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pip install -r requirements.txt
+      - run: python3 -m unittest discover -s tests -p 'test_app_*py'
+      - run: python3 -m unittest discover -s tests -p test_large_input.py
+      - run: python3 -m unittest discover -s tests -p test_iv_workflow.py
+      - run: python3 -m unittest discover -s tests -p test_pvpoke_24_workflow.py
+      - run: node tests/test_app_ui_reader_bridge.js && node tests/test_app_ui_queue.js && node tests/test_app_ui_share.js && node tests/test_app_ui_bulk_status.js

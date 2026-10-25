@@ -46,8 +46,13 @@ function preparePokemon(poke, data) {
   const entry = data.pokemon.find(p => p.speciesId === poke.speciesId);
   const forms = resolveForms(entry, data.pokemon);
   if (!forms) return false;
-  if (poke.formChange && poke.formChange.trigger && poke.formChange.trigger !== "hp_threshold") {
-    throw Error("Conflicting Minior form rule in GameMaster: " + poke.formChange.trigger);
+  const rule = poke.formChange;
+  // Current GameMaster names the same Meteor -> Core threshold "hp".
+  // Adapt only that exact rule to this pinned engine's existing hook.
+  const nativeHalfHp = rule?.trigger === "hp" && rule.type === "set" &&
+    rule.amount === 0.5 && rule.alternativeFormId === forms.coreId;
+  if (rule?.trigger && rule.trigger !== "hp_threshold" && !nativeHalfHp) {
+    throw Error("Conflicting Minior form rule in GameMaster: " + rule.trigger);
   }
   poke.originalFormId = forms.meteorId;
   poke.startFormId = forms.meteorId;
