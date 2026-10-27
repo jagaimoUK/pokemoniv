@@ -100,7 +100,8 @@ class IVWorkflow:
             highlight_limit: int = 20, review_limit: int = 8,
             focus_limit: int = 20, wait_seconds: int = 12,
             expected_meta_sha256: str | None = None,
-            report_format: str = "decision", selection_policy: dict | None = None) -> dict:
+            report_format: str = "decision", selection_policy: dict | None = None,
+            meta_preset_id: str | None = None) -> dict:
         requested_at = time.monotonic()
         if report_format not in ("decision", "decision-v1", "compact", "app"):
             raise ValueError("report_format must be decision, decision-v1, compact or app")
@@ -134,7 +135,8 @@ class IVWorkflow:
             current = self.backend.status()
             if current.get("state") == "running":
                 raise ValueError("A PvPoke calculation is already running")
-            meta = self.backend.meta_status()
+            meta = (self.backend.meta_preset_status(meta_preset_id) if meta_preset_id is not None
+                    else self.backend.meta_status())
             actual_sha = meta.get("sha256")
             if isinstance(actual_sha, str):
                 actual_sha = actual_sha.lower()
@@ -144,7 +146,11 @@ class IVWorkflow:
                 raise ValueError("Project meta SHA256 does not match the server; synchronize first")
             # /api/run24 already validates inputs and builds the preview atomically.
             english_name = self.backend.candidate_name(own["species"]) if report_format == "app" else None
-            started = self.backend.start24(own, normalized, batch_mode)
+            if meta_preset_id is not None:
+                started = self.backend.start24(own, normalized, batch_mode,
+                    meta_preset_id=meta_preset_id, expected_meta_sha256=actual_sha)
+            else:
+                started = self.backend.start24(own, normalized, batch_mode)
             status = self.backend.status()
             started_at = status.get("started_at")
             if status.get("state") not in ("running", "done") or not started_at:
@@ -154,6 +160,8 @@ class IVWorkflow:
                 "candidate": own, "iv_rows": rows, "batch_mode": batch_mode,
                 "started_at": started_at,
                 "server_meta_sha256": actual_sha,
+                "meta_preset": ({k: meta[k] for k in ("id", "name", "sha256") if k in meta}
+                                if meta_preset_id is not None else None),
                 "expected_meta_sha256": expected_meta_sha256,
                 "focus_opponents": focus_opponents,
                 "highlight_limit": highlight_limit,
@@ -242,6 +250,7 @@ class IVWorkflow:
                 "state": "done", "complete": all(report["complete"] for report in reports.values()),
                 "candidate": ticket["candidate"], "batch_mode": ticket["batch_mode"],
                 "meta_sha256": ticket["server_meta_sha256"],
+                "meta_preset": ticket.get("meta_preset"),
                 "meta_verified_against_project": ticket["expected_meta_sha256"] is not None,
                 "total_ratings_checked": sum(
                     report["total_ratings_checked"] for report in reports.values()),
@@ -263,5 +272,6 @@ class IVWorkflow:
                 output["reports"] = {}
             ticket["completed_result"] = output
             return deepcopy(output)
+
 
 

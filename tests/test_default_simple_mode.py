@@ -31,7 +31,7 @@ class BatchModeDefaultsTests(unittest.TestCase):
         source = (ROOT / "pvpoke_web.py").read_text(encoding="utf-8")
         self.assertIn('<select id="batchMode"><option value="simple">', source)
         self.assertIn("str(payload.get('batch_mode') or 'simple')", source)
-        self.assertIn("def background_run(shields, batch24=False, batch_mode='simple'):", source)
+        self.assertIn("def background_run(shields, batch24=False, batch_mode='simple', meta_file=None):", source)
 
     def test_cli_default_and_explicit_override(self):
         source = (ROOT / "pvpoke_24_workflow.py").read_text(encoding="utf-8")
@@ -42,3 +42,4 @@ class BatchModeDefaultsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

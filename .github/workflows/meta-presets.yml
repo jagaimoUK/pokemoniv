@@ -1,0 +1,22 @@
+name: Meta preset regression and image build
+on:
+  push:
+    branches: ['feature/meta-presets-20261027']
+  pull_request:
+    paths: ['pvpoke_meta_presets.py', 'pvpoke_app_ui.py', 'pvpoke_web.py', 'pvpoke_iv_workflow.py', 'pvpoke_bridge_core.py', 'pvpoke_mcp_remote.py', 'data/pvpoke_meta_presets.json', 'Dockerfile', 'tests/**', '.github/workflows/meta-presets.yml']
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -s tests
+      - run: for file in tests/test_app_*.js; do node "$file"; done
+      - run: python -m compileall -q .
+      - run: docker build -t pokemoniv-meta-presets .

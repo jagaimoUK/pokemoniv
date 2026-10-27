@@ -255,7 +255,8 @@ def call_tool(name, args):
                              args.get('focus_limit', 20),
                              args.get('wait_seconds', 12),
                              args.get('expected_meta_sha256'),
-                             args.get('report_format', 'decision'), args.get('selection_policy'))
+                             args.get('report_format', 'decision'), args.get('selection_policy'),
+                             args.get('meta_preset_id'))
     if name == 'get_iv_selection_result':
         return IV_RUNNER.result(args['run_ref'], args.get('wait_seconds', 12))
     if name == 'get_status':
@@ -310,7 +311,7 @@ class Handler(BaseHTTPRequestHandler):
         """Only explicit app operations; never proxy arbitrary backend paths."""
         if self.path not in ('/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result',
                              '/app-api/session', '/app-api/logout', '/app-api/meta-status',
-                             '/app-api/meta-preview', '/app-api/meta-apply', '/app-api/low-score', '/app-api/visual-backup-token'):
+                             '/app-api/meta-preview', '/app-api/meta-apply', '/app-api/meta-presets', '/app-api/meta-preset-save', '/app-api/low-score', '/app-api/visual-backup-token'):
             return self.respond(404, {'error': 'Not found'})
         origin = self.headers.get('Origin')
         if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'):
@@ -339,6 +340,10 @@ class Handler(BaseHTTPRequestHandler):
                 if not ranking_catalog.get('ready'):
                     raise ValueError('英語名の図鑑データを準備中です。少し待ってから再実行してください')
                 return self.respond(200, search_low_scores(args, ranking_catalog.get('species')))
+            if self.path == '/app-api/meta-presets':
+                return self.respond(200, backend.meta_presets())
+            if self.path == '/app-api/meta-preset-save':
+                return self.respond(200, backend.save_meta_preset(args))
             if self.path == '/app-api/meta-status':
                 return self.respond(200, backend.meta_status())
             if self.path == '/app-api/meta-preview':
@@ -360,7 +365,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('評価方法はappまたはdecisionです')
                 # Browser has no access to Project files. Bind the job to the
                 # currently installed server meta snapshot instead.
-                if args.get('expected_meta_sha256') is None:
+                if args.get('expected_meta_sha256') is None and args.get('meta_preset_id') is None:
                     args['expected_meta_sha256'] = backend.meta_status()['sha256']
                 args.setdefault('report_format', 'app')
                 result = call_tool('run_iv_selection', args)
@@ -515,5 +520,6 @@ if __name__ == '__main__':
     print(f'Local MCP test server: http://{HOST}:{PORT}/mcp', flush=True)
     print('Authenticated prototype server. HTTPS must be terminated by hosting platform.', flush=True)
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+
 
 
