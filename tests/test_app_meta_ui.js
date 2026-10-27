@@ -1,7 +1,7 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const script=fs.readFileSync('pvpoke_app_ui.py','utf8').split('<script>')[1].split('</script>')[0];
 const elements={},calls=[];
-function element(){const e={value:'',textContent:'',hidden:false,disabled:false,children:[],style:{},setAttribute(){},append(x){this.children.push(x)},replaceChildren(){this.children=[]}};Object.defineProperty(e,'id',{set(v){elements[v]=e}});return e;}
+function element(){const e={value:'',textContent:'',hidden:false,disabled:false,children:[],style:{},attrs:{},setAttribute(k,v){this.attrs[k]=v},getAttribute(k){return this.attrs[k]},append(x){this.children.push(x)},replaceChildren(){this.children=[]}};Object.defineProperty(e,'id',{set(v){elements[v]=e}});return e;}
 const el=id=>elements[id]??=element();
 const original='quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE\n';
 const items=[{id:'legacy',name:'既存',rows:87,source:'legacy',sha256:'a'.repeat(64),default:true},
@@ -39,12 +39,14 @@ vm.createContext(context);vm.runInContext(script,context);
 (async()=>{
  await context.refreshMetaStatus(true);
  assert(el('selectedMeta').textContent.includes('既存'));assert.equal(el('metaQuick').children.length,4);
+ assert.equal(el('metaQuick').children.filter(b=>b.getAttribute('aria-pressed')==='true').length,1);
+ assert.equal(el('metaDefault').disabled,true);
  context.chooseMeta('pvpoke:fantasy');assert(el('selectedMeta').textContent.includes('ファンタジー'));
  assert.equal(calls.filter(x=>x.path.includes('save')).length,0,'selection is local and sends no write');
- await el('metaFavorite').onclick();assert(el('metaFavorite').textContent.includes('解除'));
- assert(el('metaQuick').children.some(b=>b.textContent.includes('ファンタジー')));
+ await el('metaFavorite').onclick();assert.equal(el('metaFavorite').getAttribute('aria-pressed'),'true');
+ assert(el('metaQuick').children.some(b=>b.getAttribute('aria-label').includes('ファンタジー')));
  await el('metaDefault').onclick();await context.refreshMetaStatus(true);
- assert(el('selectedMeta').textContent.includes('ファンタジー'));assert(el('selectedMeta').textContent.includes('デフォルト'));
+ assert(el('selectedMeta').textContent.includes('ファンタジー'));assert(el('metaCurrentBadges').children.some(b=>b.textContent==='デフォルト'));assert.equal(el('metaDefault').disabled,true);
  vm.runInContext("active=true",context);context.chooseMeta('legacy');assert(el('selectedMeta').textContent.includes('ファンタジー'));vm.runInContext("active=false",context);
  context.chooseMeta('pvpoke:bad');assert(el('selectedMeta').textContent.includes('ファンタジー'));
  el('metaFile').files=[{name:'日常メタ.txt',size:original.length,async text(){return original}}];await el('metaFile').onchange();
