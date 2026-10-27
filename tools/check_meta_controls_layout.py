@@ -1,0 +1,108 @@
+"""Check the actual preset UI in Chromium, using synthetic state and no accounts."""
+import argparse
+import base64
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import time
+import urllib.request
+import websocket
+from pvpoke_app_ui import HTML
+
+FIXTURE = r'''
+metaState={revision:1,default_id:'daily',retrieved:'2026-10-27',items:[
+ {id:'daily',name:'いつものメタ',rows:87,default:true,favorite:true},
+ {id:'fantasy',name:'ファンタジーカップ',rows:27,favorite:true},
+ {id:'great',name:'スーパーリーグ',rows:44,favorite:true},
+ {id:'long',name:'非常に長い名前のカスタムプリセットでも見切れずに確認できるメタ',rows:100}
+]};selectedMetaId='daily';renderMetaChoices();
+const card=el('metaChoose').closest('section');
+document.querySelector('header').hidden=true;document.querySelector('nav').hidden=true;
+el('login').hidden=true;el('workspace').hidden=false;el('message').hidden=true;
+for(const section of document.querySelectorAll('#workspace > .card'))section.hidden=section!==card;
+for(const child of card.children)child.hidden=!child.classList.contains('meta-presets')&&child.tagName!=='H2';
+card.style.marginTop='0';document.querySelector('main').style.paddingTop='12px';
+el('metaQuick').children[1].click();el('metaChoose').click();
+setTimeout(()=>{
+ const chips=[...document.querySelectorAll('.meta-chip')];
+ const controls=[...document.querySelectorAll('.meta-toolbar button,.meta-settings button,.meta-all-row button')];
+ document.body.dataset.layout=JSON.stringify({width:document.documentElement.clientWidth,scrollWidth:document.documentElement.scrollWidth,
+  chips:chips.map(b=>({name:b.textContent,width:b.getBoundingClientRect().width,height:b.getBoundingClientRect().height,grow:getComputedStyle(b).flexGrow,selected:b.getAttribute('aria-pressed')})),
+  heights:controls.map(b=>b.getBoundingClientRect().height),selected:el('selectedMeta').textContent,
+  defaultDisabled:el('metaDefault').disabled,outside:chips.some(b=>b.getBoundingClientRect().right>document.documentElement.clientWidth)});
+},100);
+'''
+
+def cdp_call(ws, method, params=None):
+    cdp_call.sequence += 1
+    ident = cdp_call.sequence
+    ws.send(json.dumps({'id': ident, 'method': method, 'params': params or {}}))
+    while True:
+        result = json.loads(ws.recv())
+        if result.get('id') == ident:
+            if 'error' in result:
+                raise RuntimeError(result['error'])
+            return result.get('result', {})
+
+
+cdp_call.sequence = 0
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output-dir',type=Path,default=Path('/tmp/meta-controls-qa'))
+    args=parser.parse_args();args.output_dir.mkdir(parents=True,exist_ok=True)
+    chromium=shutil.which('chromium') or shutil.which('chromium-browser')
+    if not chromium:raise SystemExit('Run this inside the existing Docker image (Chromium required)')
+    page_html=HTML.replace('<script>','<script>window.fetch=async()=>({status:401,ok:false});',1).replace('</body>','<script>'+FIXTURE+'</script></body>')
+    with tempfile.TemporaryDirectory() as d:
+        directory=Path(d);page=directory/'presets.html';page.write_text(page_html,encoding='utf-8')
+        profile=directory/'chrome';log=(directory/'chromium.log').open('w')
+        process=subprocess.Popen([chromium,'--headless','--no-sandbox','--disable-gpu',
+            '--disable-dev-shm-usage','--hide-scrollbars','--remote-debugging-port=0',
+            '--remote-allow-origins=*','--user-data-dir='+str(profile),'about:blank'],stdout=log,stderr=log)
+        ws=None
+        try:
+            deadline=time.monotonic()+20
+            while not (profile/'DevToolsActivePort').exists():
+                if time.monotonic()>deadline or process.poll() is not None:
+                    raise RuntimeError((directory/'chromium.log').read_text()[-2000:])
+                time.sleep(0.1)
+            port=(profile/'DevToolsActivePort').read_text().splitlines()[0]
+            with urllib.request.urlopen('http://127.0.0.1:'+port+'/json',timeout=10) as response:
+                target=next(t for t in json.load(response) if t['type']=='page')
+            ws=websocket.create_connection(target['webSocketDebuggerUrl'],timeout=10)
+            cdp_call(ws,'Page.enable')
+            for width in (320,390,768,1280):
+                # Window size alone is clamped to 500px by some Chromium versions.
+                cdp_call(ws,'Emulation.setDeviceMetricsOverride',{'width':width,'height':900,
+                    'deviceScaleFactor':1,'mobile':width<=560})
+                cdp_call(ws,'Page.navigate',{'url':page.as_uri()})
+                deadline=time.monotonic()+15
+                expression='document.readyState==="complete" && document.body.dataset.layout && JSON.parse(document.body.dataset.layout).width==='+str(width)
+                while True:
+                    ready=cdp_call(ws,'Runtime.evaluate',{'expression':expression,'returnByValue':True})
+                    if ready.get('result',{}).get('value'):break
+                    if time.monotonic()>deadline:raise RuntimeError('Layout initialization timed out at '+str(width))
+                    time.sleep(0.1)
+                m=cdp_call(ws,'Runtime.evaluate',{'expression':'JSON.parse(document.body.dataset.layout)','returnByValue':True})['result']['value']
+                screenshot=cdp_call(ws,'Page.captureScreenshot',{'format':'png','captureBeyondViewport':False})
+                (args.output_dir/(str(width)+'.png')).write_bytes(base64.b64decode(screenshot['data']))
+                assert m['width']==width,m
+                assert m['scrollWidth']<=m['width'] and not m['outside'],m
+                assert len(m['chips'])==4 and sum(c['selected']=='true' for c in m['chips'])==1,m
+                assert all(c['grow']=='0' and c['height']>=44 for c in m['chips']),m
+                assert all(h>=44 for h in m['heights']),m
+                assert m['selected']=='ファンタジーカップ' and not m['defaultDisabled'],m
+                (args.output_dir/(str(width)+'.json')).write_text(json.dumps(m,ensure_ascii=False,indent=2))
+                print(json.dumps(m,ensure_ascii=False))
+        finally:
+            if ws:ws.close()
+            process.terminate()
+            try:process.wait(timeout=5)
+            except subprocess.TimeoutExpired:process.kill();process.wait()
+            log.close()
+
+if __name__=='__main__':main()

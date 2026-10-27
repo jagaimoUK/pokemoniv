@@ -11,6 +11,10 @@ HTML = r'''<!doctype html>
 @media(max-width:560px){.quick-nav{right:6px;top:58vh;bottom:auto}.quick-nav a{min-height:48px;min-width:48px;padding:9px 5px;font-size:11px}}
 main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin:4px 0 8px}h2{font-size:20px;margin:0 0 12px}p{line-height:1.65;color:#afc0d6}.eyebrow{color:#90ddbc;font-size:12px;letter-spacing:.15em}.card{background:#1a2637;border:1px solid #33465d;border-radius:16px;padding:20px;margin-top:18px}label{display:block;font-size:14px;margin:14px 0 6px}input,select,textarea,button{font:inherit;border-radius:9px}input,select,textarea{width:100%;padding:12px;border:1px solid #49627d;background:#101c2b;color:#ecf3ff}input[type=checkbox]{width:auto;margin:0 8px 0 0;accent-color:#90ddbc}.checkline{display:flex;align-items:center;gap:3px;cursor:pointer}textarea{min-height:142px;line-height:1.7}button{padding:12px 18px;border:1px solid #76b1dc;background:#266b9b;color:white;cursor:pointer}button:disabled{opacity:.5;cursor:wait}.row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}.secondary{background:transparent;border-color:#597086}.note{font-size:13px}.status{background:#21374a;border-radius:10px;padding:14px;white-space:pre-wrap;line-height:1.7}.error{background:#5a303a}.badge{color:#96e8c4;font-size:13px}.recommendation{border-top:1px solid #3c5068;padding-top:18px;margin-top:18px}.search{display:block;background:#0d1726;padding:12px;border-radius:8px;overflow-wrap:anywhere;font-size:14px;color:#b1e5ff}summary{cursor:pointer;color:#a4cdff}details{margin-top:14px}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;font-size:12px}[hidden]{display:none!important}@media(max-width:560px){.row{grid-template-columns:1fr}.card{padding:16px}main{padding-top:22px}.actions button{flex:1}}
 .low-score-list{display:grid;gap:12px;margin-top:14px}.low-score-item{padding:12px;border-radius:16px;background:#202f3d;border:1px solid #41594f}.low-score-item code{white-space:pre-wrap;overflow-wrap:anywhere;color:#d1ebd8;display:block;margin:8px 0}.low-score-item button{border-radius:999px;background:#536e61;border-color:#749783}.low-score-tools{display:grid;grid-template-columns:2fr 1fr;gap:10px}@media(max-width:560px){.low-score-tools{grid-template-columns:1fr}}
+
+.meta-presets{margin-bottom:18px}.meta-current{display:flex;align-items:center;flex-wrap:wrap;gap:6px 9px;padding:0 0 10px}.meta-caption{font-size:12px;color:#afc0d6}.meta-current-name{font-size:16px;font-weight:650;line-height:1.5;margin:0;color:#ecf3ff;overflow-wrap:anywhere}.meta-count{font-size:12px;color:#afc0d6;white-space:nowrap}.meta-badges{display:inline-flex;align-items:center;flex-wrap:wrap;gap:5px}.meta-tag{display:inline-flex;align-items:center;font-size:11px;font-weight:600;line-height:1.5;padding:2px 7px;border-radius:999px;background:#263d3a;color:#b9e6cf;white-space:nowrap}.meta-star{color:#e8cc85;background:#3c372b}
+.meta-toolbar,.meta-quick,.meta-settings{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.meta-toolbar button,.meta-settings button{flex:0 1 auto;min-height:44px;padding:9px 12px;font-size:13px;border-radius:12px;max-width:100%}.meta-toolbar{margin-bottom:8px}.meta-settings{margin-top:12px}.meta-settings button[aria-pressed=true],.meta-settings .is-set{border-color:#83bba5;background:#233d35;color:#caeedb}.meta-presets button:focus-visible{outline:3px solid #b9e6cf;outline-offset:3px}.meta-presets button:not(:disabled):active{filter:brightness(1.18)}
+.meta-chooser{margin-top:10px;padding:14px;border:1px solid #41586b;border-radius:16px;background:#142130}.meta-hint{font-size:12px;line-height:1.5;margin:0 0 9px;color:#afc0d6}.meta-quick{align-items:flex-start}.meta-chip{display:inline-flex;align-items:center;justify-content:flex-start;gap:7px;flex:0 1 auto;max-width:100%;min-height:44px;padding:9px 11px;border:1px solid #526979;border-radius:13px;background:#1b2d3d;color:#e8eef9;text-align:left;font-size:13px;line-height:1.5}.meta-chip[aria-pressed=true]{border-color:#91cbb0;background:#29483c;color:#e4f8eb}.meta-chip-mark{flex:none;width:15px;color:#b1c5d4;text-align:center}.meta-chip[aria-pressed=true] .meta-chip-mark{color:#c5f2d8}.meta-chip-name{min-width:0;overflow-wrap:anywhere}.meta-chip .meta-tag{font-size:10px;padding:1px 6px;flex:none}.meta-all-row{display:flex;align-items:center;gap:8px}.meta-all-row select{min-width:0;flex:1;font-size:13px}.meta-all-row button{flex:none;width:44px;min-height:44px;padding:8px;border-radius:12px;font-size:21px}.meta-help{margin:8px 0;font-size:12px}.meta-help summary{color:#afc0d6}.meta-presets .note:empty{display:none}.meta-presets .note{line-height:1.6}
 </style></head><body><nav class="quick-nav" aria-label="ページ内の移動"><a href="#pageTop" aria-label="ページ上部に戻る">↑<br>上へ</a></nav><main id="pageTop">
 <header><div class="eyebrow">PVP IV SELECTION</div><h1>役割から選ぶ、個体値厳選</h1><p>対戦計算からおすすめ・理由・検索式まで。アプリの自動推薦と、これまでのGPT評価を使い分けられます。</p></header>
 <section class="card" id="login"><h2>アプリに接続</h2><p class="note">初回だけ接続キー、または有効なアクセストークンを入力してください。APIキー自体は端末へ保存しません。</p><label for="credential">接続キー</label><input id="credential" type="password" autocomplete="off"><label class="checkline" for="remember"><input id="remember" type="checkbox" checked>このブラウザのログインを30日間維持する</label><p class="note">共有端末ではチェックを外してください。ログアウトでこのブラウザの保存情報を削除できます。</p><div class="actions"><button id="connect">接続する</button></div></section>
@@ -24,17 +28,17 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <div class="actions" role="group" aria-label="登録区分を一括変更"><button id="bulkNormal" class="secondary">すべて通常に変更</button><button id="bulkShadow" class="secondary">すべてシャドウに変更</button><button id="bulkPurified" class="secondary">すべてリトレーンに変更</button><button id="bulkStatusUndo" class="secondary" hidden>区分変更を元に戻す</button></div><p class="note" id="bulkStatusNote">対象：フォーム、または取り込み済みの全種類。区分だけを修正し、個体値・CPは変えません。リトレーン済みの個体値・CPを入力してください。変更後に再計算します。</p>
 <label for="ivs">攻撃,防御,HP（1行1体・最大4,096通り）</label><textarea id="ivs" spellcheck="false" placeholder="0,11,12&#10;3,13,8&#10;2,15,13"></textarea></section>
 <section class="card"><h2>2. 比較と推薦の設定</h2>
-<p id="selectedMeta" class="status" aria-live="polite">メタプリセットを読み込み中です。</p>
-<div class="actions"><button id="metaChoose" class="secondary" aria-expanded="false" aria-controls="metaChooser">メタプリセットを選択</button><button id="metaExport" class="secondary" disabled>PvPoke用にコピー</button></div>
+<div class="meta-presets"><div class="meta-current"><span class="meta-caption">使用中</span><p id="selectedMeta" class="meta-current-name" aria-live="polite">メタプリセットを読み込み中です。</p><span id="metaCurrentCount" class="meta-count"></span><span id="metaCurrentBadges" class="meta-badges"></span></div>
+<div class="meta-toolbar"><button id="metaChoose" class="secondary" aria-expanded="false" aria-controls="metaChooser">プリセットを選ぶ</button><button id="metaExport" class="secondary" disabled>PvPoke用にコピー</button></div>
 <p id="metaExportStatus" class="note" aria-live="polite"></p><div id="metaExportParts" class="actions" hidden></div>
 <div id="metaExportFallback" hidden><label for="metaExportText">PvPoke貼り付け用（手動コピー）</label><textarea id="metaExportText" readonly spellcheck="false"></textarea></div>
-<p class="note">PvPokeのBattle → Multi／Matrixで、対戦相手一覧のImport/Exportへ貼り付けてImportを押します。リーグはCP1500にしてください。100件超は分割して確認します。編集後の4列CSVはTXT・CSVに保存し、下の「カスタムメタを追加」から別名で登録できます。</p>
-<div id="metaChooser" hidden>
-<p class="note">デフォルト・お気に入りを優先して表示します。</p><div id="metaQuick" class="actions" role="group" aria-label="よく使うメタ"></div>
-<label for="metaAll">すべてのメタプリセット</label><select id="metaAll"></select>
-<div class="actions"><button id="metaFavorite" class="secondary">お気に入りに追加</button><button id="metaDefault" class="secondary">デフォルトにする</button><button id="metaReload" class="secondary">一覧を再取得</button></div>
+<details class="meta-help"><summary>PvPokeへの貼り付け方</summary><p class="note">PvPokeのBattle → Multi／Matrixで、対戦相手一覧のImport/Exportへ貼り付けてImportを押します。リーグはCP1500にしてください。100件超は分割して確認します。編集後の4列CSVはTXT・CSVに保存し、下の「カスタムメタを追加」から別名で登録できます。</p></details>
+<div id="metaChooser" class="meta-chooser" hidden>
+<p class="meta-hint">よく使うプリセット</p><div id="metaQuick" class="meta-quick" role="group" aria-label="よく使うメタ"></div>
+<label for="metaAll">すべてのメタプリセット</label><div class="meta-all-row"><select id="metaAll"></select><button id="metaReload" class="secondary" aria-label="一覧を再取得" title="一覧を再取得">↻</button></div>
+<div class="meta-settings"><button id="metaFavorite" class="secondary" aria-pressed="false">☆ お気に入り</button><button id="metaDefault" class="secondary">デフォルトにする</button></div>
 <p id="metaPresetNote" class="note"></p>
-</div><p class="note">カップ別の対戦相手一覧を切り替えます。CP1500対応。出場できるポケモンかどうかはカップのルールも確認してください。</p><label for="batchMode">計算条件</label><select id="batchMode"><option value="simple">簡易：Default × 6条件</option><option value="detailed">詳細：4つの相手IV × 6条件</option></select>
+</div><p class="note">カップ別の対戦相手一覧を切り替えます。CP1500対応。出場できるポケモンかどうかはカップのルールも確認してください。</p></div><label for="batchMode">計算条件</label><select id="batchMode"><option value="simple">簡易：Default × 6条件</option><option value="detailed">詳細：4つの相手IV × 6条件</option></select>
 <label for="evaluation">評価方法</label><select id="evaluation"><option value="app">アプリで自動推薦</option><option value="gpt">GPTで評価（比較情報を作成）</option></select>
 <label for="focus">重要な相手（英語名・1行1つ、省略可）</label><textarea id="focus" style="min-height:80px" placeholder="Corviknight&#10;Feraligatr"></textarea><p class="note">名前が一致する技構成をすべて重視します。省略時は独自の役割を全対面から探します。</p>
 <details><summary>自動推薦の基準を調整</summary><label for="lead">勝ち方向で採用するRating差（既定20）</label><input id="lead" type="number" min="1" max="1000" step="1" value="20"><p class="note">500の境界を越える役割は差にかかわらず確認します。負けたままのRating差は自動推薦にしません。</p></details>
@@ -383,9 +387,10 @@ function metaNotice(text,error=false){el('metaNotice').textContent=text;el('meta
 function resetMetaUpload(){metaPending=null;el('metaApply').disabled=true;el('metaPreview').hidden=true;el('metaPreview').textContent='';el('metaFile').value='';}
 function chosenMeta(){return metaState?.items.find(p=>p.id===selectedMetaId);}
 function syncMetaControls(){
+ el('metaDefault').disabled=!!chosenMeta()?.default||active||metaWorking||!!batchState||!!runRef;
  el('metaExport').disabled=metaExportWorking||!chosenMeta()||chosenMeta().available===false;
  const blocked=active||metaWorking||!!batchState||!!runRef;
- for(const id of ['metaChoose','metaAll','metaFavorite','metaDefault','metaName','metaFile','metaApply'])el(id).disabled=blocked;
+ for(const id of ['metaChoose','metaAll','metaFavorite','metaName','metaFile','metaApply'])el(id).disabled=blocked;
  for(const button of el('metaQuick').children)button.disabled=blocked;
  el('metaReload').disabled=active||metaWorking;
  el('metaApply').disabled=blocked||!metaPending||!metaState;
@@ -394,15 +399,27 @@ function syncMetaControls(){
 function renderMetaChoices(){
  if(!metaState)return;
  const current=chosenMeta();
- el('selectedMeta').textContent=current?'使用するメタ：'+current.name+' / '+current.rows+'技構成'+(current.default?'（デフォルト）':''):'メタプリセットを選択してください';
+ el('selectedMeta').textContent=current?current.name:'メタプリセットを選択してください';
+ el('metaCurrentCount').textContent=current?current.rows+'構成':'';
+ el('metaCurrentBadges').replaceChildren();
+ if(current?.default)node('span','デフォルト',el('metaCurrentBadges'),'meta-tag');
+ if(current?.favorite)node('span','★ お気に入り',el('metaCurrentBadges'),'meta-tag meta-star');
  el('metaStatus').textContent='公式プリセット取得日：'+metaState.retrieved+' / カスタム '+metaState.items.filter(p=>p.source==='custom').length+'件';
- el('metaFavorite').textContent=current?.favorite?'お気に入りを解除':'お気に入りに追加';
- el('metaDefault').textContent=current?.default?'デフォルトに設定済み':'デフォルトにする';
+ el('metaFavorite').textContent=current?.favorite?'★ お気に入り':'☆ お気に入り';
+ el('metaFavorite').setAttribute?.('aria-pressed',String(!!current?.favorite));
+ el('metaFavorite').setAttribute?.('aria-label',current?.favorite?'お気に入りから外す':'お気に入りに追加');
+ el('metaDefault').textContent=current?.default?'✓ デフォルト':'デフォルトにする';
+ el('metaDefault').className='secondary'+(current?.default?' is-set':'');
  el('metaPresetNote').textContent=current?.note||'デフォルトは次回接続時の初期値です。今回だけ選び替えてもデフォルトは変わりません。';
  const ordered=metaState.items.filter(p=>p.available!==false).slice().sort((a,b)=>Number(b.default)-Number(a.default)||Number(b.favorite)-Number(a.favorite));
  el('metaQuick').replaceChildren();
  for(const p of ordered.slice(0,4)){
-  const button=document.createElement('button');button.type='button';button.className='secondary';button.textContent=(p.default?'既定 · ':p.favorite?'★ ':'')+p.name;
+  const button=document.createElement('button');button.type='button';button.className='meta-chip';button.title=p.name;
+  const mark=node('span',p.id===selectedMetaId?'✓':'○',button,'meta-chip-mark');mark.setAttribute?.('aria-hidden','true');
+  node('span',p.name,button,'meta-chip-name');
+  if(p.default)node('span','既定',button,'meta-tag');
+  if(p.favorite)node('span','★',button,'meta-tag meta-star');
+  button.setAttribute?.('aria-label',p.name+(p.default?'、デフォルト':'')+(p.favorite?'、お気に入り':''));
   button.setAttribute?.('aria-pressed',String(p.id===selectedMetaId));button.onclick=()=>chooseMeta(p.id);el('metaQuick').append(button);
  }
  el('metaAll').replaceChildren();
@@ -431,7 +448,7 @@ el('metaChoose').onclick=()=>{if(active||metaWorking||batchState||runRef)return;
 el('metaAll').onchange=()=>chooseMeta(el('metaAll').value);
 el('metaReload').onclick=async()=>{try{await refreshMetaStatus();metaNotice('一覧を再取得しました。');}catch(e){metaNotice(e.message,true);}};
 async function saveMetaPreference(action){
- if(active||metaWorking||batchState||runRef||!chosenMeta())return;
+ if(active||metaWorking||batchState||runRef||!chosenMeta()||(action==='default'&&chosenMeta().default))return;
  metaWorking=true;syncMetaControls();
  try{metaState=await api('meta-preset-save',{action,id:selectedMetaId,favorite:!chosenMeta().favorite,revision:metaState.revision});renderMetaChoices();metaNotice('設定を保存しました。');}
  catch(e){metaNotice(e.message,true);}
