@@ -167,3 +167,33 @@ def snapshot(work: Path, preset_id: str, species: dict,
     elif path.read_text(encoding='utf-8') != content:
         raise ValueError('計算用メタの保存内容が一致しません')
     return path, {k: v for k, v in entry.items() if k != 'csv'}
+
+
+# PvPoke's battle/matrix custom-group selector currently accepts 100 entries.
+PVP_IMPORT_LIMIT = 100
+
+
+def export_preset(work: Path, preset_id: str, expected_sha256: str) -> dict:
+    """Read-only adapter to PvPoke PokeMultiSelect.quickFillCSV (four columns)."""
+    entry = resolve(work, preset_id)
+    if entry.get('available') is False:
+        raise ValueError(entry['unavailable_reason'])
+    if expected_sha256 != entry['sha256']:
+        raise ValueError('プリセットの内容が更新されました。一覧を再取得してからコピーしてください')
+    rows = []
+    for species, fast, charged1, charged2 in live._parse(entry['csv']):
+        sid = species.lower()
+        # _shadow is the species ID; -shadow tells PvPoke to apply shadow damage.
+        if sid.endswith('_shadow-shadow'):
+            sid = sid.removesuffix('-shadow')
+        if sid.endswith('_shadow'):
+            sid += '-shadow'
+        rows.append((sid, fast.upper(), charged1.upper(), charged2.upper()))
+    parts = [
+        {'start': i + 1, 'end': min(i + PVP_IMPORT_LIMIT, len(rows)),
+         'csv': meta.serialize(rows[i:i + PVP_IMPORT_LIMIT]).rstrip('\n')}
+        for i in range(0, len(rows), PVP_IMPORT_LIMIT)
+    ]
+    return {'id': entry['id'], 'name': entry['name'], 'sha256': entry['sha256'],
+            'rows': len(rows), 'csv': meta.serialize(rows).rstrip('\n'),
+            'parts': parts, 'max_import_rows': PVP_IMPORT_LIMIT}

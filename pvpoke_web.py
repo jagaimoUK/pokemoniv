@@ -495,11 +495,15 @@ class Handler(BaseHTTPRequestHandler):
                 available = app_presets(cat['species'], cat['presets'],
                                        meta_live.active_path(WORK).read_text(encoding='utf-8-sig'))
             self.respond(200, {**cat, 'app_presets': available, 'saved': saved})
-        elif path in ('/api/meta/presets', '/api/meta/preset'):
+        elif path in ('/api/meta/presets', '/api/meta/preset', '/api/meta/preset-export'):
             try:
                 with LOCK:
                     if path == '/api/meta/presets':
                         result = meta_presets.listing(WORK)
+                    elif path == '/api/meta/preset-export':
+                        query = parse_qs(urlparse(self.path).query)
+                        result = meta_presets.export_preset(WORK, query.get('id', [None])[0],
+                                                            query.get('sha256', [None])[0])
                     else:
                         entry = meta_presets.resolve(WORK, parse_qs(urlparse(self.path).query).get('id', [None])[0])
                         result = {k: v for k, v in entry.items() if k != 'csv'}

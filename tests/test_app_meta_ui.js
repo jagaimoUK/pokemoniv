@@ -8,13 +8,19 @@ const items=[{id:'legacy',name:'既存',rows:87,source:'legacy',sha256:'a'.repea
  {id:'pvpoke:fantasy',name:'ファンタジーカップ',rows:27,source:'pvpoke',sha256:'b'.repeat(64)},
  ...Array.from({length:5},(_,i)=>({id:'pvpoke:'+i,name:'Cup '+i,rows:20,sha256:'b'.repeat(64)})),
  {id:'pvpoke:bad',name:'未完成',rows:1,available:false,unavailable_reason:'通常技なし'}];
-let state={revision:0,default_id:'legacy',retrieved:'2026-10-27',items};let failSave=false;
-const context={document:{getElementById:el,createElement:element},navigator:{clipboard:{async writeText(){}}},URLSearchParams,location:{hash:''},sessionStorage:{getItem(){return null},setItem(){},removeItem(){}},
+let state={revision:0,default_id:'legacy',retrieved:'2026-10-27',items};let failSave=false,denyClipboard=false,exportRows=1,exportFail=false,exportDeferred=null;const copied=[];
+const context={document:{getElementById:el,createElement:element},navigator:{clipboard:{async writeText(text){if(denyClipboard)throw Error('clipboard denied');copied.push(text);}}},URLSearchParams,location:{hash:''},sessionStorage:{getItem(){return null},setItem(){},removeItem(){}},
 fetch:async(path,opts)=>{
  const data=JSON.parse(opts.body);calls.push({path,data});
  if(path==='/app-api/catalog')return {status:401,ok:false};
  let out;
  if(path==='/app-api/meta-presets')out=structuredClone(state);
+ else if(path==='/app-api/meta-preset-export'){
+  if(exportFail)return {status:400,ok:false,json:async()=>({error:'内容が更新されました'})};
+  if(exportDeferred)await exportDeferred;
+  const parts=Array.from({length:Math.ceil(exportRows/100)},(_,i)=>({start:i*100+1,end:Math.min((i+1)*100,exportRows),csv:('part'+i+','+original).trim()}));
+  out={id:data.id,sha256:data.expected_sha256,name:'Export test',rows:exportRows,parts};
+ }
  else if(path==='/app-api/meta-preview')out={rows:1,sha256:'c'.repeat(64),changed:false};
  else if(path==='/app-api/meta-preset-save'){
   if(failSave)return {status:400,ok:false,json:async()=>({error:'別の画面で更新'})};
@@ -48,5 +54,27 @@ vm.createContext(context);vm.runInContext(script,context);
  assert.equal(state.default_id,'pvpoke:fantasy','create must not overwrite default');
  failSave=true;await el('metaDefault').onclick();assert(el('metaNotice').textContent.includes('別の画面'));
  assert(el('selectedMeta').textContent.includes('日常メタ'));
+ // Export selected content; no save or calculation is triggered.
+ const writes=calls.filter(c=>c.path==='/app-api/meta-preset-save').length;
+ await el('metaExport').onclick();assert.equal(copied.length,1);
+ assert(el('metaExportStatus').textContent.includes('コピーしました'));
+ const request=calls.findLast(c=>c.path==='/app-api/meta-preset-export');
+ assert.equal(request.data.id,'custom:1');assert.equal(request.data.expected_sha256,'c'.repeat(64));
+ exportRows=101;await el('metaExport').onclick();assert.equal(copied.length,1,'split content needs explicit part selection');
+ assert.equal(el('metaExportParts').children.length,2);await el('metaExportParts').children[1].onclick();assert(copied.at(-1).startsWith('part1,'));
+ const staleButton=el('metaExportParts').children[0];context.chooseMeta('legacy');
+ await staleButton.onclick();assert.equal(copied.length,2,'old part cannot be copied after selecting another meta');
+ exportRows=1;denyClipboard=true;await el('metaExport').onclick();
+ assert.equal(el('metaExportFallback').hidden,false);assert(el('metaExportText').value.includes(original.trim()));
+ assert(el('metaExportStatus').textContent.includes('自動コピーできません'));
+ denyClipboard=false;exportFail=true;await el('metaExport').onclick();assert(el('metaExportStatus').textContent.includes('内容が更新'));
+ assert.equal(el('metaExportFallback').hidden,true);assert.equal(el('metaExport').disabled,false);
+ exportFail=false;let release;exportDeferred=new Promise(resolve=>release=resolve);
+ const pending=el('metaExport').onclick();assert.equal(el('metaExport').disabled,true);
+ context.chooseMeta('pvpoke:fantasy');release();await pending;exportDeferred=null;
+ assert.equal(copied.length,2,'discard slow response for previous selection');
+ assert.equal(calls.filter(c=>c.path==='/app-api/meta-preset-save').length,writes);
+ assert.equal(calls.filter(c=>c.path==='/app-api/run').length,0);
+ console.log('Meta CSV export: selected ID/hash, split parts, clipboard fallback, failures and stale responses OK');
  console.log('Meta presets: quick 4, default, favorites, named upload, read-only selection, failures OK');
 })();

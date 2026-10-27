@@ -311,7 +311,7 @@ class Handler(BaseHTTPRequestHandler):
         """Only explicit app operations; never proxy arbitrary backend paths."""
         if self.path not in ('/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result',
                              '/app-api/session', '/app-api/logout', '/app-api/meta-status',
-                             '/app-api/meta-preview', '/app-api/meta-apply', '/app-api/meta-presets', '/app-api/meta-preset-save', '/app-api/low-score', '/app-api/visual-backup-token'):
+                             '/app-api/meta-preview', '/app-api/meta-apply', '/app-api/meta-presets', '/app-api/meta-preset-save', '/app-api/meta-preset-export', '/app-api/low-score', '/app-api/visual-backup-token'):
             return self.respond(404, {'error': 'Not found'})
         origin = self.headers.get('Origin')
         if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'):
@@ -342,6 +342,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, search_low_scores(args, ranking_catalog.get('species')))
             if self.path == '/app-api/meta-presets':
                 return self.respond(200, backend.meta_presets())
+            if self.path == '/app-api/meta-preset-export':
+                return self.respond(200, backend.export_meta_preset(
+                    args.get('id'), args.get('expected_sha256')))
             if self.path == '/app-api/meta-preset-save':
                 return self.respond(200, backend.save_meta_preset(args))
             if self.path == '/app-api/meta-status':

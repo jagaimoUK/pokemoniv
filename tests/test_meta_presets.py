@@ -145,3 +145,43 @@ class MetaPresetTests(unittest.TestCase):
         state=self.create()
         with self.assertRaises(ValueError):
             presets.snapshot(self.work,state['saved_id'],{})
+
+
+    def test_export_preserves_moves_order_and_shadow_damage_marker(self):
+        content=('quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE\n'
+                 'quagsire_shadow,MUD_SHOT,AQUA_TAIL,MUD_BOMB\n'
+                 'quagsire_shadow-shadow,MUD_SHOT,AQUA_TAIL,STONE_EDGE\n')
+        with patch.object(presets.live,'active_path') as path:
+            path.return_value.read_text.return_value=content
+            result=presets.export_preset(self.work,'legacy',live.digest(content))
+        self.assertEqual(result['csv'],content.replace('quagsire_shadow,','quagsire_shadow-shadow,').rstrip('\n'))
+        self.assertEqual(result['rows'],3)
+        self.assertEqual(len(result['parts']),1)
+        self.assertFalse(presets.store_path(self.work).exists())
+
+    def test_export_large_preset_never_drops_rows(self):
+        for count in (1,100,101,500):
+            with self.subTest(count=count):
+                content=''.join(f'pokemon{i},FAST,CHARGE1,CHARGE2\n' for i in range(count))
+                with patch.object(presets.live,'active_path') as path:
+                    path.return_value.read_text.return_value=content
+                    result=presets.export_preset(self.work,'legacy',live.digest(content))
+                self.assertEqual(result['rows'],count)
+                self.assertEqual('\n'.join(p['csv'] for p in result['parts']),result['csv'])
+                self.assertTrue(all(len(p['csv'].splitlines())<=100 for p in result['parts']))
+                self.assertEqual(result['parts'][-1]['end'],count)
+
+    def test_export_unknown_unavailable_or_changed_meta_fails(self):
+        for id_,sha in [('missing','a'*64),('pvpoke:spectral','a'*64),('legacy','0'*64),('legacy',None)]:
+            with self.subTest(id=id_):
+                with self.assertRaises(ValueError):presets.export_preset(self.work,id_,sha)
+
+    def test_export_custom_and_official_without_rewriting_settings(self):
+        saved=self.create();id_=saved['saved_id'];before=presets.store_path(self.work).read_bytes()
+        result=presets.export_preset(self.work,id_,live.digest(CSV))
+        self.assertEqual(result['csv'],CSV.rstrip('\n'))
+        fantasy=presets.resolve(self.work,'pvpoke:fantasy')
+        exported=presets.export_preset(self.work,'pvpoke:fantasy',fantasy['sha256'])
+        self.assertEqual(exported['rows'],27)
+        self.assertIn('forretress_shadow-shadow,',exported['csv'])
+        self.assertEqual(presets.store_path(self.work).read_bytes(),before)
