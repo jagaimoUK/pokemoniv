@@ -78,6 +78,22 @@ def meta_status() -> dict:
     return _request('/api/meta/status')
 
 
+def meta_presets() -> dict:
+    return _request('/api/meta/presets')
+
+
+def meta_preset_status(preset_id: str) -> dict:
+    from urllib.parse import quote
+    if not isinstance(preset_id, str):
+        raise BridgeError('メタプリセットを選択してください')
+    return _request('/api/meta/preset?id=' + quote(preset_id, safe=''))
+
+
+def save_meta_preset(args: dict) -> dict:
+    return _request('/api/meta/presets', args,
+                    headers={'X-PvPoke-Token': _token()}, timeout=75)
+
+
 def candidate_name(species: str) -> str:
     """Use game-data English names, never invent form spellings from an ID."""
     cat = _request('/api/catalog')
@@ -177,8 +193,14 @@ def preview24(candidate: dict, ivs: str, batch_mode: str = 'simple') -> dict:
                     headers={'X-PvPoke-Token': _token()}, timeout=75)
 
 
-def start24(candidate: dict, ivs: str, batch_mode: str = 'simple') -> dict:
-    result = _request('/api/run24', validate_24(candidate, ivs, batch_mode),
+def start24(candidate: dict, ivs: str, batch_mode: str = 'simple', *,
+            meta_preset_id: str | None = None, expected_meta_sha256: str | None = None) -> dict:
+    payload = validate_24(candidate, ivs, batch_mode)
+    if meta_preset_id is not None:
+        payload['meta_preset_id'] = meta_preset_id
+    if expected_meta_sha256 is not None:
+        payload['expected_meta_sha256'] = expected_meta_sha256
+    result = _request('/api/run24', payload,
                       headers={'X-PvPoke-Token': _token()}, timeout=75)
     if not result.get('ok'):
         raise BridgeError(str(result))
@@ -307,4 +329,5 @@ if __name__ == '__main__':
         print(json.dumps(healthcheck(), ensure_ascii=False, indent=2))
     except BridgeError as e:
         raise SystemExit('接続確認エラー: ' + str(e)) from e
+
 

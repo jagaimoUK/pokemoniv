@@ -56,7 +56,8 @@ class AppGatewayTests(unittest.TestCase):
 
     def test_app_data_requires_current_mcp_authentication(self):
         for path in ['/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result',
-                     '/app-api/meta-status', '/app-api/meta-preview', '/app-api/meta-apply']:
+                     '/app-api/meta-status', '/app-api/meta-preview', '/app-api/meta-apply',
+                     '/app-api/meta-presets', '/app-api/meta-preset-save']:
             status, _ = self.request(path, {}, token=False)
             self.assertEqual(status, 401)
         self.assertEqual(self.backend.run_count, 0)
@@ -215,3 +216,4 @@ class AppGatewayTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

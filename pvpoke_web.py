@@ -23,12 +23,13 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 import pvpoke_batch_v2 as engine
 import pvpoke_iv_modes as iv_modes
 import pvpoke_archive as archives
 import pvpoke_meta_live as meta_live
+import pvpoke_meta_presets as meta_presets
 from pvpoke_app_input import app_presets
 from pvpoke_app_catalog import enrich_catalog
 
@@ -301,11 +302,11 @@ def worker(shields):
     print('DONE:', LATEST_ZIP, flush=True)
 
 
-def background_run(shields, batch24=False, batch_mode='simple'):
+def background_run(shields, batch24=False, batch_mode='simple', meta_file=None):
     if batch24:
         command = [sys.executable, '-u', str(Path(__file__).resolve().parent / 'pvpoke_24_workflow.py'),
                    '--run', '--config', str(BATCH_CONFIG), '--output', str(BATCH_OUTPUT),
-                   '--batch-mode', batch_mode, '--meta', str(meta_live.active_path(WORK))]
+                   '--batch-mode', batch_mode, '--meta', str(meta_file or meta_live.active_path(WORK))]
     else:
         command = [sys.executable, str(Path(__file__).resolve()), '--worker', shields]
     try:
@@ -494,6 +495,17 @@ class Handler(BaseHTTPRequestHandler):
                 available = app_presets(cat['species'], cat['presets'],
                                        meta_live.active_path(WORK).read_text(encoding='utf-8-sig'))
             self.respond(200, {**cat, 'app_presets': available, 'saved': saved})
+        elif path in ('/api/meta/presets', '/api/meta/preset'):
+            try:
+                with LOCK:
+                    if path == '/api/meta/presets':
+                        result = meta_presets.listing(WORK)
+                    else:
+                        entry = meta_presets.resolve(WORK, parse_qs(urlparse(self.path).query).get('id', [None])[0])
+                        result = {k: v for k, v in entry.items() if k != 'csv'}
+                self.respond(200, result)
+            except (ValueError, OSError) as exc:
+                self.respond(400, {'error': str(exc)})
         elif path == '/api/meta/status':
             self.respond(200, meta_live.get_status(WORK))
         elif path == '/api/storage/status':
@@ -530,7 +542,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        if path not in ('/api/prepare','/api/run','/api/prepare24','/api/run24','/api/meta/sync','/api/meta/preview'):
+        if path not in ('/api/prepare','/api/run','/api/prepare24','/api/run24','/api/meta/sync','/api/meta/preview','/api/meta/presets'):
             return self.respond(404, {'error': '見つかりません'})
         # Only same-origin JS with the random session token can start a job.
         origin = self.headers.get('Origin','')
@@ -548,6 +560,10 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 if STATUS['state'] == 'running':
                     return self.respond(409, {'error':'計算中は入力を変更できません'})
+                if path == '/api/meta/presets':
+                    if not CATALOG['ready']:
+                        raise ValueError('ゲームデータの読み込みが完了していません')
+                    return self.respond(200, meta_presets.save(WORK, payload, CATALOG['species']))
                 if path == '/api/meta/preview':
                     if not CATALOG['ready']:
                         raise ValueError('ゲームデータの読み込みが完了していません')
@@ -565,13 +581,21 @@ class Handler(BaseHTTPRequestHandler):
                     cand_parts = normalize_pokemon(payload.get('candidate'), CATALOG['species'], '自分')
                     iv_list = parse_ivs(payload.get('ivs'))
                     meta_file = meta_live.active_path(WORK)
+                    selected_meta = None
+                    if payload.get('meta_preset_id') is not None:
+                        meta_file, selected_meta = meta_presets.snapshot(
+                            WORK, payload['meta_preset_id'], CATALOG['species'],
+                            payload.get('expected_meta_sha256'))
+                    elif (payload.get('expected_meta_sha256') is not None
+                          and payload['expected_meta_sha256'] != meta_live.get_status(WORK)['sha256']):
+                        raise ValueError('計算前にメタが更新されました。再確認してください')
                     with meta_file.open(encoding='utf-8-sig', newline='') as fp:
                         meta_count = sum(bool(row) for row in csv.reader(fp))
                     batch_mode = str(payload.get('batch_mode') or 'simple').strip().lower()
                     if batch_mode not in ('simple','detailed'):
                         raise ValueError('メタ計算モードはsimpleまたはdetailedです')
                     mode_count = 1 if batch_mode == 'simple' else 4
-                    preview = {'batch24': True, 'batch_mode': batch_mode, 'candidate_count': len(iv_list),
+                    preview = {'meta_preset': selected_meta, 'batch24': True, 'batch_mode': batch_mode, 'candidate_count': len(iv_list),
                                'opponent_count': meta_count, 'mode_count': mode_count, 'shield_cases': 6,
                                'battles_upper_bound': len(iv_list)*meta_count*mode_count*6}
                     if path == '/api/run24':
@@ -587,7 +611,7 @@ class Handler(BaseHTTPRequestHandler):
                                        'logs':deque(maxlen=120), 'exit_code':None,
                                        'started_at':datetime.now().isoformat(timespec='microseconds'),
                                        'finished_at':None, 'batch24':True})
-                        threading.Thread(target=background_run, args=('all', True, batch_mode),
+                        threading.Thread(target=background_run, args=('all', True, batch_mode, meta_file),
                                          daemon=True).start()
                     return self.respond(200, {'ok':True,'preview':preview})
                 cleaned, crows, orows, preview = prepare_payload(payload)
@@ -632,5 +656,6 @@ if __name__ == '__main__':
         main()
     except KeyboardInterrupt:
         print('\n終了したにぇ。保存済みのCSVとZIPは残るよ。')
+
 
 
