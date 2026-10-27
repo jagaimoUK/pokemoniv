@@ -1,3 +1,11 @@
+## 2026-10-27 PvPoke向けプリセットコピー
+
+選択中のメタを4列CSVでコピーする機能を追加。`_shadow` 種IDにPvPokeの補正指定 `-shadow` を付け、技違いは保持する。100件超は分割コピー。古い応答やSHA256不一致を拒否し、クリップボード拒否時には手動コピー欄。保存データや計算を変更しない。ChatGPT用PvPoke MCPは呼び出さない。
+
+設計・公式ソース・使い方・検証範囲は [meta-preset-export-20261027.md](meta-preset-export-20261027.md)。本番反映の最終状態は当該PRとRailwayのデプロイを確認。Android ChromeとPvPoke実画面の貼り付けは未確認。
+
+---
+
 ## 2026-10-27 メタプリセット複数保存
 
 正本 main `7d10a7e864d2fcec15ea9213f30a39a0baac9f3f` から `feature/meta-presets-20261027` で開発。詳細・学習解説・測定値・復旧方法は [meta-presets-20261027.md](meta-presets-20261027.md)。

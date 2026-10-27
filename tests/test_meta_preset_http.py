@@ -56,6 +56,19 @@ class PresetHTTPTests(unittest.TestCase):
         self.assertEqual(self.req('/api/meta/preset')[0],400)
         self.assertEqual(self.req('/api/meta/presets',{'action':'default','id':id_,'revision':0})[0],400)
 
+    def test_export_round_trip_over_http_does_not_mutate_or_start_battle(self):
+        saved=self.create();id_=saved['saved_id']
+        checksum=presets.resolve(self.work,id_)['sha256']
+        before=presets.store_path(self.work).read_bytes()
+        with patch.object(bridge,'BASE','http://127.0.0.1:'+str(self.server.server_port)):
+            exported=bridge.export_meta_preset(id_,checksum)
+        self.assertEqual(exported['csv'],CSV.rstrip('\n'))
+        self.assertEqual(exported['parts'][0]['start'],1)
+        self.assertEqual(presets.store_path(self.work).read_bytes(),before)
+        self.assertEqual(web.STATUS['state'],'idle')
+        self.assertEqual(self.req('/api/meta/preset-export?id='+id_+'&sha256='+'0'*64)[0],400)
+        self.assertEqual(self.req('/api/meta/preset-export')[0],400)
+
     def test_run_uses_chosen_immutable_file_and_checks_hash_under_lock(self):
         saved=self.create();id_=saved['saved_id'];checksum=presets.resolve(self.work,id_)['sha256']
         args={'candidate':CANDIDATE,'ivs':IVS,'meta_preset_id':id_,'expected_meta_sha256':'0'*64}

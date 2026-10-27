@@ -89,6 +89,14 @@ def meta_preset_status(preset_id: str) -> dict:
     return _request('/api/meta/preset?id=' + quote(preset_id, safe=''))
 
 
+def export_meta_preset(preset_id: str, expected_sha256: str) -> dict:
+    from urllib.parse import urlencode
+    if not isinstance(preset_id, str) or not isinstance(expected_sha256, str):
+        raise BridgeError('コピーするメタプリセットを選択してください')
+    return _request('/api/meta/preset-export?' + urlencode({
+        'id': preset_id, 'sha256': expected_sha256}))
+
+
 def save_meta_preset(args: dict) -> dict:
     return _request('/api/meta/presets', args,
                     headers={'X-PvPoke-Token': _token()}, timeout=75)

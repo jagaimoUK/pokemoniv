@@ -1,7 +1,7 @@
 name: Meta preset regression and image build
 on:
   push:
-    branches: ['feature/meta-presets-20261027']
+    branches: ['feature/meta-presets-20261027', 'feature/meta-preset-export-20261027']
   pull_request:
     paths: ['pvpoke_meta_presets.py', 'pvpoke_app_ui.py', 'pvpoke_web.py', 'pvpoke_iv_workflow.py', 'pvpoke_bridge_core.py', 'pvpoke_mcp_remote.py', 'data/pvpoke_meta_presets.json', 'Dockerfile', 'tests/**', '.github/workflows/meta-presets.yml']
 jobs:

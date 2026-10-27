@@ -57,10 +57,20 @@ class AppGatewayTests(unittest.TestCase):
     def test_app_data_requires_current_mcp_authentication(self):
         for path in ['/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result',
                      '/app-api/meta-status', '/app-api/meta-preview', '/app-api/meta-apply',
-                     '/app-api/meta-presets', '/app-api/meta-preset-save']:
+                     '/app-api/meta-presets', '/app-api/meta-preset-save', '/app-api/meta-preset-export']:
             status, _ = self.request(path, {}, token=False)
             self.assertEqual(status, 401)
         self.assertEqual(self.backend.run_count, 0)
+
+    def test_preset_export_is_authenticated_and_read_only(self):
+        expected={'id':'pvpoke:fantasy','rows':27,'csv':'export'}
+        with patch.object(remote.backend,'export_meta_preset',return_value=expected) as export:
+            status,body=self.request('/app-api/meta-preset-export',{
+                'id':'pvpoke:fantasy','expected_sha256':'a'*64})
+            self.assertEqual(status,200)
+            self.assertEqual(json.loads(body),expected)
+            export.assert_called_once_with('pvpoke:fantasy','a'*64)
+        self.assertEqual(self.backend.run_count,0)
 
     def test_import_validates_without_starting_a_battle(self):
         from test_app_input import CATALOG
