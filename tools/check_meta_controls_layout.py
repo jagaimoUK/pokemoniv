@@ -137,7 +137,18 @@ def main():
                 assert 'exceptionDetails' not in result,result
                 saved=result['result']['value']
                 assert saved['name']=='貼り付け確認 '+str(width) and saved['text']=='' and saved['disabled'] and saved['defaultId']=='daily',saved
-                print(json.dumps({'paste_preview':pasted,'saved':saved},ensure_ascii=False))
+                expression=r"""(async()=>{
+                    const transfer=new DataTransfer();
+                    const csv='quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE\r\n';
+                    transfer.items.add(new File([csv+csv],'windows-meta.csv',{type:'text/csv'}));
+                    el('metaFile').files=transfer.files;await el('metaFile').onchange();
+                    return {canSave:!el('metaApply').disabled,hasCR:el('metaText').value.includes('\r'),preview:el('metaPreview').textContent};
+                })()"""
+                result=cdp_call(ws,'Runtime.evaluate',{'expression':expression,'returnByValue':True,'awaitPromise':True})
+                assert 'exceptionDetails' not in result,result
+                windows=result['result']['value']
+                assert windows['canSave'] and not windows['hasCR'] and '重複 1行' in windows['preview'],windows
+                print(json.dumps({'paste_preview':pasted,'saved':saved,'windows_file':windows},ensure_ascii=False))
         finally:
             if ws:ws.close()
             process.terminate()

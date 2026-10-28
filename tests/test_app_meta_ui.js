@@ -3,6 +3,8 @@ const script=fs.readFileSync('pvpoke_app_ui.py','utf8').split('<script>')[1].spl
 const elements={},calls=[];
 function element(){const e={value:'',textContent:'',hidden:false,disabled:false,children:[],style:{},attrs:{},setAttribute(k,v){this.attrs[k]=v},getAttribute(k){return this.attrs[k]},append(x){this.children.push(x)},replaceChildren(){this.children=[]}};Object.defineProperty(e,'id',{set(v){elements[v]=e}});return e;}
 const el=id=>elements[id]??=element();
+// Real textareas normalize line endings when files are loaded into the editor.
+let metaTextValue='';Object.defineProperty(el('metaText'),'value',{get(){return metaTextValue},set(v){metaTextValue=String(v).replace(/\r\n?/g,'\n')}});
 const original='quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE\n';
 const items=[{id:'legacy',name:'既存',rows:87,source:'legacy',sha256:'a'.repeat(64),default:true},
  {id:'pvpoke:fantasy',name:'ファンタジーカップ',rows:27,source:'pvpoke',sha256:'b'.repeat(64)},
@@ -55,6 +57,8 @@ vm.createContext(context);vm.runInContext(script,context);
  context.chooseMeta('pvpoke:bad');assert(el('selectedMeta').textContent.includes('ファンタジー'));
  el('metaFile').files=[{name:'日常メタ.txt',size:original.length,async text(){return original}}];await el('metaFile').onchange();
  assert.equal(el('metaApply').disabled,false,'identical content can be saved under another name');
+ el('metaFile').files=[{name:'日常メタ.txt',size:original.length+1,async text(){return original.replace(/\n/g,'\r\n')}}];await el('metaFile').onchange();
+ assert.equal(calls.findLast(c=>c.path==='/app-api/meta-preview').data.csv,original);assert.equal(el('metaApply').disabled,false,'Windows file preview must stay valid');
  assert.equal(el('metaName').value,'日常メタ');assert(el('metaPreview').textContent.includes('上書きしません'));
  await el('metaApply').onclick();assert(el('metaNotice').textContent.includes('保存完了'));assert(el('selectedMeta').textContent.includes('日常メタ'));
  assert.equal(state.default_id,'pvpoke:fantasy','create must not overwrite default');

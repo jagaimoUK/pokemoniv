@@ -493,9 +493,9 @@ async function previewMetaInput(file=null){
  if(active||metaWorking||batchState||runRef){metaNotice('計算中はメタを更新できません。',true);return;}
  resetMetaUploadPreviewOnly();metaWorking=true;syncMetaControls();metaNotice('メタの内容と技を確認中です。');
  try{
-  const content=file?await file.text():el('metaText').value;
+  let content=file?await file.text():el('metaText').value;
   if(file&&el('metaFile').files?.[0]!==file)return;
-  if(file)el('metaText').value=content;
+  if(file){el('metaText').value=content;content=el('metaText').value;} // Textareas normalize CRLF/CR to LF.
   if(!content.trim())throw Error('メタの内容を貼り付けてください。');
   const preview=await api('meta-preview',{csv:content});
   if(el('metaText').value!==content||(file&&el('metaFile').files?.[0]!==file))return;
