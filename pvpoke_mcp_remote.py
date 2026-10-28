@@ -10,6 +10,7 @@ import threading
 import logging
 import os
 import hmac
+from functools import lru_cache
 from urllib.parse import urlparse
 import jwt
 from jwt import PyJWKClient, InvalidTokenError
@@ -20,6 +21,7 @@ from pvpoke_app_ui import HTML as APP_HTML
 from pvpoke_app_access import AppAccess, BrowserLogin
 from pvpoke_app_input import parse_import
 from pvpoke_score_search import search_low_scores
+from pvpoke_reader_cleanup import reader_cleanup_payload
 
 APP_ACCESS = AppAccess()
 
@@ -271,6 +273,15 @@ if AUTH0_ENABLED:
     for t in TOOLS:
         t['securitySchemes'] = [{'type':'oauth2', 'scopes':[OAUTH_SCOPE] if OAUTH_SCOPE else []}]
 
+@lru_cache(maxsize=1)
+def cached_reader_cleanup():
+    """Fixed snapshot / nonpersonal response. Do not cache user sessions."""
+    catalog = backend._request('/api/catalog')
+    if not catalog.get('ready'):
+        raise ValueError('図鑑データを準備中です')
+    return reader_cleanup_payload(catalog.get('species'))
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = 'PvPokeMCPLite/0.1'
     def respond(self, code, obj=None, cookie=None):
@@ -418,6 +429,17 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(503, {'error':'保存先に接続できません。端末内の見本は残っています'})
 
     def do_GET(self):
+        # This one read-only route contains only global, fixed PvP rankings
+        # transformed into GO search terms. Do not expose private app APIs,
+        # user IVs, stored presets, or credentials without authentication.
+        if self.path == '/reader-api/v1/cleanup':
+            try:
+                return self.respond(200, cached_reader_cleanup())
+            except ValueError as exc:
+                return self.respond(503, {'error': str(exc)})
+            except Exception:
+                logging.exception('Reader cleanup response unavailable')
+                return self.respond(503, {'error': '検索式を生成できませんでした'})
         if self.path == '/reader-backup':
             data=BACKUP_HTML.encode('utf-8')
             self.send_response(200)

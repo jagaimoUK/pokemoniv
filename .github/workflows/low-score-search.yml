@@ -8,10 +8,13 @@ on:
       - 'data/pokemon_species_evolutions_20261019.json'
       - 'pvpoke_web.py'
       - 'pvpoke_score_search.py'
+      - 'pvpoke_reader_cleanup.py'
       - 'pvpoke_mcp_remote.py'
       - 'pvpoke_app_ui.py'
       - 'android-integration/overlayqueue/**'
       - 'tests/test_low_score_search.py'
+      - 'tests/test_reader_cleanup_contract.py'
+      - 'tests/test_app_ui_low_score_visibility.js'
       - 'tests/test_app_ui_low_score.js'
       - 'demo/app/src/test/java/com/example/pokemonivreader/overlayqueue/LowScoreQueueTest.kt'
       - '.github/workflows/low-score-search.yml'
@@ -19,10 +22,13 @@ on:
     paths:
       - 'Dockerfile'
       - 'pvpoke_score_search.py'
+      - 'pvpoke_reader_cleanup.py'
       - 'pvpoke_mcp_remote.py'
       - 'pvpoke_app_ui.py'
       - 'android-integration/overlayqueue/OverlayCopyQueueImportActivity.kt'
       - 'tests/test_low_score_search.py'
+      - 'tests/test_reader_cleanup_contract.py'
+      - 'tests/test_app_ui_low_score_visibility.js'
       - 'tests/test_app_ui_low_score.js'
   workflow_dispatch:
 jobs:
@@ -37,8 +43,10 @@ jobs:
         with:
           node-version: '22'
       - run: python -m unittest discover -s tests -p 'test_low_score_search.py' -v
-      - run: python -m py_compile pvpoke_mcp_remote.py pvpoke_app_ui.py pvpoke_score_search.py
+      - run: python -m unittest discover -s tests -p 'test_reader_cleanup_contract.py' -v
+      - run: python -m py_compile pvpoke_mcp_remote.py pvpoke_app_ui.py pvpoke_score_search.py pvpoke_reader_cleanup.py
       - run: node tests/test_app_ui_low_score.js
+      - run: node tests/test_app_ui_low_score_visibility.js
       - run: node tests/test_app_ui_share.js
       - run: node tests/test_app_ui_queue.js
       - run: node tests/test_app_ui_bulk_status.js

@@ -275,6 +275,62 @@ def search_low_scores(params=None, species_catalog=None):
                 {"name": entry["name"], "high_cp_only": cp_cutoff is not None}
             )
 
+    # A missing ranking row is UNKNOWN, not a low score. Offer a clearly
+    # labelled *review-only* search when its entire evolution chain is ranked
+    # below the practical threshold. This covers Gothita (#574), whose own
+    # score is absent in the pinned snapshot but whose evolutions are known.
+    # Never merge these provisional candidates with verified low-score terms.
+    unranked_groups = {}
+    unranked_review = []
+    unranked_with_unknown_evolution = 0
+    unranked_with_strong_evolution = 0
+    unranked_uncertain_form_or_name = 0
+    if isinstance(species_catalog, dict):
+        catalog_by_dex = {}
+        for species_id, data in species_catalog.items():
+            if isinstance(data, dict) and type(data.get("dex")) is int:
+                catalog_by_dex.setdefault(data["dex"], []).append((species_id, data))
+        for dex, variants in sorted(catalog_by_dex.items()):
+            if dex in ranked_by_dex:
+                continue
+            descendants = descendants_map.get(dex, ())
+            # Without ranked descendants there is no evidence of low PvP value.
+            if not descendants or any(child not in ranked_by_dex for child in descendants):
+                unranked_with_unknown_evolution += 1
+                continue
+            if any(row[role] >= threshold
+                   for child in descendants
+                   for row in ranked_by_dex[child]
+                   for role in PRESETS["practical"]):
+                unranked_with_strong_evolution += 1
+                continue
+            # A mixed regional / special-form dex cannot be selected by one
+            # unequivocal search term. Only regular and shadow catalogue IDs
+            # are accepted; shadows are excluded explicitly in GO.
+            if any(
+                (not isinstance(key, str)
+                 or (key != key.split("_shadow")[0] and not key.endswith("_shadow"))
+                 or re.search(r"(alolan|galarian|hisuian|paldean|mega|primal|origin|altered|female|male|costume|_)", key.casefold().removesuffix("_shadow")))
+                for key, _ in variants
+            ):
+                unranked_uncertain_form_or_name += 1
+                continue
+            english = english_by_dex.get(dex)
+            if not english or any(c in english for c in (",", ":", ";", "|", "&", "!", chr(10), chr(13))):
+                unranked_uncertain_form_or_name += 1
+                continue
+            token = species_search_term(english)
+            if not token:
+                continue
+            unranked_review.append({
+                "name": english,
+                "dex": dex,
+                "reason": "元の種はランキング未掲載。進化先は全て実戦6項目が基準未満だが、元の強さは未評価なので要確認",
+                "evolves_to": [ranked_by_dex[d][0]["name"] for d in descendants],
+            })
+            suffix = ("!shadow", "cp-1500", *(("!favorite",) if exclude_favorites else ()))
+            unranked_groups.setdefault(suffix, []).append((token, None))
+
     # A one-copy search cannot express separate OR-of-AND conditions in GO.
     # Use exact National Dex terms ONLY for species where ALL known forms are
     # eligible, AND none need a special CP condition. Numeric terms reportedly
@@ -305,23 +361,26 @@ def search_low_scores(params=None, species_catalog=None):
         quick_covered_rows = 0
         safe_dex = []
 
-    queries = []
-    searched = 0
-    for suffix, names in sorted(groups.items(), key=lambda g: (len(g[0]), g[0])):
-        chunk = []
-        for base, entry in names:
-            tentative = ",".join(chunk + [base]) + "&" + "&".join(suffix)
-            if chunk and (len(chunk) >= MAX_NAMES_PER_QUERY
-                          or len(tentative) > MAX_QUERY_CHARS):
-                query = ",".join(chunk) + "&" + "&".join(suffix)
-                queries.append({"query": query, "species_count": len(chunk)})
-                searched += len(chunk)
-                chunk = []
-            chunk.append(base)
-        if chunk:
-            queries.append({"query": ",".join(chunk) + "&" + "&".join(suffix),
-                            "species_count": len(chunk)})
-            searched += len(chunk)
+    def grouped_queries(source_groups):
+        result = []
+        for suffix, names in sorted(source_groups.items(), key=lambda g: (len(g[0]), g[0])):
+            chunk = []
+            for base, _entry in names:
+                tentative = ",".join(chunk + [base]) + "&" + "&".join(suffix)
+                if chunk and (len(chunk) >= MAX_NAMES_PER_QUERY
+                              or len(tentative) > MAX_QUERY_CHARS):
+                    result.append({"query": ",".join(chunk) + "&" + "&".join(suffix),
+                                   "species_count": len(chunk)})
+                    chunk = []
+                chunk.append(base)
+            if chunk:
+                result.append({"query": ",".join(chunk) + "&" + "&".join(suffix),
+                               "species_count": len(chunk)})
+        return result
+
+    queries = grouped_queries(groups)
+    searched = sum(row["species_count"] for row in queries)
+    unranked_queries = grouped_queries(unranked_groups)
     # No names should be silently excluded; the user needs all missing forms.
     if searched + len(manual) + len(evolution_protected) != len(selected):
         raise RuntimeError("検索対象の件数が合いません")
@@ -342,6 +401,21 @@ def search_low_scores(params=None, species_catalog=None):
         "evolution_high_cp_count": len(high_cp_exceptions),
         "evolution_high_cp_exceptions": high_cp_exceptions,
         "queries": queries, "preserved_by_other_roles": len(preserved),
+        "unranked_review_count": len(unranked_review),
+        "unranked_review": unranked_review,
+        "unranked_queries": unranked_queries,
+        "unranked_unknown_evolution_count": unranked_with_unknown_evolution,
+        "unranked_strong_evolution_count": unranked_with_strong_evolution,
+        "unranked_uncertain_form_count": unranked_uncertain_form_or_name,
+        "exclusion_reasons": {
+            "specialist_preserved": len(preserved),
+            "evolution_protected": len(evolution_protected),
+            "form_or_name_unsearchable": len(manual),
+            "unranked_not_verified": unranked_with_unknown_evolution,
+            "unranked_strong_evolution": unranked_with_strong_evolution,
+            "unranked_uncertain_form_or_name": unranked_uncertain_form_or_name,
+            "unranked_manual_review": len(unranked_review),
+        },
         "quick_query": one_query,
         "quick_species_count": len(safe_dex),
         "quick_covered_rows": quick_covered_rows,
