@@ -283,6 +283,8 @@ def search_low_scores(params=None, species_catalog=None):
     unranked_groups = {}
     unranked_review = []
     unranked_with_unknown_evolution = 0
+    unranked_with_strong_evolution = 0
+    unranked_uncertain_form_or_name = 0
     if isinstance(species_catalog, dict):
         catalog_by_dex = {}
         for species_id, data in species_catalog.items():
@@ -300,6 +302,7 @@ def search_low_scores(params=None, species_catalog=None):
                    for child in descendants
                    for row in ranked_by_dex[child]
                    for role in PRESETS["practical"]):
+                unranked_with_strong_evolution += 1
                 continue
             # A mixed regional / special-form dex cannot be selected by one
             # unequivocal search term. Only regular and shadow catalogue IDs
@@ -310,9 +313,11 @@ def search_low_scores(params=None, species_catalog=None):
                  or re.search(r"(alolan|galarian|hisuian|paldean|mega|primal|origin|altered|female|male|costume|_)", key.casefold().removesuffix("_shadow")))
                 for key, _ in variants
             ):
+                unranked_uncertain_form_or_name += 1
                 continue
             english = english_by_dex.get(dex)
             if not english or any(c in english for c in (",", ":", ";", "|", "&", "!", chr(10), chr(13))):
+                unranked_uncertain_form_or_name += 1
                 continue
             token = species_search_term(english)
             if not token:
@@ -400,11 +405,15 @@ def search_low_scores(params=None, species_catalog=None):
         "unranked_review": unranked_review,
         "unranked_queries": unranked_queries,
         "unranked_unknown_evolution_count": unranked_with_unknown_evolution,
+        "unranked_strong_evolution_count": unranked_with_strong_evolution,
+        "unranked_uncertain_form_count": unranked_uncertain_form_or_name,
         "exclusion_reasons": {
             "specialist_preserved": len(preserved),
             "evolution_protected": len(evolution_protected),
             "form_or_name_unsearchable": len(manual),
             "unranked_not_verified": unranked_with_unknown_evolution,
+            "unranked_strong_evolution": unranked_with_strong_evolution,
+            "unranked_uncertain_form_or_name": unranked_uncertain_form_or_name,
             "unranked_manual_review": len(unranked_review),
         },
         "quick_query": one_query,
