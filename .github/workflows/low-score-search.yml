@@ -59,6 +59,4 @@ jobs:
           cp android-integration/overlayqueue/OverlayPairParser.kt demo/app/src/main/java/com/example/pokemonivreader/overlayqueue/
           cp android-integration/overlayqueue/OverlayQueueStore.kt demo/app/src/main/java/com/example/pokemonivreader/overlayqueue/
           cp android-integration/overlayqueue/OverlayCopyQueueImportActivity.kt demo/app/src/main/java/com/example/pokemonivreader/overlayqueue/
-          mkdir -p demo/app/src/main/java/com/example/pokemonivreader/readerquickmenu
-          cp android-integration/readerquickmenu/ReaderCleanupStore.kt android-integration/readerquickmenu/ReaderQuickMenu.kt demo/app/src/main/java/com/example/pokemonivreader/readerquickmenu/
           gradle -p demo :app:assembleDebug :app:testDebugUnitTest --no-daemon --stacktrace
