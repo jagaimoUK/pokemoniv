@@ -42,7 +42,7 @@ function flatten(e){return [e,...e.children.flatMap(flatten)];}
  await vm.runInContext('shareRecommendations([bad],{})',context);
  assert.equal(shared.length,2,'Invalid search must never be shared');
  assert(elements.message.textContent.includes('検索式'));
- first.source_records=[{ivs:'0/11/12',cp:717,species:'wooper',search_string:'Wooper&0attack&3defense&3hp&cp717'},{ivs:'0/11/12',cp:625,species:'wooper',search_string:'Wooper&0attack&3defense&3hp&cp625'}];const cp=JSON.parse(vm.runInContext('overlayExport([first])',context));assert.equal(cp.items.length,3);assert.equal(cp.items[0].cp,717);assert(cp.items[0].search.startsWith('Wooper&'));assert.equal(cp.items[1].cp,625);assert.equal(cp.items[2].cp,null);assert(vm.runInContext('recommendationExport(first)',context).includes('&cp717'));
+ first.source_records=[{ivs:'0/11/12',cp:717,species:'wooper',search_string:'Wooper&0attack&3defense&3hp&cp717'},{ivs:'0/11/12',cp:625,species:'wooper',search_string:'Wooper&0attack&3defense&3hp&cp625'}];const cp=JSON.parse(vm.runInContext('overlayExport([first])',context));assert.equal(cp.items.length,3);assert.equal(cp.items[0].species,'wooper');assert.equal(cp.items[0].target_species,'quagsire');assert.equal(cp.items[0].target_name,'ヌオー');assert.equal(cp.items[0].cp,717);assert(cp.items[0].search.startsWith('Wooper&'));assert.equal(cp.items[1].cp,625);assert.equal(cp.items[2].cp,null);assert(vm.runInContext('recommendationExport(first)',context).includes('&cp717'));
  const oldRegional=result([row('13/8/11','Wooper (Paldean)&3attack&2defense&3hp')]);
  oldRegional.source_records=[{ivs:'13/8/11',cp:458,species:'wooper_paldean',search_string:'Wooper (Paldean)&3attack&2defense&3hp&cp458'}];
  const migrated=JSON.parse(vm.runInContext('overlayExport([oldRegional])',Object.assign(context,{oldRegional})));
@@ -55,5 +55,13 @@ function flatten(e){return [e,...e.children.flatMap(flatten)];}
   const fixed=vm.runInContext('normalizedRegionalSearch('+JSON.stringify(name+'&1attack')+')',context);
   assert.equal(fixed,name.split(' (')[0]+'&'+region+'&1attack');
  }
+ context.evolved={...first,candidate:{...first.candidate,species:'clodsire'},source_sections:['same-source']};
+ vm.runInContext("catalog.clodsire={name:'Clodsire',name_ja:'ドオー',nickname_code:'Clod'};first.source_sections=['same-source'];displayedResults=[first,evolved]",context);
+ const branches=JSON.parse(vm.runInContext('overlayExport([first,evolved])',context));
+ assert.deepEqual([...new Set(branches.items.map(x=>x.target_name))],['ヌオー','ドオー']);
+ assert(branches.items.every(x=>x.ivs&&x.nickname&&x.search));
+ assert.equal(branches.items[0].search,branches.items[3].search,'Source searches stay exact across target stages');
+ assert.equal(branches.items[0].nickname,branches.items[3].nickname,'Shared multi-stage nickname stays identical');
  console.log('Android Web Share: exact pairs, multi-result, duplicate, fallback, cancel, error: PASS');
 })().catch(e=>{console.error(e);process.exitCode=1});
+

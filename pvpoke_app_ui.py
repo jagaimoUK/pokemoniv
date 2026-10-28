@@ -236,7 +236,9 @@ function overlayExport(results){
  const items=results.flatMap(result=>(result.selection?.recommendations||[]).flatMap(row=>
   [row,...(row.equivalent_candidates||[])].flatMap(iv=>individualSearches(result,iv).map(source=>({
    search:source.search,nickname:nicknameFor(result,row,iv.ivs).text,ivs:iv.ivs,
-   cp:source.cp||null,species:source.species||result.candidate.species
+   cp:source.cp||null,species:source.species||result.candidate.species,
+   target_species:result.candidate.species,
+   target_name:catalog[result.candidate.species]?.name_ja||result.display_name||catalog[result.candidate.species]?.name||result.candidate.species
   })))));
  return JSON.stringify({format:'pokemoniv-overlay-v2',items});
 }
@@ -617,5 +619,6 @@ function receiveReaderInput(){
 const access=new URLSearchParams(location.hash.slice(1)).get('access');
 if(access){history.replaceState(null,'',location.pathname+location.search);el('credential').value=access;connect(false);}else{receiveReaderInput();connect(true);}
 </script></body></html>'''
+
 
 
