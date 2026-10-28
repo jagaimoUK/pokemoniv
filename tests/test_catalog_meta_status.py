@@ -2,9 +2,24 @@
 import unittest
 from unittest.mock import patch
 import pvpoke_bridge_core as bridge
+import pvpoke_web as web
 
 
 class CatalogStorageTest(unittest.TestCase):
+    def test_web_catalog_exposes_conditional_return_for_preview_validation(self):
+        species={'grumpig':{'speciesName':'Grumpig','dex':326,'fastMoves':['PSYWAVE'],
+            'chargedMoves':['DYNAMIC_PUNCH'],'tags':['shadoweligible'],'level25CP':1441}}
+        with patch.dict(web.CATALOG), patch.object(web,'configure_engine'), \
+                patch.object(web.engine,'game_data',return_value=({'timestamp':'test'},[],species)):
+            web.load_catalog()
+            self.assertTrue(web.CATALOG['ready'],web.CATALOG['error'])
+            entry=web.CATALOG['species']['grumpig']
+            self.assertIn('RETURN',entry['chargedMoves'])
+            self.assertEqual(web.normalize_pokemon({'species':'grumpig','fast':'PSYWAVE',
+                'charged1':'DYNAMIC_PUNCH','charged2':'RETURN'},web.CATALOG['species'],'メタ'),
+                ['grumpig','PSYWAVE','DYNAMIC_PUNCH','RETURN'])
+        self.assertEqual(species['grumpig']['chargedMoves'],['DYNAMIC_PUNCH'])
+
     def test_catalog_reports_synced_meta_and_archive_stats(self):
         def fake_request(path, *args, **kwargs):
             if path == "/api/catalog":
@@ -23,3 +38,4 @@ class CatalogStorageTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

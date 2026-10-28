@@ -87,6 +87,27 @@ class PresetHTTPTests(unittest.TestCase):
         self.assertEqual(self.req('/api/meta/preset-export?id='+id_+'&sha256='+'0'*64)[0],400)
         self.assertEqual(self.req('/api/meta/preset-export')[0],400)
 
+    def test_eight_column_paste_preview_save_export_and_snapshot_over_http(self):
+        raw=CSV.rstrip('\n')+',34.5,4,14,13\n'+CSV
+        old=presets.live.get_status(self.work)
+        with patch.object(bridge,'BASE','http://127.0.0.1:'+str(self.server.server_port)):
+            preview=bridge.preview_meta_opponents(raw)
+            self.assertEqual(preview['custom_stats_count'],1)
+            self.assertEqual(preview['custom_stats_lines'],[1])
+            self.assertEqual(preview['duplicate_count'],1)
+            self.assertFalse(presets.store_path(self.work).exists())
+            saved=bridge.save_meta_preset({'action':'create','name':'PvPokeから貼り付け','csv':raw,
+                'expected_sha256':preview['sha256'],'revision':0})
+            self.assertEqual(saved['custom_stats_count'],1)
+            id_=saved['saved_id']
+            exported=bridge.export_meta_preset(id_,preview['sha256'])
+        self.assertEqual(exported['csv'],CSV.rstrip('\n'))
+        path,info=presets.snapshot(self.work,id_,SPECIES,preview['sha256'])
+        self.assertEqual(path.read_text(),CSV)
+        self.assertEqual(presets.listing(self.work)['default_id'],'legacy')
+        self.assertEqual(presets.live.get_status(self.work),old)
+        self.assertEqual(web.STATUS['state'],'idle')
+
     def test_run_uses_chosen_immutable_file_and_checks_hash_under_lock(self):
         saved=self.create();id_=saved['saved_id'];checksum=presets.resolve(self.work,id_)['sha256']
         args={'candidate':CANDIDATE,'ivs':IVS,'meta_preset_id':id_,'expected_meta_sha256':'0'*64}

@@ -32,7 +32,7 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <div class="meta-toolbar"><button id="metaChoose" class="secondary" aria-expanded="false" aria-controls="metaChooser">プリセットを選ぶ</button><button id="metaExport" class="secondary" disabled>PvPoke用にコピー</button></div>
 <p id="metaExportStatus" class="note" aria-live="polite"></p><div id="metaExportParts" class="actions" hidden></div>
 <div id="metaExportFallback" hidden><label for="metaExportText">PvPoke貼り付け用（手動コピー）</label><textarea id="metaExportText" readonly spellcheck="false"></textarea></div>
-<details class="meta-help"><summary>PvPokeへの貼り付け方</summary><p class="note">PvPokeのBattle → Multi／Matrixで、対戦相手一覧のImport/Exportへ貼り付けてImportを押します。リーグはCP1500にしてください。100件超は分割して確認します。編集後の4列CSVはTXT・CSVに保存し、下の「カスタムメタを追加」から別名で登録できます。</p></details>
+<details class="meta-help"><summary>PvPokeへの貼り付け方</summary><p class="note">PvPokeのBattle → Multi／Matrixで、対戦相手一覧のImport/Exportへ貼り付けてImportを押します。リーグはCP1500にしてください。100件超は分割して確認します。編集後は下の「カスタムメタを追加」へ直接貼り付けるか、TXT・CSVで読み込めます。レベル・個体値付きの8列も種と技だけを保存します。</p></details>
 <div id="metaChooser" class="meta-chooser" hidden>
 <p class="meta-hint">よく使うプリセット</p><div id="metaQuick" class="meta-quick" role="group" aria-label="よく使うメタ"></div>
 <label for="metaAll">すべてのメタプリセット</label><div class="meta-all-row"><select id="metaAll"></select><button id="metaReload" class="secondary" aria-label="一覧を再取得" title="一覧を再取得">↻</button></div>
@@ -51,7 +51,7 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <label for="metaText">メタを貼り付け</label><textarea id="metaText" spellcheck="false" aria-describedby="metaInputHelp" placeholder="quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE"></textarea>
 <div class="meta-toolbar"><button id="metaTextPreview" class="secondary" type="button">貼り付けた内容を確認</button></div>
 <details><summary>ファイルから読み込む（TXT／CSV）</summary><label for="metaFile">メタ一覧（最大80KB）</label><input id="metaFile" type="file" accept=".txt,.csv,text/plain,text/csv"></details>
-<p class="note" id="metaInputHelp">species,fast,charged1,charged2 の4列です。同じ種と技構成の重複はまとめ、最大500技構成まで保存できます。「内容を確認」→「別のプリセットとして保存」の順に操作してください。保存するまで既存のメタは変わりません。</p>
+<p class="note" id="metaInputHelp">species,fast,charged1,charged2 の4列、または level,atk,def,hp を加えた8列を貼り付けできます。保存するのは種と技だけです。入力のレベル・個体値は使わず、計算時は選択した対戦相手の個体値条件を使います。同じ種と技構成はまとめ、最大500技構成まで。「内容を確認」→「別のプリセットとして保存」の順に操作してください。</p>
 <div id="metaPreview" class="status" hidden></div>
 <div class="actions"><button id="metaApply" class="secondary" disabled>別のプリセットとして保存</button><button id="metaCancel" class="secondary" type="button">選択を取り消す</button></div>
 <p id="metaNotice" class="note" aria-live="polite"></p>
@@ -505,6 +505,10 @@ async function previewMetaInput(file=null){
   if(preview.duplicate_count){
    lines.push('重複 '+preview.duplicate_count+'行を統合しました。');
    if(preview.duplicate_lines?.length)lines.push('重複した行：'+preview.duplicate_lines.join(', ')+(preview.duplicate_count>preview.duplicate_lines.length?' ほか':''));
+  }
+  if(preview.custom_stats_count){
+   lines.push('レベル・個体値付き '+preview.custom_stats_count+'行：種と技だけを保存します。入力のレベル・個体値は保存・計算に使いません。計算時は選択した対戦相手の個体値条件を使います。');
+   if(preview.custom_stats_lines?.length)lines.push('対象行：'+preview.custom_stats_lines.join(', ')+(preview.custom_stats_count>preview.custom_stats_lines.length?' ほか':''));
   }
   el('metaPreview').textContent=lines.join('\n');el('metaPreview').hidden=false;
   metaNotice('内容と名前を確認し、別のプリセットとして保存してください。');

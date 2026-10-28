@@ -26,7 +26,9 @@ fetch:async(path,opts)=>{
  else if(path==='/app-api/meta-preview'){
   if(previewDeferred)await previewDeferred;
   if(previewFail)return {status:400,ok:false,json:async()=>({error:'メタ一覧の検証失敗'})};
-  const count=data.csv.trim().split('\n').length;out={rows:1,input_rows:count,duplicate_count:count-1,duplicate_lines:count>1?[2]:[],sha256:'c'.repeat(64),changed:false};
+  const rows=data.csv.trim().split('\n'),count=rows.length;
+  const customLines=rows.flatMap((row,i)=>row.split(',').length===8?[i+1]:[]);
+  out={rows:1,input_rows:count,duplicate_count:count-1,duplicate_lines:count>1?[2]:[],custom_stats_count:customLines.length,custom_stats_lines:customLines,sha256:'c'.repeat(64),changed:false};
  }
  else if(path==='/app-api/meta-preset-save'){
   if(failSave)return {status:400,ok:false,json:async()=>({error:'別の画面で更新'})};
@@ -96,6 +98,15 @@ vm.createContext(context);vm.runInContext(script,context);
  await el('metaApply').onclick();assert(el('selectedMeta').textContent.includes('貼り付けメタ'));
  assert(el('metaNotice').textContent.includes('重複1行を統合'));assert.equal(el('metaText').value,'');
  assert.equal(state.default_id,'pvpoke:fantasy');
+ // PvPoke custom stats are explained before the user explicitly saves.
+ expectedCSV=original.trim()+',34.5,4,14,13\n';el('metaText').value=expectedCSV;
+ el('metaText').oninput();el('metaName').value='8列のメタ';
+ await el('metaTextPreview').onclick();
+ assert(el('metaPreview').textContent.includes('レベル・個体値付き 1行'));
+ assert(el('metaPreview').textContent.includes('入力のレベル・個体値は保存・計算に使いません'));
+ assert(el('metaPreview').textContent.includes('対象行：1'));
+ assert.equal(el('metaApply').disabled,false);
+ await el('metaApply').onclick();assert(el('selectedMeta').textContent.includes('8列のメタ'));
  el('metaText').value=original;await el('metaTextPreview').onclick();
  el('metaText').value=original+'changed';await el('metaApply').onclick();assert.equal(el('metaApply').disabled,true);
  assert(el('metaNotice').textContent.includes('内容が確認後に変わりました'));

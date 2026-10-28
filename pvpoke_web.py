@@ -88,7 +88,7 @@ def load_catalog():
                 'dex': p.get('dex'),
                 'baseStats': p.get('baseStats'),
                 'fastMoves': p.get('fastMoves', []),
-                'chargedMoves': p.get('chargedMoves', []),
+                'chargedMoves': engine.charged_move_pool(p),
             }
             for sid, p in species.items()
         }

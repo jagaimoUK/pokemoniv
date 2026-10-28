@@ -9,6 +9,7 @@ import csv
 from collections import Counter
 import hashlib
 import io
+import math
 import os
 import uuid
 from pathlib import Path
@@ -36,7 +37,7 @@ def digest(csv_data: str) -> str:
     return hashlib.sha256(meta.serialize(rows).encode("utf-8")).hexdigest()
 
 
-def _input_rows(csv_data: str):
+def _input_rows(csv_data: str, *, allow_custom_stats=False):
     if not isinstance(csv_data, str) or len(csv_data.encode("utf-8")) > MAX_BYTES:
         raise ValueError("メタ一覧が空、または80KBを超えています")
     found = False
@@ -44,10 +45,21 @@ def _input_rows(csv_data: str):
     for fields in reader:
         if not fields or (len(fields) == 1 and not fields[0].strip()):
             continue
-        if len(fields) != 4 or any(not f.strip() for f in fields):
-            raise ValueError(f"メタ一覧{reader.line_num}行目は種IDと技3列の4列にしてください")
+        fields = tuple(f.strip() for f in fields)
+        if len(fields) not in ((4, 8) if allow_custom_stats else (4,)) or any(not f for f in fields):
+            expected = "種IDと技3列の4列、またはレベル・攻撃・防御・HPを加えた8列" if allow_custom_stats else "種IDと技3列の4列"
+            raise ValueError(f"メタ一覧{reader.line_num}行目は{expected}にしてください")
+        if len(fields) == 8:
+            try:
+                level, *ivs = map(float, fields[4:])
+                valid = (math.isfinite(level) and 1 <= level <= 51 and (level * 2).is_integer()
+                         and all(math.isfinite(iv) and iv.is_integer() and 0 <= iv <= 15 for iv in ivs))
+            except ValueError:
+                valid = False
+            if not valid:
+                raise ValueError(f"メタ一覧{reader.line_num}行目のレベル・個体値が不正です（レベル1〜51の0.5刻み、個体値0〜15の整数）")
         found = True
-        yield reader.line_num, tuple(f.strip() for f in fields)
+        yield reader.line_num, fields
     if not found:
         raise ValueError("メタ一覧が空です")
 
@@ -62,11 +74,16 @@ def _parse(csv_data: str) -> list[tuple[str, str, str, str]]:
 
 
 def normalize_input(content: str) -> dict:
-    """Keep the first occurrence of each engine-equivalent four-column row."""
-    rows, source_lines, duplicates, seen = [], [], [], set()
-    input_count = duplicate_count = 0
-    for line, row in _input_rows(content):
+    """Import PvPoke CSV as move sets; custom stats are explicitly reported, not used."""
+    rows, source_lines, duplicates, custom_stats_lines, seen = [], [], [], [], set()
+    input_count = duplicate_count = custom_stats_count = 0
+    for line, fields in _input_rows(content, allow_custom_stats=True):
         input_count += 1
+        if len(fields) == 8:
+            custom_stats_count += 1
+            if len(custom_stats_lines) < 30:
+                custom_stats_lines.append(line)
+        row = fields[:4]
         key = (workflow.engine.canonical_export_species(row[0]),
                *(move.upper() for move in row[1:]))
         if key in seen:
@@ -81,7 +98,9 @@ def normalize_input(content: str) -> dict:
             raise ValueError("重複を整理した後のメタ一覧は最大500技構成までです")
     return {'csv': meta.serialize(rows), 'source_lines': source_lines,
             'input_rows': input_count, 'duplicate_count': duplicate_count,
-            'duplicate_lines': duplicates, 'duplicate_line_limit': 30}
+            'duplicate_lines': duplicates, 'duplicate_line_limit': 30,
+            'custom_stats_count': custom_stats_count, 'custom_stats_lines': custom_stats_lines,
+            'custom_stats_line_limit': 30}
 
 
 def _validated_upload(work: Path, content: str, species: dict):
