@@ -18,7 +18,6 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-import com.example.pokemonivreader.readerquickmenu.ReaderCleanupStore
 
 /** Import via Android Sharesheet, or paste while this Activity is foreground.
  * Never attempts to read the clipboard from an overlay/background Service.
@@ -130,19 +129,7 @@ class OverlayCopyQueueImportActivity : Activity() {
     private fun applySharedText(intent: Intent?) {
         if (intent?.action == Intent.ACTION_SEND && intent.type?.startsWith("text/") == true) {
             val incoming = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
-            if (!incoming.isNullOrBlank()) {
-                if (ReaderCleanupStore.isCleanupPayload(incoming)) {
-                    try {
-                        val count = ReaderCleanupStore(this).importPayload(incoming)
-                        notifyUser("非厳選個体の検索式を" + count + "件保存しました。読み取りメニューの⋯からコピーできます")
-                        returnToGame()
-                    } catch (e: Exception) {
-                        // Do not silently fall back to the nickname queue on invalid cleanup data.
-                        entry.setText(incoming)
-                        notifyUser("非厳選検索式を受け取れませんでした: " + e.localizedMessage)
-                    }
-                } else entry.setText(incoming)
-            }
+            if (!incoming.isNullOrBlank()) entry.setText(incoming)
         }
     }
     private fun showOrRequestOverlay() {
