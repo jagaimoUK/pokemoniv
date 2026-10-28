@@ -27,7 +27,7 @@ card.style.marginTop='0';document.querySelector('main').style.paddingTop='12px';
 el('metaQuick').children[1].click();el('metaChoose').click();
 setTimeout(()=>{
  const chips=[...document.querySelectorAll('.meta-chip')];
- const controls=[...document.querySelectorAll('.meta-toolbar button,.meta-settings button,.meta-all-row button')];
+ const controls=[...card.querySelectorAll('.meta-toolbar button,.meta-settings button,.meta-all-row button')];
  document.body.dataset.layout=JSON.stringify({width:document.documentElement.clientWidth,scrollWidth:document.documentElement.scrollWidth,
   chips:chips.map(b=>({name:b.textContent,width:b.getBoundingClientRect().width,height:b.getBoundingClientRect().height,grow:getComputedStyle(b).flexGrow,selected:b.getAttribute('aria-pressed')})),
   heights:controls.map(b=>b.getBoundingClientRect().height),selected:el('selectedMeta').textContent,
