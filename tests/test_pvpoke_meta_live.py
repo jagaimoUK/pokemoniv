@@ -48,13 +48,15 @@ class LiveMetaTests(unittest.TestCase):
                 self.assertEqual(live.get_status(work)["sha256"], old)
                 self.assertEqual(live.active_path(work).read_text(), good)
 
-    def test_duplicate_and_malformed_rejected(self):
+    def test_duplicate_upload_consolidated_but_malformed_rejected(self):
         with tempfile.TemporaryDirectory() as d:
             with patch.dict(os.environ, {"PVP_ARCHIVE_DIR": d}):
                 work = Path(d) / "work"
                 row = "quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE\n"
-                with self.assertRaises(ValueError):
-                    live.sync(work, row + row, SPECIES)
+                saved = live.sync(work, row + row, SPECIES)
+                self.assertEqual(saved["rows"], 1)
+                self.assertEqual(saved["duplicate_count"], 1)
+                self.assertEqual(live.active_path(work).read_text(), row)
                 with self.assertRaises(ValueError):
                     live.sync(work, "quagsire,MUD_SHOT,STONE_EDGE\n", SPECIES)
 
@@ -101,7 +103,6 @@ class LiveMetaTests(unittest.TestCase):
                 for content in (
                     "quagsire,MUD_SHOT,BOGUS,STONE_EDGE\n",
                     "missingno,MUD_SHOT,AQUA_TAIL,STONE_EDGE\n",
-                    "quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE\n" * 2,
                     "quagsire,MUD_SHOT,AQUA_TAIL\n",
                 ):
                     with self.assertRaises(ValueError):
@@ -113,6 +114,65 @@ class LiveMetaTests(unittest.TestCase):
         a = "quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE\n"
         b = "quagsire, MUD_SHOT, AQUA_TAIL, STONE_EDGE\r\n"
         self.assertEqual(live.digest(a), live.digest(b))
+
+
+
+    def test_reported_91_92_duplicate_error_and_preview_recovery(self):
+        species={f'p{i}':{'fastMoves':['FAST'],'chargedMoves':['CHARGE1','CHARGE2']} for i in range(90)}
+        rows=[f'p{i},FAST,CHARGE1,CHARGE2' for i in range(90)]
+        content='\n'.join(rows+[rows[0],rows[1]])+'\n'
+        with tempfile.TemporaryDirectory() as d, patch.dict(os.environ,{'PVP_ARCHIVE_DIR':d}):
+            work=Path(d)/'work'
+            old=live.get_status(work)
+            with self.assertRaisesRegex(ValueError,'91行 重複; 92行 重複'):
+                live._validated_rows(work,content,species)
+            proposal=live.preview(work,content,species)
+            self.assertEqual(proposal['input_rows'],92)
+            self.assertEqual(proposal['rows'],90)
+            self.assertEqual(proposal['duplicate_count'],2)
+            self.assertEqual(proposal['duplicate_lines'],[91,92])
+            self.assertEqual(live.get_status(work),old)
+            saved=live.sync(work,content,species,expected_previous_sha256=old['sha256'],expected_sha256=proposal['sha256'])
+            self.assertEqual(saved['rows'],90)
+            self.assertEqual(live.active_path(work).read_text(),'\n'.join(rows)+'\n')
+            self.assertEqual(saved['sha256'],proposal['sha256'])
+
+    def test_semantic_duplicates_preserve_forms_moves_and_first_occurrence(self):
+        content=('Quagsire, MUD_SHOT, AQUA_TAIL, STONE_EDGE\n'
+            'quagsire,mud_shot,aqua_tail,stone_edge\n'
+            'quagsire_shadow,MUD_SHOT,AQUA_TAIL,STONE_EDGE\n'
+            'QUAGSIRE_SHADOW-shadow,mud_shot,aqua_tail,stone_edge\n'
+            'quagsire,MUD_SHOT,AQUA_TAIL,MUD_BOMB\n'
+            'quagsire,MUD_SHOT,STONE_EDGE,AQUA_TAIL\n')
+        proposal=live.normalize_input(content)
+        self.assertEqual(proposal['duplicate_count'],2)
+        self.assertEqual(proposal['duplicate_lines'],[2,4])
+        self.assertEqual(proposal['source_lines'],[1,3,5,6])
+        self.assertEqual(proposal['csv'].splitlines()[0],'Quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE')
+        self.assertEqual(len(proposal['csv'].splitlines()),4)
+
+    def test_duplicate_cleanup_does_not_hide_bad_rows_and_reports_original_line(self):
+        good='quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE\n'
+        content='\n'+good+good+'\nquagsire,MUD_SHOT,BOGUS,STONE_EDGE\n'
+        with tempfile.TemporaryDirectory() as d, patch.dict(os.environ,{'PVP_ARCHIVE_DIR':d}):
+            work=Path(d)/'work';old=live.get_status(work)
+            with self.assertRaisesRegex(ValueError,'5行 現在のPvPokeデータにない技'):
+                live.preview(work,content,SPECIES)
+            self.assertEqual(live.get_status(work),old)
+            self.assertFalse(live.uploaded_path(work).exists())
+
+    def test_unique_row_and_byte_limits_still_apply_after_cleanup(self):
+        good='quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE\n'
+        proposal=live.normalize_input(good*501)
+        self.assertEqual(proposal['duplicate_count'],500)
+        self.assertEqual(len(proposal['duplicate_lines']),30)
+        self.assertEqual(proposal['csv'],good)
+        with self.assertRaisesRegex(ValueError,'500'):
+            live.normalize_input(''.join(f'p{i},FAST,C1,C2\n' for i in range(501)))
+        with self.assertRaisesRegex(ValueError,'80KB'):
+            live.normalize_input(good*3000)
+        for content in ('', '  \n', 'quagsire,MUD_SHOT,AQUA_TAIL\n'):
+            with self.assertRaises(ValueError):live.normalize_input(content)
 
 
 if __name__ == "__main__":

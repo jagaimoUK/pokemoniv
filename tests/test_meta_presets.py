@@ -77,7 +77,7 @@ class MetaPresetTests(unittest.TestCase):
         self.create()
         before = presets.store_path(self.work).read_bytes()
         for name, csv in [('日常用',CSV), ('x'*61,CSV),('',CSV),
-                ('不正','quagsire,BOGUS,AQUA_TAIL,STONE_EDGE\n'), ('重複',CSV+CSV)]:
+                ('不正','quagsire,BOGUS,AQUA_TAIL,STONE_EDGE\n')]:
             with self.subTest(name=name):
                 with self.assertRaises(ValueError):
                     self.create(name,csv)
@@ -184,4 +184,26 @@ class MetaPresetTests(unittest.TestCase):
         exported=presets.export_preset(self.work,'pvpoke:fantasy',fantasy['sha256'])
         self.assertEqual(exported['rows'],27)
         self.assertIn('forretress_shadow-shadow,',exported['csv'])
+        self.assertEqual(presets.store_path(self.work).read_bytes(),before)
+
+
+    def test_named_preset_creation_uses_the_same_deduplicated_preview(self):
+        content=CSV+CSV2+CSV
+        proposal=live.preview(self.work,content,SPECIES)
+        before=live.get_status(self.work)
+        saved=presets.save(self.work,{'action':'create','name':'貼り付けテスト','csv':content,
+            'revision':0,'expected_sha256':proposal['sha256']},SPECIES)
+        entry=presets.resolve(self.work,saved['saved_id'])
+        self.assertEqual(entry['csv'],CSV+CSV2)
+        self.assertEqual(entry['sha256'],proposal['sha256'])
+        self.assertEqual(saved['duplicate_count'],1)
+        self.assertEqual(live.get_status(self.work),before)
+        self.assertEqual(presets.listing(self.work)['default_id'],'legacy')
+
+    def test_changed_paste_is_rejected_without_mutating_store(self):
+        self.create();before=presets.store_path(self.work).read_bytes()
+        proposal=live.preview(self.work,CSV+CSV,SPECIES)
+        with self.assertRaisesRegex(ValueError,'プレビュー'):
+            presets.save(self.work,{'action':'create','name':'書換えテスト','csv':CSV2+CSV2,
+                'revision':1,'expected_sha256':proposal['sha256']},SPECIES)
         self.assertEqual(presets.store_path(self.work).read_bytes(),before)

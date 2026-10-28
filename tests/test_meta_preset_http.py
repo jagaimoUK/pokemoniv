@@ -56,6 +56,24 @@ class PresetHTTPTests(unittest.TestCase):
         self.assertEqual(self.req('/api/meta/preset')[0],400)
         self.assertEqual(self.req('/api/meta/presets',{'action':'default','id':id_,'revision':0})[0],400)
 
+    def test_duplicate_paste_preview_and_named_save_over_real_http(self):
+        raw=CSV+'quagsire,MUD_SHOT,AQUA_TAIL,MUD_BOMB\n'+CSV
+        old=presets.live.get_status(self.work)
+        with patch.object(bridge,'BASE','http://127.0.0.1:'+str(self.server.server_port)):
+            preview=bridge.preview_meta_opponents(raw)
+            self.assertEqual(preview['duplicate_count'],1)
+            self.assertEqual(preview['rows'],2)
+            self.assertEqual(preview['input_rows'],3)
+            self.assertFalse(presets.store_path(self.work).exists())
+            saved=bridge.save_meta_preset({'action':'create','name':'直接貼り付け','csv':raw,
+                'expected_sha256':preview['sha256'],'revision':0})
+        entry=presets.resolve(self.work,saved['saved_id'])
+        self.assertEqual(entry['rows'],2)
+        self.assertEqual(entry['sha256'],preview['sha256'])
+        self.assertEqual(saved['duplicate_count'],1)
+        self.assertEqual(presets.live.get_status(self.work),old)
+        self.assertEqual(web.STATUS['state'],'idle')
+
     def test_export_round_trip_over_http_does_not_mutate_or_start_battle(self):
         saved=self.create();id_=saved['saved_id']
         checksum=presets.resolve(self.work,id_)['sha256']
