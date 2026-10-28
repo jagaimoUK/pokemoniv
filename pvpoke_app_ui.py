@@ -87,7 +87,7 @@ async function loadLowScores(){
   lowScoreResults=result;
   el('lowScoreSummary').textContent='保存データ '+result.source_date+' / 評価済みの対象 '+result.selected_count+'件 / 検索可能 '+result.searchable_count+'件（内部検索式 '+result.queries.length+'個） / 未掲載・要確認 '+(result.unranked_review_count||0)+'種類。';
   const why=result.exclusion_reasons||{};
-  el('lowExclusionSummary').textContent='対象から保護・除外した理由：他の実戦役割で70点以上 '+(why.specialist_preserved||0)+'件 / 進化先が高スコア・未評価 '+(why.evolution_protected||0)+'件 / 姿・英語名の検索が不確実 '+(why.form_or_name_unsearchable||0)+'件 / 未掲載で進化先も確認不能 '+(why.unranked_not_verified||0)+'種類。未掲載候補は低スコア確定ではありません。';
+  el('lowExclusionSummary').textContent='対象から保護・除外した理由：他の実戦役割で70点以上 '+(why.specialist_preserved||0)+'件 / 進化先が高スコア・未評価 '+(why.evolution_protected||0)+'件 / 姿・英語名の検索が不確実 '+(why.form_or_name_unsearchable||0)+'件 / 未掲載で低評価を確認できない '+(why.unranked_not_verified||0)+'種類 / 未掲載で進化先に高評価あり '+(why.unranked_strong_evolution||0)+'種類 / 未掲載で姿・名前を区別できない '+(why.unranked_uncertain_form_or_name||0)+'種類。未掲載候補は低スコア確定ではありません。';
   el('lowEvolutionProtected').hidden=!result.evolution_protected_count;
   el('lowEvolutionNames').textContent=(result.evolution_protected||[]).map(x=>x.name+' → '+x.evolves_to.join('、')+'：'+x.reason).join('\n');
   el('lowManual').hidden=!result.manual_review_count;
