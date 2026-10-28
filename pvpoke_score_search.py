@@ -312,7 +312,7 @@ def search_low_scores(params=None, species_catalog=None):
             ):
                 continue
             english = english_by_dex.get(dex)
-            if not english or any(c in english for c in ",:;|&!\\n\\r"):
+            if not english or any(c in english for c in (",", ":", ";", "|", "&", "!", chr(10), chr(13))):
                 continue
             token = species_search_term(english)
             if not token:
