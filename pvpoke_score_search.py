@@ -209,6 +209,11 @@ def search_low_scores(params=None, species_catalog=None):
     exclude_favorites = args.get("exclude_favorites", True)
     if not isinstance(exclude_favorites, bool):
         raise ValueError("お気に入り除外の指定が不正です")
+    # Reader-only conservative mode: if evolving the same species could make
+    # its retention depend on today's CP, omit the *whole species* instead.
+    exclude_cp_dependent = args.get("exclude_cp_dependent", False)
+    if not isinstance(exclude_cp_dependent, bool):
+        raise ValueError("CP依存種の除外指定が不正です")
     source_date, all_rows = load_snapshot()
     roles = PRESETS[mode]
     selected = [x for x in all_rows if all(x[k] < threshold for k in roles)]
@@ -229,6 +234,7 @@ def search_low_scores(params=None, species_catalog=None):
     manual = []
     evolution_protected = []
     high_cp_exceptions = []
+    cp_dependent_excluded = []
     directly_searchable_by_dex = {}
     for entry in selected:
         if entry["dex"] not in descendants_map:
@@ -255,6 +261,18 @@ def search_low_scores(params=None, species_catalog=None):
                     "reason": "進化先に高スコア・未評価の種類があり、CP1500超過を保証できません",
                     "evolves_to": [ranked_by_dex[d][0]["name"] if d in ranked_by_dex
                                    else "図鑑No." + str(d) for d in relevant]
+                })
+                continue
+            if exclude_cp_dependent:
+                # A high-CP version is eligible for cleanup, a lower-CP
+                # version may still evolve into a useful GL Pokémon.
+                # Keep both out of the automatic cleanup list as requested.
+                cp_dependent_excluded.append({
+                    "name": entry["name"], "dex": entry["dex"],
+                    "minimum_cp": cp_cutoff,
+                    "reason": "現在CPによって進化先のCP1500以下の可能性が変わるため、種類ごと検索から除外",
+                    "evolves_to": [ranked_by_dex[d][0]["name"] if d in ranked_by_dex
+                                   else "図鑑No." + str(d) for d in relevant],
                 })
                 continue
             high_cp_exceptions.append({"name": entry["name"], "minimum_cp": cp_cutoff})
@@ -382,7 +400,7 @@ def search_low_scores(params=None, species_catalog=None):
     searched = sum(row["species_count"] for row in queries)
     unranked_queries = grouped_queries(unranked_groups)
     # No names should be silently excluded; the user needs all missing forms.
-    if searched + len(manual) + len(evolution_protected) != len(selected):
+    if searched + len(manual) + len(evolution_protected) + len(cp_dependent_excluded) != len(selected):
         raise RuntimeError("検索対象の件数が合いません")
     for i, query in enumerate(queries, 1):
         query["index"] = i
@@ -400,6 +418,8 @@ def search_low_scores(params=None, species_catalog=None):
         "evolution_protected": evolution_protected,
         "evolution_high_cp_count": len(high_cp_exceptions),
         "evolution_high_cp_exceptions": high_cp_exceptions,
+        "cp_dependent_excluded_count": len(cp_dependent_excluded),
+        "cp_dependent_excluded": cp_dependent_excluded,
         "queries": queries, "preserved_by_other_roles": len(preserved),
         "unranked_review_count": len(unranked_review),
         "unranked_review": unranked_review,
@@ -411,6 +431,7 @@ def search_low_scores(params=None, species_catalog=None):
             "specialist_preserved": len(preserved),
             "evolution_protected": len(evolution_protected),
             "form_or_name_unsearchable": len(manual),
+            "cp_dependent_excluded": len(cp_dependent_excluded),
             "unranked_not_verified": unranked_with_unknown_evolution,
             "unranked_strong_evolution": unranked_with_strong_evolution,
             "unranked_uncertain_form_or_name": unranked_uncertain_form_or_name,
