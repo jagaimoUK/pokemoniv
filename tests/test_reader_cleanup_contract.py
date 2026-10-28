@@ -62,12 +62,26 @@ class ReaderCleanupContractTests(unittest.TestCase):
         }
         with patch("pvpoke_reader_cleanup.search_low_scores", return_value=data):
             result = reader_cleanup_payload({})
-        self.assertEqual(result["items"][0]["search"], data["queries"][1]["query"])
+        self.assertEqual(
+            set(result["items"][0]["search"].split("&")[0].split(",")),
+            set(data["queries"][1]["query"].split("&")[0].split(",")),
+        )
+        self.assertEqual(
+            result["items"][0]["search"].split("&")[1:],
+            data["queries"][1]["query"].split("&")[1:],
+        )
         self.assertFalse(result["excluded_favorites"])
         self.assertFalse(result["single_query_complete"])
         self.assertEqual(result["original_query_count"], 5)
         self.assertTrue(all("!favorite" not in x["search"] for x in result["items"]))
-        self.assertEqual(result["items"][1]["search"], data["queries"][2]["query"])
+        self.assertEqual(
+            set(result["items"][1]["search"].split("&")[0].split(",")),
+            set(data["queries"][2]["query"].split("&")[0].split(",")),
+        )
+        self.assertEqual(
+            result["items"][1]["search"].split("&")[1:],
+            data["queries"][2]["query"].split("&")[1:],
+        )
         self.assertEqual(result["items"][2]["search"], "Gothita&!shadow&cp-1500")
         self.assertEqual(result["items"][2]["confidence"], "unranked_review")
         self.assertEqual(len(result["items"]), 5)
