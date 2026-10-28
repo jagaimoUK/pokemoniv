@@ -16,7 +16,10 @@ assert.equal(update('?tool=low-score-extra'),true);
 assert.equal(update('?tool=low-score'),false, 'Legacy cleanup route must remain usable');
 assert.equal(update('?from=android&tool=low-score'),false);
 assert.equal(update('?tool=low-score&tool=selection'),false);
-assert(html.includes('function scoreQueuePayload()'),'Existing cleanup export stays available');
+assert(!html.includes('id="lowSendAndroid"'),'Obsolete one-query send action must not appear');
+assert(!html.includes('id="lowSingleCard"'),'One-query search card must not appear');
+assert(!html.includes('id="lowCopyQueue"'),'One-query copy action must not appear');
+assert(html.includes('id="lowExclusionSummary"'),'Exclusion reasons must be visible in diagnostics');
 assert(html.includes("api('low-score'"),'Server-side search remains intact');
 assert(html.includes('updateLowScorePanelVisibility();const opts='),
  'Visibility must be synchronized when an authenticated workspace opens');
