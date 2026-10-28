@@ -50,8 +50,8 @@ class ReaderCleanupContractTests(unittest.TestCase):
             "source_date": "test",
             "queries": [
                 {"query": "RareOne&!shadow&cp1000-1500", "species_count": 1},
-                {"query": "ManySpecies&!shadow&cp-1500", "species_count": 60},
-                {"query": "ShadowGroup&shadow&cp-1500", "species_count": 20},
+                {"query": ",".join("ManySpecies" + str(i) for i in range(60)) + "&!shadow&cp-1500", "species_count": 60},
+                {"query": ",".join("ShadowGroup" + str(i) for i in range(20)) + "&shadow&cp-1500", "species_count": 20},
                 {"query": "RareTwo&!shadow&cp1100-1500", "species_count": 1},
             ],
             "unranked_queries": [{"query": "Gothita&!shadow&cp-1500"}],
