@@ -20,7 +20,20 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <section class="card" id="login"><h2>アプリに接続</h2><p class="note">初回だけ接続キー、または有効なアクセストークンを入力してください。APIキー自体は端末へ保存しません。</p><label for="credential">接続キー</label><input id="credential" type="password" autocomplete="off"><label class="checkline" for="remember"><input id="remember" type="checkbox" checked>このブラウザのログインを30日間維持する</label><p class="note">共有端末ではチェックを外してください。ログアウトでこのブラウザの保存情報を削除できます。</p><div class="actions"><button id="connect">接続する</button></div></section>
 <div id="message" class="status" role="status" aria-live="polite" hidden></div>
 <div id="workspace" hidden>
-<section class="card" id="lowScorePanel" hidden><h2>低スコア個体の一括検索</h2><p class="note">ボックス整理向け。現在の姿が低スコアでも、進化先がいずれかの実戦評価で70点以上なら保護します。例外は進化後CPが必ず1500を超える高CP範囲だけ。判断できない個体は検索対象にしません。従来の6評価での選別は維持し、アプリがポケモンを削除することはありません。</p><div class="low-score-tools"><div><label for="lowMode">抽出ルール</label><select id="lowMode"><option value="practical">推奨：総合＋実戦5役割すべて70未満</option><option value="overall">総合スコアだけ70未満</option><option value="battle">総合＋先発・終盤・交代すべて70未満</option><option value="strict">全7項目すべて70未満</option></select></div><div><label for="lowThreshold">スコア未満（同点は対象外）</label><input id="lowThreshold" type="number" value="70" min="1" max="100" step="0.1"></div></div><label class="checkline" for="lowExcludeFavorites"><input id="lowExcludeFavorites" type="checkbox" checked>検索時にお気に入りを除外（誤操作防止）</label><div class="actions"><button id="lowSearchRun">検索式を作成</button><button id="lowSendAndroid" class="secondary" disabled>1本をAndroidに送る</button><button id="lowCopyQueue" class="secondary" disabled>1本用データをコピー</button></div><p class="note"><strong>1本モードは誤検索を避けるため、進化先や全フォームが低スコアと確認できた図鑑番号だけを使用します。</strong> この1本に入らない個体は下の詳細検索へ。1本ですべての条件を完全表現する機能ではありません。</p><p class="note">「Show Evolutionary Line」は<strong>OFF推奨</strong>。図鑑番号には進化系統の展開が効かないとの報告がありますが、ON時の安全性は実機未検証です。ONのまま使う場合は、まず検索結果を照合し、強い進化先が混ざっていないことを確認してください。</p><p class="note">お気に入り除外OFFなら、検索式から <code>!favorite</code> を取り除きます。ポケモン自体のお気に入りマークは変更しません。条件を切り替えると自動で再生成します。</p><p class="note">Androidへのまとめ送りは検索式だけを扱う対応版が必要です。送る内容は原則1本分。ニックネームを変更したり、ポケモンを削除したりしません。</p><p id="lowScoreSummary" class="note" aria-live="polite">安全優先の検索式1本を作ります。</p><div id="lowSingleCard" class="low-score-item" hidden><strong>安全優先の検索式（1本）</strong><code id="lowSingleQuery" class="search"></code><button id="lowSingleCopy">この1本をコピー</button></div><p id="lowSingleStatus" class="note"></p><details id="lowDetailedPanel"><summary>対象を増やす場合の詳細検索式（複数・英語名）</summary><p class="note">姿・シャドウ・CP範囲ごとに条件を分けます。ボックス整理に使う際はShow Evolutionary Lineをオフにしてください。</p><div id="lowScoreQueries" class="low-score-list"></div></details><details id="lowEvolutionProtected" hidden><summary>進化後を考慮して検索から保護した個体</summary><div id="lowEvolutionNames" class="note" style="white-space:pre-wrap"></div></details><details id="lowManual" hidden><summary>検索式で厳密に区別できない姿・英語名（要確認）</summary><div id="lowManualNames" class="note"></div></details></section>
+<section class="card" id="lowScorePanel" hidden>
+<h2>非厳選判定の内訳（診断）</h2>
+<p class="note">読み取りアプリの「⋯ → 非厳選を取得・コピー」から直接検索式を生成・コピーします。この画面は除外理由の確認専用で、検索式の手動転送は不要です。候補は博士送りの保証ではありません。</p>
+<div class="low-score-tools"><div><label for="lowMode">判定基準</label><select id="lowMode"><option value="practical">推奨：総合＋実戦5役割すべて70未満</option><option value="overall">総合スコアだけ70未満</option><option value="battle">総合＋先発・終盤・交代すべて70未満</option><option value="strict">全7項目すべて70未満</option></select></div>
+<div><label for="lowThreshold">スコア未満</label><input id="lowThreshold" type="number" value="70" min="1" max="100" step="0.1"></div></div>
+<label class="checkline" for="lowExcludeFavorites"><input id="lowExcludeFavorites" type="checkbox" checked>お気に入り除外（!favorite）</label>
+<div class="actions"><button id="lowSearchRun">判定理由を確認</button></div>
+<p class="note">Pokémon GOの「Show Evolutionary Line」はOFF推奨。ランキング未掲載の個体は低スコアと断定できません。進化先が低スコアでも、元の個体が未評価なら別の要確認候補です。</p>
+<p id="lowScoreSummary" class="note" aria-live="polite">データの判定内容を確認できます。</p>
+<p id="lowExclusionSummary" class="note"></p>
+<details id="lowEvolutionProtected" hidden><summary>進化先を考慮して保護した個体</summary><div id="lowEvolutionNames" class="note" style="white-space:pre-wrap"></div></details>
+<details id="lowManual" hidden><summary>姿・検索名などで安全に検索できない個体</summary><div id="lowManualNames" class="note" style="white-space:pre-wrap"></div></details>
+<details id="lowUnrankedReview" hidden><summary>ランキング未掲載の要確認候補（ゴチム等）</summary><div id="lowUnrankedNames" class="note" style="white-space:pre-wrap"></div></details>
+</section>
 <section class="card"><h2>まとめて貼り付け</h2><p class="note">ポケモン・技・個体値をまとめて取り込めます。読み取りCP付きの「0,11,12 CP717 | ヌオー」にも対応します。日本語の種名、技省略、複数の進化先を含む「個体値リスト」「個体値厳選」、CSVに対応します。</p><label for="importText">コマンドまたはCSV</label><textarea id="importText" spellcheck="false" placeholder="個体値厳選&#10;quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE&#10;0,11,12&#10;3,13,8&#10;2,15,13"></textarea><div class="actions"><button id="importInput" class="secondary">貼り付けた内容を取り込む</button></div><p class="note">取り込みだけでは計算を開始しません。# クルマユ ハハコモリ のような見出しは、次の個体値を両方へ割り当てます。省略した技は種類ごとに補って表示します。</p></section>
 <section class="card" id="queuePanel" hidden><h2>連続計算するポケモン</h2><pre id="queuePreview"></pre><p class="note">表示した順にすべて計算します。複数種の内容は上の貼り付け欄から編集できます。</p><button id="singleForm" class="secondary">単一種のフォームに戻す</button></section>
 <section class="card"><h2>1. ポケモンと個体値</h2><label for="preset">登録プリセット（任意）</label><select id="preset"></select><p class="note" id="presetHint"></p><label for="allSpecies">全ポケモンから選ぶ</label><select id="allSpecies"></select><label for="species">ポケモン名・英語ID（直接入力）</label><input id="species" list="speciesList" value="quagsire" autocomplete="off"><datalist id="speciesList"></datalist>
@@ -67,58 +80,24 @@ function updateLowScorePanelVisibility(){
  el('lowScorePanel').hidden=new URLSearchParams(location.search||'').get('tool')!=='low-score';
 }
 let lowScoreResults=null;
-function scoreQueuePayload(){
- if(!lowScoreResults?.quick_query)throw Error('1本の検索式を作成できませんでした。詳細検索を確認してください。');
- return JSON.stringify({format:'pokemoniv-search-queue-v1',
-  source_date:lowScoreResults.source_date,
-  items:[{search:lowScoreResults.quick_query}]});
-}
-async function shareLowScoreQueue(){
- try{
-  const text=scoreQueuePayload();
-  if(launchAndroidOverlay(text))return;
-  if(typeof navigator.share==='function'){
-   try{await navigator.share({title:'低スコア検索式リスト',text});return;}
-   catch(e){if(e?.name==='AbortError')return;}
-  }
-  await copy(text,el('lowCopyQueue'));
-  el('lowScoreSummary').textContent+=' 共有できなかったため、取り込み用データをコピーしました。対応Android版の取り込み欄に貼り付けてください。';
- }catch(e){message(e.message,true);}
-}
-el('lowSendAndroid').onclick=()=>shareLowScoreQueue();
-el('lowCopyQueue').onclick=async()=>{try{await copy(scoreQueuePayload(),el('lowCopyQueue'));}catch(e){message(e.message,true);}};
 async function loadLowScores(){
- const button=el('lowSearchRun');button.disabled=true;button.textContent='集計中…';
+ const button=el('lowSearchRun');button.disabled=true;button.textContent='確認中…';
  try{
   const result=await api('low-score',{mode:el('lowMode').value,threshold:Number(el('lowThreshold').value),exclude_favorites:el('lowExcludeFavorites').checked});
   lowScoreResults=result;
-  el('lowSendAndroid').disabled=!result.quick_query;
-  el('lowCopyQueue').disabled=!result.quick_query;
-  el('lowSingleCard').hidden=!result.quick_query;
-  el('lowSingleQuery').textContent=result.quick_query||'';
-  el('lowSingleCopy').disabled=!result.quick_query;
-  el('lowSingleStatus').textContent=result.quick_query?
-   '1本で扱える '+result.quick_species_count+'種類（'+result.quick_covered_rows+'ランキング行）。安全上まとめられない '+result.quick_omitted_rows+'行は詳細検索へ。お気に入りの条件：'+(result.excluded_favorites?'除外 ON（!favorite付き）':'除外 OFF（お気に入りも検索対象）')+'。'
-   :'条件が異なるため安全な1本を作れませんでした。詳細検索を確認してください。';
-  el('lowScoreSummary').textContent='保存データ '+result.source_date+' / 総合スコアが基準未満 '+result.overall_under_threshold+'件 / 抽出 '+result.selected_count+'件 / 自動検索 '+result.searchable_count+'件 / 要確認 '+result.manual_review_count+'件。検索式 '+result.queries.length+'個。'+result.preserved_by_other_roles+'件は他の役割の評価で保護。進化先の評価で '+result.evolution_protected_count+'件を検索対象から除外しました。進化後CPが必ず1500超と判定できる '+result.evolution_high_cp_count+'件は高CPのみ候補に戻しています。';
-  const root=el('lowScoreQueries');root.replaceChildren();
-  for(const item of result.queries){
-   const box=node('div','',root,'low-score-item');
-   node('strong','検索 '+item.index+' / '+result.queries.length+' （'+item.species_count+'種類）',box);
-   node('code',item.query,box);
-   const b=node('button','この検索式をコピー',box);
-   b.onclick=()=>copy(item.query,b);
-  }
-  if(!result.queries.length)node('p','コピー対象となる検索式はありません。',root,'note');
+  el('lowScoreSummary').textContent='保存データ '+result.source_date+' / 評価済みの対象 '+result.selected_count+'件 / 検索可能 '+result.searchable_count+'件（内部検索式 '+result.queries.length+'個） / 未掲載・要確認 '+(result.unranked_review_count||0)+'種類。';
+  const why=result.exclusion_reasons||{};
+  el('lowExclusionSummary').textContent='対象から保護・除外した理由：他の実戦役割で70点以上 '+(why.specialist_preserved||0)+'件 / 進化先が高スコア・未評価 '+(why.evolution_protected||0)+'件 / 姿・英語名の検索が不確実 '+(why.form_or_name_unsearchable||0)+'件 / 未掲載で進化先も確認不能 '+(why.unranked_not_verified||0)+'種類。未掲載候補は低スコア確定ではありません。';
   el('lowEvolutionProtected').hidden=!result.evolution_protected_count;
-  el('lowEvolutionNames').textContent=(result.evolution_protected||[]).map(x=>x.name+' → '+x.evolves_to.join('、')).join('\n');
+  el('lowEvolutionNames').textContent=(result.evolution_protected||[]).map(x=>x.name+' → '+x.evolves_to.join('、')+'：'+x.reason).join('\n');
   el('lowManual').hidden=!result.manual_review_count;
-  el('lowManualNames').textContent=result.manual_review.map(x=>x.name+'（総合'+x.overall+'）：'+x.reason).join('\n');
- }catch(e){el('lowScoreSummary').textContent='検索式を取得できませんでした：'+e.message;}
- finally{button.disabled=false;button.textContent='検索式を作成';}
+  el('lowManualNames').textContent=(result.manual_review||[]).map(x=>x.name+'（総合'+x.overall+'）：'+x.reason).join('\n');
+  el('lowUnrankedReview').hidden=!(result.unranked_review_count>0);
+  el('lowUnrankedNames').textContent=(result.unranked_review||[]).map(x=>x.name+'（No.'+x.dex+'）→ '+x.evolves_to.join('、')+'：'+x.reason).join('\n');
+ }catch(e){el('lowScoreSummary').textContent='判定理由を取得できませんでした：'+e.message;}
+ finally{button.disabled=false;button.textContent='判定理由を確認';}
 }
 el('lowSearchRun').onclick=()=>loadLowScores();
-el('lowSingleCopy').onclick=()=>copy(lowScoreResults.quick_query,el('lowSingleCopy'));
 el('lowExcludeFavorites').onchange=()=>loadLowScores();
 function option(select,values,selected){select.replaceChildren();for(const v of values){const o=document.createElement('option');o.value=v;o.textContent=v;select.append(o);}if(values.includes(selected))select.value=selected;}
 function moves(row={}){const p=catalog[el('species').value]||{};option(el('fast'),p.fastMoves||[],row.fast);option(el('charged1'),p.chargedMoves||[],row.charged1);option(el('charged2'),p.chargedMoves||[],row.charged2);if(el('charged1').value===el('charged2').value){const alt=(p.chargedMoves||[]).find(x=>x!==el('charged1').value);if(alt)el('charged2').value=alt;}}
