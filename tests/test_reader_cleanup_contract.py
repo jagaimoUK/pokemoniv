@@ -29,6 +29,8 @@ class ReaderCleanupContractTests(unittest.TestCase):
         self.assertTrue(any("Gothita" in item["search"] for item in payload["items"]))
         self.assertTrue(all("nickname" not in item for item in payload["items"]))
         self.assertTrue(all("!favorite" not in item["search"] for item in payload["items"]))
+        self.assertTrue(payload["excluded_xxl"])
+        self.assertTrue(all(item["search"].endswith("&!xxl") for item in payload["items"]))
 
     def test_strong_or_unknown_descendants_do_not_enter_unranked_queries(self):
         rows = [
@@ -68,7 +70,7 @@ class ReaderCleanupContractTests(unittest.TestCase):
         )
         self.assertEqual(
             result["items"][0]["search"].split("&")[1:],
-            data["queries"][1]["query"].split("&")[1:],
+            data["queries"][1]["query"].split("&")[1:] + ["!xxl"],
         )
         self.assertFalse(result["excluded_favorites"])
         self.assertFalse(result["single_query_complete"])
@@ -80,9 +82,9 @@ class ReaderCleanupContractTests(unittest.TestCase):
         )
         self.assertEqual(
             result["items"][1]["search"].split("&")[1:],
-            data["queries"][2]["query"].split("&")[1:],
+            data["queries"][2]["query"].split("&")[1:] + ["!xxl"],
         )
-        self.assertEqual(result["items"][2]["search"], "Gothita&!shadow&cp-1500")
+        self.assertEqual(result["items"][2]["search"], "Gothita&!shadow&cp-1500&!xxl")
         self.assertEqual(result["items"][2]["confidence"], "unranked_review")
         self.assertEqual(len(result["items"]), 5)
 
@@ -103,6 +105,7 @@ class ReaderCleanupContractTests(unittest.TestCase):
         with patch("pvpoke_reader_cleanup.search_low_scores",return_value=fake):
             result = reader_cleanup_payload({})
         self.assertEqual(len(result["items"]),3)
+        self.assertTrue(all(q["search"].endswith("&!xxl") for q in result["items"]))
         self.assertEqual(result["verified_query_count"],2)
         self.assertNotIn(result["quick_query"] if "quick_query" in result else "201&cp-1500",
                          [x["search"] for x in result["items"]])
@@ -161,6 +164,15 @@ class ReaderCleanupContractTests(unittest.TestCase):
         self.assertFalse(any(
             "!favorite" in item["search"] for item in exported["items"]
         ))
+
+    def test_reader_rejects_contradictory_xxl_only_cleanup_query(self):
+        from unittest.mock import patch
+        fake = {"source_date":"test", "queries":[{"query":"Pumpkaboo&xxl&cp-1500"}],
+                "unranked_queries":[], "unranked_review":[], "unranked_review_count":0,
+                "searchable_count":1, "exclusion_reasons":{}}
+        with patch("pvpoke_reader_cleanup.search_low_scores",return_value=fake):
+            with self.assertRaisesRegex(ValueError,"XXL"):
+                reader_cleanup_payload({})
 
     def test_invalid_cp_dependent_flag_and_default_behavior(self):
         with self.assertRaises(ValueError):
