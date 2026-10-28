@@ -26,6 +26,15 @@ vm.runInContext("catalog={swadloon:{name:'Swadloon',name_ja:'クルマユ',nickn
  assert.deepEqual(copied.slice(3),['ASwd>Oth11','ALea>Oth11']);
  assert(!storage.has('pvpoke-app-batch'));assert(els.resume.hidden);
  console.log('Sequential grouped execution, retained per-species results, frozen meta and copies: OK');
+ // Force choice is frozen for every queued job; reused results remain explicit.
+ vm.runInContext("el('forceRecalculate').checked=true",context);
+ calls.length=0;
+ context.fetch=async(path,options)=>{const data=JSON.parse(options.body);calls.push({path,data});els.forceRecalculate.checked=false;return {ok:true,json:async()=>({...result(jobs[calls.length-1]),result_cache:{reused:true}})};};
+ vm.runInContext("batchState={jobs,index:0,results:[],run_ref:null,batch_mode:'simple',focus:[],report_format:'app',policy:{},force_recalculate:true}",context);
+ await vm.runInContext('executeBatch()',context);
+ assert(calls.every(c=>c.data.force_recalculate===true));
+ assert(flat(els.results).some(x=>x.textContent.includes('過去の対戦結果を再利用')));
+ console.log('Force recalculation stays frozen across queued jobs; reuse notice preserved: OK');
  // Resume after the first completed species; do not restart it.
  calls.length=0;context.saved=result(jobs[0]);context.saved.display_name='クルマユ';
  vm.runInContext("render(saved);batchState={jobs,index:1,results:[saved],run_ref:'resumed-ref',meta_sha256:'a'.repeat(64),batch_mode:'simple',focus:[],report_format:'app',policy:{}}",context);

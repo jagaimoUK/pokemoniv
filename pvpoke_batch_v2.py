@@ -20,6 +20,7 @@ import urllib.request
 import zipfile
 import pvpoke_archive
 import pvpoke_matchup_cache as matchup_cache
+from pvpoke_calculation_version import calculation_version, force_recalculate
 import pvpoke_direct_backend as direct_backend
 from datetime import datetime, timezone
 from pathlib import Path
@@ -512,6 +513,8 @@ def run(refresh=False, shield_set='all'):
         raise ValueError('メテノのフォルム連動計算にはDirect Nodeエンジンが必要です')
     backend_fallbacks = 0
     print(f'PvPoke Matrix engine selected: {selected_engine}', flush=True)
+    engine_version = calculation_version(DATA)
+    reuse_results = engine_version is not None and not force_recalculate()
     # A fresh cache ID whenever game data, inputs, or scenario choices change.
     gamemaster_hash = hashlib.sha256((DATA/'gamemaster.json').read_bytes()).hexdigest()
     pokemonjs_hash = hashlib.sha256((DATA/'Pokemon.js').read_bytes()).hexdigest()
@@ -519,7 +522,7 @@ def run(refresh=False, shield_set='all'):
         'candidates': candidates, 'opponents': opponents,
         'cp_cap': CP_CAP, 'max_level': MAX_LEVEL,
         'gamemaster_hash': gamemaster_hash, 'pokemonjs_hash': pokemonjs_hash,
-        'pairs': pairs, 'candidate_chunk': CAND_CHUNK,
+        'engine_version': engine_version, 'pairs': pairs, 'candidate_chunk': CAND_CHUNK,
         'opponent_chunk': OPP_CHUNK, 'version': 'minior-hp-3policies-v1' if minior_batch else 5
     }, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
     parts_dir = OUT / ('parts_' + fingerprint)
@@ -531,13 +534,12 @@ def run(refresh=False, shield_set='all'):
     cache = None
     # The current SQLite cache only stores ratings, not policy provenance.
     # Never silently reuse old or unannotated Minior matchups.
-    if not minior_batch and os.environ.get('PVP_MATCHUP_CACHE', '1').lower() not in ('0', 'false', 'off'):
+    if reuse_results and not minior_batch and os.environ.get('PVP_MATCHUP_CACHE', '1').lower() not in ('0', 'false', 'off'):
         try:
             ns = matchup_cache.cache_namespace(
                 gamemaster_hash=gamemaster_hash, pokemonjs_hash=pokemonjs_hash,
-                cp_cap=CP_CAP, max_level=MAX_LEVEL,
-                epoch=os.environ.get('PVP_CACHE_EPOCH', '') +
-                ('|direct-a23fb293-adapter1' if use_direct else ''))
+                cp_cap=CP_CAP, max_level=MAX_LEVEL, engine_hash=engine_version,
+                epoch=os.environ.get('PVP_CACHE_EPOCH', ''))
             cache_dir = pvpoke_archive.archive_dir(DATA.parent)
             cache = matchup_cache.MatchupCache(cache_dir / 'matchups.sqlite3', ns)
             print(f'Matchup cache enabled: {cache.path}', flush=True)
@@ -598,6 +600,8 @@ def run(refresh=False, shield_set='all'):
                 print(f'  Direct engine rejected batch; using Chromium fallback: {error}', flush=True)
                 backend_fallbacks += 1
                 use_direct = False
+                if cache is not None:
+                    cache.disable()
                 if node_client is not None:
                     node_client.close()
                     node_client = None
@@ -643,7 +647,7 @@ def run(refresh=False, shield_set='all'):
                 rows_by_pair = {}
                 pending = []
                 for pair, path in part_paths.items():
-                    if path.exists() and not minior_batch:
+                    if path.exists() and reuse_results and not minior_batch:
                         with path.open(encoding='utf-8-sig', newline='') as f:
                             rows_by_pair[pair] = list(csv.reader(f))
                         print(f'  保存済み {result_filename(pair)} を再利用')
@@ -697,6 +701,8 @@ def run(refresh=False, shield_set='all'):
             node_client.close()
         if cache is not None:
             cache.close()
+        if backend_fallbacks:
+            shutil.rmtree(parts_dir, ignore_errors=True)
     if cache is not None:
         print(f'Matchup cache summary: {cache.stats}', flush=True)
     node_memory = (
@@ -748,6 +754,7 @@ def run(refresh=False, shield_set='all'):
         'cp_cap': CP_CAP, 'max_level': MAX_LEVEL,
         'gamemaster_timestamp': gm.get('timestamp'),
         'gamemaster_sha256': gamemaster_hash, 'pokemonjs_sha256': pokemonjs_hash,
+        'calculation_version': engine_version,
         'candidate_count': len(candidates), 'opponent_count': len(opponents),
         'shield_pairs': [list(p) for p in pairs], 'fingerprint': fingerprint,
         'matchup_cache': cache.stats if cache is not None else {'enabled': False},

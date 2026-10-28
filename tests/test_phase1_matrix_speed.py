@@ -103,6 +103,7 @@ class PhaseOneTests(unittest.TestCase):
                              "prepared_candidates.csv", "prepared_opponents.csv"):
                 (home / filename).write_text("test\n", encoding="utf-8")
             patches = [
+                patch.dict(engine.os.environ,{"PVP_ENGINE":"browser", "PVP_BROWSER_CACHE_EPOCH":"fixture-v1", "PVP_FORCE_RECALCULATE":"0"}),
                 patch.object(engine, "DIR", home),
                 patch.object(engine, "OUT", home / "results"),
                 patch.object(engine, "DATA", data_dir),
@@ -132,6 +133,9 @@ class PhaseOneTests(unittest.TestCase):
                 # A re-run should reuse all 12 saved matrices without opening a tab.
                 engine.run(shield_set="equal")
                 self.assertEqual(len(FakePage.created), 1)
+                with patch.dict(engine.os.environ,{"PVP_FORCE_RECALCULATE":"1"}):
+                    engine.run(shield_set="equal")
+                self.assertEqual(len(FakePage.created),2,"Forced recalculation bypasses both chunk and matchup caches")
 
 
 if __name__ == "__main__":

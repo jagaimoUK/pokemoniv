@@ -78,7 +78,7 @@ class CacheRunnerIntegrationTests(unittest.TestCase):
                     patch.object(engine, "prepare", side_effect=prepare),
                     patch.object(engine, "chromium_connect", return_value={"Browser":"mock"}),
                     patch.object(engine, "Page", DummyPage),
-                    patch.dict(engine.os.environ, {"PVP_MATCHUP_CACHE":"1"}, clear=True),
+                    patch.dict(engine.os.environ, {"PVP_MATCHUP_CACHE":"1", "PVP_BROWSER_CACHE_EPOCH":"fixture-v1"}, clear=True),
                 ):
                     stack.enter_context(c)
 
