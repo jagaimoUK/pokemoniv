@@ -45,6 +45,29 @@ class ReaderCleanupContractTests(unittest.TestCase):
         self.assertFalse(result["unranked_queries"])
         self.assertFalse(result["unranked_review"])
 
+    def test_prioritizes_high_coverage_and_gothita_review_before_cp_exceptions(self):
+        data = {
+            "source_date": "test",
+            "queries": [
+                {"query": "RareOne&!shadow&cp1000-1500&!favorite", "species_count": 1},
+                {"query": "ManySpecies&!shadow&cp-1500&!favorite", "species_count": 60},
+                {"query": "ShadowGroup&shadow&cp-1500&!favorite", "species_count": 20},
+                {"query": "RareTwo&!shadow&cp1100-1500&!favorite", "species_count": 1},
+            ],
+            "unranked_queries": [{"query": "Gothita&!shadow&cp-1500&!favorite"}],
+            "unranked_review": [{"name": "Gothita", "reason": "未掲載"}],
+            "unranked_review_count": 1,
+            "searchable_count": 82,
+            "exclusion_reasons": {},
+        }
+        with patch("pvpoke_reader_cleanup.search_low_scores", return_value=data):
+            result = reader_cleanup_payload({})
+        self.assertEqual(result["items"][0]["search"], data["queries"][1]["query"])
+        self.assertEqual(result["items"][1]["search"], data["queries"][2]["query"])
+        self.assertEqual(result["items"][2]["search"], "Gothita&!shadow&cp-1500&!favorite")
+        self.assertEqual(result["items"][2]["confidence"], "unranked_review")
+        self.assertEqual(len(result["items"]), 5)
+
     def test_response_sends_every_verified_query_not_the_tiny_quick_subset(self):
         from pvpoke_reader_cleanup import reader_cleanup_payload
         fake = {

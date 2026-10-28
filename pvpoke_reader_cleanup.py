@@ -12,16 +12,24 @@ def reader_cleanup_payload(species_catalog):
         {"mode": "practical", "threshold": 70, "exclude_favorites": True},
         species_catalog,
     )
-    items = [
+    # Put the largest confirmed groups first, so the first automatic copy
+    # is useful for the most Pokémon. Exact CP exceptions often represent
+    # single species and must not bury the broad shadow group or Gothita.
+    ranked_groups = sorted(
+        result["queries"], key=lambda row: (-row.get("species_count", 1), row["query"])
+    )
+    ranked_items = [
         {"search": row["query"], "confidence": "ranked"}
-        for row in result["queries"]
+        for row in ranked_groups
     ]
-    # An unranked basic-stage Pokémon is a *review suggestion*, NEVER
-    # labelled a proven low-score Pokémon or mixed with ranked groups.
-    items += [
+    # Unranked stages are hypotheses for manual review, never confirmed lows.
+    # Place them after the two highest-coverage verified groups, NOT at the
+    # very end after dozens of one-species CP-exception searches.
+    review_items = [
         {"search": row["query"], "confidence": "unranked_review"}
         for row in result["unranked_queries"]
     ]
+    items = ranked_items[:2] + review_items + ranked_items[2:]
     if not items:
         raise ValueError("安全に表現できる検索式がありません。ランキングと図鑑を確認してください")
     if len(items) > 10000 or any(
