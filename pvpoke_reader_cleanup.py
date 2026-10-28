@@ -50,11 +50,11 @@ def reader_cleanup_payload(species_catalog):
         "review_query_count": len(result["unranked_queries"]),
         "verified_species_count": result["searchable_count"],
         "review_species_count": result["unranked_review_count"],
-        "cp_dependent_excluded_count": result["cp_dependent_excluded_count"],
+        "cp_dependent_excluded_count": result.get("cp_dependent_excluded_count", 0),
         "cp_dependent_excluded_species_count": len({
-            item["dex"] for item in result["cp_dependent_excluded"]
+            item["dex"] for item in result.get("cp_dependent_excluded", [])
         }),
-        "cp_dependent_excluded_examples": result["cp_dependent_excluded"][:30],
+        "cp_dependent_excluded_examples": result.get("cp_dependent_excluded", [])[:30],
         "exclusion_reasons": result["exclusion_reasons"],
         "review_examples": result["unranked_review"][:30],
         "notice": ("検索式は候補の確認用で、博士送りを保証しません。"
