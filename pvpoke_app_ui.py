@@ -25,7 +25,7 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <p class="note">読み取りアプリの「⋯ → 非厳選を取得・コピー」から直接検索式を生成・コピーします。この画面は除外理由の確認専用で、検索式の手動転送は不要です。候補は博士送りの保証ではありません。</p>
 <div class="low-score-tools"><div><label for="lowMode">判定基準</label><select id="lowMode"><option value="practical">推奨：総合＋実戦5役割すべて70未満</option><option value="overall">総合スコアだけ70未満</option><option value="battle">総合＋先発・終盤・交代すべて70未満</option><option value="strict">全7項目すべて70未満</option></select></div>
 <div><label for="lowThreshold">スコア未満</label><input id="lowThreshold" type="number" value="70" min="1" max="100" step="0.1"></div></div>
-<label class="checkline" for="lowExcludeFavorites"><input id="lowExcludeFavorites" type="checkbox" checked>お気に入り除外（!favorite）</label>
+<label class="checkline" for="lowExcludeFavorites"><input id="lowExcludeFavorites" type="checkbox">診断用：お気に入り除外（任意）</label>
 <div class="actions"><button id="lowSearchRun">判定理由を確認</button></div>
 <p class="note">Pokémon GOの「Show Evolutionary Line」はOFF推奨。ランキング未掲載の個体は低スコアと断定できません。進化先が低スコアでも、元の個体が未評価なら別の要確認候補です。</p>
 <p id="lowScoreSummary" class="note" aria-live="polite">データの判定内容を確認できます。</p>
