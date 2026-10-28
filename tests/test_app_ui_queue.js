@@ -19,7 +19,7 @@ vm.runInContext("catalog={swadloon:{name:'Swadloon',name_ja:'クルマユ',nickn
  assert(!nodes.some(x=>/重要個体値（コピペ用）|この個体値をコピー/.test(x.textContent)));
  assert.equal(els.allCopyActions.hidden,false);
  for(const b of nodes.filter(x=>x.textContent==='検索式とニックネームをすべてコピー'))await b.onclick();
- assert.equal(copied[0],'swadloon&1attack&1defense&1hp\nASwd>Oth11');assert.equal(copied[1],'leavanny&1attack&1defense&1hp\nALea>Oth11');
+ assert.equal(copied[0],'swadloon&1attack&1defense&1hp&!xxl\nASwd>Oth11');assert.equal(copied[1],'leavanny&1attack&1defense&1hp&!xxl\nALea>Oth11');
  assert.equal(nodes.filter(x=>x.textContent==='検索式をコピー').length,2);
  await els.allCopyActions.children[0].onclick();assert.equal(copied[2],copied[0]+'\n'+copied[1]);
  for(const b of nodes.filter(x=>x.textContent==='ニックネームをコピー'))await b.onclick();

@@ -219,9 +219,17 @@ function statusSearch(search,status){
  else parts.push('!shadow','!purified');
  return parts.join('&');
 }
+function xxlProtectedSearch(search){
+ if(!search||typeof search!=='string')return search;
+ const terms=search.toLowerCase().split('&').map(x=>x.trim());
+ // Pumpkin/Gourgeist super-size is a distinct battle form and requires &xxl.
+ // Never create the impossible &xxl&!xxl combination.
+ if(terms.includes('xxl')||terms.includes('!xxl'))return search;
+ return search+'&!xxl';
+}
 function individualSearches(result,iv){
  const records=(result.source_records||[]).filter(r=>r.ivs===iv.ivs);
- return records.length?records.map(r=>({search:statusSearch(r.search_string,result.pokemon_status),cp:r.cp,species:r.species})):[{search:statusSearch(iv.search_string,result.pokemon_status)}];
+ return records.length?records.map(r=>({search:xxlProtectedSearch(statusSearch(r.search_string,result.pokemon_status)),cp:r.cp,species:r.species})):[{search:xxlProtectedSearch(statusSearch(iv.search_string,result.pokemon_status))}];
 }
 function overlayExport(results){
  recommendationExportText(results); // Validate every pair before writing anything.
@@ -314,6 +322,7 @@ function render(result,append=false){
  node('p',[result.candidate.fast,result.candidate.charged1,result.candidate.charged2].join(' / '),panel,'note');const selection=result.selection;
  if(!selection){node('h2','GPT評価用の比較情報',panel);node('p','今回の比較情報をコピーしてGPTに評価を依頼できます。',panel);const b=node('button','比較情報をコピー',panel);b.onclick=()=>copy('以下のPvPoke実測比較を、個体値厳選の基準で評価してください。おすすめ個体と英語検索式を示してください。\n'+JSON.stringify(result),b);return;}
  node('h2','おすすめ個体',panel);
+ node('p','検索式ではXXLの実際の身長を比較できないため、通常の検索式からXXLを除外します。XXLは手動で比較し、最大の個体を残してください。サイズがフォルムそのものを表す場合は例外です。',panel,'note');
  if(selection.input_notices)selection.input_notices.forEach(n=>node('p',n,panel,'note'));
  if(selection.minior_experimental)node('p','メテノの戦術比較（試験版）：流星で即撃ち／コアまで温存／状況判断を同じ条件で比較。表示Ratingは各対面で最良の戦術を選んだ上限値です。実機のCP・レベル調整が未検証のため、この結果だけで個体を博士に送らないでください。',panel,'note');
  node('p','Sは総合本命、Aはその本命にない実戦上の役割を補う個体です。通常は最大4体に絞ります。S/Aは入力候補内の暫定評価で、実際の勝敗を保証するものではありません。',panel,'note');

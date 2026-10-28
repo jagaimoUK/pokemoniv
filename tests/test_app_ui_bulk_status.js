@@ -23,7 +23,7 @@ vm.runInContext('const shadowWooper=catalog.wooper_shadow;delete catalog.wooper_
 vm.runInContext('catalog.wooper_shadow=shadowWooper;setImportedJobs(null);setCandidate({species:"wooper",fast:"FAST",charged1:"C1",charged2:"C2"});el("ivs").value="1,2,3";applyBulkStatus("purified")',c);
 assert.equal(vm.runInContext('inputPokemonStatus',c),'purified');assert.equal(els.ivs.value,'1,2,3');
 c.result={pokemon_status:'purified',source_records:[{species:'wooper',ivs:'1/2/3',cp:500,search_string:'Wooper&shadow&1attack&1defense&1hp&cp500'}]};c.iv={ivs:'1/2/3',search_string:'Quagsire&shadow&1attack&1defense&1hp'};
-assert.equal(vm.runInContext('individualSearches(result,iv)[0].search',c),'Wooper&1attack&1defense&1hp&cp500&purified');
-assert.equal(vm.runInContext('individualSearches({pokemon_status:"normal"},iv)[0].search',c),'Quagsire&1attack&1defense&1hp&!shadow&!purified');
+assert.equal(vm.runInContext('individualSearches(result,iv)[0].search',c),'Wooper&1attack&1defense&1hp&cp500&purified&!xxl');
+assert.equal(vm.runInContext('individualSearches({pokemon_status:"normal"},iv)[0].search',c),'Quagsire&1attack&1defense&1hp&!shadow&!purified&!xxl');
 vm.runInContext('active=true;applyBulkStatus("normal")',c);assert.equal(vm.runInContext('inputPokemonStatus',c),'purified');
 console.log('Bulk status: normal/shadow/purified, undo, atomic failure, source CP, exports, busy guard: PASS');

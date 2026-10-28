@@ -19,13 +19,13 @@ function flatten(e){return [e,...e.children.flatMap(flatten)];}
  assert.equal(buttons.length,3, 'Two single-result buttons and one all-results button are present');
  await buttons[1].onclick();
  assert.equal(shared.length,1);
- const expected='Quagsire&0attack&3defense&3hp\nAQuag>Cor01\nQuagsire&1attack&3defense&3hp\nAQuag>Cor01';
+ const expected='Quagsire&0attack&3defense&3hp&!xxl\nAQuag>Cor01\nQuagsire&1attack&3defense&3hp&!xxl\nAQuag>Cor01';
  const payload=JSON.parse(shared[0].text);assert.equal(payload.format,'pokemoniv-overlay-v2');assert.equal(payload.items.length,2);assert.equal(payload.items[0].ivs,'0/11/12');assert.equal(payload.items.map(x=>x.search+'\n'+x.nickname).join('\n'),expected);
  assert.equal(shared[0].title,'厳選コピーリスト');
  assert.equal(copied.length,0);
  await elements.allCopyActions.children.find(x=>x.textContent==='Androidへ送る').onclick();
  assert.equal(shared.length,2);
- assert.equal(JSON.parse(shared[1].text).items.map(x=>x.search+'\n'+x.nickname).join('\n'),expected+'\nQuagsire&0attack&3defense&3hp\nAQuag>Cor01');
+ assert.equal(JSON.parse(shared[1].text).items.map(x=>x.search+'\n'+x.nickname).join('\n'),expected+'\nQuagsire&0attack&3defense&3hp&!xxl\nAQuag>Cor01');
  assert.equal(JSON.parse(shared[1].text).items.length,3);
  navigator.share=undefined;
  await buttons[1].onclick();
@@ -46,8 +46,11 @@ function flatten(e){return [e,...e.children.flatMap(flatten)];}
  const oldRegional=result([row('13/8/11','Wooper (Paldean)&3attack&2defense&3hp')]);
  oldRegional.source_records=[{ivs:'13/8/11',cp:458,species:'wooper_paldean',search_string:'Wooper (Paldean)&3attack&2defense&3hp&cp458'}];
  const migrated=JSON.parse(vm.runInContext('overlayExport([oldRegional])',Object.assign(context,{oldRegional})));
- assert.equal(migrated.items[0].search,'Wooper&paldea&3attack&2defense&3hp&cp458');
- assert(vm.runInContext('recommendationExport(oldRegional)',context).startsWith('Wooper&paldea&3attack&2defense&3hp&cp458'));
+ assert.equal(migrated.items[0].search,'Wooper&paldea&3attack&2defense&3hp&cp458&!xxl');
+ assert(vm.runInContext('recommendationExport(oldRegional)',context).startsWith('Wooper&paldea&3attack&2defense&3hp&cp458&!xxl'));
+ assert.equal(vm.runInContext('xxlProtectedSearch("Pumpkaboo&xxl&cp100")',context),'Pumpkaboo&xxl&cp100');
+ assert.equal(vm.runInContext('xxlProtectedSearch("Pumpkaboo&!xxl&cp100")',context),'Pumpkaboo&!xxl&cp100');
+ assert.equal(vm.runInContext('xxlProtectedSearch("Quagsire&cp500")',context),'Quagsire&cp500&!xxl');
  for(const [name,region] of [['Raichu (Alolan)','alola'],['Zigzagoon (Galarian)','galar'],['Growlithe (Hisuian)','hisui']]){
   const fixed=vm.runInContext('normalizedRegionalSearch('+JSON.stringify(name+'&1attack')+')',context);
   assert.equal(fixed,name.split(' (')[0]+'&'+region+'&1attack');

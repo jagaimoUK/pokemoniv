@@ -20,7 +20,7 @@ assert(nodes.some(n=>n.textContent==='オーダイル(シャドウ)：勝ち（�
 assert(nodes.some(n=>n.textContent==='アーマーガア：引き分け（標準IV・自分シールド0 / 相手1）'));
 assert(!nodes.some(n=>n.textContent.includes('English old reason')||n.textContent.includes('Corviknight')));
 const exported=vm.runInContext('recommendationExport(result)',context);
-assert.equal(exported,'Quagsire&0attack&3defense&3hp\nSQuag>Fers12\nQuagsire&1attack&3defense&3hp\nSQuag>Fers12');
+assert.equal(exported,'Quagsire&0attack&3defense&3hp&!xxl\nSQuag>Fers12\nQuagsire&1attack&3defense&3hp&!xxl\nSQuag>Fers12');
 assert.equal(nodes.filter(n=>n.textContent==='検索式をコピー').length,2);
 assert(!exported.includes('\t')&&!exported.includes('\n\n'));
 assert.throws(()=>vm.runInContext('recommendationExport({candidate:result.candidate,selection:{recommendations:[{...result.selection.recommendations[0],search_string:null}]}})',context),/検索式/);
@@ -54,5 +54,5 @@ assert(!overlapNodes.some(n=>n.textContent.includes('オーダイル(シャド�
  'Shared Rating=511 must not hide the real reason for retaining the IV.');
 assert.equal(vm.runInContext('recommendationExport(overlapResult)',context).split('\n').length,4,
  'Search/nickname copy must stay intact.');
-(async()=>{for(const b of nodes.filter(n=>n.textContent==='検索式をコピー')){await b.onclick();assert(['Quagsire&0attack&3defense&3hp','Quagsire&1attack&3defense&3hp'].includes(context.copied));}console.log('Japanese matchups, restored search copies, exact search/nickname pairs and alternatives: OK');})();
+(async()=>{for(const b of nodes.filter(n=>n.textContent==='検索式をコピー')){await b.onclick();assert(['Quagsire&0attack&3defense&3hp&!xxl','Quagsire&1attack&3defense&3hp&!xxl'].includes(context.copied));}console.log('Japanese matchups, restored search copies, exact search/nickname pairs and alternatives: OK');})();
 
