@@ -112,6 +112,67 @@ class ReaderCleanupContractTests(unittest.TestCase):
 if __name__=="__main__":
     unittest.main()
 
+    def test_excludes_entire_cp_sensitive_species_from_android_search(self):
+        # Spritzee is below 70, but Aromatisse has a strong PvP score.
+        # This fixture yields a genuine CP-dependent threshold in the old mode.
+        catalog = {
+            "spritzee": {"name": "Spritzee", "dex": 682,
+                         "baseStats": {"atk": 100, "def": 100, "hp": 100}},
+            "aromatisse": {"name": "Aromatisse", "dex": 683,
+                           "baseStats": {"atk": 240, "def": 240, "hp": 240}},
+            "unown": {"name": "Unown", "dex": 201},
+        }
+        original = search_low_scores(
+            {"mode": "practical", "exclude_favorites": False}, catalog
+        )
+        self.assertTrue(any(
+            "Spritzee" in row["query"] for row in original["queries"]
+        ))
+        self.assertTrue(any(
+            row["name"] == "シュシュプ"
+            for row in original["evolution_high_cp_exceptions"]
+        ))
+
+        safe = search_low_scores(
+            {"mode": "practical", "exclude_favorites": False,
+             "exclude_cp_dependent": True}, catalog
+        )
+        self.assertFalse(any(
+            "Spritzee" in row["query"] for row in safe["queries"]
+        ))
+        self.assertEqual(safe["evolution_high_cp_count"], 0)
+        self.assertTrue(any(
+            row["name"] == "シュシュプ" and row["minimum_cp"] > 1
+            for row in safe["cp_dependent_excluded"]
+        ))
+        self.assertEqual(
+            safe["selected_count"],
+            safe["searchable_count"] + safe["manual_review_count"]
+            + safe["evolution_protected_count"] + safe["cp_dependent_excluded_count"],
+        )
+
+        exported = reader_cleanup_payload(catalog)
+        self.assertTrue(exported["cp_dependent_excluded_count"] >= 1)
+        self.assertTrue(exported["cp_dependent_excluded_species_count"] >= 1)
+        self.assertFalse(any(
+            "Spritzee" in item["search"] for item in exported["items"]
+        ))
+        self.assertTrue(all(
+            "&cp-1500" in item["search"]
+            for item in exported["items"]
+        ))
+        self.assertFalse(any(
+            "!favorite" in item["search"] for item in exported["items"]
+        ))
+
+    def test_invalid_cp_dependent_flag_and_default_behavior(self):
+        with self.assertRaises(ValueError):
+            search_low_scores({"exclude_cp_dependent": "true"})
+        # Diagnostic mode stays unchanged unless the reader explicitly opts in.
+        standard = search_low_scores()
+        self.assertEqual(standard["cp_dependent_excluded_count"], 0)
+        self.assertGreater(standard["evolution_high_cp_count"], 0)
+
 
 class BooleanCompactionTests(unittest.TestCase):
     def test_shadow_and_region_partition_merge_without_other_species(self):

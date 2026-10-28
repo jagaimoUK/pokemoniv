@@ -10,12 +10,12 @@ from pvpoke_go_query_compact import compact_search_groups
 
 def reader_cleanup_payload(species_catalog):
     result = search_low_scores(
-        {"mode": "practical", "threshold": 70, "exclude_favorites": False},
+        {"mode": "practical", "threshold": 70,
+         "exclude_favorites": False, "exclude_cp_dependent": True},
         species_catalog,
     )
-    # Put the largest confirmed groups first, so the first automatic copy
-    # is useful for the most Pokémon. Exact CP exceptions often represent
-    # single species and must not bury the broad shadow group or Gothita.
+    # All CP-dependent species are omitted, never searched only in a
+    # high-CP interval. Prefer the largest fully eligible search groups.
     ranked_groups = compact_search_groups(result["queries"])
     review_groups = compact_search_groups(result["unranked_queries"])
     ranked_items = [
@@ -23,8 +23,7 @@ def reader_cleanup_payload(species_catalog):
         for row in ranked_groups
     ]
     # Unranked stages are hypotheses for manual review, never confirmed lows.
-    # Place them after the two highest-coverage verified groups, NOT at the
-    # very end after dozens of one-species CP-exception searches.
+    # Keep these separate from verified low-score Pokémon.
     review_items = [
         {"search": row["query"], "confidence": "unranked_review"}
         for row in review_groups
@@ -51,10 +50,16 @@ def reader_cleanup_payload(species_catalog):
         "review_query_count": len(result["unranked_queries"]),
         "verified_species_count": result["searchable_count"],
         "review_species_count": result["unranked_review_count"],
+        "cp_dependent_excluded_count": result["cp_dependent_excluded_count"],
+        "cp_dependent_excluded_species_count": len({
+            item["dex"] for item in result["cp_dependent_excluded"]
+        }),
+        "cp_dependent_excluded_examples": result["cp_dependent_excluded"][:30],
         "exclusion_reasons": result["exclusion_reasons"],
         "review_examples": result["unranked_review"][:30],
         "notice": ("検索式は候補の確認用で、博士送りを保証しません。"
                    "未掲載候補はスコア未評価のため、通常検索式とは分けています。"
                    "Pokémon GOのShow Evolutionary LineはOFF推奨。"
-                   "統合できないCP・姿条件は検索オーバーレイに表示します。"),
+                   "CPによって進化後の利用可否が変わる種類は検索から丸ごと除外します。"
+                   "残る姿・シャドウ条件は必要に応じて検索オーバーレイに表示します。"),
     }
