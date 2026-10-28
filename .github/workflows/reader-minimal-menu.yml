@@ -34,6 +34,7 @@ jobs:
           gradle-version: '8.9'
       - name: Copy reader module into isolated Android test harness
         run: |
+          cp android-integration/IvSelectionText.kt demo/app/src/main/java/com/example/pokemonivreader/
           mkdir -p demo/app/src/main/java/com/example/pokemonivreader/readerquickmenu
           mkdir -p demo/app/src/test/java/com/example/pokemonivreader/readerquickmenu
           cp android-integration/readerquickmenu/ReaderCleanupStore.kt android-integration/readerquickmenu/ReaderQuickMenu.kt demo/app/src/main/java/com/example/pokemonivreader/readerquickmenu/
