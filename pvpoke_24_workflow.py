@@ -28,6 +28,7 @@ from pathlib import Path
 
 import pvpoke_batch_v2 as engine
 import pvpoke_iv_modes as iv_modes
+from pvpoke_calculation_version import calculation_version, content_hash
 
 MODES = ('default', 'rank1', 'attack', 'defense')
 BATCH_MODES = {'simple': ('default',), 'detailed': MODES}
@@ -195,6 +196,7 @@ def record_cache_stats(engine_manifest_path: Path, batch_manifest_path: Path):
     if not isinstance(engine_stats, dict):
         raise ValueError('Engine metadata is not an object')
     batch_manifest['engine'] = engine_stats
+    batch_manifest['calculation_version'] = engine_manifest.get('calculation_version')
     temp = batch_manifest_path.with_suffix('.tmp')
     try:
         temp.write_text(json.dumps(batch_manifest, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -235,6 +237,7 @@ def main():
     (target / 'excluded_rows.json').write_text(json.dumps(errors, ensure_ascii=False, indent=2), encoding='utf-8')
     (target / 'manifest.json').write_text(json.dumps({
         'created_at': datetime.now(timezone.utc).isoformat(),
+        'calculation_version': calculation_version(engine.DATA), 'meta_sha256': content_hash(args.meta),
         'source_file': args.meta.name, 'gamemaster_timestamp': gm.get('timestamp'),
         'cp_cap': engine.CP_CAP, 'max_level': engine.MAX_LEVEL,
         'batch_mode': args.batch_mode,

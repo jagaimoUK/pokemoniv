@@ -190,6 +190,7 @@ TOOLS = [
          'focus_limit': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 20},
          'wait_seconds': {'type': 'integer', 'minimum': 0, 'maximum': 20, 'default': 12},
          'report_format': {'type': 'string', 'enum': ['decision', 'decision-v1', 'compact', 'app'], 'default': 'decision'},
+         'force_recalculate': {'type': 'boolean', 'default': False, 'description': 'Bypass saved battle ZIPs, matchup results and intermediate parts for this job.'},
          'selection_policy': {'type': 'object', 'properties': {
              'meaningful_win_lead': {'type': 'number', 'minimum': 1, 'maximum': 1000, 'default': 20}
          }, 'additionalProperties': False}
@@ -258,7 +259,7 @@ def call_tool(name, args):
                              args.get('wait_seconds', 12),
                              args.get('expected_meta_sha256'),
                              args.get('report_format', 'decision'), args.get('selection_policy'),
-                             args.get('meta_preset_id'))
+                             args.get('meta_preset_id'), args.get('force_recalculate', False))
     if name == 'get_iv_selection_result':
         return IV_RUNNER.result(args['run_ref'], args.get('wait_seconds', 12))
     if name == 'get_status':

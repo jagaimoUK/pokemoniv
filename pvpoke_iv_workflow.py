@@ -101,10 +101,12 @@ class IVWorkflow:
             focus_limit: int = 20, wait_seconds: int = 12,
             expected_meta_sha256: str | None = None,
             report_format: str = "decision", selection_policy: dict | None = None,
-            meta_preset_id: str | None = None) -> dict:
+            meta_preset_id: str | None = None, force_recalculate: bool = False) -> dict:
         requested_at = time.monotonic()
         if report_format not in ("decision", "decision-v1", "compact", "app"):
             raise ValueError("report_format must be decision, decision-v1, compact or app")
+        if not isinstance(force_recalculate, bool):
+            raise ValueError("force_recalculate must be true or false")
         validate_policy(selection_policy)
         own, normalized, rows = _canonical(candidate, ivs, batch_mode)
         inventory_form_notice = battle_entry_notice(own['species'])
@@ -146,11 +148,12 @@ class IVWorkflow:
                 raise ValueError("Project meta SHA256 does not match the server; synchronize first")
             # /api/run24 already validates inputs and builds the preview atomically.
             english_name = self.backend.candidate_name(own["species"]) if report_format == "app" else None
+            force_args = {"force_recalculate": True} if force_recalculate else {}
             if meta_preset_id is not None:
                 started = self.backend.start24(own, normalized, batch_mode,
-                    meta_preset_id=meta_preset_id, expected_meta_sha256=actual_sha)
+                    meta_preset_id=meta_preset_id, expected_meta_sha256=actual_sha, **force_args)
             else:
-                started = self.backend.start24(own, normalized, batch_mode)
+                started = self.backend.start24(own, normalized, batch_mode, **force_args)
             status = self.backend.status()
             started_at = status.get("started_at")
             if status.get("state") not in ("running", "done") or not started_at:
@@ -172,6 +175,7 @@ class IVWorkflow:
                 "inventory_form_notice": inventory_form_notice,
                 "requested_at": requested_at,
                 "completed_result": None,
+                "result_cache": started.get("preview", {}).get("result_cache", {"reused":False}),
             }
             self._ticket = ticket
 
@@ -251,6 +255,7 @@ class IVWorkflow:
                 "candidate": ticket["candidate"], "batch_mode": ticket["batch_mode"],
                 "meta_sha256": ticket["server_meta_sha256"],
                 "meta_preset": ticket.get("meta_preset"),
+                "result_cache": ticket["result_cache"],
                 "meta_verified_against_project": ticket["expected_meta_sha256"] is not None,
                 "total_ratings_checked": sum(
                     report["total_ratings_checked"] for report in reports.values()),

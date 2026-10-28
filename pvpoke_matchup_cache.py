@@ -9,21 +9,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sqlite3
 import time
 from collections import defaultdict
 from pathlib import Path
 
-VERSION = 1
+VERSION = 2
 CACHE_TTL_SECONDS = 7 * 24 * 3600
 MAX_ENTRIES = 150_000
 FIELDS = ("species", "fast", "charged1", "charged2", "atk", "def",
           "hp", "level", "cp", "level_override")
 
 
-def cache_namespace(*, gamemaster_hash, pokemonjs_hash, cp_cap, max_level, epoch=""):
+def cache_namespace(*, gamemaster_hash, pokemonjs_hash, cp_cap, max_level, epoch="", engine_hash=""):
     """Do not share results across different Pokémon data or operator epochs."""
-    data = [VERSION, gamemaster_hash, pokemonjs_hash, cp_cap, max_level, epoch]
+    data = [VERSION, gamemaster_hash, pokemonjs_hash, cp_cap, max_level, epoch, engine_hash]
     return hashlib.sha256(json.dumps(data, separators=(",", ":")).encode()).hexdigest()
 
 
@@ -48,6 +49,7 @@ class MatchupCache:
         self.path = Path(path)
         self.namespace = namespace
         self.ttl_seconds = ttl_seconds
+        self.enabled = True
         self.stats = {"hits": 0, "misses": 0, "computed": 0, "bypassed": 0}
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(str(self.path), timeout=5)
@@ -86,6 +88,10 @@ class MatchupCache:
         finally:
             self.db.close()
             self.db = None
+
+    def disable(self):
+        """A backend fallback must never populate the pinned-engine namespace."""
+        self.enabled = False
 
     def _key(self, candidate, opponent, shield):
         body = [self.namespace, _prepared(candidate), _prepared(opponent), list(shield)]
@@ -178,7 +184,7 @@ class MatchupCache:
             ratings = [cells[(i,j)][2] for j in range(nright)]
             counts = _winner_counts(ratings)
             output.append([label, *ratings, *counts,
-                           round(sum(map(float, ratings))/nright, 2)])
+                           math.floor(sum(map(float, ratings)) * 100 / nright + 0.5) / 100])
         return output
 
     def resolve(self, candidates, opponents, shield, simulate, *,
@@ -189,16 +195,25 @@ class MatchupCache:
         returns the usual verified CSV rows. On doubtful outcome semantics,
         conservatively execute the original full matrix without caching it.
         """
+        if not self.enabled:
+            total = len(candidates) * len(opponents)
+            self.stats["computed"] += total
+            self.stats["bypassed"] += total
+            return simulate(candidates, opponents, shield)
         cells = self.lookup(candidates, opponents, shield)
         total = len(candidates)*len(opponents)
         self.stats["hits"] += len(cells)
         self.stats["misses"] += total - len(cells)
         if len(cells) == total:
-            return self.assemble(candidates, opponents, cells)
+            try:
+                return self.assemble(candidates, opponents, cells)
+            except ValueError:
+                self.stats["bypassed"] += total
+                cells = {}
         if not cells:
             matrix = simulate(candidates, opponents, shield)
             self.stats["computed"] += total
-            if self.store_matrix(candidates, opponents, shield, matrix) is None:
+            if self.enabled and self.store_matrix(candidates, opponents, shield, matrix) is None:
                 self.stats["bypassed"] += total
             return matrix
 
@@ -216,6 +231,11 @@ class MatchupCache:
                     orows = [opponents[j] for j in selected_o]
                     matrix = simulate(crows, orows, shield)
                     self.stats["computed"] += len(crows)*len(orows)
+                    if not self.enabled:
+                        # Do not combine old direct-engine hits with browser fallback cells.
+                        self.stats["bypassed"] += total
+                        self.stats["computed"] += total
+                        return simulate(candidates, opponents, shield)
                     new = self.store_matrix(crows, orows, shield, matrix)
                     if new is None:
                         self.stats["bypassed"] += total

@@ -1,5 +1,6 @@
 """Offline safety checks for per-matchup persisted PvPoke results."""
 import csv
+import io
 import sqlite3
 import tempfile
 import unittest
@@ -115,3 +116,37 @@ class PersistentMatchupCacheTests(unittest.TestCase):
             db.db.execute("UPDATE matchup SET expires=0")
             db.db.commit()
             self.assertFalse(db.lookup(cands,opps,(1,1)))
+
+
+class BackendFallbackCacheTests(unittest.TestCase):
+    def test_fallback_does_not_mix_or_store_results_under_direct_identity(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/"cache.sqlite3"
+            with MatchupCache(path,"direct-fixture") as cache:
+                own=[candidate(0),candidate(1)]; other=[opponent(0)]
+                cache.resolve(own[:1],other,(0,0),pvpmatrix)
+                calls=[]
+                def fallback(c,o,sh):
+                    calls.append(len(c))
+                    cache.disable()
+                    return pvpmatrix(c,o,sh)
+                self.assertEqual(cache.resolve(own,other,(0,0),fallback),pvpmatrix(own,other,(0,0)))
+                self.assertEqual(calls,[1,2])
+            with MatchupCache(path,"direct-fixture") as cache:
+                self.assertEqual(len(cache.lookup(own,other,(0,0))),1)
+                self.assertFalse(cache.lookup(own[1:],other,(0,0)))
+
+
+class MatrixRoundingCacheTests(unittest.TestCase):
+    def test_cache_rounding_matches_pvpoke_javascript_half_up(self):
+        with tempfile.TemporaryDirectory() as folder:
+            own=[candidate(0)]; others=[opponent(i) for i in range(8)]
+            matrix=[["",*["opponent-"+str(i) for i in range(8)],"Wins","Losses","Draws","Average"],
+                    ["Quagsire 0/11/8",*[500]*7,501,1,0,7,500.13]]
+            with MatchupCache(Path(folder)/"cache.sqlite3","rounding") as cache:
+                cache.resolve(own,others,(0,0),lambda *args:matrix)
+                restored=cache.resolve(own,others,(0,0),lambda *args:self.fail("cached battle"))
+                self.assertEqual(restored[1][-1],500.13)
+                def as_csv(rows):
+                    stream=io.StringIO();csv.writer(stream).writerows(rows);return stream.getvalue()
+                self.assertEqual(as_csv(restored),as_csv(matrix))

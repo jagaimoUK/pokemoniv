@@ -28,6 +28,8 @@ from urllib.parse import urlparse, parse_qs
 import pvpoke_batch_v2 as engine
 import pvpoke_iv_modes as iv_modes
 import pvpoke_archive as archives
+import pvpoke_result_cache as result_cache
+from pvpoke_calculation_version import calculation_version, content_hash, force_recalculate
 import pvpoke_meta_live as meta_live
 import pvpoke_meta_presets as meta_presets
 from pvpoke_app_input import app_presets
@@ -302,7 +304,7 @@ def worker(shields):
     print('DONE:', LATEST_ZIP, flush=True)
 
 
-def background_run(shields, batch24=False, batch_mode='simple', meta_file=None):
+def background_run(shields, batch24=False, batch_mode='simple', meta_file=None, cache_context=None, force=False):
     if batch24:
         command = [sys.executable, '-u', str(Path(__file__).resolve().parent / 'pvpoke_24_workflow.py'),
                    '--run', '--config', str(BATCH_CONFIG), '--output', str(BATCH_OUTPUT),
@@ -311,7 +313,8 @@ def background_run(shields, batch24=False, batch_mode='simple', meta_file=None):
         command = [sys.executable, str(Path(__file__).resolve()), '--worker', shields]
     try:
         p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             text=True, bufsize=1, cwd=str(HOME))
+                             text=True, bufsize=1, cwd=str(HOME),
+                             env={**os.environ, **({"PVP_FORCE_RECALCULATE":"1"} if force else {})})
         for line in p.stdout:
             line = line.rstrip('\r\n')
             if not line:
@@ -324,7 +327,15 @@ def background_run(shields, batch24=False, batch_mode='simple', meta_file=None):
             # Verify all 24 files and atomically save the final ZIP first.
             # Only after durable save succeeds may we remove the temporary
             # browser CSV chunks and extracted results.
-            archives.preserve_and_cleanup(BATCH_OUTPUT, WORK)
+            archived = archives.preserve_and_cleanup(BATCH_OUTPUT, WORK)
+            # Cache storage is best-effort; a valid completed calculation stays valid.
+            if cache_context and calculation_version(engine.DATA) == cache_context['request']['calculation_version']:
+                try:
+                    saved = result_cache.ResultCache.configured(WORK)
+                    if saved is not None:
+                        saved.store(cache_context, archived)
+                except (OSError, ValueError, TypeError, KeyError, __import__('zipfile').BadZipFile) as exc:
+                    print(f'Result cache skipped: {exc}', flush=True)
             BATCH_CONFIG.unlink(missing_ok=True)
         result_zip = archives.archived_latest(WORK) if batch24 else LATEST_ZIP
         with LOCK:
@@ -603,6 +614,32 @@ class Handler(BaseHTTPRequestHandler):
                                'opponent_count': meta_count, 'mode_count': mode_count, 'shield_cases': 6,
                                'battles_upper_bound': len(iv_list)*meta_count*mode_count*6}
                     if path == '/api/run24':
+                        force = payload.get('force_recalculate', False)
+                        if not isinstance(force, bool):
+                            raise ValueError('force_recalculate must be true or false')
+                        force = force or force_recalculate()
+                        cache_context = None
+                        reuse = {'reused':False}
+                        version = calculation_version(engine.DATA)
+                        if version is not None:
+                            try:
+                                saved = result_cache.ResultCache.configured(WORK)
+                                if saved is not None:
+                                    cache_context = result_cache.context(
+                                        dict(zip(engine.HEADER[:4], cand_parts)), iv_list, batch_mode,
+                                        content_hash(meta_file), version, engine.CP_CAP, engine.MAX_LEVEL)
+                                    cached = None if force else saved.restore(
+                                        cache_context, archives.archive_dir(WORK) / 'latest.zip')
+                                    if cached is not None:
+                                        now = datetime.now().isoformat(timespec='microseconds')
+                                        STATUS.update({'state':'done','message':'過去の対戦結果を再利用しました',
+                                            'logs':deque(maxlen=120),'exit_code':0,'started_at':now,
+                                            'finished_at':now,'batch24':True,'result_cache':cached})
+                                        preview['result_cache'] = cached
+                                        return self.respond(200, {'ok':True,'preview':preview})
+                            except (OSError, ValueError, TypeError, KeyError):
+                                cache_context = None  # Always allow a normal calculation.
+                        preview['result_cache'] = reuse
                         BATCH_CONFIG.parent.mkdir(parents=True, exist_ok=True)
                         temp = BATCH_CONFIG.with_suffix('.tmp')
                         temp.write_text(json.dumps({
@@ -614,8 +651,8 @@ class Handler(BaseHTTPRequestHandler):
                         STATUS.update({'state':'running', 'message':'メタ比較を準備中',
                                        'logs':deque(maxlen=120), 'exit_code':None,
                                        'started_at':datetime.now().isoformat(timespec='microseconds'),
-                                       'finished_at':None, 'batch24':True})
-                        threading.Thread(target=background_run, args=('all', True, batch_mode, meta_file),
+                                       'finished_at':None, 'batch24':True, 'result_cache':reuse})
+                        threading.Thread(target=background_run, args=('all', True, batch_mode, meta_file, cache_context, force),
                                          daemon=True).start()
                     return self.respond(200, {'ok':True,'preview':preview})
                 cleaned, crows, orows, preview = prepare_payload(payload)
