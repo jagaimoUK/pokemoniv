@@ -52,9 +52,11 @@ class ReaderQuickMenuTest {
     @Test fun cleanupCopiesDirectlyWithoutNicknameQueue() {
         val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
         val value = "244,682&cp-1500&!favorite"
-        ReaderCleanupStore(activity).importPayload(
-            """{"format":"pokemoniv-search-queue-v1","items":[{"search":"""" + value + """"}]}"""
-        )
+        val payload = org.json.JSONObject()
+            .put("format", "pokemoniv-search-queue-v1")
+            .put("items", org.json.JSONArray().put(org.json.JSONObject().put("search", value)))
+            .toString()
+        ReaderCleanupStore(activity).importPayload(payload)
         val toolbar = LinearLayout(activity)
         val messages = mutableListOf<String>()
         val menu = ReaderQuickMenu(activity, { ReaderQuickMenu.Mode.SELECTION }, { true }, { messages.add(it) })
