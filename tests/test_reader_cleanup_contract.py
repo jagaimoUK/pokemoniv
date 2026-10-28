@@ -109,9 +109,6 @@ class ReaderCleanupContractTests(unittest.TestCase):
         self.assertTrue(all(len(x["search"])<=2000 for x in result["items"]))
 
 
-if __name__=="__main__":
-    unittest.main()
-
     def test_excludes_entire_cp_sensitive_species_from_android_search(self):
         # Spritzee is below 70, but Aromatisse has a strong PvP score.
         # This fixture yields a genuine CP-dependent threshold in the old mode.
@@ -173,6 +170,10 @@ if __name__=="__main__":
         self.assertEqual(standard["cp_dependent_excluded_count"], 0)
         # Tests with a complete species/stat catalog above cover the actual
         # CP exception; an empty catalog cannot prove any CP lower bound.
+
+if __name__=="__main__":
+    unittest.main()
+
 
 
 class BooleanCompactionTests(unittest.TestCase):
