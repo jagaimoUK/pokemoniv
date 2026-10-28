@@ -28,7 +28,7 @@ class ReaderCleanupContractTests(unittest.TestCase):
         self.assertEqual(payload["items"][-1]["confidence"], "unranked_review")
         self.assertTrue(any("Gothita" in item["search"] for item in payload["items"]))
         self.assertTrue(all("nickname" not in item for item in payload["items"]))
-        self.assertTrue(all(item["search"].endswith("&!favorite") for item in payload["items"]))
+        self.assertTrue(all("!favorite" not in item["search"] for item in payload["items"]))
 
     def test_strong_or_unknown_descendants_do_not_enter_unranked_queries(self):
         rows = [
@@ -49,12 +49,12 @@ class ReaderCleanupContractTests(unittest.TestCase):
         data = {
             "source_date": "test",
             "queries": [
-                {"query": "RareOne&!shadow&cp1000-1500&!favorite", "species_count": 1},
-                {"query": "ManySpecies&!shadow&cp-1500&!favorite", "species_count": 60},
-                {"query": "ShadowGroup&shadow&cp-1500&!favorite", "species_count": 20},
-                {"query": "RareTwo&!shadow&cp1100-1500&!favorite", "species_count": 1},
+                {"query": "RareOne&!shadow&cp1000-1500", "species_count": 1},
+                {"query": "ManySpecies&!shadow&cp-1500", "species_count": 60},
+                {"query": "ShadowGroup&shadow&cp-1500", "species_count": 20},
+                {"query": "RareTwo&!shadow&cp1100-1500", "species_count": 1},
             ],
-            "unranked_queries": [{"query": "Gothita&!shadow&cp-1500&!favorite"}],
+            "unranked_queries": [{"query": "Gothita&!shadow&cp-1500"}],
             "unranked_review": [{"name": "Gothita", "reason": "未掲載"}],
             "unranked_review_count": 1,
             "searchable_count": 82,
@@ -63,8 +63,12 @@ class ReaderCleanupContractTests(unittest.TestCase):
         with patch("pvpoke_reader_cleanup.search_low_scores", return_value=data):
             result = reader_cleanup_payload({})
         self.assertEqual(result["items"][0]["search"], data["queries"][1]["query"])
+        self.assertFalse(result["excluded_favorites"])
+        self.assertFalse(result["single_query_complete"])
+        self.assertEqual(result["original_query_count"], 5)
+        self.assertTrue(all("!favorite" not in x["search"] for x in result["items"]))
         self.assertEqual(result["items"][1]["search"], data["queries"][2]["query"])
-        self.assertEqual(result["items"][2]["search"], "Gothita&!shadow&cp-1500&!favorite")
+        self.assertEqual(result["items"][2]["search"], "Gothita&!shadow&cp-1500")
         self.assertEqual(result["items"][2]["confidence"], "unranked_review")
         self.assertEqual(len(result["items"]), 5)
 
@@ -72,24 +76,92 @@ class ReaderCleanupContractTests(unittest.TestCase):
         from pvpoke_reader_cleanup import reader_cleanup_payload
         fake = {
             "source_date":"test",
-            "queries":[{"query":"Alpha&!shadow&cp-1500&!favorite"},
-                       {"query":"Beta&shadow&cp-1500&!favorite"}],
-            "unranked_queries":[{"query":"Gothita&!shadow&cp-1500&!favorite"}],
+            "queries":[{"query":"Alpha&!shadow&cp-1500"},
+                       {"query":"Beta&shadow&cp-1500"}],
+            "unranked_queries":[{"query":"Gothita&!shadow&cp-1500"}],
             "unranked_review":[{"name":"Gothita","reason":"未掲載"}],
             "unranked_review_count":1,
             "source_date":"test",
             "searchable_count":2,
             "exclusion_reasons":{"evolution_protected":1},
-            "quick_query":"201&cp-1500&!favorite",
+            "quick_query":"201&cp-1500",
         }
         with patch("pvpoke_reader_cleanup.search_low_scores",return_value=fake):
             result = reader_cleanup_payload({})
         self.assertEqual(len(result["items"]),3)
         self.assertEqual(result["verified_query_count"],2)
-        self.assertNotIn(result["quick_query"] if "quick_query" in result else "201&cp-1500&!favorite",
+        self.assertNotIn(result["quick_query"] if "quick_query" in result else "201&cp-1500",
                          [x["search"] for x in result["items"]])
         self.assertTrue(all(len(x["search"])<=2000 for x in result["items"]))
 
 
 if __name__=="__main__":
     unittest.main()
+
+
+class BooleanCompactionTests(unittest.TestCase):
+    def test_shadow_and_region_partition_merge_without_other_species(self):
+        from pvpoke_go_query_compact import compact_search_groups
+        rows = [
+            {"query": "A,B&!shadow&!alola&cp-1500"},
+            {"query": "A&shadow&!alola&cp-1500"},
+            {"query": "A&!shadow&alola&cp-1500"},
+            {"query": "A&shadow&alola&cp-1500"},
+        ]
+        out = compact_search_groups(rows)
+        self.assertEqual({x["query"] for x in out},
+            {"A&cp-1500", "B&!alola&!shadow&cp-1500"})
+        self.assertEqual(sum(x["species_count"] for x in out), 2)
+
+    def test_different_cp_bounds_never_merge(self):
+        from pvpoke_go_query_compact import compact_search_groups
+        rows = [
+            {"query": "A&!shadow&cp1000-1500"},
+            {"query": "A&shadow&cp1100-1500"},
+            {"query": "B&!shadow&cp-1500"},
+            {"query": "B&shadow&cp-1500"},
+        ]
+        actual = {r["query"] for r in compact_search_groups(rows)}
+        self.assertEqual(actual, {"A&!shadow&cp1000-1500",
+                                  "A&shadow&cp1100-1500", "B&cp-1500"})
+
+    def test_long_groups_split_below_go_input_limit(self):
+        from pvpoke_go_query_compact import compact_search_groups
+        query = ",".join("Candidate" + str(i) for i in range(250)) + "&!shadow&cp-1500"
+        result = compact_search_groups([{"query": query}])
+        self.assertGreater(len(result), 1)
+        self.assertEqual(sum(x["species_count"] for x in result), 250)
+        self.assertTrue(all(len(x["query"]) <= 950 for x in result))
+
+    def test_boolean_union_equivalent_on_status_region_and_cp_boundaries(self):
+        from pvpoke_go_query_compact import compact_search_groups
+        rows = [
+            {"query": "A,C&!shadow&!alola&cp-1500"},
+            {"query": "A&shadow&!alola&cp-1500"},
+            {"query": "A&!shadow&alola&cp-1500"},
+            {"query": "A&shadow&alola&cp-1500"},
+            {"query": "B&shadow&cp1000-1500"},
+            {"query": "B&!shadow&cp1250-1500"},
+        ]
+        result = compact_search_groups(rows)
+        def matched(q, name, shadow, alola, cp):
+            names, *conditions = q.split("&")
+            if name not in names.split(","):
+                return False
+            for term in conditions:
+                if term == "shadow" and not shadow: return False
+                if term == "!shadow" and shadow: return False
+                if term == "alola" and not alola: return False
+                if term == "!alola" and alola: return False
+                if term.startswith("cp"):
+                    lo, hi = term[2:].split("-")
+                    if not (int(lo) if lo else 0) <= cp <= (int(hi) if hi else 999999):
+                        return False
+            return True
+        for name in ("A","B","C","D"):
+            for shadow in (False,True):
+                for alola in (False,True):
+                    for cp in (1,999,1000,1249,1250,1500,1501):
+                        before = any(matched(r["query"],name,shadow,alola,cp) for r in rows)
+                        after = any(matched(r["query"],name,shadow,alola,cp) for r in result)
+                        self.assertEqual(before, after, (name, shadow, alola, cp))
