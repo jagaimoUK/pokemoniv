@@ -1,6 +1,7 @@
 """Network-free smoke tests for the 24-condition PvPoke batch workflow."""
 import csv
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,35 @@ import pvpoke_24_workflow as batch
 
 
 class Batch24Tests(unittest.TestCase):
+    def test_conditional_return_and_frustration_match_pvpoke_eligibility(self):
+        pool=batch.engine.charged_move_pool
+        base={'chargedMoves':['SHADOW_BALL'], 'tags':['shadoweligible'], 'level25CP':1500}
+        self.assertEqual(pool(base),['SHADOW_BALL','RETURN'])
+        self.assertEqual(base['chargedMoves'],['SHADOW_BALL'],'do not mutate cached GameMaster')
+        self.assertEqual(pool({**base,'level25CP':1501}),['SHADOW_BALL'])
+        self.assertEqual(pool({**base,'tags':[]}),['SHADOW_BALL'])
+        self.assertEqual(pool({**base,'tags':['shadow']}),['SHADOW_BALL','FRUSTRATION'])
+        self.assertEqual(pool({**base,'chargedMoves':['RETURN','SHADOW_BALL']}),['RETURN','SHADOW_BALL'])
+        self.assertEqual(pool({'chargedMoves':['SHADOW_BALL'],'tags':['shadoweligible']}),['SHADOW_BALL'])
+
+    def test_reported_87_move_sets_prepare_with_return_and_shadows(self):
+        import pvpoke_meta_live as live
+        fixtures=Path(__file__).parent/'fixtures'
+        species=json.loads((fixtures/'meta_pvpoke_mixed_species.json').read_text())['species']
+        source=(fixtures/'meta_pvpoke_mixed_columns.csv').read_text()
+        js=(Path(__file__).parent.parent/'vendor/pvpoke/src/js/pokemon/Pokemon.js').read_text()
+        cpms=[float(x.strip()) for x in re.search(r'var\s+cpms\s*=\s*\[([^\]]+)\]',js).group(1).split(',') if x.strip()]
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'meta.csv';path.write_text(live.normalize_input(source)['csv'])
+            meta,errors=batch.load_meta(path,species)
+        self.assertEqual(errors,[])
+        rows,report,errors,counts=batch.generate_rows(meta,species,cpms,full_modes=('default',))
+        self.assertEqual(errors,[])
+        self.assertEqual(len(rows),87)
+        grumpig=next(r for r in rows if r['species']=='grumpig')
+        self.assertEqual(grumpig['charged2'],'RETURN')
+        self.assertTrue(any(r['species']=='quagsire_shadow' for r in rows))
+
     def test_meta_reader_normalizes_shadow_suffix(self):
         species = {'feraligatr_shadow': {
             'fastMoves': ['SHADOW_CLAW'], 'chargedMoves': ['HYDRO_CANNON', 'ICE_BEAM']}}

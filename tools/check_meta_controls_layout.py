@@ -106,12 +106,12 @@ def main():
                     document.querySelector('.meta-presets').closest('section').hidden=true;
                     const manager=el('metaManager');manager.hidden=false;manager.open=true;
                     const csv='quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE\n';
-                    const input=csv+csv,sha='a'.repeat(64),id='custom:paste-'+WIDTH;
+                    const input=csv.trim()+',34.5,4,14,13\n'+csv,sha='a'.repeat(64),id='custom:paste-'+WIDTH;
                     window.fetch=async(path,options)=>{
                         const data=JSON.parse(options.body);
                         if(path==='/app-api/meta-preview'){
                             if(data.csv!==input)throw Error('Paste content changed');
-                            return {ok:true,status:200,json:async()=>({rows:1,input_rows:2,duplicate_count:1,duplicate_lines:[2],sha256:sha})};
+                            return {ok:true,status:200,json:async()=>({rows:1,input_rows:2,duplicate_count:1,duplicate_lines:[2],custom_stats_count:1,custom_stats_lines:[1],sha256:sha})};
                         }
                         if(path==='/app-api/meta-preset-save'){
                             if(data.csv!==input||data.expected_sha256!==sha)throw Error('Saved unreviewed content');
@@ -131,6 +131,7 @@ def main():
                 pasted=result['result']['value']
                 assert pasted['width']==width and pasted['scrollWidth']<=width,pasted
                 assert pasted['canSave'] and pasted['text'] and '重複 1行' in pasted['preview'],pasted
+                assert 'レベル・個体値付き 1行' in pasted['preview'] and '保存・計算に使いません' in pasted['preview'],pasted
                 screenshot=cdp_call(ws,'Page.captureScreenshot',{'format':'png','captureBeyondViewport':False})
                 (args.output_dir/(str(width)+'-paste.png')).write_bytes(base64.b64decode(screenshot['data']))
                 result=cdp_call(ws,'Runtime.evaluate',{'expression':"(async()=>{await el('metaApply').onclick();return {name:chosenMeta().name,text:el('metaText').value,disabled:el('metaApply').disabled,defaultId:metaState.default_id}})()",'returnByValue':True,'awaitPromise':True})
@@ -139,8 +140,8 @@ def main():
                 assert saved['name']=='貼り付け確認 '+str(width) and saved['text']=='' and saved['disabled'] and saved['defaultId']=='daily',saved
                 expression=r"""(async()=>{
                     const transfer=new DataTransfer();
-                    const csv='quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE\r\n';
-                    transfer.items.add(new File([csv+csv],'windows-meta.csv',{type:'text/csv'}));
+                    const csv='quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE';
+                    transfer.items.add(new File([csv+',34.5,4,14,13\r\n'+csv+'\r\n'],'windows-meta.csv',{type:'text/csv'}));
                     el('metaFile').files=transfer.files;await el('metaFile').onchange();
                     return {canSave:!el('metaApply').disabled,hasCR:el('metaText').value.includes('\r'),preview:el('metaPreview').textContent};
                 })()"""
@@ -148,6 +149,7 @@ def main():
                 assert 'exceptionDetails' not in result,result
                 windows=result['result']['value']
                 assert windows['canSave'] and not windows['hasCR'] and '重複 1行' in windows['preview'],windows
+                assert 'レベル・個体値付き 1行' in windows['preview'],windows
                 print(json.dumps({'paste_preview':pasted,'saved':saved,'windows_file':windows},ensure_ascii=False))
         finally:
             if ws:ws.close()

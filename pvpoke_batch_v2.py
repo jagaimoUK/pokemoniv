@@ -156,6 +156,18 @@ def get_rows(path):
     return rows
 
 
+def charged_move_pool(pokemon, cp_cap=CP_CAP):
+    """Mirror Pokemon.js's conditional Return/Frustration move pools."""
+    moves = list(pokemon.get('chargedMoves', ()))
+    tags = pokemon.get('tags') or ()
+    if 'shadoweligible' in tags and pokemon.get('level25CP', float('inf')) <= cp_cap:
+        if 'RETURN' not in moves:
+            moves.append('RETURN')
+    if 'shadow' in tags and 'FRUSTRATION' not in moves:
+        moves.append('FRUSTRATION')
+    return moves
+
+
 def optimize(rows, species, cpms, fname):
     prepared = []
     for idx, row in enumerate(rows, 2):
@@ -163,7 +175,7 @@ def optimize(rows, species, cpms, fname):
         if p is None:
             raise ValueError(f'{fname} {idx}行目: species未登録: {row["species"]}')
         allowed_fast = set(p['fastMoves'])
-        allowed_charged = set(p['chargedMoves'])
+        allowed_charged = set(charged_move_pool(p))
         for key, allowed in [('fast', allowed_fast), ('charged1', allowed_charged), ('charged2', allowed_charged)]:
             if row[key] not in allowed:
                 raise ValueError(f'{fname} {idx}行目: 未対応の技: {key}={row[key]} ({row["species"]})')
@@ -790,3 +802,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

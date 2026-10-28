@@ -1,5 +1,6 @@
 """Project snapshot synchronization is atomic, validated, and persistent."""
 import os
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,6 +22,62 @@ SPECIES = {
 
 
 class LiveMetaTests(unittest.TestCase):
+    def test_reported_mixed_pvpoke_csv_against_official_move_pools(self):
+        fixtures = Path(__file__).parent / 'fixtures'
+        content = (fixtures / 'meta_pvpoke_mixed_columns.csv').read_text()
+        species = json.loads((fixtures / 'meta_pvpoke_mixed_species.json').read_text())['species']
+        with tempfile.TemporaryDirectory() as d, patch.dict(os.environ, {'PVP_ARCHIVE_DIR': d}):
+            work = Path(d) / 'work'
+            old = live.get_status(work)
+            with self.assertRaisesRegex(ValueError, '15行目.*4列'):
+                live._validated_rows(work, content, species)
+            proposal = live.preview(work, content, species)
+            self.assertEqual(proposal['input_rows'], 87)
+            self.assertEqual(proposal['rows'], 87)
+            self.assertEqual(proposal['duplicate_count'], 0)
+            self.assertEqual(proposal['custom_stats_count'], 15)
+            self.assertEqual(proposal['custom_stats_lines'], [15,16,17,18,19,20,22,23,24,25,26,27,28,29,63])
+            self.assertEqual(live.get_status(work), old)
+            saved = live.sync(work, content, species, expected_sha256=proposal['sha256'])
+            self.assertEqual(saved['sha256'], proposal['sha256'])
+            self.assertEqual(saved['custom_stats_count'], 15)
+            self.assertEqual(live.active_path(work).read_text().splitlines(),
+                             [','.join(line.split(',')[:4]) for line in content.splitlines()])
+
+    def test_custom_stats_are_validated_before_move_set_deduplication(self):
+        row = 'quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE'
+        content = row + ',1,0,15,15\n' + row + '\n' + row + ',51,15,0,0\n'
+        proposal = live.normalize_input(content)
+        self.assertEqual(proposal['csv'], row + '\n')
+        self.assertEqual(proposal['duplicate_count'], 2)
+        self.assertEqual(proposal['custom_stats_count'], 2)
+        self.assertEqual(proposal['custom_stats_lines'], [1, 3])
+        for stats in ('0,1,2,3', '51.5,1,2,3', '20.25,1,2,3', 'nan,1,2,3',
+                      'inf,1,2,3', '20,nan,2,3', '20,inf,2,3', '20,-1,2,3',
+                      '20,16,2,3', '20,1.5,2,3', 'abc,1,2,3', '20,1,,3',
+                      '20,1,2', '20,1,2,3,4'):
+            with self.subTest(stats=stats), self.assertRaisesRegex(ValueError, '2行目'):
+                live.normalize_input(row + '\n' + row + ',' + stats + '\n')
+
+    def test_bad_eight_column_move_preserves_active_data_and_source_line(self):
+        good = 'quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE\n'
+        with tempfile.TemporaryDirectory() as d, patch.dict(os.environ, {'PVP_ARCHIVE_DIR': d}):
+            work = Path(d) / 'work'
+            live.sync(work, good, SPECIES)
+            bad = good + good + '\nquagsire,BOGUS,AQUA_TAIL,STONE_EDGE,20,0,15,15\n'
+            with self.assertRaisesRegex(ValueError, '4行 現在のPvPokeデータにない技'):
+                live.sync(work, bad, SPECIES)
+            self.assertEqual(live.active_path(work).read_text(), good)
+
+    def test_stats_reporting_is_bounded_and_stored_parser_remains_strict(self):
+        row = 'quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE,25.5,4,15,15\r\n'
+        proposal = live.normalize_input('\ufeff\n' + row * 500)
+        self.assertEqual(proposal['custom_stats_count'], 500)
+        self.assertEqual(proposal['custom_stats_lines'], list(range(2, 32)))
+        self.assertEqual(proposal['duplicate_count'], 499)
+        with self.assertRaisesRegex(ValueError, '4列'):
+            live.digest(row)
+
     def test_atomic_persist_and_same_content_no_change(self):
         with tempfile.TemporaryDirectory() as d:
             with patch.dict(os.environ, {"PVP_ARCHIVE_DIR": d}):

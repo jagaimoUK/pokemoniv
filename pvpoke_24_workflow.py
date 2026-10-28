@@ -62,7 +62,8 @@ def load_meta(path: Path, species: dict) -> tuple[list[dict], list[dict]]:
                 errors.append({'line': line_number, 'reason': '未登録species', 'row': ','.join(parts)})
                 continue
             p = species[sid]
-            if moves[0] not in p.get('fastMoves', ()) or any(m not in p.get('chargedMoves', ()) for m in moves[1:]) or moves[1] == moves[2]:
+            charged = engine.charged_move_pool(p)
+            if moves[0] not in p.get('fastMoves', ()) or any(m not in charged for m in moves[1:]) or moves[1] == moves[2]:
                 errors.append({'line': line_number, 'reason': '現在のPvPokeデータにない技', 'row': ','.join(parts)})
                 continue
             result.append(dict(zip(POKE_FIELDS, key)))
