@@ -115,6 +115,7 @@ def save(work: Path, args: dict, species: dict) -> dict:
     if type(args.get('revision')) is not int or args['revision'] != obj['revision']:
         raise ValueError('別の画面でプリセットが更新されました。一覧を再取得してください')
     action = args.get('action')
+    input_info = {}
     if action == 'create':
         name = args.get('name')
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 60:
@@ -124,7 +125,7 @@ def save(work: Path, args: dict, species: dict) -> dict:
             raise ValueError('同じ名前があります。別の名前で保存してください')
         if len(obj['items']) >= MAX_CUSTOM:
             raise ValueError('カスタムプリセットは最大50件です')
-        _, content = live._validated_rows(work, args.get('csv'), species)
+        _, content, input_info = live._validated_upload(work, args.get('csv'), species)
         checksum = hashlib.sha256(content.encode('utf-8')).hexdigest()
         if args.get('expected_sha256') != checksum:
             raise ValueError('プレビューと内容が異なります。もう一度確認してください')
@@ -149,7 +150,7 @@ def save(work: Path, args: dict, species: dict) -> dict:
     else:
         raise ValueError('未対応のプリセット操作です')
     _write(work, obj)
-    return listing(work) | {'saved_id': preset_id}
+    return listing(work) | {'saved_id': preset_id, **input_info}
 
 
 def snapshot(work: Path, preset_id: str, species: dict,

@@ -98,6 +98,46 @@ def main():
                 assert m['selected']=='ファンタジーカップ' and not m['defaultDisabled'],m
                 (args.output_dir/(str(width)+'.json')).write_text(json.dumps(m,ensure_ascii=False,indent=2))
                 print(json.dumps(m,ensure_ascii=False))
+            # The same real browser also exercises paste -> preview -> explicit save.
+            for width in (320,390):
+                cdp_call(ws,'Emulation.setDeviceMetricsOverride',{'width':width,'height':1000,
+                    'deviceScaleFactor':1,'mobile':True})
+                expression = r"""(async()=>{
+                    document.querySelector('.meta-presets').closest('section').hidden=true;
+                    const manager=el('metaManager');manager.hidden=false;manager.open=true;
+                    const csv='quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE\n';
+                    const input=csv+csv,sha='a'.repeat(64),id='custom:paste-'+WIDTH;
+                    window.fetch=async(path,options)=>{
+                        const data=JSON.parse(options.body);
+                        if(path==='/app-api/meta-preview'){
+                            if(data.csv!==input)throw Error('Paste content changed');
+                            return {ok:true,status:200,json:async()=>({rows:1,input_rows:2,duplicate_count:1,duplicate_lines:[2],sha256:sha})};
+                        }
+                        if(path==='/app-api/meta-preset-save'){
+                            if(data.csv!==input||data.expected_sha256!==sha)throw Error('Saved unreviewed content');
+                            return {ok:true,status:200,json:async()=>({...metaState,revision:metaState.revision+1,
+                                saved_id:id,items:[...metaState.items,{id,name:data.name,rows:1,source:'custom',sha256:sha}]})};
+                        }
+                        throw Error('Unexpected request '+path);
+                    };
+                    el('metaName').value='貼り付け確認 '+WIDTH;el('metaText').value=input;
+                    el('metaText').dispatchEvent(new Event('input',{bubbles:true}));
+                    await el('metaTextPreview').onclick();
+                    return {width:document.documentElement.clientWidth,scrollWidth:document.documentElement.scrollWidth,
+                        preview:el('metaPreview').textContent,canSave:!el('metaApply').disabled,text:el('metaText').value===input};
+                })()""".replace('WIDTH',str(width))
+                result=cdp_call(ws,'Runtime.evaluate',{'expression':expression,'returnByValue':True,'awaitPromise':True})
+                assert 'exceptionDetails' not in result,result
+                pasted=result['result']['value']
+                assert pasted['width']==width and pasted['scrollWidth']<=width,pasted
+                assert pasted['canSave'] and pasted['text'] and '重複 1行' in pasted['preview'],pasted
+                screenshot=cdp_call(ws,'Page.captureScreenshot',{'format':'png','captureBeyondViewport':False})
+                (args.output_dir/(str(width)+'-paste.png')).write_bytes(base64.b64decode(screenshot['data']))
+                result=cdp_call(ws,'Runtime.evaluate',{'expression':"(async()=>{await el('metaApply').onclick();return {name:chosenMeta().name,text:el('metaText').value,disabled:el('metaApply').disabled,defaultId:metaState.default_id}})()",'returnByValue':True,'awaitPromise':True})
+                assert 'exceptionDetails' not in result,result
+                saved=result['result']['value']
+                assert saved['name']=='貼り付け確認 '+str(width) and saved['text']=='' and saved['disabled'] and saved['defaultId']=='daily',saved
+                print(json.dumps({'paste_preview':pasted,'saved':saved},ensure_ascii=False))
         finally:
             if ws:ws.close()
             process.terminate()
