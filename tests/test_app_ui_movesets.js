@@ -6,11 +6,11 @@ vm.createContext(ctx);vm.runInContext(script,ctx);
 vm.runInContext("catalog={ursaluna_shadow:{name:'Ursaluna (Shadow)',name_ja:'ガチグマ (シャドウ)',nickname_code:'Ursa',fastMoves:['SCRATCH','TACKLE','SCRATCH'],chargedMoves:['THUNDER_PUNCH','ICE_PUNCH','SWIFT','HIGH_HORSEPOWER']}}",ctx);
 const base={candidate:{species:'ursaluna_shadow',fast:'SCRATCH',charged1:'THUNDER_PUNCH',charged2:'HIGH_HORSEPOWER'},ivs:'0,15,15\n1,15,15',name:'ガチグマs',source_sections:[7],source_records:[{ivs:'0/15/15',cp:500,species:'teddiursa',search_string:'Teddiursa&0attack&4defense&4hp&cp500&shadow'}]};
 ctx.base=base;
-const plan=vm.runInContext('planMovesets([base])',ctx);
+const plan=vm.runInContext("planMovesets([base],'all')",ctx);
 assert.equal(plan.length,12,'2 fast × C(4 charged,2), without duplicates');
 assert.equal(new Set(plan.map(j=>[j.candidate.fast,j.candidate.charged1,j.candidate.charged2].join('|'))).size,12);
 assert(plan.some(j=>j.candidate.fast==='SCRATCH'&&[j.candidate.charged1,j.candidate.charged2].includes('SWIFT')&&[j.candidate.charged1,j.candidate.charged2].includes('ICE_PUNCH')));
-assert.equal(plan[0].candidate.charged1,'HIGH_HORSEPOWER','Default ordering is canonical charged order');
+assert.equal(plan[0].candidate.charged1,'THUNDER_PUNCH','Explicit input is retained first');
 assert(plan.every(j=>j.source_records===base.source_records&&j.ivs===base.ivs&&j.moveset_group===0));
 function result(charged2,mean,wins,ivMeans={"0/15/15":mean,"1/15/15":mean},ivs=['0/15/15']){
  const candidate={...base.candidate,charged2};
