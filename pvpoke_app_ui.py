@@ -9,7 +9,7 @@ HTML = r'''<!doctype html>
 .quick-nav a{display:flex;align-items:center;justify-content:center;min-height:48px;min-width:54px;padding:8px 7px;border:1px solid #76b1dc;border-radius:12px;background:#1d4768;color:#fff;font-size:12px;font-weight:650;text-decoration:none;box-shadow:0 4px 14px #0008}
 .quick-nav a:focus-visible{outline:3px solid #90ddbc;outline-offset:3px}
 @media(max-width:560px){.quick-nav{right:6px;top:58vh;bottom:auto}.quick-nav a{min-height:48px;min-width:48px;padding:9px 5px;font-size:11px}}
-main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin:4px 0 8px}h2{font-size:20px;margin:0 0 12px}p{line-height:1.65;color:#afc0d6}.eyebrow{color:#90ddbc;font-size:12px;letter-spacing:.15em}.card{background:#1a2637;border:1px solid #33465d;border-radius:16px;padding:20px;margin-top:18px}label{display:block;font-size:14px;margin:14px 0 6px}input,select,textarea,button{font:inherit;border-radius:9px}input,select,textarea{width:100%;padding:12px;border:1px solid #49627d;background:#101c2b;color:#ecf3ff}input[type=checkbox]{width:auto;margin:0 8px 0 0;accent-color:#90ddbc}.checkline{display:flex;align-items:center;gap:3px;cursor:pointer}textarea{min-height:142px;line-height:1.7}button{padding:12px 18px;border:1px solid #76b1dc;background:#266b9b;color:white;cursor:pointer}button:disabled{opacity:.5;cursor:wait}.row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}.secondary{background:transparent;border-color:#597086}.note{font-size:13px}.status{background:#21374a;border-radius:10px;padding:14px;white-space:pre-wrap;line-height:1.7}.error{background:#5a303a}.badge{color:#96e8c4;font-size:13px}.recommendation{border-top:1px solid #3c5068;padding-top:18px;margin-top:18px}.search{display:block;background:#0d1726;padding:12px;border-radius:8px;overflow-wrap:anywhere;font-size:14px;color:#b1e5ff}summary{cursor:pointer;color:#a4cdff}details{margin-top:14px}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;font-size:12px}[hidden]{display:none!important}@media(max-width:560px){.row{grid-template-columns:1fr}.card{padding:16px}main{padding-top:22px}.actions button{flex:1}}
+main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin:4px 0 8px}h2{font-size:20px;margin:0 0 12px}p{line-height:1.65;color:#afc0d6}.eyebrow{color:#90ddbc;font-size:12px;letter-spacing:.15em}.card{background:#1a2637;border:1px solid #33465d;border-radius:16px;padding:20px;margin-top:18px}label{display:block;font-size:14px;margin:14px 0 6px}input,select,textarea,button{font:inherit;border-radius:9px}input,select,textarea{width:100%;padding:12px;border:1px solid #49627d;background:#101c2b;color:#ecf3ff}input[type=checkbox]{width:auto;margin:0 8px 0 0;accent-color:#90ddbc}.checkline{display:flex;align-items:center;gap:3px;cursor:pointer}textarea{min-height:142px;line-height:1.7}button{min-height:48px;padding:12px 18px;border:1px solid #76b1dc;background:#266b9b;color:white;cursor:pointer}button:disabled{opacity:.5;cursor:wait}.row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}.secondary{background:transparent;border-color:#597086}.note{font-size:13px}.status{background:#21374a;border-radius:10px;padding:14px;white-space:pre-wrap;line-height:1.7}.error{background:#5a303a}.badge{color:#96e8c4;font-size:13px}.recommendation{border-top:1px solid #3c5068;padding-top:18px;margin-top:18px}.search{display:block;background:#0d1726;padding:12px;border-radius:8px;overflow-wrap:anywhere;font-size:14px;color:#b1e5ff}summary{cursor:pointer;color:#a4cdff}details{margin-top:14px}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;font-size:12px}[hidden]{display:none!important}@media(max-width:560px){.row{grid-template-columns:1fr}.card{padding:16px}main{padding-top:22px}.actions button{flex:1}}
 .low-score-list{display:grid;gap:12px;margin-top:14px}.low-score-item{padding:12px;border-radius:16px;background:#202f3d;border:1px solid #41594f}.low-score-item code{white-space:pre-wrap;overflow-wrap:anywhere;color:#d1ebd8;display:block;margin:8px 0}.low-score-item button{border-radius:999px;background:#536e61;border-color:#749783}.low-score-tools{display:grid;grid-template-columns:2fr 1fr;gap:10px}@media(max-width:560px){.low-score-tools{grid-template-columns:1fr}}
 
 .meta-presets{margin-bottom:18px}.meta-current{display:flex;align-items:center;flex-wrap:wrap;gap:6px 9px;padding:0 0 10px}.meta-caption{font-size:12px;color:#afc0d6}.meta-current-name{font-size:16px;font-weight:650;line-height:1.5;margin:0;color:#ecf3ff;overflow-wrap:anywhere}.meta-count{font-size:12px;color:#afc0d6;white-space:nowrap}.meta-badges{display:inline-flex;align-items:center;flex-wrap:wrap;gap:5px}.meta-tag{display:inline-flex;align-items:center;font-size:11px;font-weight:600;line-height:1.5;padding:2px 7px;border-radius:999px;background:#263d3a;color:#b9e6cf;white-space:nowrap}.meta-star{color:#e8cc85;background:#3c372b}
@@ -319,7 +319,6 @@ function renderNickname(result,row,parent,ivs=row.ivs){
  const note=node('p','',explanation,'note');
  nicknameBindings.push({result,row,ivs,label,code,button,note});
  button.onclick=()=>{const nick=nicknameFor(result,row,ivs);if(nick)copy(nick.text,button);};
- refreshNicknames();
 }
 function updateAllCopy(){const box=el('allCopyActions');const available=displayedResults.filter(r=>r.selection?.recommendations?.length);box.hidden=available.length<2;}
 function render(result,append=false){
@@ -614,20 +613,24 @@ function planMovesets(jobs){
  return planned;
 }
 function moveLabel(c){return [c.fast,c.charged1,c.charged2].map(id=>moveCatalog[id]?.name||id).join(' / ');}
+const moveAliasCache=new Map();
 function moveAliases(c){
  const p=catalog[c.species]||{},ids=[...new Set([...(p.fastMoves||[]),...(p.chargedMoves||[]),c.fast,c.charged1,c.charged2])].sort();
+ const cacheKey=ids.join('|');if(moveAliasCache.has(cacheKey))return moveAliasCache.get(cacheKey);
  const preferred={SCRATCH:'Sc',THUNDER_PUNCH:'TP',ICE_PUNCH:'IP',SWIFT:'Sw',HIGH_HORSEPOWER:'HH'};
  const codes={},used=new Set();
  // Reserve recognizable codes before assigning alternatives, case-insensitively.
  for(const id of ids.filter(x=>preferred[x])){codes[id]=preferred[id];used.add(preferred[id].toLowerCase());}
  for(const id of ids.filter(x=>!preferred[x])){
   const words=id.split('_'),suggested=words.length>1?words[0][0]+words[1][0]:id.slice(0,2);
-  const choices=[suggested];
-  for(let n=0;n<1296;n++)choices.push(n.toString(36).padStart(2,'0').toUpperCase());
-  const code=choices.find(x=>/^[A-Za-z0-9]{2}$/.test(x)&&!used.has(x.toLowerCase()));
+  let code=/^[A-Za-z0-9]{2}$/.test(suggested)&&!used.has(suggested.toLowerCase())?suggested:null;
+  for(let n=0;!code&&n<1296;n++){
+   const fallback=n.toString(36).padStart(2,'0').toUpperCase();
+   if(!used.has(fallback.toLowerCase()))code=fallback;
+  }
   if(!code)throw Error('技の略号を作成できません');codes[id]=code;used.add(code.toLowerCase());
  }
- return codes;
+ moveAliasCache.set(cacheKey,codes);return codes;
 }
 function movesetNickname(members){
  // One physical IV shared by evolutions keeps the first target's adopted build.
