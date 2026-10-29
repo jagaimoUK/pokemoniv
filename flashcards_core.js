@@ -2,7 +2,9 @@
 (function(root,factory){const api=factory();if(typeof module==='object')module.exports=api;else root.Flashcards=factory();})(typeof globalThis!=='undefined'?globalThis:this,function(){
   'use strict';
   const DAY=86400000;
-  const key=c=>[c.species,c.fast,c.charged].join('|');
+  const sequence=c=>c.sequence||Array(4).fill(c.charged);
+  const path=c=>{if(!c.sequence)return c.charged;const ids=c.sequence;return ids.every(id=>id===ids[0])?ids[0]:'sequence:'+ids.join('>');};
+  const key=c=>[c.species,c.fast,path(c)].join('|');
   function counts(gain,cost,n=4,initial=0){
     if(!Number.isFinite(gain)||gain<=0||gain>100||!Number.isFinite(cost)||cost<=0||cost>100)throw Error('技のエネルギーが不正です');
     if(!Number.isFinite(initial)||initial<0||initial>100)throw Error('開始エネルギーが不正です');
@@ -15,6 +17,17 @@
     const remaining=Math.min(100,first*gain)-heavyCost;
     // Four charged attacks total: heavy opener, then three target attacks.
     return {first,remaining,counts:[first,...counts(gain,cost,3,remaining)]};
+  }
+  function sequenceCounts(gain,costs){
+    if(!Array.isArray(costs)||costs.length!==4)throw Error('ゲージ技を4つ指定してください');
+    let energy=0;
+    return costs.map(cost=>{const count=counts(gain,cost,1,energy)[0];energy=Math.min(100,energy+count*gain)-cost;return count;});
+  }
+  function answer(c,moves){return sequenceCounts(moves[c.fast]?.gain,sequence(c).map(id=>moves[id]?.cost));}
+  function relativeCounts(values,turns){
+    if(!Array.isArray(values)||values.length!==4||values.some(v=>!Number.isInteger(v)||v<0)||![2,3,4,5].includes(turns))throw Error('ターン数が不正です');
+    let total=0,previous=0;
+    return values.map(v=>{total+=v;const completed=Math.floor(total/turns),delta=completed-previous;previous=completed;return delta;});
   }
   function alternatives(card,moves){
     const gain=moves[card.fast].gain,cost=moves[card.charged].cost,normal=counts(gain,cost);
@@ -31,7 +44,7 @@
   const baseSpecies=id=>id.replace(/_shadow$/,'');
   function deduplicate(items,moves){
     const map=new Map();for(const c of items){
-      const k=[baseSpecies(c.species),c.fast,c.charged,signature(c,moves)].join('|');
+      const k=[baseSpecies(c.species),c.fast,path(c),signature(c,moves)].join('|');
       const old=map.get(k);if(!old||old.species.endsWith('_shadow')&&!c.species.endsWith('_shadow'))map.set(k,c);
     }return [...map.values()];
   }
@@ -40,11 +53,20 @@
     if(a.length>1&&a.every((c,i)=>key(c)===key(items[i])))[a[0],a[1]]=[a[1],a[0]];
     return a;
   }
-  function signature(c,moves){const f=moves[c.fast],g=moves[c.charged];return JSON.stringify([f?.gain,g?.cost]);}
+  function signature(c,moves){const f=moves[c.fast];return JSON.stringify([f?.gain,...(path(c).startsWith('sequence:')?sequence(c).map(id=>moves[id]?.cost):[moves[c.charged]?.cost])]);}
   function cards(rows,catalog){
     const result=new Map();let invalid=0;
     for(const row of rows||[]){
       const p=catalog.species[row.species];
+      if(row.sequences!==undefined){
+        if(!Array.isArray(row.sequences)||!row.sequences.length){invalid++;continue;}
+        for(const fast of row.fast||[])for(const ids of row.sequences){
+          if(!p||!p.fast.includes(fast)||!Array.isArray(ids)||ids.length!==4||!ids.every(id=>p.charged.includes(id))){invalid++;continue;}
+          const c={species:row.species,fast,charged:ids[0],sequence:ids.slice()};
+          try{answer(c,catalog.moves);result.set(key(c),c);}catch(_){invalid++;}
+        }
+        continue;
+      }
       for(const fast of row.fast||[])for(const charged of row.charged||[]){
         const c={species:row.species,fast,charged};
         if(!p||!p.fast.includes(fast)||!p.charged.includes(charged)){invalid++;continue;}
@@ -61,7 +83,14 @@
     for(const c of available){const k=baseSpecies(c.species)+'|'+c.fast;if(!pools.has(k))pools.set(k,new Set());pools.get(k).add(c.charged);}
     const enriched=available.map(c=>({...c,heavy:[...pools.get(baseSpecies(c.species)+'|'+c.fast)].filter(id=>
       catalog.moves[id].cost>catalog.moves[c.charged].cost)}));
-    return {...compiled,items:deduplicate(enriched,catalog.moves)};
+    const questions=[];
+    for(const c of enriched){questions.push(c);if(c.sequence)continue;
+      for(const alt of alternatives(c,catalog.moves))for(const opener of alt.moves){
+        const mixed={species:c.species,fast:c.fast,charged:opener,sequence:[opener,c.charged,c.charged,c.charged]};
+        if(!excluded.has(key(mixed)))questions.push(mixed);
+      }
+    }
+    return {...compiled,items:deduplicate(questions,catalog.moves)};
   }
   function stateFor(card,stored,moves){
     const answer=signature(card,moves);
@@ -109,5 +138,5 @@
     for(const d of existing.values())result.push(d);
     return result;
   }
-  return {DAY,key,counts,afterHeavy,alternatives,deduplicate,shuffle,cards,deckCards,signature,stateFor,reviewState,review,select,dueInfo,mergeDecks};
+  return {DAY,key,sequence,sequenceCounts,answer,relativeCounts,counts,afterHeavy,alternatives,deduplicate,shuffle,cards,deckCards,signature,stateFor,reviewState,review,select,dueInfo,mergeDecks};
 });

@@ -18,7 +18,9 @@ const server=http.createServer((req,res)=>{
   const tapHalf=async(x,y=.5)=>{const b=await page.locator('#card').boundingBox();if(viewport.width<600)await page.touchscreen.tap(b.x+b.width*x,b.y+b.height*y);else await page.mouse.click(b.x+b.width*x,b.y+b.height*y);};
   assert(await page.locator('#grades').isHidden());await tapHalf(.2);
   assert((await page.locator('#progress').textContent()).startsWith('1 /'));assert(await page.locator('#answer').isVisible());assert(await page.locator('#reveal').isHidden());
-  assert.deepEqual(await page.evaluate(()=>['again','correct'].map(id=>getComputedStyle(document.getElementById(id)).backgroundColor)),['rgb(232, 210, 200)','rgb(217, 228, 213)']);
+  assert.deepEqual(await page.evaluate(()=>['again','correct'].map(id=>getComputedStyle(document.getElementById(id)).backgroundColor)),['rgba(0, 0, 0, 0)','rgba(0, 0, 0, 0)']);
+  assert.deepEqual(await page.evaluate(()=>['again','correct'].map(id=>getComputedStyle(document.getElementById(id)).backgroundImage.includes('72px'))),[true,true]);
+  assert((await page.locator('#fast').textContent()).includes('ターン'));assert.equal(await page.locator('#hint').textContent(),'');
   const cardBox=await page.locator('#card').boundingBox(),leftBox=await page.locator('#again').boundingBox(),rightBox=await page.locator('#correct').boundingBox();
   assert(Math.abs(leftBox.width-cardBox.width/2)<1);assert.equal(leftBox.height,cardBox.height);assert.equal(rightBox.height,cardBox.height);assert.equal(rightBox.x,leftBox.x+leftBox.width);
   if(viewport.width===390)await page.screenshot({path:'/tmp/flashcards-tap-card.png'});
@@ -46,8 +48,30 @@ const server=http.createServer((req,res)=>{
   const geometry=await page.locator('#start').boundingBox();assert(geometry.height>=48);assert.deepEqual(errors,[]);
   await page.evaluate(()=>new Promise((resolve,reject)=>{const open=indexedDB.open('pokemon-move-flashcards',1);open.onsuccess=()=>{const db=open.result,read=db.transaction('kv').objectStore('kv').get('decks');read.onsuccess=()=>{const deck={id:'test:annihilape',name:'コノヨザル',rows:[{species:'annihilape',fast:['COUNTER'],charged:['ICE_PUNCH','CLOSE_COMBAT','SHADOW_BALL']}]};const chosen=Flashcards.deckCards(deck,FLASHCARD_BOOTSTRAP).items.find(c=>c.charged==='ICE_PUNCH');const tx=db.transaction('kv','readwrite');tx.objectStore('kv').put([...read.result,deck],'decks');tx.objectStore('kv').put({deck:deck.id,cards:[chosen],index:0},'session');tx.objectStore('kv').put(null,'undo');tx.oncomplete=()=>{db.close();resolve();};};};}));
   await page.reload();await page.locator('#home').waitFor({state:'visible'});await page.click('#resume');await page.click('#card');
-  assert.equal(await page.locator('#answer').textContent(),'7 → 7 → 6 → 7');assert.deepEqual(await page.locator('.alternate-counts').allTextContents(),['9 → 6 → 7 → 7']);assert.deepEqual(await page.locator('.alternate-label').allTextContents(),['初手：シャドーボール、2〜4発目：れいとうパンチ']);assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  assert.equal(await page.locator('#answer').textContent(),'7 → 7 → 6 → 7');assert.equal(await page.locator('#turnAnswers').isHidden(),true);assert.equal(await page.locator('#charged').textContent(),'れいとうパンチ');assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.click('#correct');await page.locator('#completed').waitFor({state:'visible'});await page.click('#finishHome');await page.locator('#home').waitFor({state:'visible'});
+  // Explicit paths persist as independent questions and retain their review state.
+  await page.click('#create');await page.fill('#deckName','使用順テスト');await page.fill('#search','サンド');await page.getByRole('button',{name:'サンド · Sandshrew',exact:true}).click();
+  for(const checkbox of await page.locator('#fastOptions input').all())await checkbox.uncheck();await page.locator('#fastOptions input[value="SAND_ATTACK"]').check();
+  const seq=['ROCK_TOMB','ROCK_TOMB','SAND_TOMB','SAND_TOMB'];
+  for(let i=0;i<4;i++)await page.locator('#sequenceOptions select').nth(i).selectOption(seq[i]);
+  await page.click('#addSequence');assert.equal(await page.locator('#editCount').textContent(),'1枚');
+  for(let i=0;i<4;i++)await page.locator('#sequenceOptions select').nth(i).selectOption(seq[3-i]);
+  await page.click('#addSequence');assert.equal(await page.locator('#editCount').textContent(),'2枚');await page.click('#saveDeck');await page.click('#start');await page.click('#card');
+  const charged=await page.locator('#charged').textContent();assert.equal(charged.split(' → ').length,4);assert((await page.locator('#fast').textContent()).includes('1ターン'));
+  assert.equal(await page.locator('#turnAnswers .turn-row').count(),4);assert(!await page.locator('#hint').textContent());
+  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  if(viewport.width===390)await page.screenshot({path:'/tmp/flashcards-sequence.png',fullPage:true});
+  const pathAnswer=await page.locator('#answer').textContent();await tapHalf(.8,.3);await page.waitForFunction(()=>document.querySelector('#progress').textContent.startsWith('2 /'));await page.click('#undo');await page.waitForFunction(()=>document.querySelector('#progress').textContent.startsWith('1 /'));assert.equal(await page.locator('#answer').textContent(),pathAnswer);
+  await page.reload();await page.locator('#home').waitFor({state:'visible'});await page.click('#resume');await page.click('#card');assert.equal(await page.locator('#charged').textContent(),charged);
+  // Simulate a catalog stored by 1.5.4: duration hydration preserves reviews.
+  const historyBefore=await page.evaluate(()=>new Promise(resolve=>{const req=indexedDB.open('pokemon-move-flashcards',1);req.onsuccess=()=>{const db=req.result,q=db.transaction('reviews').objectStore('reviews').getAll();q.onsuccess=()=>{resolve(q.result);db.close();};};}));
+  await page.evaluate(()=>new Promise(resolve=>{const req=indexedDB.open('pokemon-move-flashcards',1);req.onsuccess=()=>{const db=req.result,old=structuredClone(FLASHCARD_BOOTSTRAP);for(const move of Object.values(old.moves))delete move.turns;const tx=db.transaction('kv','readwrite');tx.objectStore('kv').put(old,'catalog');tx.oncomplete=()=>{db.close();resolve();};};}));
+  await page.reload();await page.locator('#home').waitFor({state:'visible'});await page.click('#resume');assert((await page.locator('#fast').textContent()).includes('1ターン'));
+  assert.deepEqual(await page.evaluate(()=>new Promise(resolve=>{const req=indexedDB.open('pokemon-move-flashcards',1);req.onsuccess=()=>{const db=req.result,q=db.transaction('reviews').objectStore('reviews').getAll();q.onsuccess=()=>{resolve(q.result);db.close();};};})),historyBefore);
+  await page.click('#homeBtn');await page.selectOption('#deck',{label:'使用順テスト'});await page.click('#edit');assert.equal(await page.locator('#editCount').textContent(),'2枚');await page.locator('#entries button').first().click();assert.equal(await page.locator('#editCount').textContent(),'1枚');await page.click('#saveDeck');
+  await page.locator('summary').click();const downloadWait=page.waitForEvent('download');await page.click('#export');const download=await downloadWait;const backupPath=await download.path();const backup=JSON.parse(fs.readFileSync(backupPath,'utf8'));assert(backup.decks.find(d=>d.name==='使用順テスト').extra.some(r=>r.sequences?.length));
+  page.once('dialog',dialog=>dialog.accept());await page.setInputFiles('#restore',backupPath);await page.waitForFunction(()=>document.querySelector('#status').textContent==='復元しました');await page.selectOption('#deck',{label:'使用順テスト'});await page.click('#edit');assert.equal(await page.locator('#editCount').textContent(),'1枚');await page.click('#cancelEdit');
   if(viewport.width===390)await page.screenshot({path:'/tmp/flashcards-home.png'});
   console.log('Half-card taps/colors/reveal-only/drag/keyboard/single save, persistence/undo/swipe/resume, bilingual search and no overflow: PASS',viewport.width);
   await page.close();

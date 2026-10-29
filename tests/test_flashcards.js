@@ -37,7 +37,7 @@ for(let gain=1;gain<=20;gain++)for(const cost of [35,40,55,70])for(const heavy o
 const shadowCat={...cat,species:{...cat.species,a_shadow:cat.species.a,a_galarian:cat.species.a}};
 const duplicates={rows:[{species:'a_shadow',fast:['F','G'],charged:['X','Y']},{species:'a',fast:['F'],charged:['X']},{species:'a_galarian',fast:['F'],charged:['X']}]};
 const unique=C.deckCards(duplicates,shadowCat).items;
-assert.equal(unique.length,5);assert(unique.some(c=>c.species==='a'&&c.fast==='F'&&c.charged==='X'));assert(unique.some(c=>c.species==='a_shadow'&&c.fast==='G'));assert(unique.some(c=>c.species==='a_galarian'));
+assert.equal(unique.length,6);assert(unique.some(c=>c.species==='a'&&c.fast==='F'&&c.charged==='X'));assert(unique.some(c=>c.species==='a_shadow'&&c.fast==='G'));assert(unique.some(c=>c.species==='a_galarian'));
 const shadowReview={...start,id:'a_shadow|F|X',seen:8,last:200,due:400};assert.equal(C.reviewState(card,{'a_shadow|F|X':shadowReview},cat.moves).seen,8);assert.equal(C.reviewState(card,{'a_shadow|F|X':shadowReview},cat.moves).id,'a|F|X');
 const original=[card,{...card,charged:'Y'},{...card,charged:'Z'}];const mixed=C.shuffle(original,()=>.999);assert.notDeepEqual(mixed,original);assert.deepEqual(new Set(mixed.map(C.key)),new Set(original.map(C.key)));assert.equal(original[0],card);
 console.log('4 counts, heavy-first residual/cap (240 scenarios), unchanged paths, shadow dedup/forms/history and replay shuffle: PASS');
@@ -57,3 +57,35 @@ for(let gain=1;gain<=20;gain++)for(const cost of [35,40,55,70])for(const heavy o
  assert.equal(C.alternatives({fast:'F',charged:'X',heavy:['Y']},moves).length,Number(changed));
 }
 console.log('Annihilape Counter/Ice Punch/Close Combat: omit unchanged attacks 2–4; Shadow Ball mixed sequence; 240 positional comparisons: PASS');
+
+// An independent cumulative-energy oracle for arbitrary four-attack orders.
+let scenarios=0;
+for(let gain=1;gain<=20;gain++)for(const a of [35,50,100])for(const b of [40,45,100])for(const c of [35,60])for(const d of [45,100]){
+ const costs=[a,b,c,d];let energy=0;const expected=[];
+ for(const cost of costs){let used=0;while(energy<cost){energy=Math.min(100,energy+gain);used++;}energy-=cost;expected.push(used);}
+ assert.deepEqual(C.sequenceCounts(gain,costs),expected);scenarios++;
+}
+for(const costs of [[],[40],[40,40,40,0],[40,40,40,101],null])assert.throws(()=>C.sequenceCounts(6,costs));
+const forward={species:'a',fast:'F',charged:'X',sequence:['X','X','Y','Y']},reverse={...forward,charged:'Y',sequence:['Y','Y','X','X']};
+assert.notEqual(C.key(forward),C.key(reverse));assert.notEqual(C.key(forward),C.key(card));
+assert.equal(C.key({...card,sequence:['X','X','X','X']}),C.key(card));
+assert.equal(C.signature({...card,sequence:['X','X','X','X']},cat.moves),C.signature(card,cat.moves));
+assert.equal(C.reviewState(reverse,{[C.key(forward)]:{...start,signature:C.signature(forward,cat.moves),seen:9}},cat.moves).seen,0);
+const learnedPath={...C.stateFor(forward,null,cat.moves),seen:5};
+assert.equal(C.stateFor(forward,learnedPath,{...cat.moves,Y:{cost:60}}).seen,0);
+const sequences={id:'meta:x',rows:[],extra:[{species:'a',fast:['F'],charged:['X','Y'],sequences:[forward.sequence,reverse.sequence]}],excluded:[]};
+assert.equal(C.deckCards(sequences,cat).items.length,2);
+assert.equal(C.deckCards({...sequences,excluded:[C.key(forward)]},cat).items.length,1);
+assert.equal(C.deckCards(C.mergeDecks([sequences],[{id:'meta:x',rows:[]}])[0],cat).items.length,2);
+assert.equal(C.cards([{species:'a',fast:['F'],charged:['X'],sequences:[['X','X','X','missing']]}],cat).invalid,1);
+assert.deepEqual(C.relativeCounts([9,9,9,8],2),[4,5,4,4]);
+assert.deepEqual(C.relativeCounts([9,9,9,8],3),[3,3,3,2]);
+assert.deepEqual(C.relativeCounts([9,9,9,8],4),[2,2,2,2]);
+assert.deepEqual(C.relativeCounts([9,9,9,8],5),[1,2,2,2]);
+for(const turns of [2,3,4,5])assert.equal(C.relativeCounts([9,9,9,8],turns).reduce((a,b)=>a+b),Math.floor(35/turns));
+const sandshrew={species:'sandshrew',fast:'SAND_ATTACK',charged:'ROCK_TOMB',sequence:['ROCK_TOMB','ROCK_TOMB','SAND_TOMB','SAND_TOMB']};
+assert.deepEqual(C.answer(sandshrew,catalog.moves),[13,12,12,11]);
+const apeQuestions=C.deckCards({rows:[{species:'annihilape',fast:['COUNTER'],charged:['ICE_PUNCH','CLOSE_COMBAT','SHADOW_BALL']}]},catalog).items;
+assert(apeQuestions.some(c=>c.sequence?.join('>')==='SHADOW_BALL>ICE_PUNCH>ICE_PUNCH>ICE_PUNCH'));
+assert(!apeQuestions.some(c=>c.sequence?.join('>')==='CLOSE_COMBAT>ICE_PUNCH>ICE_PUNCH>ICE_PUNCH'));
+console.log('Explicit four-move orders, '+scenarios+' cap/residual cases, independent history, restore/sync/exclusion, turns with carried remainder: PASS');

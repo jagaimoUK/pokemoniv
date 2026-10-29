@@ -36,7 +36,8 @@ def build(source):
         translations.setdefault(row['move_id'], {})[row['local_language_id']] = row['name']
     japanese = {normal(r['9']): r.get('1', r.get('11')) for r in translations.values() if '9' in r}
     moves = {m['moveId']: {'name': m['name'], 'ja': japanese.get(normal(m['name'])) or m['name'],
-                          'gain': m.get('energyGain', 0), 'cost': m.get('energy', 0)} for m in gm['moves']}
+                          'gain': m.get('energyGain', 0), 'cost': m.get('energy', 0),
+                          'turns': m.get('turns') or m.get('cooldown', 0) // 500} for m in gm['moves']}
     species = {sid: {'name': p['name'], 'ja': p.get('name_ja', p['name']),
                      'aliases': p['aliases'], 'fast': [m for m in p['fastMoves'] if moves.get(m, {}).get('gain', 0)>0],
                      'charged': [m for m in p['chargedMoves'] if 0<moves.get(m, {}).get('cost', 0)<=100]}
