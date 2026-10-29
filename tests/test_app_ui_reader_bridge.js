@@ -13,7 +13,7 @@ const receiver=content.match(/function receiveReaderInput\(\)\{[\s\S]*?\n\}\ncon
 assert(receiver,'Reader receiver must be defined before access handling');
 const values={importText:{value:''}};
 let hash='',url='',notice='',error=false;
-const ctx={URLSearchParams,Uint8Array,TextDecoder,atob,
+const ctx={URLSearchParams,Uint8Array,TextDecoder,atob,active:false,readerInputText:null,readerImportPending:false,
   location:{get hash(){return hash},pathname:'/app',search:'?from=android'},
   history:{replaceState(a,b,c){url=c}},
   el:id=>values[id],

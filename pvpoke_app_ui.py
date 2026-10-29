@@ -37,10 +37,9 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <section class="card"><h2>まとめて貼り付け</h2><p class="note">ポケモン・技・個体値をまとめて取り込めます。読み取りCP付きの「0,11,12 CP717 | ヌオー」にも対応します。日本語の種名、技省略、複数の進化先を含む「個体値リスト」「個体値厳選」、CSVに対応します。</p><label for="importText">コマンドまたはCSV</label><textarea id="importText" spellcheck="false" placeholder="個体値厳選&#10;quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE&#10;0,11,12&#10;3,13,8&#10;2,15,13"></textarea><div class="actions"><button id="importInput" class="secondary">貼り付けた内容を取り込む</button></div><p class="note">取り込みだけでは計算を開始しません。# クルマユ ハハコモリ のような見出しは、次の個体値を両方へ割り当てます。省略した技は種類ごとに補って表示します。</p></section>
 <section class="card" id="queuePanel" hidden><h2>連続計算するポケモン</h2><pre id="queuePreview"></pre><p class="note">表示した順にすべて計算します。複数種の内容は上の貼り付け欄から編集できます。</p><button id="singleForm" class="secondary">単一種のフォームに戻す</button></section>
 <section class="card"><h2>1. ポケモンと個体値</h2><label for="preset">登録プリセット（任意）</label><select id="preset"></select><p class="note" id="presetHint"></p><label for="allSpecies">全ポケモンから選ぶ</label><select id="allSpecies"></select><label for="species">ポケモン名・英語ID（直接入力）</label><input id="species" list="speciesList" value="quagsire" autocomplete="off"><datalist id="speciesList"></datalist>
-<div class="row"><div><label for="fast">通常技</label><select id="fast"></select></div><div><label for="charged1">ゲージ技1</label><select id="charged1"></select></div><div><label for="charged2">ゲージ技2</label><select id="charged2"></select></div></div>
 <div class="actions" role="group" aria-label="登録区分を一括変更"><button id="bulkNormal" class="secondary">すべて通常に変更</button><button id="bulkShadow" class="secondary">すべてシャドウに変更</button><button id="bulkPurified" class="secondary">すべてリトレーンに変更</button><button id="bulkStatusUndo" class="secondary" hidden>区分変更を元に戻す</button></div><p class="note" id="bulkStatusNote">対象：フォーム、または取り込み済みの全種類。区分だけを修正し、個体値・CPは変えません。リトレーン済みの個体値・CPを入力してください。変更後に再計算します。</p>
 <label for="ivs">攻撃,防御,HP（1行1体・最大4,096通り）</label><textarea id="ivs" spellcheck="false" placeholder="0,11,12&#10;3,13,8&#10;2,15,13"></textarea></section>
-<section class="card"><h2>2. 比較と推薦の設定</h2>
+<section class="card" id="comparisonSettings" tabindex="-1"><h2>2. 比較と推薦の設定</h2>
 <div class="meta-presets"><div class="meta-current"><span class="meta-caption">使用中</span><p id="selectedMeta" class="meta-current-name" aria-live="polite">メタプリセットを読み込み中です。</p><span id="metaCurrentCount" class="meta-count"></span><span id="metaCurrentBadges" class="meta-badges"></span></div>
 <div class="meta-toolbar"><button id="metaChoose" class="secondary" aria-expanded="false" aria-controls="metaChooser">プリセットを選ぶ</button><button id="metaExport" class="secondary" disabled>PvPoke用にコピー</button></div>
 <p id="metaExportStatus" class="note" aria-live="polite"></p><div id="metaExportParts" class="actions" hidden></div>
@@ -70,9 +69,16 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <div class="actions"><button id="metaApply" class="secondary" disabled>別のプリセットとして保存</button><button id="metaCancel" class="secondary" type="button">選択を取り消す</button></div>
 <p id="metaNotice" class="note" aria-live="polite"></p>
 </details>
-<section class="card" id="results" hidden></section></div></main><script>
+<section class="card" id="results" hidden></section>
+<details class="card" id="moveSettings"><summary>技の設定</summary>
+<label class="checkline" for="autoMoves"><input id="autoMoves" type="checkbox" checked> 強い技構成をすべて比較</label>
+<p class="note">合法な通常技 × ゲージ技2個をすべて実測します。入力個体・メタ全体の平均Ratingと、他構成にない勝ち対面で候補を残します。構成数に応じて時間がかかります。</p>
+<label for="moveThreshold">残す平均Ratingの下限（500付近の目安）</label><input id="moveThreshold" type="number" min="0" max="1000" value="450" step="1">
+<p class="note">全構成が下限未満でも最高平均の構成は表示します。OFFの場合は下の技だけを計算します。個体ごとのコピー名には、推薦された構成のうち平均Ratingが最も高い技の略号を付けます。</p>
+<div class="row"><div><label for="fast">通常技</label><select id="fast"></select></div><div><label for="charged1">ゲージ技1</label><select id="charged1"></select></div><div><label for="charged2">ゲージ技2</label><select id="charged2"></select></div></div>
+</details></div></main><script>
 'use strict';
-const el=id=>document.getElementById(id);let importedSingle=null;let credential='',catalog={},presets=[],active=false,runRef=null,lastResult=null,importedJobs=null,batchState=null,metaPending=null,metaWorking=false;let metaState=null,selectedMetaId=null,metaExportWorking=false;
+const el=id=>document.getElementById(id);let importedSingle=null;let credential='',catalog={},presets=[],active=false,runRef=null,lastResult=null,importedJobs=null,batchState=null,metaPending=null,metaWorking=false;let metaState=null,selectedMetaId=null,metaExportWorking=false;let moveCatalog={},readerImportPending=false,readerImportInFlight=false,readerInputText=null;
 function message(s,error=false){const x=el('message');x.hidden=false;x.textContent=s;x.className='status'+(error?' error':'');}
 async function api(path,data={}){const headers={'Content-Type':'application/json'};if(credential)headers.Authorization='Bearer '+credential;const r=await fetch('/app-api/'+path,{method:'POST',credentials:'same-origin',headers,body:JSON.stringify(data)});if(r.status===401){const e=Error('ログインの有効期限が切れました。接続キーで再接続してください。');e.status=401;throw e;}let out;try{out=await r.json();}catch{throw Error('応答を確認できません。接続を確認してください。');}if(!r.ok){const e=Error(out.error||'通信エラー');e.status=r.status;throw e;}return out;}
 // Keep the legacy cleanup tool accessible by explicit URL only.
@@ -108,7 +114,7 @@ function setCandidate(p){inputPokemonStatus=null;el('species').value=p.species;e
 function setPreset(){const p=presets.find(x=>presetKey(x)===el('preset').value);if(p)setCandidate(p);}
 function resolveTypedSpecies(){const raw=el('species').value.normalize('NFKC').trim().toLowerCase();if(['gourgeist','pumpkaboo','パンプジン','バケッチャ'].includes(raw)){message('このポケモンはサイズごとに能力が異なります。こだましゅ/XS、ちゅうだましゅ/通常、おおだましゅ/XL、ギガだましゅ/XXLを指定してください。',true);return;}const found=Object.entries(catalog).filter(([sid,p])=>[sid,p.name,p.name_ja,...(p.aliases||[])].some(x=>x&&String(x).normalize('NFKC').trim().toLowerCase()===raw));if(found.length===1)el('species').value=found[0][0];else if(found.length>1)message('複数のフォルムが一致しました。サイズやフォルムを指定してください。',true);}
 
-function setBusy(value){active=value;for(const id of ['bulkNormal','bulkShadow','bulkPurified','bulkStatusUndo'])el(id).disabled=value;for(const id of ['run','resume','disconnect','importInput','singleForm','forceRecalculate'])el(id).disabled=value;el('metaFile').disabled=value;el('metaApply').disabled=value||!metaPending||metaWorking;el('run').textContent=value?'計算を確認中…':'計算して結果を表示';syncMetaControls();}
+function setBusy(value){active=value;for(const id of ['bulkNormal','bulkShadow','bulkPurified','bulkStatusUndo'])el(id).disabled=value;for(const id of ['run','resume','disconnect','importInput','singleForm','forceRecalculate','autoMoves','moveThreshold','fast','charged1','charged2'])el(id).disabled=value;for(const id of ['preset','allSpecies','species','fast','charged1','charged2','ivs'])el(id).disabled=value||!!importedJobs;el('metaFile').disabled=value;el('metaApply').disabled=value||!metaPending||metaWorking;el('run').textContent=value?'計算を確認中…':'計算して結果を表示';syncMetaControls();if(!value&&readerImportPending&&!readerImportInFlight)Promise.resolve().then(autoImportReader);}
 function node(tag,text,parent,cls=''){const n=document.createElement(tag);n.textContent=text;if(cls)n.className=cls;parent.append(n);return n;}
 async function copy(text,button){try{await navigator.clipboard.writeText(text);button.textContent='コピーしました';}catch{const root=el('message');message('コピーできませんでした。下の欄から選択してコピーしてください。',true);const area=node('textarea',text,root);area.value=text;area.readOnly=true;area.focus();area.select();}}
 // Result labels are resolved against the active catalog, including form names.
@@ -162,6 +168,7 @@ function nicknameMembers(result,row,ivs){
 }
 function nicknameFor(result,row,ivs=row.ivs){
  const members=nicknameMembers(result,row,ivs);
+ if(members.some(m=>m.row.chosen_moves))return movesetNickname(members);
  // Only documented PvPoke evidence is compared; unseen battles are not inferred.
  const matches=members.flatMap(member=>(member.row.evidence||[])
   .filter(e=>Number.isFinite(e.rating)&&opponentLabel(e.opponent).code&&shieldCode(e.shield))
@@ -325,11 +332,12 @@ function render(result,append=false){
  if(result.meta_preset)node('p','対戦メタ：'+result.meta_preset.name+' / SHA256 '+result.meta_sha256.slice(0,12)+'…',panel,'note');
  node('p',[result.candidate.fast,result.candidate.charged1,result.candidate.charged2].join(' / '),panel,'note');const selection=result.selection;
  if(!selection){node('h2','GPT評価用の比較情報',panel);node('p','今回の比較情報をコピーしてGPTに評価を依頼できます。',panel);const b=node('button','比較情報をコピー',panel);b.onclick=()=>copy('以下のPvPoke実測比較を、個体値厳選の基準で評価してください。おすすめ個体と英語検索式を示してください。\n'+JSON.stringify(result),b);return;}
+ if(result.moveset_comparison)renderMovesetComparison(result,panel);
  node('h2','おすすめ個体',panel);
  node('p','検索式ではXXLの実際の身長を比較できないため、通常の検索式からXXLを除外します。XXLは手動で比較し、最大の個体を残してください。サイズがフォルムそのものを表す場合は例外です。',panel,'note');
  if(selection.input_notices)selection.input_notices.forEach(n=>node('p',n,panel,'note'));
  if(selection.minior_experimental)node('p','メテノの戦術比較（試験版）：流星で即撃ち／コアまで温存／状況判断を同じ条件で比較。表示Ratingは各対面で最良の戦術を選んだ上限値です。実機のCP・レベル調整が未検証のため、この結果だけで個体を博士に送らないでください。',panel,'note');
- node('p','Sは総合本命、Aはその本命にない実戦上の役割を補う個体です。通常は最大4体に絞ります。S/Aは入力候補内の暫定評価で、実際の勝敗を保証するものではありません。',panel,'note');
+ node('p',(result.moveset_comparison?'技ごとの推薦を統合しています。同じ個体値は1回だけ表示し、その個体の採用技を名前に略します。':'')+'Sは総合本命、Aはその本命にない実戦上の役割を補う個体です。1構成では通常最大4体に絞ります。S/Aは入力候補内の暫定評価で、実際の勝敗を保証するものではありません。',panel,'note');
  if(selection.policy?.version&&selection.policy.version!=='box-first-v3'){
   node('p','保存済みの結果は以前の推薦基準です。最新のS本命・少数厳選を使うには、同じ入力を再計算してください。',panel,'note');
  }
@@ -340,6 +348,7 @@ function render(result,append=false){
  if(!selection.recommendations.length)node('p','自動推薦の根拠が十分な個体はありません。下の保留個体を確認してください。',panel);
  for(const row of selection.recommendations){
   const card=node('article','',panel,'recommendation');node('h2',row.rank+'位｜'+row.ivs+'｜'+row.grade,card);node('div',row.role,card,'badge');
+  if(row.chosen_moves)node('p','採用技：'+moveLabel(row.chosen_moves)+' / 平均Rating '+row.moveset_mean.toFixed(1),card,'note');
   if(row.minior_strategy){
    const m=row.minior_strategy,parts=[];
    if(m.hold_win_flip_count)parts.push('コアまでゲージ温存で新たに勝ち '+m.hold_win_flip_count+'条件');
@@ -588,16 +597,151 @@ el('bulkStatusUndo').onclick=()=>{
 
 function cacheBatch(){try{sessionStorage.setItem('pvpoke-app-batch',JSON.stringify(batchState));}catch{message('再開情報を保存できませんでした。計算が終わるまで画面を開いておいてください。',true);}}
 function setImportedJobs(jobs){importedSingle=jobs?.length===1?jobs[0]:null;importedJobs=jobs&&jobs.length>1?jobs:null;el('queuePanel').hidden=!importedJobs;for(const id of ['preset','allSpecies','species','fast','charged1','charged2','ivs'])el(id).disabled=!!importedJobs;if(importedJobs)el('queuePreview').textContent=jobs.map((j,i)=>(i+1)+'. '+j.name+'：'+j.candidate_count+'個体\n   '+[j.candidate.fast,j.candidate.charged1,j.candidate.charged2].join(' / ')+'\n'+j.warnings.join('\n')).join('\n\n');}
-async function finish(result){while(result.state==='running'){message('全対面を計算中です。'+(batchState?' '+(batchState.index+1)+' / '+batchState.jobs.length+'種類':''));result=await api('result',{run_ref:runRef,wait_seconds:12});}if(result.state!=='done'||!result.complete)throw Error(result.message||'計算が完了していません。');return result;}
-async function executeBatch(){for(;batchState.index<batchState.jobs.length;){const job=batchState.jobs[batchState.index];message(job.name+'を計算します（'+(batchState.index+1)+' / '+batchState.jobs.length+'）。');let result;if(batchState.run_ref){runRef=batchState.run_ref;result=await api('result',{run_ref:runRef,wait_seconds:12});}else{const data={candidate:job.candidate,ivs:job.ivs,batch_mode:batchState.batch_mode,focus_opponents:batchState.focus,report_format:batchState.report_format,selection_policy:batchState.policy,force_recalculate:batchState.force_recalculate===true,wait_seconds:0};if(batchState.meta_sha256)data.expected_meta_sha256=batchState.meta_sha256;if(batchState.meta_preset_id)data.meta_preset_id=batchState.meta_preset_id;result=await api('run',data);runRef=result.run_ref;batchState.run_ref=runRef;sessionStorage.setItem('pvpoke-app-run',runRef);cacheBatch();}result=await finish(result);result.display_name=job.name;result.source_sections=job.source_sections||[];result.source_records=job.source_records||[];result.pokemon_status=job.pokemon_status;batchState.meta_sha256=result.meta_sha256;batchState.results.push(result);render(result,batchState.index>0);batchState.index++;batchState.run_ref=null;runRef=null;sessionStorage.removeItem('pvpoke-app-run');cacheBatch();}message(batchState.jobs.length+'種類すべての計算と推薦が完了しました。');sessionStorage.removeItem('pvpoke-app-batch');batchState=null;runRef=null;el('resume').hidden=true;}
-async function connect(auto=false){credential=auto?'':el('credential').value.trim();if(!auto&&!credential){message('接続キーを入力してください。',true);return;}el('connect').disabled=true;try{if(!auto&&el('remember').checked){await api('session');credential='';}const cat=await api('catalog');if(!cat.ready)throw Error(cat.error||'ゲームデータを読込中です。少し待って接続してください。');catalog=cat.species;prepareLabels();presets=cat.app_presets||cat.presets;el('credential').value='';el('login').hidden=true;el('workspace').hidden=false;updateLowScorePanelVisibility();const opts=el('preset');opts.replaceChildren();const custom=document.createElement('option');custom.value='';custom.textContent='直接指定・貼り付け';opts.append(custom);for(const p of presets){const o=document.createElement('option');o.value=presetKey(p);o.textContent=p.name+' / '+p.fast+' / '+p.charged1+' / '+p.charged2;opts.append(o);}el('presetHint').textContent='登録済みの技構成 '+presets.length+'件。プリセット外も、全ポケモンの選択・CSV貼り付けから計算できます。';const speciesOptions=Object.keys(catalog).sort((a,b)=>(catalog[a].name_ja||catalog[a].name||a).localeCompare(catalog[b].name_ja||catalog[b].name||b,'ja'));el('allSpecies').replaceChildren();el('speciesList').replaceChildren();for(const sid of speciesOptions){const label=(catalog[sid].name_ja||catalog[sid].name||sid)+' ('+sid+')';const o=document.createElement('option');o.value=sid;o.textContent=label;el('allSpecies').append(o);const hint=document.createElement('option');hint.value=sid;hint.label=label;el('speciesList').append(hint);}const preferred=presets.find(p=>p.species==='quagsire'&&p.charged2==='STONE_EDGE')||presets[0];if(preferred)setCandidate(preferred);runRef=sessionStorage.getItem('pvpoke-app-run');try{batchState=JSON.parse(sessionStorage.getItem('pvpoke-app-batch')||'null');}catch{batchState=null;}if(batchState?.jobs)setImportedJobs(batchState.jobs);if(batchState?.results?.length)batchState.results.forEach((r,i)=>render(r,i>0));el('resume').hidden=!(runRef||batchState);message('接続できました。');if(new URLSearchParams(location.search||'').get('tool')==='low-score'){el('lowScorePanel').scrollIntoView?.();await loadLowScores();}await refreshMetaStatus(true);}catch(e){credential='';if(!auto||e.status!==401)message(e.message,true);}finally{el('connect').disabled=false;}}
+async function finish(result){while(result.state==='running'){message('全対面を計算中です。'+(batchState?' '+(batchState.index+1)+' / '+batchState.jobs.length+'構成':''));result=await api('result',{run_ref:runRef,wait_seconds:12});}if(result.state!=='done'||!result.complete)throw Error(result.message||'計算が完了していません。');return result;}
+// Exhaustive legal combinations. Freeze the full plan before starting one worker.
+function planMovesets(jobs){
+ const planned=[];
+ jobs.forEach((job,group)=>{
+  const p=catalog[job.candidate.species],fast=[...new Set(p?.fastMoves||[])].sort(),charged=[...new Set(p?.chargedMoves||[])].sort();
+  if(!fast.length||charged.length<2)throw Error(job.name+'の合法な技一覧が不足しています。技の設定で直接指定してください。');
+  const profiles=[];
+  for(const f of fast)for(let i=0;i<charged.length;i++)for(let j=i+1;j<charged.length;j++)profiles.push({species:job.candidate.species,fast:f,charged1:charged[i],charged2:charged[j]});
+  // Default first is an execution order only, never a strength estimate.
+  const key=c=>[c.fast,...[c.charged1,c.charged2].sort()].join('|'),preferred=key(job.candidate);
+  profiles.sort((a,b)=>Number(key(b)===preferred)-Number(key(a)===preferred));
+  for(const candidate of profiles)planned.push({...job,candidate,moveset_group:group});
+ });
+ return planned;
+}
+function moveLabel(c){return [c.fast,c.charged1,c.charged2].map(id=>moveCatalog[id]?.name||id).join(' / ');}
+function moveAliases(c){
+ const p=catalog[c.species]||{},ids=[...new Set([...(p.fastMoves||[]),...(p.chargedMoves||[]),c.fast,c.charged1,c.charged2])].sort();
+ const preferred={SCRATCH:'Sc',THUNDER_PUNCH:'TP',ICE_PUNCH:'IP',SWIFT:'Sw',HIGH_HORSEPOWER:'HH'};
+ const codes={},used=new Set();
+ // Reserve recognizable codes before assigning alternatives, case-insensitively.
+ for(const id of ids.filter(x=>preferred[x])){codes[id]=preferred[id];used.add(preferred[id].toLowerCase());}
+ for(const id of ids.filter(x=>!preferred[x])){
+  const words=id.split('_'),suggested=words.length>1?words[0][0]+words[1][0]:id.slice(0,2);
+  const choices=[suggested];
+  for(let n=0;n<1296;n++)choices.push(n.toString(36).padStart(2,'0').toUpperCase());
+  const code=choices.find(x=>/^[A-Za-z0-9]{2}$/.test(x)&&!used.has(x.toLowerCase()));
+  if(!code)throw Error('技の略号を作成できません');codes[id]=code;used.add(code.toLowerCase());
+ }
+ return codes;
+}
+function movesetNickname(members){
+ // One physical IV shared by evolutions keeps the first target's adopted build.
+ const primary=members.find(m=>m.row.chosen_moves),c=primary.row.chosen_moves,aliases=moveAliases(c);
+ const ids=[c.fast,c.charged1,c.charged2],suffix=ids.map(id=>aliases[id]).join('');
+ const grade=String(primary.row.grade||'').startsWith('S')?'S':'A';
+ for(const width of [4,3,2])for(const code of codeChoices(primary.sid,width)){
+  const text=grade+code+suffix;
+  if(validNickname(text))return {text,description:grade+'＝候補評価 / '+code+'＝'+(catalog[primary.sid]?.name_ja||primary.sid)+' / '+ids.map(id=>aliases[id]+'＝'+(moveCatalog[id]?.name||id)).join(' / ')+' / 個体別平均Rating '+primary.row.moveset_mean.toFixed(1)+(members.length>1?' / 共通個体：'+members.map(m=>catalog[m.sid]?.name_ja||m.sid).join('、')+'（技略号は最初の進化先）':'')};
+ }
+ return null;
+}
+function combineMovesets(results,threshold){
+ const summaries=results.map(r=>r.selection?.moveset_summary),first=summaries[0];
+ if(results.some(r=>r.meta_sha256!==results[0].meta_sha256||r.calculation_version!==results[0].calculation_version||r.batch_mode!==results[0].batch_mode||r.candidate.species!==results[0].candidate.species)||!first||summaries.some(s=>!s||s.version!==1||s.axis_sha256!==first.axis_sha256||s.available_wins.length!==first.available_wins.length||!Number.isFinite(s.mean_rating)))throw Error('技の比較条件が一致しません。同じメタ・条件で再計算してください。');
+ const counts=Array.from(first.available_wins,(_,i)=>summaries.reduce((n,s)=>n+Number(s.available_wins[i]==='1'),0));
+ const best=Math.max(...summaries.map(s=>s.mean_rating));
+ const profiles=results.map((r,i)=>({candidate:r.candidate,mean_rating:summaries[i].mean_rating,
+  unique_win_count:counts.filter((n,k)=>n===1&&summaries[i].available_wins[k]==='1').length,
+  retained:summaries[i].mean_rating>=threshold||summaries[i].mean_rating===best||counts.some((n,k)=>n===1&&summaries[i].available_wins[k]==='1')}));
+ const chosen=new Map();
+ results.forEach((result,i)=>{
+  if(!profiles[i].retained)return;
+  for(const row of result.selection.recommendations)for(const item of [row,...(row.equivalent_candidates||[])]){
+   const mean=summaries[i].iv_mean_ratings[item.ivs];
+   if(!Number.isFinite(mean))throw Error('個体別Ratingが不足しています。再計算してください。');
+   const previous=chosen.get(item.ivs);
+   if(previous&&previous.moveset_mean>=mean)continue;
+   // Equivalence is specific to one profile. Never reuse it across configurations.
+   chosen.set(item.ivs,{...row,ivs:item.ivs,search_string:item.search_string,equivalent_candidates:[],chosen_moves:result.candidate,moveset_mean:mean,comparison_peer:null,comparison_differences:[],comparison_difference_count:0});
+  }
+ });
+ const rows=[...chosen.values()].sort((a,b)=>Number(String(b.grade).startsWith('S'))-Number(String(a.grade).startsWith('S'))||b.moveset_mean-a.moveset_mean||a.ivs.localeCompare(b.ivs));
+ rows.forEach((r,i)=>r.rank=i+1);
+ const bestIndex=summaries.findIndex(s=>s.mean_rating===best),base=results[bestIndex];
+ const candidateIvs=base.selection.candidate_ivs||Object.keys(first.iv_mean_ratings);
+ const additional=candidateIvs.filter(iv=>!chosen.has(iv)).map(ivs=>({ivs,reason:'採用した技構成では保存候補に選ばれませんでした。',equivalent_candidates:[]}));
+ return {...base,moveset_comparison:{threshold,profiles},selection:{...base.selection,
+  recommendations:rows,review_candidates:[],additional_candidates:additional,covered_candidates:[],dominated_by:{},
+  total_ratings_checked:summaries.reduce((n,s)=>n+s.rating_count,0)}};
+}
+function renderMovesetComparison(result,parent){
+ const info=result.moveset_comparison,kept=info.profiles.filter(p=>p.retained);
+ node('p',info.profiles.length+'構成を実測 / 採用 '+kept.length+'構成 / 平均Ratingの目安 '+info.threshold+'以上',parent,'note');
+ const d=node('details','',parent);node('summary','技構成の比較を見る',d);
+ for(const p of info.profiles)node('p',(p.retained?'採用｜':'参考｜')+moveLabel(p.candidate)+'｜平均 '+p.mean_rating.toFixed(1)+(p.unique_win_count?'｜この構成だけで勝てる対面条件 '+p.unique_win_count:'') ,d,'note');
+}
+function renderBatchResults(){
+ if(!batchState?.auto_moves){batchState.results.forEach((r,i)=>render(r,i>0));return;}
+ const completed=[];
+ for(const group of [...new Set(batchState.jobs.map(j=>j.moveset_group))]){
+  const jobs=batchState.jobs.filter(j=>j.moveset_group===group),results=batchState.results.filter(r=>r.moveset_group===group);
+  if(results.length===jobs.length)completed.push(combineMovesets(results,batchState.move_threshold));
+ }
+ completed.forEach((r,i)=>render(r,i>0));
+}
+
+async function executeBatch(){
+ for(;batchState.index<batchState.jobs.length;){
+  const job=batchState.jobs[batchState.index];
+  message(job.name+'｜'+moveLabel(job.candidate)+'（'+(batchState.index+1)+' / '+batchState.jobs.length+'構成）');
+  let result;
+  if(batchState.run_ref){runRef=batchState.run_ref;result=await api('result',{run_ref:runRef,wait_seconds:12});}
+  else{
+   const data={candidate:job.candidate,ivs:job.ivs,batch_mode:batchState.batch_mode,focus_opponents:batchState.focus,report_format:batchState.report_format,selection_policy:batchState.policy,force_recalculate:batchState.force_recalculate===true,wait_seconds:0};
+   if(batchState.meta_sha256)data.expected_meta_sha256=batchState.meta_sha256;
+   if(batchState.meta_preset_id)data.meta_preset_id=batchState.meta_preset_id;
+   result=await api('run',data);runRef=result.run_ref;batchState.run_ref=runRef;
+   sessionStorage.setItem('pvpoke-app-run',runRef);cacheBatch();
+  }
+  result=await finish(result);
+  if(batchState.auto_moves){
+   if(!/^[a-f0-9]{64}$/.test(result.calculation_version||''))throw Error('計算データの更新版を識別できません。全技比較をOFFにして直接指定するか、計算環境の設定を確認してください');
+   if(batchState.calculation_version&&batchState.calculation_version!==result.calculation_version)throw Error('計算中にゲームデータまたは計算処理が更新されました。古い結果を混ぜず、新しく計算し直してください');
+   batchState.calculation_version=result.calculation_version;
+  }
+  result.display_name=job.name;
+  result.source_sections=job.source_sections||[];result.source_records=job.source_records||[];result.pokemon_status=job.pokemon_status;
+  result.moveset_group=job.moveset_group;
+  batchState.meta_sha256=result.meta_sha256;batchState.results.push(result);batchState.index++;
+  batchState.run_ref=null;runRef=null;sessionStorage.removeItem('pvpoke-app-run');cacheBatch();
+  renderBatchResults();
+ }
+ message(batchState.jobs.length+'構成すべての計算と推薦が完了しました。');
+ sessionStorage.removeItem('pvpoke-app-batch');batchState=null;runRef=null;el('resume').hidden=true;
+}
+async function connect(auto=false){credential=auto?'':el('credential').value.trim();if(!auto&&!credential){message('接続キーを入力してください。',true);return;}el('connect').disabled=true;try{if(!auto&&el('remember').checked){await api('session');credential='';}const cat=await api('catalog');if(!cat.ready)throw Error(cat.error||'ゲームデータを読込中です。少し待って接続してください。');catalog=cat.species;moveCatalog=cat.moves||{};prepareLabels();presets=cat.app_presets||cat.presets;el('credential').value='';el('login').hidden=true;el('workspace').hidden=false;updateLowScorePanelVisibility();const opts=el('preset');opts.replaceChildren();const custom=document.createElement('option');custom.value='';custom.textContent='直接指定・貼り付け';opts.append(custom);for(const p of presets){const o=document.createElement('option');o.value=presetKey(p);o.textContent=p.name+' / '+p.fast+' / '+p.charged1+' / '+p.charged2;opts.append(o);}el('presetHint').textContent='登録済みの技構成 '+presets.length+'件。プリセット外も、全ポケモンの選択・CSV貼り付けから計算できます。';const speciesOptions=Object.keys(catalog).sort((a,b)=>(catalog[a].name_ja||catalog[a].name||a).localeCompare(catalog[b].name_ja||catalog[b].name||b,'ja'));el('allSpecies').replaceChildren();el('speciesList').replaceChildren();for(const sid of speciesOptions){const label=(catalog[sid].name_ja||catalog[sid].name||sid)+' ('+sid+')';const o=document.createElement('option');o.value=sid;o.textContent=label;el('allSpecies').append(o);const hint=document.createElement('option');hint.value=sid;hint.label=label;el('speciesList').append(hint);}const preferred=presets.find(p=>p.species==='quagsire'&&p.charged2==='STONE_EDGE')||presets[0];if(preferred)setCandidate(preferred);runRef=sessionStorage.getItem('pvpoke-app-run');try{batchState=JSON.parse(sessionStorage.getItem('pvpoke-app-batch')||'null');}catch{batchState=null;}if(batchState?.jobs){const jobs=batchState.auto_moves?batchState.jobs.filter((j,i,a)=>a.findIndex(x=>x.moveset_group===j.moveset_group)===i):batchState.jobs;setImportedJobs(jobs);if(batchState.auto_moves!==undefined)el('autoMoves').checked=batchState.auto_moves;if(batchState.move_threshold!==undefined)el('moveThreshold').value=batchState.move_threshold;}if(batchState?.results?.length)renderBatchResults();el('resume').hidden=!(runRef||batchState);message('接続できました。');if(new URLSearchParams(location.search||'').get('tool')==='low-score'){el('lowScorePanel').scrollIntoView?.();await loadLowScores();}await refreshMetaStatus(true);await autoImportReader();}catch(e){credential='';if(!auto||e.status!==401)message(e.message,true);}finally{el('connect').disabled=false;}}
 el('connect').onclick=()=>connect(false);
 el('preset').onchange=()=>{bulkStatusUndo=null;el('bulkStatusUndo').hidden=true;setPreset();};el('species').onchange=()=>{inputPokemonStatus=null;bulkStatusUndo=null;el('bulkStatusUndo').hidden=true;resolveTypedSpecies();el('allSpecies').value=el('species').value;el('preset').value='';moves();};
 el('allSpecies').onchange=()=>{inputPokemonStatus=null;bulkStatusUndo=null;el('bulkStatusUndo').hidden=true;el('species').value=el('allSpecies').value;el('preset').value='';moves();};
 el('singleForm').onclick=()=>{if(!active){inputPokemonStatus=null;bulkStatusUndo=null;el('bulkStatusUndo').hidden=true;setImportedJobs(null);message('単一種のフォームに切り替えました。貼り付けた元の入力は上の欄に残っています。');}};
-el('importInput').onclick=async()=>{if(active)return;setBusy(true);try{const parsed=await api('import',{text:el('importText').value,current:currentCandidate()});const jobs=parsed.jobs||[parsed];setCandidate(jobs[0].candidate);el('ivs').value=jobs[0].ivs;if(parsed.batch_mode)el('batchMode').value=parsed.batch_mode;setImportedJobs(jobs);bulkStatusUndo=null;el('bulkStatusUndo').hidden=true;message(jobs.map(j=>j.name+'：'+j.candidate_count+'個体 / '+[j.candidate.fast,j.candidate.charged1,j.candidate.charged2].join(' / ')+'\n'+j.warnings.join('\n')).join('\n\n'));}catch(e){message(e.message,true);}finally{setBusy(false);}};
+async function importInput(){
+ if(active)return false;
+ setBusy(true);
+ try{
+  const parsed=await api('import',{text:el('importText').value,current:currentCandidate()});
+  const jobs=parsed.jobs||[parsed];
+  if(!jobs.length)throw Error('取り込む個体値がありません');
+  setCandidate(jobs[0].candidate);el('ivs').value=jobs[0].ivs;
+  if(parsed.batch_mode)el('batchMode').value=parsed.batch_mode;
+  setImportedJobs(jobs);bulkStatusUndo=null;el('bulkStatusUndo').hidden=true;
+  message(jobs.map(j=>j.name+'：'+j.candidate_count+'個体'+(j.warnings?.length?'\n'+j.warnings.join('\n'):'')).join('\n')+'\n取り込みました。メタを確認して計算してください。');
+  el('comparisonSettings').scrollIntoView?.({block:'start'});el('comparisonSettings').focus?.({preventScroll:true});
+  return true;
+ }catch(e){message(e.message,true);return false;}finally{setBusy(false);}
+}
+async function autoImportReader(){
+ if(!readerImportPending||readerImportInFlight||active||el('workspace').hidden)return;
+ readerImportPending=false;readerImportInFlight=true;
+ try{el('importText').value=readerInputText;await importInput();}finally{readerImportInFlight=false;if(readerImportPending)Promise.resolve().then(autoImportReader);}
+}
+el('importInput').onclick=importInput;
 el('evaluation').onchange=()=>{el('run').textContent=el('evaluation').value==='app'?'計算して推薦を表示':'GPT評価用の比較情報を作成';};
-el('run').onclick=async()=>{if(active||metaWorking)return;if(!chosenMeta()){message('メタプリセットを選択してください。',true);return;}setBusy(true);el('results').hidden=true;try{const current=currentCandidate();const keep=importedSingle?.candidate.species===current.species&&importedSingle.ivs.trim()===el('ivs').value.trim();const jobs=importedJobs||[{candidate:current,ivs:el('ivs').value,name:catalog[el('species').value]?.name_ja||el('species').value,source_records:keep?importedSingle.source_records:[],source_sections:keep?importedSingle.source_sections:[],pokemon_status:inputPokemonStatus}];batchState={jobs,index:0,results:[],run_ref:null,meta_preset_id:selectedMetaId,meta_sha256:chosenMeta().sha256,batch_mode:el('batchMode').value,focus:el('focus').value.split('\n').map(x=>x.trim()).filter(Boolean),report_format:el('evaluation').value==='app'?'app':'decision',force_recalculate:el('forceRecalculate').checked===true,policy:{meaningful_win_lead:Number(el('lead').value)}};cacheBatch();await executeBatch();}catch(e){if(batchState&&!batchState.results.length&&!batchState.run_ref){batchState=null;sessionStorage.removeItem('pvpoke-app-batch');}message(e.message+'\n完了済みの結果は表示を保持しています。後続の対象は未実行です。',true);el('resume').hidden=!(runRef||batchState);}finally{setBusy(false);}};
+el('run').onclick=async()=>{if(active||metaWorking)return;if(!chosenMeta()){message('メタプリセットを選択してください。',true);return;}setBusy(true);el('results').hidden=true;try{const current=currentCandidate();const keep=importedSingle?.candidate.species===current.species&&importedSingle.ivs.trim()===el('ivs').value.trim();const inputJobs=importedJobs||[{candidate:current,ivs:el('ivs').value,name:catalog[el('species').value]?.name_ja||el('species').value,source_records:keep?importedSingle.source_records:[],source_sections:keep?importedSingle.source_sections:[],pokemon_status:inputPokemonStatus}];const auto_moves=el('autoMoves').checked===true;const threshold=Number(el('moveThreshold').value);if(auto_moves&&(!Number.isFinite(threshold)||threshold<0||threshold>1000))throw Error('技の平均Rating下限は0〜1000で指定してください');if(auto_moves&&el('evaluation').value!=='app')throw Error('全技比較は「アプリで自動推薦」で使用してください');const jobs=auto_moves?planMovesets(inputJobs):inputJobs;batchState={jobs,auto_moves,move_threshold:threshold,index:0,results:[],run_ref:null,meta_preset_id:selectedMetaId,meta_sha256:chosenMeta().sha256,batch_mode:el('batchMode').value,focus:el('focus').value.split('\n').map(x=>x.trim()).filter(Boolean),report_format:el('evaluation').value==='app'?'app':'decision',force_recalculate:el('forceRecalculate').checked===true,policy:{meaningful_win_lead:Number(el('lead').value)}};cacheBatch();await executeBatch();}catch(e){if(batchState&&!batchState.results.length&&!batchState.run_ref){batchState=null;sessionStorage.removeItem('pvpoke-app-batch');}message(e.message+'\n完了済みの結果は表示を保持しています。後続の対象は未実行です。',true);el('resume').hidden=!(runRef||batchState);}finally{setBusy(false);}};
 el('resume').onclick=async()=>{if(active||!(runRef||batchState))return;setBusy(true);try{if(batchState){await executeBatch();}else{render(await finish(await api('result',{run_ref:runRef,wait_seconds:12})));runRef=null;sessionStorage.removeItem('pvpoke-app-run');el('resume').hidden=true;message('計算と結果の確認が完了しました。');}}catch(e){message(e.message,true);}finally{setBusy(false);}};
 el('disconnect').onclick=async()=>{try{await api('logout');}catch(e){message('ログアウトできませんでした。再試行してください。',true);return;}credential='';catalog={};metaState=null;selectedMetaId=null;clearMetaExport();nameEntries=[];opponentLabels.clear();displayedResults=[];nicknameBindings=[];presets=[];lastResult=null;setImportedJobs(null);batchState=null;el('results').replaceChildren();el('workspace').hidden=true;el('login').hidden=false;resetMetaUpload();message('接続を解除しました。このブラウザのログイン情報も削除しました。');};
 // Reader-to-browser handoff is kept in a URL fragment, never sent in an HTTP request.
@@ -613,13 +757,15 @@ function receiveReaderInput(){
   const bytes=Uint8Array.from(atob(encoded.replace(/-/g,'+').replace(/_/g,'/')+pad),c=>c.charCodeAt(0));
   const value=new TextDecoder('utf-8',{fatal:true}).decode(bytes);
   if(bytes.length>384000||!value.startsWith('個体値厳選')||!/(?:^|\n)#\s*\S/.test(value))throw Error('Invalid IV input');
-  el('importText').value=value;
-  message('読み取りアプリから個体値を受け取りました。「貼り付けた内容を取り込む」を押すと確認できます。');
+  readerInputText=value;readerImportPending=true;
+  if(!active)el('importText').value=value;
+  message('読み取りアプリから個体値を受け取りました。接続後に取り込み、比較と推薦の設定へ移動します。');
   return true;
  }catch(e){message('読み取りデータを自動入力できませんでした。コピーした内容を手動で貼り付けてください。',true);return false;}
 }
 const access=new URLSearchParams(location.hash.slice(1)).get('access');
 if(access){history.replaceState(null,'',location.pathname+location.search);el('credential').value=access;connect(false);}else{receiveReaderInput();connect(true);}
+if(typeof window!=='undefined')window.addEventListener('hashchange',()=>{if(receiveReaderInput())autoImportReader();});
 </script></body></html>'''
 
 

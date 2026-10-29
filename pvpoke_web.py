@@ -107,6 +107,8 @@ def load_catalog():
                             'fast': fast, 'charged1': c1, 'charged2': c2})
         with LOCK:
             CATALOG.update({'ready': True, 'error': None, 'species': payload,
+                            'moves': {m['moveId']: {'name': m.get('name') or m['moveId']}
+                                      for m in gm.get('moves', []) if m.get('moveId')},
                             'presets': presets, 'timestamp': gm.get('timestamp')})
     except Exception as exc:
         with LOCK:

@@ -11,6 +11,7 @@ from pvpoke_input_limits import MAX_CANDIDATES, MAX_IMPORT_CHARS, MAX_APP_REQUES
 import csv
 from copy import deepcopy
 import io
+import json
 import re
 import threading
 import time
@@ -218,6 +219,7 @@ class IVWorkflow:
             analysis_started = time.monotonic()
             with self.backend._zip() as archive:
                 _verify_zip(archive, ticket)
+                calculation_revision = json.loads(archive.read("manifest.json")).get("calculation_version")
                 modes = ("default",) if ticket["batch_mode"] == "simple" else MODES
                 app_selection = None
                 if ticket["report_format"] == "app":
@@ -254,6 +256,7 @@ class IVWorkflow:
                 "state": "done", "complete": all(report["complete"] for report in reports.values()),
                 "candidate": ticket["candidate"], "batch_mode": ticket["batch_mode"],
                 "meta_sha256": ticket["server_meta_sha256"],
+                "calculation_version": calculation_revision,
                 "meta_preset": ticket.get("meta_preset"),
                 "result_cache": ticket["result_cache"],
                 "meta_verified_against_project": ticket["expected_meta_sha256"] is not None,

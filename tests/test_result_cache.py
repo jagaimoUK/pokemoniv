@@ -74,6 +74,15 @@ class ResultCacheTests(unittest.TestCase):
         self.source = self.root / "source.zip"; make_archive(self.source, self.ctx)
         self.cache = ResultCache(self.root)
 
+    def test_exhaustive_movesets_can_configure_bounded_entry_capacity(self):
+        with patch.dict(os.environ, {"PVP_RESULT_CACHE_MAX_ENTRIES": "64"}):
+            cache = ResultCache.configured(self.root)
+            self.assertEqual(cache.max_entries, 64)
+            self.assertEqual(cache.max_bytes, 200 * 1024 * 1024)
+        for value in ("0", "513", "bad"):
+            with patch.dict(os.environ, {"PVP_RESULT_CACHE_MAX_ENTRIES": value}):
+                with self.assertRaises(ValueError): ResultCache.configured(self.root)
+
     def test_reopen_restores_exact_complete_archive_without_recalculation(self):
         self.assertTrue(self.cache.store(self.ctx, self.source))
         output = self.root / "output.zip"
