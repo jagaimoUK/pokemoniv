@@ -13,14 +13,16 @@
   function afterHeavy(gain,cost,heavyCost){
     const first=counts(gain,heavyCost,1)[0];
     const remaining=Math.min(100,first*gain)-heavyCost;
-    return {first,remaining,counts:counts(gain,cost,4,remaining)};
+    // Four charged attacks total: heavy opener, then three target attacks.
+    return {first,remaining,counts:[first,...counts(gain,cost,3,remaining)]};
   }
   function alternatives(card,moves){
     const gain=moves[card.fast].gain,cost=moves[card.charged].cost,normal=counts(gain,cost);
     const groups=new Map();
     for(const id of card.heavy||[]){const heavyCost=moves[id]?.cost;if(!(heavyCost>cost))continue;
       const result=afterHeavy(gain,cost,heavyCost);
-      if(result.counts.every((v,i)=>v===normal[i]))continue;
+      // A slower opener alone is not an alternative target cadence.
+      if(result.counts.slice(1).every((v,i)=>v===normal[i+1]))continue;
       const k=JSON.stringify([result.first,result.counts]);
       if(!groups.has(k))groups.set(k,{...result,moves:[]});groups.get(k).moves.push(id);
     }

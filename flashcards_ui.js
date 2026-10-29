@@ -24,7 +24,7 @@ function draw(){show('study');const c=session.cards[session.index];$('undo').dis
  $('species').textContent=monName(c.species);$('fast').textContent=moveName(c.fast);$('charged').textContent=moveName(c.charged);
  $('answer').textContent=C.counts(catalog.moves[c.fast].gain,catalog.moves[c.charged].cost).join(' → ');$('answer').hidden=!revealed;
  $('alternateAnswers').replaceChildren();$('alternateAnswers').hidden=!revealed;
- for(const alternative of C.alternatives(c,catalog.moves)){const row=document.createElement('span'),label=document.createElement('span'),answer=document.createElement('span');label.className='alternate-label';answer.className='alternate-counts';label.textContent=alternative.moves.map(moveName).join('／')+`を${alternative.first}回で使用した後`;answer.textContent=alternative.counts.join(' → ');row.append(label,answer);$('alternateAnswers').append(row);}
+ for(const alternative of C.alternatives(c,catalog.moves)){const row=document.createElement('span'),label=document.createElement('span'),answer=document.createElement('span');label.className='alternate-label';answer.className='alternate-counts';label.textContent='初手：'+alternative.moves.map(moveName).join('／')+'、2〜4発目：'+moveName(c.charged);answer.textContent=alternative.counts.join(' → ');row.append(label,answer);$('alternateAnswers').append(row);}
  $('hint').textContent=revealed?'1回目 → 2回目 → 3回目 → 4回目':'タップで答え';
  $('card').setAttribute('aria-label',revealed?'答えを表示中':'タップで答えを表示');$('again').disabled=$('correct').disabled=!revealed||busy;
  $('sessionInfo').textContent='答えを表示してから左右にスワイプでも記録できます。';}

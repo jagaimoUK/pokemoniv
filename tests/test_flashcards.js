@@ -25,13 +25,13 @@ const t=performance.now();for(let i=0;i<20;i++)C.select(many,records,cat.moves,5
 assert.equal(C.dueInfo([{rows:[{species:'a',fast:['F'],charged:['X']}]}],cat,{[C.key(card)]:s},s.due).due,1);
 console.log('Flashcards: counts/cap, invalid energy, multi-moves, SM-2/relearning/early practice, change invalidation, merge/history, due/hard priority and 12k-card limit: PASS');
 
-assert.deepEqual(C.afterHeavy(9,40,55),{first:7,remaining:8,counts:[4,4,5,4]});
-assert.deepEqual(C.alternatives({...card,heavy:['Y','Z']},cat.moves)[0].counts,[4,4,5,4]);
+assert.deepEqual(C.afterHeavy(9,40,55),{first:7,remaining:8,counts:[7,4,4,5]});
+assert.deepEqual(C.alternatives({...card,heavy:['Y','Z']},cat.moves)[0].counts,[7,4,4,5]);
 assert.deepEqual(C.alternatives({fast:'F',charged:'X',heavy:['Y']},{F:{gain:8},X:{cost:40},Y:{cost:55}}),[]);
-assert.deepEqual(C.afterHeavy(7,35,100).counts,[5,5,5,5]);
+assert.deepEqual(C.afterHeavy(7,35,100).counts,[15,5,5,5]);
 for(let gain=1;gain<=20;gain++)for(const cost of [35,40,55,70])for(const heavy of [75,90,100]){
  let energy=0,n=0;while(energy<heavy){energy=Math.min(100,energy+gain);n++;}energy-=heavy;
- const expected=[];for(let i=0;i<4;i++){let count=0;while(energy<cost){energy=Math.min(100,energy+gain);count++;}energy-=cost;expected.push(count);}
+ const expected=[n];for(let i=1;i<4;i++){let count=0;while(energy<cost){energy=Math.min(100,energy+gain);count++;}energy-=cost;expected.push(count);}
  assert.deepEqual(C.afterHeavy(gain,cost,heavy),{first:n,remaining:Math.min(100,n*gain)-heavy,counts:expected});
 }
 const shadowCat={...cat,species:{...cat.species,a_shadow:cat.species.a,a_galarian:cat.species.a}};
@@ -41,3 +41,19 @@ assert.equal(unique.length,5);assert(unique.some(c=>c.species==='a'&&c.fast==='F
 const shadowReview={...start,id:'a_shadow|F|X',seen:8,last:200,due:400};assert.equal(C.reviewState(card,{'a_shadow|F|X':shadowReview},cat.moves).seen,8);assert.equal(C.reviewState(card,{'a_shadow|F|X':shadowReview},cat.moves).id,'a|F|X');
 const original=[card,{...card,charged:'Y'},{...card,charged:'Z'}];const mixed=C.shuffle(original,()=>.999);assert.notDeepEqual(mixed,original);assert.deepEqual(new Set(mixed.map(C.key)),new Set(original.map(C.key)));assert.equal(original[0],card);
 console.log('4 counts, heavy-first residual/cap (240 scenarios), unchanged paths, shadow dedup/forms/history and replay shuffle: PASS');
+
+// Compare the same charged-attack positions, not target-use indices after the opener.
+const catalog=require('../data/flashcard_catalog.json');
+const ape={species:'annihilape',fast:'COUNTER',charged:'ICE_PUNCH',heavy:['CLOSE_COMBAT','SHADOW_BALL']};
+assert.deepEqual(C.counts(6,40),[7,7,6,7]);
+assert.deepEqual(C.afterHeavy(6,40,45).counts,[8,7,6,7]);
+assert.deepEqual(C.alternatives({...ape,heavy:['CLOSE_COMBAT']},catalog.moves),[]);
+assert.deepEqual(C.alternatives(ape,catalog.moves).map(a=>({moves:a.moves,counts:a.counts})),
+ [{moves:['SHADOW_BALL'],counts:[9,6,7,7]}]);
+for(let gain=1;gain<=20;gain++)for(const cost of [35,40,55,70])for(const heavy of [75,90,100]){
+ const moves={F:{gain},X:{cost},Y:{cost:heavy}},normal=C.counts(gain,cost);
+ const mixed=C.afterHeavy(gain,cost,heavy).counts;
+ const changed=mixed.slice(1).some((v,i)=>v!==normal[i+1]);
+ assert.equal(C.alternatives({fast:'F',charged:'X',heavy:['Y']},moves).length,Number(changed));
+}
+console.log('Annihilape Counter/Ice Punch/Close Combat: omit unchanged attacks 2–4; Shadow Ball mixed sequence; 240 positional comparisons: PASS');
