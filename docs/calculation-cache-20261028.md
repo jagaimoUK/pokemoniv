@@ -12,7 +12,8 @@ The UI defaults to automatic reuse and offers “保存結果を使わず再計�
 |---|---|---|
 | PVP_RESULT_CACHE | 1 | Set 0 to disable completed battle reuse/storage |
 | PVP_RESULT_CACHE_TTL_SECONDS | 604800 | Retention/reuse limit, 0 disables; max 30 days |
-| PVP_RESULT_CACHE_MAX_MB | 200 | Bounded completed-cache size; max 1024 MB, 20 entries |
+| PVP_RESULT_CACHE_MAX_ENTRIES | 128 | Bounded entry count (1..512), raised for exhaustive moveset batches |
+| PVP_RESULT_CACHE_MAX_MB | 200 | Bounded completed-cache size; max 1024 MB; entry limit above |
 | PVP_CACHE_EPOCH | empty | Operator invalidation across both battle cache layers |
 | PVP_FORCE_RECALCULATE | 0 | Bypass all battle reuse for newly started jobs |
 | PVP_BROWSER_CACHE_EPOCH | empty | Only explicitly pinned browser revisions may reuse |

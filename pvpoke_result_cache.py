@@ -56,7 +56,7 @@ def _validate(path: Path, request: dict) -> None:
 
 class ResultCache:
     def __init__(self, work: Path, *, ttl_seconds: int = 7 * 86400,
-                 max_bytes: int = 200 * 1024 * 1024, max_entries: int = 20):
+                 max_bytes: int = 200 * 1024 * 1024, max_entries: int = 128):
         self.root = archives.archive_dir(work) / "result_cache"
         self.ttl_seconds, self.max_bytes, self.max_entries = ttl_seconds, max_bytes, max_entries
 
@@ -66,9 +66,10 @@ class ResultCache:
             return None
         ttl = int(os.environ.get("PVP_RESULT_CACHE_TTL_SECONDS", str(7 * 86400)))
         budget = int(os.environ.get("PVP_RESULT_CACHE_MAX_MB", "200"))
-        if not 0 <= ttl <= 30 * 86400 or not 1 <= budget <= 1024:
+        entries = int(os.environ.get("PVP_RESULT_CACHE_MAX_ENTRIES", "128"))
+        if not 0 <= ttl <= 30 * 86400 or not 1 <= budget <= 1024 or not 1 <= entries <= 512:
             raise ValueError("Invalid result cache retention limits")
-        return cls(work, ttl_seconds=ttl, max_bytes=budget * 1024 * 1024) if ttl else None
+        return cls(work, ttl_seconds=ttl, max_bytes=budget * 1024 * 1024, max_entries=entries) if ttl else None
 
     def restore(self, ctx: dict, destination: Path) -> dict | None:
         key = ctx["key"]

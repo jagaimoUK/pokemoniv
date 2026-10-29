@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import math
 import json
+import hashlib
 from zipfile import ZipFile
 
 from pvpoke_selection_matrix import MODES, SHIELDS, SelectionMatrix, load_selection_matrix
@@ -226,7 +227,21 @@ def recommend(matrices: dict[str, SelectionMatrix], candidate: dict,
     for rank, row in enumerate(recommendations, 1):
         row["rank"] = rank
     matched_focus = [x for x in focus if any(x.casefold() in name.casefold() for _, _, _, name in cells)]
+    # Full matrices only: sparse recommendation evidence cannot rank movesets.
+    # Union wins describe a configuration's available matchups across input IVs.
+    profile = {
+        "version": 1,
+        "axis_sha256": hashlib.sha256(json.dumps(
+            [(mode, shield, pos, opponent) for mode, shield, pos, opponent in cells],
+            ensure_ascii=False, separators=(",", ":")).encode()).hexdigest(),
+        "mean_rating": sum(sum(v) for v in vectors.values()) / (len(ivs) * len(cells)),
+        "iv_mean_ratings": {iv: sum(v) / len(cells) for iv, v in vectors.items()},
+        "available_wins": "".join("1" if any(v[i] > 500 for v in vectors.values()) else "0"
+                                  for i in range(len(cells))),
+        "rating_count": len(ivs) * len(cells),
+    }
     return {"format": "app-recommendations-v1", "complete": True, "policy": asdict(rules),
+            "moveset_summary": profile,
             "explanation_version": "pairwise-v1",
             "grade_source": "project rule-based provisional candidates", "candidate": candidate,
             "english_name": english_name, "candidate_count": len(ivs),
