@@ -3,11 +3,40 @@
   'use strict';
   const DAY=86400000;
   const key=c=>[c.species,c.fast,c.charged].join('|');
-  function counts(gain,cost,n=5){
+  function counts(gain,cost,n=4,initial=0){
     if(!Number.isFinite(gain)||gain<=0||gain>100||!Number.isFinite(cost)||cost<=0||cost>100)throw Error('技のエネルギーが不正です');
-    let energy=0;const result=[];
+    if(!Number.isFinite(initial)||initial<0||initial>100)throw Error('開始エネルギーが不正です');
+    let energy=initial;const result=[];
     for(let i=0;i<n;i++){let count=0;while(energy<cost){energy=Math.min(100,energy+gain);count++;}energy-=cost;result.push(count);}
     return result;
+  }
+  function afterHeavy(gain,cost,heavyCost){
+    const first=counts(gain,heavyCost,1)[0];
+    const remaining=Math.min(100,first*gain)-heavyCost;
+    return {first,remaining,counts:counts(gain,cost,4,remaining)};
+  }
+  function alternatives(card,moves){
+    const gain=moves[card.fast].gain,cost=moves[card.charged].cost,normal=counts(gain,cost);
+    const groups=new Map();
+    for(const id of card.heavy||[]){const heavyCost=moves[id]?.cost;if(!(heavyCost>cost))continue;
+      const result=afterHeavy(gain,cost,heavyCost);
+      if(result.counts.every((v,i)=>v===normal[i]))continue;
+      const k=JSON.stringify([result.first,result.counts]);
+      if(!groups.has(k))groups.set(k,{...result,moves:[]});groups.get(k).moves.push(id);
+    }
+    return [...groups.values()];
+  }
+  const baseSpecies=id=>id.replace(/_shadow$/,'');
+  function deduplicate(items,moves){
+    const map=new Map();for(const c of items){
+      const k=[baseSpecies(c.species),c.fast,c.charged,signature(c,moves)].join('|');
+      const old=map.get(k);if(!old||old.species.endsWith('_shadow')&&!c.species.endsWith('_shadow'))map.set(k,c);
+    }return [...map.values()];
+  }
+  function shuffle(items,random=Math.random){
+    const a=items.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}
+    if(a.length>1&&a.every((c,i)=>key(c)===key(items[i])))[a[0],a[1]]=[a[1],a[0]];
+    return a;
   }
   function signature(c,moves){const f=moves[c.fast],g=moves[c.charged];return JSON.stringify([f?.gain,g?.cost]);}
   function cards(rows,catalog){
@@ -25,13 +54,24 @@
   function deckCards(deck,catalog){
     const compiled=cards([...(deck.rows||[]),...(deck.extra||[])],catalog);
     const excluded=new Set(deck.excluded||[]);
-    return {...compiled,items:compiled.items.filter(c=>!excluded.has(key(c)))};
+    const available=compiled.items.filter(c=>!excluded.has(key(c)));
+    const pools=new Map();
+    for(const c of available){const k=baseSpecies(c.species)+'|'+c.fast;if(!pools.has(k))pools.set(k,new Set());pools.get(k).add(c.charged);}
+    const enriched=available.map(c=>({...c,heavy:[...pools.get(baseSpecies(c.species)+'|'+c.fast)].filter(id=>
+      catalog.moves[id].cost>catalog.moves[c.charged].cost)}));
+    return {...compiled,items:deduplicate(enriched,catalog.moves)};
   }
   function stateFor(card,stored,moves){
     const answer=signature(card,moves);
     // Names/rank changes keep history. Energy changes invalidate just that answer.
     if(!stored||stored.signature!==answer)return {id:key(card),signature:answer,reps:0,ease:2.5,interval:0,due:0,lapses:0,seen:0};
-    return {...stored};
+    return {...stored,id:key(card)};
+  }
+  function reviewState(card,stored,moves){
+    const paired={...card,species:card.species.endsWith('_shadow')?baseSpecies(card.species):card.species+'_shadow'};
+    const valid=[stored[key(card)],stored[key(paired)]].filter(s=>s&&s.signature===signature(card,moves));
+    valid.sort((a,b)=>(b.last||0)-(a.last||0));
+    return stateFor(card,valid[0],moves);
   }
   function review(state,correct,now=Date.now()){
     if(typeof correct!=='boolean'||!Number.isFinite(now))throw Error('評価が不正です');
@@ -47,7 +87,7 @@
   function select(items,stored,moves,limit,now=Date.now()){
     if(![10,30,50].includes(limit))throw Error('10・30・50問から選択してください');
     const buckets=[[],[],[]];
-    for(const c of items){const s=stateFor(c,stored[key(c)],moves);const group=s.seen?(s.due<=now?0:2):1;buckets[group].push({c,s});}
+    for(const c of items){const s=reviewState(c,stored,moves);const group=s.seen?(s.due<=now?0:2):1;buckets[group].push({c,s});}
     // Overdue first; hard cards win ties. New cards have a stable order.
     buckets[0].sort((a,b)=>b.s.lapses-a.s.lapses||a.s.due-b.s.due||key(a.c).localeCompare(key(b.c)));
     buckets[1].sort((a,b)=>key(a.c).localeCompare(key(b.c)));
@@ -57,7 +97,7 @@
   function dueInfo(decks,catalog,stored,now=Date.now()){
     const all=new Map();for(const d of decks)for(const c of deckCards(d,catalog).items)all.set(key(c),c);
     let next=null,due=0;
-    for(const c of all.values()){const s=stateFor(c,stored[key(c)],catalog.moves);if(!s.seen)continue;if(s.due<=now)due++;if(next===null||s.due<next)next=s.due;}
+    for(const c of all.values()){const s=reviewState(c,stored,catalog.moves);if(!s.seen)continue;if(s.due<=now)due++;if(next===null||s.due<next)next=s.due;}
     return {next,due};
   }
   function mergeDecks(local,remote){
@@ -67,5 +107,5 @@
     for(const d of existing.values())result.push(d);
     return result;
   }
-  return {DAY,key,counts,cards,deckCards,signature,stateFor,review,select,dueInfo,mergeDecks};
+  return {DAY,key,counts,afterHeavy,alternatives,deduplicate,shuffle,cards,deckCards,signature,stateFor,reviewState,review,select,dueInfo,mergeDecks};
 });

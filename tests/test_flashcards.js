@@ -1,8 +1,8 @@
 const assert=require('assert'),C=require('../flashcards_core.js');
 const cat={species:{a:{fast:['F','G'],charged:['X','Y','Z']}},moves:{F:{gain:9},G:{gain:7},X:{cost:40},Y:{cost:55},Z:{cost:100}}};
 const card={species:'a',fast:'F',charged:'X'};
-assert.deepEqual(C.counts(9,40),[5,4,5,4,5]);
-assert.deepEqual(C.counts(7,100),[15,15,15,15,15]); // 100-energy cap discards overflow.
+assert.deepEqual(C.counts(9,40),[5,4,5,4]);
+assert.deepEqual(C.counts(7,100),[15,15,15,15]); // 100-energy cap discards overflow.
 for(const invalid of [0,-1,101,NaN,Infinity])assert.throws(()=>C.counts(invalid,40));
 for(const invalid of [0,-1,101,NaN,Infinity])assert.throws(()=>C.counts(9,invalid));
 assert.equal(C.cards([{species:'a',fast:['F','G'],charged:['X','Y','Z']}],cat).items.length,6);
@@ -24,3 +24,20 @@ assert.equal(C.key(C.select(many,records,cat.moves,10,2000)[0]),C.key(many[30]))
 const t=performance.now();for(let i=0;i<20;i++)C.select(many,records,cat.moves,50,2000);console.log('12,000 cards select50, avg ms:',((performance.now()-t)/20).toFixed(2));
 assert.equal(C.dueInfo([{rows:[{species:'a',fast:['F'],charged:['X']}]}],cat,{[C.key(card)]:s},s.due).due,1);
 console.log('Flashcards: counts/cap, invalid energy, multi-moves, SM-2/relearning/early practice, change invalidation, merge/history, due/hard priority and 12k-card limit: PASS');
+
+assert.deepEqual(C.afterHeavy(9,40,55),{first:7,remaining:8,counts:[4,4,5,4]});
+assert.deepEqual(C.alternatives({...card,heavy:['Y','Z']},cat.moves)[0].counts,[4,4,5,4]);
+assert.deepEqual(C.alternatives({fast:'F',charged:'X',heavy:['Y']},{F:{gain:8},X:{cost:40},Y:{cost:55}}),[]);
+assert.deepEqual(C.afterHeavy(7,35,100).counts,[5,5,5,5]);
+for(let gain=1;gain<=20;gain++)for(const cost of [35,40,55,70])for(const heavy of [75,90,100]){
+ let energy=0,n=0;while(energy<heavy){energy=Math.min(100,energy+gain);n++;}energy-=heavy;
+ const expected=[];for(let i=0;i<4;i++){let count=0;while(energy<cost){energy=Math.min(100,energy+gain);count++;}energy-=cost;expected.push(count);}
+ assert.deepEqual(C.afterHeavy(gain,cost,heavy),{first:n,remaining:Math.min(100,n*gain)-heavy,counts:expected});
+}
+const shadowCat={...cat,species:{...cat.species,a_shadow:cat.species.a,a_galarian:cat.species.a}};
+const duplicates={rows:[{species:'a_shadow',fast:['F','G'],charged:['X','Y']},{species:'a',fast:['F'],charged:['X']},{species:'a_galarian',fast:['F'],charged:['X']}]};
+const unique=C.deckCards(duplicates,shadowCat).items;
+assert.equal(unique.length,5);assert(unique.some(c=>c.species==='a'&&c.fast==='F'&&c.charged==='X'));assert(unique.some(c=>c.species==='a_shadow'&&c.fast==='G'));assert(unique.some(c=>c.species==='a_galarian'));
+const shadowReview={...start,id:'a_shadow|F|X',seen:8,last:200,due:400};assert.equal(C.reviewState(card,{'a_shadow|F|X':shadowReview},cat.moves).seen,8);assert.equal(C.reviewState(card,{'a_shadow|F|X':shadowReview},cat.moves).id,'a|F|X');
+const original=[card,{...card,charged:'Y'},{...card,charged:'Z'}];const mixed=C.shuffle(original,()=>.999);assert.notDeepEqual(mixed,original);assert.deepEqual(new Set(mixed.map(C.key)),new Set(original.map(C.key)));assert.equal(original[0],card);
+console.log('4 counts, heavy-first residual/cap (240 scenarios), unchanged paths, shadow dedup/forms/history and replay shuffle: PASS');
