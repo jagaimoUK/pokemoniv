@@ -15,9 +15,21 @@ const server=http.createServer((req,res)=>{
   assert.equal(await page.locator('#deck option').count(),10);
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.click('#start');await page.locator('#card').waitFor({state:'visible'});assert(await page.locator('#correct').isDisabled());
-  await page.click('#card');await page.click('#again');await page.waitForFunction(()=>document.querySelector('#progress').textContent.startsWith('2 /'));
+  const tapHalf=async(x,y=.5)=>{const b=await page.locator('#card').boundingBox();await page.mouse.click(b.x+b.width*x,b.y+b.height*y);};
+  assert(await page.locator('#grades').isHidden());await tapHalf(.2);
+  assert((await page.locator('#progress').textContent()).startsWith('1 /'));assert(await page.locator('#answer').isVisible());assert(await page.locator('#reveal').isHidden());
+  assert.deepEqual(await page.evaluate(()=>['again','correct'].map(id=>getComputedStyle(document.getElementById(id)).backgroundColor)),['rgb(232, 210, 200)','rgb(217, 228, 213)']);
+  const cardBox=await page.locator('#card').boundingBox(),leftBox=await page.locator('#again').boundingBox(),rightBox=await page.locator('#correct').boundingBox();
+  assert(Math.abs(leftBox.width-cardBox.width/2)<1);assert.equal(leftBox.height,cardBox.height);assert.equal(rightBox.height,cardBox.height);assert.equal(rightBox.x,leftBox.x+leftBox.width);
+  if(viewport.width===390)await page.screenshot({path:'/tmp/flashcards-tap-card.png'});
+  // Hit test the edges, centre boundary and text area, then undo each real save.
+  for(const [x,y] of [[.03,.08],[.49,.5],[.51,.5],[.97,.9]]){await tapHalf(x,y);await page.waitForFunction(()=>document.querySelector('#progress').textContent.startsWith('2 /'));assert((await page.locator('#status').textContent()).includes(x<.5?'見直し':'正解'));assert(await page.locator('#grades').isHidden());await page.click('#undo');await page.waitForFunction(()=>document.querySelector('#progress').textContent.startsWith('1 /'));}
+  const scrollBox=await page.locator('#card').boundingBox();await page.mouse.move(scrollBox.x+scrollBox.width*.2,scrollBox.y+scrollBox.height*.4);await page.mouse.down();await page.mouse.move(scrollBox.x+scrollBox.width*.2,scrollBox.y+scrollBox.height*.4+45);await page.mouse.up();assert((await page.locator('#progress').textContent()).startsWith('1 /'));
+  await page.focus('#again');await page.keyboard.press('Enter');await page.waitForFunction(()=>document.querySelector('#progress').textContent.startsWith('2 /'));await page.click('#undo');await page.waitForFunction(()=>document.querySelector('#progress').textContent.startsWith('1 /'));
+  await page.evaluate(()=>{document.getElementById('again').click();document.getElementById('again').click();});await page.waitForFunction(()=>document.querySelector('#progress').textContent.startsWith('2 /'));
+
   assert((await page.locator('#status').textContent()).includes('見直し'));await page.click('#undo');await page.waitForFunction(()=>document.querySelector('#progress').textContent.startsWith('1 /'));assert(await page.locator('#answer').isVisible());
-  await page.click('#correct');await page.waitForFunction(()=>document.querySelector('#progress').textContent.startsWith('2 /'));
+  await tapHalf(.8);await page.waitForFunction(()=>document.querySelector('#progress').textContent.startsWith('2 /'));
   await page.reload();await page.locator('#home').waitFor({state:'visible'});await page.click('#resume');await page.waitForFunction(()=>document.querySelector('#progress').textContent.startsWith('2 /'));
   await page.click('#card');const box=await page.locator('#card').boundingBox();await page.mouse.move(box.x+box.width*.35,box.y+box.height*.5);await page.mouse.down();await page.mouse.move(box.x+box.width*.8,box.y+box.height*.5);await page.mouse.up();await page.waitForFunction(()=>document.querySelector('#progress').textContent.startsWith('3 /'));
   assert((await page.locator('#status').textContent()).includes('正解'));
@@ -37,7 +49,7 @@ const server=http.createServer((req,res)=>{
   assert.equal(await page.locator('#answer').textContent(),'7 → 7 → 6 → 7');assert.deepEqual(await page.locator('.alternate-counts').allTextContents(),['9 → 6 → 7 → 7']);assert.deepEqual(await page.locator('.alternate-label').allTextContents(),['初手：シャドーボール、2〜4発目：れいとうパンチ']);assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.click('#correct');await page.locator('#completed').waitFor({state:'visible'});await page.click('#finishHome');await page.locator('#home').waitFor({state:'visible'});
   if(viewport.width===390)await page.screenshot({path:'/tmp/flashcards-home.png'});
-  console.log('Mobile/desktop persistence, reveal/grade/undo/swipe/resume, bilingual search, custom multi-moves, no overflow: PASS',viewport.width);
+  console.log('Half-card taps/colors/reveal-only/drag/keyboard/single save, persistence/undo/swipe/resume, bilingual search and no overflow: PASS',viewport.width);
   await page.close();
  }
  console.log({privateCalls,publicCalls});

@@ -20,14 +20,14 @@ function deckInfo(){const d=currentDeck();if(!d)return;const result=C.deckCards(
 function notifyDate(){const info=C.dueInfo(decks,catalog,reviews);return info.next?new Date(info.next).toLocaleString('ja-JP'):'';}
 function draw(){show('study');const c=session.cards[session.index];$('undo').disabled=!undo||busy;$('completed').hidden=!!c;
  if(!c){$('card').hidden=true;$('grades').hidden=true;$('progress').textContent=`${session.cards.length}問 おつかれさま`;$('sessionInfo').textContent='次の復習：'+(notifyDate()||'未設定');return;}
- $('card').hidden=false;$('grades').hidden=false;$('progress').textContent=`${session.index+1} / ${session.cards.length}`;
+ $('card').hidden=false;$('grades').hidden=!revealed;$('reveal').hidden=revealed;$('progress').textContent=`${session.index+1} / ${session.cards.length}`;
  $('species').textContent=monName(c.species);$('fast').textContent=moveName(c.fast);$('charged').textContent=moveName(c.charged);
  $('answer').textContent=C.counts(catalog.moves[c.fast].gain,catalog.moves[c.charged].cost).join(' → ');$('answer').hidden=!revealed;
  $('alternateAnswers').replaceChildren();$('alternateAnswers').hidden=!revealed;
  for(const alternative of C.alternatives(c,catalog.moves)){const row=document.createElement('span'),label=document.createElement('span'),answer=document.createElement('span');label.className='alternate-label';answer.className='alternate-counts';label.textContent='初手：'+alternative.moves.map(moveName).join('／')+'、2〜4発目：'+moveName(c.charged);answer.textContent=alternative.counts.join(' → ');row.append(label,answer);$('alternateAnswers').append(row);}
  $('hint').textContent=revealed?'1回目 → 2回目 → 3回目 → 4回目':'タップで答え';
- $('card').setAttribute('aria-label',revealed?'答えを表示中':'タップで答えを表示');$('again').disabled=$('correct').disabled=!revealed||busy;
- $('sessionInfo').textContent='答えを表示してから左右にスワイプでも記録できます。';}
+ $('card').setAttribute('aria-label',revealed?'左半分で見直し、右半分で正解':'技カウントカード');$('again').disabled=$('correct').disabled=!revealed||busy;
+ $('sessionInfo').textContent='答えを表示したら、左半分をタップで見直し、右半分をタップで正解。';}
 async function start(replay=false){if(busy)return;busy=true;try{const cards=replay?C.shuffle(C.deduplicate(session.cards,catalog.moves)):C.select(C.deckCards(currentDeck(),catalog).items,reviews,catalog.moves,limit);if(!cards.length)return;const next={deck:replay?session.deck:currentDeck().id,cards,index:0};await transaction(['kv'],tx=>{put(tx,'session',next);put(tx,'undo',null);} );session=next;undo=null;revealed=false;draw();message('');}catch(e){message('保存できません。学習は開始していません。',true);}finally{busy=false;}}
 async function grade(correct){if(busy||!revealed||!session?.cards[session.index])return;busy=true;draw();const c=session.cards[session.index],id=C.key(c),previous=reviews[id],oldSession=structuredClone(session),next=C.review(C.reviewState(c,reviews,catalog.moves),correct);
  const nextSession={...session,index:session.index+1};try{await transaction(['kv','reviews'],tx=>{tx.objectStore('reviews').put(next,id);put(tx,'session',nextSession);put(tx,'undo',{id,previous:previous||null,session:oldSession});});reviews[id]=next;undo={id,previous:previous||null,session:oldSession};session=nextSession;revealed=false;message(correct?'前の問題を「正解」で保存しました':'前の問題を「見直し」で保存しました');$('status').dataset.grade=correct?'correct':'again';updateNotify();}catch(e){message('保存に失敗しました。同じカードでもう一度記録してください。',true);}finally{busy=false;draw();}}
@@ -55,8 +55,15 @@ try{db=await new Promise((resolve,reject)=>{const req=indexedDB.open('pokemon-mo
  const all=await new Promise((resolve,reject)=>{const r=db.transaction('reviews').objectStore('reviews').getAll();r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});reviews=Object.fromEntries(all.map(r=>[r.id,r]));await saveDecks(decks);
  $('deck').onchange=deckInfo;$('start').onclick=()=>start(false);$('replay').onclick=()=>start(true);$('finishHome').onclick=()=>{home();sync();};$('resume').onclick=()=>{revealed=false;draw();};$('homeBtn').onclick=()=>{if(busy)return;if(!$('editor').hidden){draft=null;home();return;}home();sync();};
  for(const button of document.querySelectorAll('[data-size]'))button.onclick=()=>{limit=+button.dataset.size;for(const b of document.querySelectorAll('[data-size]'))b.setAttribute('aria-pressed',String(b===button));};
- let suppressTap=false;$('card').onclick=()=>{if(suppressTap){suppressTap=false;return;}if(!busy&&session?.cards[session.index]){revealed=true;draw();}};$('again').onclick=()=>grade(false);$('correct').onclick=()=>grade(true);$('undo').onclick=undoGrade;
- let down=null;$('card').onpointerdown=e=>{suppressTap=false;if(revealed&&!busy){down={x:e.clientX,y:e.clientY,id:e.pointerId};$('card').setPointerCapture(e.pointerId);}};$('card').onpointercancel=()=>down=null;$('card').onpointerup=e=>{const start=down;down=null;if(!start||start.id!==e.pointerId)return;const dx=e.clientX-start.x,dy=e.clientY-start.y;if(Math.abs(dx)>=Math.min(90,Math.max(56,$('card').clientWidth*.2))&&Math.abs(dx)>Math.abs(dy)*1.5){e.preventDefault();suppressTap=true;grade(dx>0);}};
+ let suppressTap=false,down=null;
+ const ignored=e=>busy||(suppressTap&&e.detail!==0);
+ $('reveal').onclick=e=>{if(ignored(e)||!session?.cards[session.index])return;revealed=true;draw();};
+ $('again').onclick=e=>{if(!ignored(e))grade(false);};$('correct').onclick=e=>{if(!ignored(e))grade(true);};$('undo').onclick=undoGrade;
+ $('card').onpointerdown=e=>{suppressTap=false;down=e.isPrimary&&e.button===0?{x:e.clientX,y:e.clientY,id:e.pointerId,revealed}:null;};
+ $('card').onpointercancel=()=>{down=null;suppressTap=true;};
+ $('card').onpointerup=e=>{const start=down;down=null;if(!start||start.id!==e.pointerId)return;const dx=e.clientX-start.x,dy=e.clientY-start.y;
+ if(Math.hypot(dx,dy)>10)suppressTap=true;
+ if(start.revealed&&!busy&&Math.abs(dx)>=Math.min(90,Math.max(56,$('card').clientWidth*.2))&&Math.abs(dx)>Math.abs(dy)*1.5){e.preventDefault();grade(dx>0);}};
  $('edit').onclick=()=>edit(false);$('create').onclick=()=>edit(true);$('cancelEdit').onclick=home;$('search').oninput=search;$('source').onchange=search;
  $('addLeague').onclick=()=>{const l=catalog.leagues.find(l=>l.id===$('source').value);draft.extra.push(...structuredClone(l.rows));populateEditor();};
  $('addMon').onclick=()=>{const fast=[...$('fastOptions').querySelectorAll('input:checked')].map(x=>x.value),charged=[...$('chargedOptions').querySelectorAll('input:checked')].map(x=>x.value);if(!fast.length||!charged.length){message('通常技とゲージ技を1つ以上選んでください',true);return;}
