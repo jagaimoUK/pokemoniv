@@ -44,7 +44,9 @@ const individual=vm.runInContext('combineMovesets(equivs,450).selection.recommen
 assert.equal(individual.length,2);
 assert.equal(individual.find(r=>r.ivs==='0/15/15').chosen_moves.charged2,'ICE_PUNCH');
 assert.equal(individual.find(r=>r.ivs==='1/15/15').chosen_moves.charged2,'SWIFT');
-assert(html.indexOf('id="moveSettings"')>html.indexOf('id="results"'),'Move settings must be last');
+assert(html.indexOf('id="moveSettings"')<html.indexOf('自動推薦の基準を調整'));
+assert(html.indexOf('1. ポケモンと個体値')>html.indexOf('id="metaManager"'));
+assert(!html.includes('合法な通常技'));
 assert(html.indexOf('<label for="fast">')>html.indexOf('id="moveSettings"'));
 console.log('Exhaustive legal profiles, actual Rating selection, unique wins, safe move nicknames and per-IV adoption: OK');
 (async()=>{
