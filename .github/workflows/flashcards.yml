@@ -1,0 +1,24 @@
+name: Flashcards and existing app regression
+on:
+  push:
+    branches: [feature/flashcards-20261029]
+  workflow_dispatch:
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -q
+      - run: for test in tests/test*.js; do node "$test" || exit 1; done
+      - name: Actual Chromium interaction and layout
+        run: |
+          npm install --prefix "$RUNNER_TEMP/browser" playwright@1.62.1 --no-save
+          python -c "from pathlib import Path; from pvpoke_flashcards import page; Path('/tmp/flashcards-preview.html').write_text(page(),encoding='utf-8')"
+          CHROME_BIN=/usr/bin/google-chrome NODE_PATH="$RUNNER_TEMP/browser/node_modules" node tests/flashcards_browser_smoke.cjs

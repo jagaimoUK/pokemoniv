@@ -1,0 +1,26 @@
+const assert=require('assert'),C=require('../flashcards_core.js');
+const cat={species:{a:{fast:['F','G'],charged:['X','Y','Z']}},moves:{F:{gain:9},G:{gain:7},X:{cost:40},Y:{cost:55},Z:{cost:100}}};
+const card={species:'a',fast:'F',charged:'X'};
+assert.deepEqual(C.counts(9,40),[5,4,5,4,5]);
+assert.deepEqual(C.counts(7,100),[15,15,15,15,15]); // 100-energy cap discards overflow.
+for(const invalid of [0,-1,101,NaN,Infinity])assert.throws(()=>C.counts(invalid,40));
+for(const invalid of [0,-1,101,NaN,Infinity])assert.throws(()=>C.counts(9,invalid));
+assert.equal(C.cards([{species:'a',fast:['F','G'],charged:['X','Y','Z']}],cat).items.length,6);
+assert.equal(C.cards([{species:'missing',fast:['F'],charged:['X']}],cat).invalid,1);
+const start=C.stateFor(card,null,cat.moves);let s=C.review(start,true,1000);
+assert.equal(s.due,1000+C.DAY);assert.equal(s.reps,1);
+const early=C.review(s,true,2000);assert.equal(early.due,s.due);assert.equal(early.reps,1);
+s=C.review(s,true,s.due);assert.equal(s.interval,6);s=C.review(s,true,s.due);assert.equal(s.interval,15);
+s=C.review(s,false,s.due);assert.equal(s.reps,0);assert.equal(s.lapses,1);assert.equal(s.due-s.last,600000);
+assert.equal(C.stateFor(card,s,cat.moves).seen,s.seen);
+assert.equal(C.stateFor(card,s,{...cat.moves,F:{gain:8}}).seen,0);
+const updated=C.mergeDecks([{id:'meta:x',extra:[{species:'a',fast:['G'],charged:['Z']}],excluded:['a|F|X']}],[{id:'meta:x',rows:[{species:'a',fast:['F'],charged:['X','Y']}]}]);
+assert.equal(C.deckCards(updated[0],cat).items.length,2);
+assert.equal(C.mergeDecks([{id:'meta:legacy',revision:'private',rows:['saved']}],[{id:'meta:legacy',rows:['bundled']}])[0].revision,'private');
+const many=Array.from({length:12000},(_,i)=>({...card,species:'a'+i}));
+let records={};for(let i=0;i<60;i++)records[C.key(many[i])]={...start,id:C.key(many[i]),seen:1,due:1000,lapses:i===30?8:0};
+for(const limit of [10,30,50])assert.equal(C.select(many,records,cat.moves,limit,2000).length,limit);
+assert.equal(C.key(C.select(many,records,cat.moves,10,2000)[0]),C.key(many[30]));
+const t=performance.now();for(let i=0;i<20;i++)C.select(many,records,cat.moves,50,2000);console.log('12,000 cards select50, avg ms:',((performance.now()-t)/20).toFixed(2));
+assert.equal(C.dueInfo([{rows:[{species:'a',fast:['F'],charged:['X']}]}],cat,{[C.key(card)]:s},s.due).due,1);
+console.log('Flashcards: counts/cap, invalid energy, multi-moves, SM-2/relearning/early practice, change invalidation, merge/history, due/hard priority and 12k-card limit: PASS');

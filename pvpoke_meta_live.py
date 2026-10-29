@@ -64,7 +64,14 @@ def _input_rows(csv_data: str, *, allow_custom_stats=False):
         raise ValueError("メタ一覧が空です")
 
 
-def _parse(csv_data: str) -> list[tuple[str, str, str, str]]:
+def _parse(csv_data: str, *, trusted=False) -> list[tuple[str, str, str, str]]:
+    if trusted:
+        # Generated rows are already engine-validated; upload size/row limits
+        # must not truncate automatic moveset expansion or flashcard decks.
+        rows = [tuple(row) for row in csv.reader(io.StringIO(csv_data)) if row]
+        if not rows or any(len(r) != 4 or not all(r) for r in rows):
+            raise ValueError('保存済みメタの形式が不正です')
+        return rows
     rows = []
     for _, row in _input_rows(csv_data):
         rows.append(row)
@@ -122,9 +129,9 @@ def get_status(work: Path) -> dict:
     }
 
 
-def _validated_rows(work: Path, content: str, species: dict, *, source_lines=None):
+def _validated_rows(work: Path, content: str, species: dict, *, source_lines=None, trusted=False):
     """Validate all proposed rows with the actual battle engine, without replacing active meta."""
-    rows = _parse(content)
+    rows = _parse(content, trusted=trusted)
     rendered = meta.serialize(rows)
     destination = uploaded_path(work)
     destination.parent.mkdir(parents=True, exist_ok=True)

@@ -9,6 +9,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY *.py /app/
 COPY pvpoke_node_matrix.js /app/pvpoke_node_matrix.js
 COPY pvpoke_minior_strategy.js /app/pvpoke_minior_strategy.js
+COPY flashcards.html flashcards_core.js flashcards_ui.js /app/
+COPY data/flashcard_catalog.json /app/data/flashcard_catalog.json
 # Node loads this module at startup for *every* matrix, not just Minior.
 # Validate the deployed image here so missing modules cannot reach production.
 RUN node -e "const s=require('./pvpoke_minior_strategy.js'); if (s.POLICIES.join(',') !== 'instant,hold,adaptive') process.exit(1)"
@@ -18,6 +20,7 @@ COPY pvpoke_meta_opponents.csv /app/pvpoke_meta_opponents.csv
 COPY data/cp1500_role_scores_20261015.json /app/data/cp1500_role_scores_20261015.json
 COPY data/pokemon_species_evolutions_20261019.json /app/data/pokemon_species_evolutions_20261019.json
 COPY data/pvpoke_meta_presets.json /app/data/pvpoke_meta_presets.json
+RUN python -c "from pvpoke_flashcards import page; assert '/*CORE*/' not in page()"
 RUN python -c "from pvpoke_meta_presets import bundled; assert any(p['id'] == 'pvpoke:fantasy' for p in bundled()['items'])"
 # Fail deployment at build time instead of returning 500 from /app-api/low-score.
 RUN python -c "from pvpoke_score_search import load_snapshot, evolution_descendants; assert len(load_snapshot()[1]) == 1153; assert len(evolution_descendants()) == 1025"

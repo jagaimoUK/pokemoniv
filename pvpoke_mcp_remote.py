@@ -22,6 +22,7 @@ from pvpoke_app_access import AppAccess, BrowserLogin
 from pvpoke_app_input import parse_import
 from pvpoke_score_search import search_low_scores
 from pvpoke_reader_cleanup import reader_cleanup_payload
+import pvpoke_flashcards as flashcards
 
 APP_ACCESS = AppAccess()
 
@@ -308,7 +309,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def app_page(self):
-        data = APP_HTML.encode('utf-8')
+        data = (flashcards.page() if self.path == '/flashcards' else APP_HTML).encode('utf-8')
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.send_header('Content-Length', str(len(data)))
@@ -323,7 +324,7 @@ class Handler(BaseHTTPRequestHandler):
         """Only explicit app operations; never proxy arbitrary backend paths."""
         if self.path not in ('/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result',
                              '/app-api/session', '/app-api/logout', '/app-api/meta-status',
-                             '/app-api/meta-preview', '/app-api/meta-apply', '/app-api/meta-presets', '/app-api/meta-preset-save', '/app-api/meta-preset-export', '/app-api/low-score', '/app-api/visual-backup-token'):
+                             '/app-api/meta-preview', '/app-api/meta-apply', '/app-api/meta-presets', '/app-api/meta-preset-save', '/app-api/meta-preset-export', '/app-api/low-score', '/app-api/visual-backup-token', '/app-api/flashcards'):
             return self.respond(404, {'error': 'Not found'})
         origin = self.headers.get('Origin')
         if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'):
@@ -352,6 +353,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not ranking_catalog.get('ready'):
                     raise ValueError('英語名の図鑑データを準備中です。少し待ってから再実行してください')
                 return self.respond(200, search_low_scores(args, ranking_catalog.get('species')))
+            if self.path == '/app-api/flashcards':
+                return self.respond(200, backend._request('/api/flashcards', headers={'X-PvPoke-Token': backend._token()}))
             if self.path == '/app-api/meta-presets':
                 return self.respond(200, backend.meta_presets())
             if self.path == '/app-api/meta-preset-export':
@@ -430,6 +433,22 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(503, {'error':'保存先に接続できません。端末内の見本は残っています'})
 
     def do_GET(self):
+        if self.path == '/reader-api/v1/flashcards':
+            tag = flashcards.etag()
+            if self.headers.get('If-None-Match') == tag:
+                self.send_response(304)
+                self.send_header('ETag', tag)
+                self.end_headers()
+                return
+            data = json.dumps(flashcards.public_catalog(), ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+            self.send_response(200)
+            for name, value in [('Content-Type', 'application/json; charset=utf-8'), ('Content-Length', str(len(data))), ('ETag', tag), ('Cache-Control', 'public, max-age=86400'), ('X-Content-Type-Options', 'nosniff')]:
+                self.send_header(name, value)
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if self.path == '/flashcards':
+            return self.app_page()
         # This one read-only route contains only global, fixed PvP rankings
         # transformed into GO search terms. Do not expose private app APIs,
         # user IVs, stored presets, or credentials without authentication.

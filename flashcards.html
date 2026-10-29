@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self' https://pokemoniv-production.up.railway.app; img-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+<title>技カウント</title>
+<style>
+:root{color-scheme:light;--bg:#e9eee6;--panel:#f8f9f3;--ink:#263e34;--muted:#5e7165;--green:#4d6e59;--soft:#d9e4d5;--review:#e7d9c4}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,sans-serif}main{max-width:680px;margin:auto;padding:16px 18px calc(22px + env(safe-area-inset-bottom))}h1{font-size:24px;margin:0}h2{font-size:20px}p{margin:8px 0}button,input,select{font:inherit;color:inherit}button,input,select{border:0;border-radius:22px;min-height:52px;padding:12px 18px;background:var(--soft)}button{cursor:pointer;touch-action:manipulation}button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #7b957e;outline-offset:3px}button:disabled{opacity:.42;cursor:default}button.primary{background:var(--green);color:#fff}button.review{background:var(--review)}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.row>*{min-width:0}.grow{flex:1}.quiet{color:var(--muted);font-size:14px}.panel{background:var(--panel);border-radius:28px;padding:18px;margin:14px 0}.stack{display:grid;gap:12px}.wide{width:100%}label{display:block}.check{display:flex;gap:10px;align-items:center;min-height:48px}.check input{min-height:auto;width:22px;height:22px;padding:0;accent-color:var(--green)}[hidden]{display:none!important}#status{min-height:24px;overflow-wrap:anywhere}#status.error{color:#794230}#card{display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;min-height:48dvh;padding:30px 16px;background:var(--panel);border-radius:36px;text-align:center;touch-action:pan-y;user-select:none}#species{font-size:clamp(24px,6vw,34px);font-weight:650;margin-bottom:26px}#moveLine{font-size:clamp(18px,4.8vw,24px);display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap}#answer{font-size:clamp(27px,8vw,42px);font-weight:650;margin-top:30px;letter-spacing:1px}#hint{margin-top:26px;color:var(--muted);font-size:14px}#grades{display:flex;gap:14px;margin-top:18px}#grades button{flex:1;min-height:66px;font-size:18px}#study{min-height:85dvh;display:flex;flex-direction:column}#study .spacer{flex:1;min-height:12px}#editor{padding-bottom:20px}#results{max-height:270px;overflow:auto;display:grid;gap:6px}#results button{text-align:left}.moves{max-height:240px;overflow:auto}.entries{max-height:380px;overflow:auto}.entry{display:flex;align-items:center;gap:10px;margin-bottom:8px}.entry span{flex:1;font-size:14px}.chips button[aria-pressed=true]{background:var(--green);color:white}details summary{cursor:pointer;min-height:48px;padding:10px 0}#login input{width:100%;background:#fff}#notifications{font-size:14px}.top{margin-bottom:16px}#undo{min-width:110px}#sessionInfo{font-size:14px}
+</style></head><body><main>
+<div class="row top"><h1 class="grow">技カウント</h1><button id="homeBtn" hidden>デッキへ</button></div>
+<p id="status" class="quiet" role="status" aria-live="polite"></p>
+<section id="home" hidden>
+ <div class="panel stack"><label for="deck">デッキ</label><select id="deck" class="wide"></select><p id="deckInfo" class="quiet"></p>
+ <div class="row chips" role="group" aria-label="問題数"><button data-size="10" aria-pressed="true">10問</button><button data-size="30" aria-pressed="false">30問</button><button data-size="50" aria-pressed="false">50問</button></div>
+ <button id="start" class="primary wide">はじめる</button><button id="resume" hidden>中断した学習を再開</button>
+ <p class="quiet">期限が来た問題・苦手な問題から出題します。答えは通常技の回数、初回のエネルギーは0です。</p></div>
+ <div class="row"><button id="edit" class="grow">デッキを編集</button><button id="create" class="grow">デッキを作る</button></div>
+ <details class="panel"><summary>同期・復習通知</summary>
+  <button id="sync" class="wide">メタ・ランキングを更新</button><p id="syncInfo" class="quiet"></p>
+  <div id="login"><p class="quiet">カスタムメタとの同期は、厳選アプリと同じ接続キーで接続します。</p><input id="key" type="password" autocomplete="off" placeholder="接続キー" aria-label="接続キー"><button id="connect" class="wide">接続して同期</button></div>
+  <div id="notifications"><label class="check"><input type="checkbox" id="notify">復習日に通知する</label><label>通知する時間 <select id="hour"><option value="9">9時</option><option value="12">12時</option><option value="18">18時</option><option value="21">21時</option></select></label><p id="notifyInfo" class="quiet"></p></div>
+  <button id="export" class="wide">学習データを書き出す</button><label class="quiet">バックアップから復元 <input id="restore" type="file" accept="application/json,.json"></label>
+ </details>
+</section>
+<section id="study" hidden>
+ <div class="row"><p id="progress" class="grow quiet"></p><button id="undo" disabled>ひとつ戻す</button></div>
+ <button id="card" aria-label="タップで答えを表示"><span id="species"></span><span id="moveLine"><span id="fast"></span><span aria-hidden="true">→</span><span id="charged"></span></span><span id="answer" hidden></span><span id="hint">タップで答え</span></button>
+ <div class="spacer"></div><div id="grades"><button id="again" class="review" disabled>← 見直し</button><button id="correct" class="primary" disabled>正解 →</button></div><p id="sessionInfo" class="quiet">答えを表示してから左右にスワイプでも記録できます。</p>
+</section>
+<section id="editor" hidden>
+ <div class="panel stack"><label>デッキ名 <input id="deckName" class="wide" maxlength="80"></label>
+ <label id="sourceLabel">ランキングからまとめて追加 <select id="source" class="wide"></select></label><button id="addLeague">選んだランキングの全件を追加</button>
+ <label>ポケモンを検索 <input id="search" class="wide" placeholder="日本語・English" autocomplete="off"></label><div id="results"></div>
+ <div id="moveEditor" hidden><h2 id="editingSpecies"></h2><p class="quiet">出題する技を複数選べます。</p><p>通常技</p><div id="fastOptions" class="moves"></div><p>ゲージ技</p><div id="chargedOptions" class="moves"></div><button id="addMon" class="wide">選んだ技を追加・変更</button></div>
+ <p id="editCount" class="quiet"></p><div id="entries" class="entries"></div><div class="row"><button id="cancelEdit" class="grow">キャンセル</button><button id="saveDeck" class="primary grow">保存</button></div></div>
+</section>
+</main><script>/*BOOTSTRAP*/</script><script>/*CORE*/</script><script>/*UI*/</script></body></html>

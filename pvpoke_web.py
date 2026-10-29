@@ -32,6 +32,8 @@ import pvpoke_result_cache as result_cache
 from pvpoke_calculation_version import calculation_version, content_hash, force_recalculate
 import pvpoke_meta_live as meta_live
 import pvpoke_meta_presets as meta_presets
+import pvpoke_flashcards as flashcards
+import pvpoke_meta_variants as meta_variants
 from pvpoke_app_input import app_presets
 from pvpoke_app_catalog import enrich_catalog
 
@@ -110,6 +112,7 @@ def load_catalog():
                             'moves': {m['moveId']: {'name': m.get('name') or m['moveId']}
                                       for m in gm.get('moves', []) if m.get('moveId')},
                             'presets': presets, 'timestamp': gm.get('timestamp')})
+        meta_variants.start(WORK, LOCK, STATUS)
     except Exception as exc:
         with LOCK:
             CATALOG.update({'ready': False, 'error': str(exc)})
@@ -508,6 +511,12 @@ class Handler(BaseHTTPRequestHandler):
                 available = app_presets(cat['species'], cat['presets'],
                                        meta_live.active_path(WORK).read_text(encoding='utf-8-sig'))
             self.respond(200, {**cat, 'app_presets': available, 'saved': saved})
+        elif path == '/api/flashcards':
+            if self.headers.get('X-PvPoke-Token') != TOKEN:
+                return self.respond(403, {'error': '認証が必要です'})
+            with LOCK:
+                result = flashcards.private_decks(WORK)
+            return self.respond(200, {**result, 'augmentation': meta_variants.status(WORK)})
         elif path in ('/api/meta/presets', '/api/meta/preset', '/api/meta/preset-export'):
             try:
                 with LOCK:
@@ -519,7 +528,7 @@ class Handler(BaseHTTPRequestHandler):
                                                             query.get('sha256', [None])[0])
                     else:
                         entry = meta_presets.resolve(WORK, parse_qs(urlparse(self.path).query).get('id', [None])[0])
-                        result = {k: v for k, v in entry.items() if k != 'csv'}
+                        result = {k: v for k, v in entry.items() if k not in ('csv', 'source_csv')}
                 self.respond(200, result)
             except (ValueError, OSError) as exc:
                 self.respond(400, {'error': str(exc)})
@@ -580,7 +589,10 @@ class Handler(BaseHTTPRequestHandler):
                 if path == '/api/meta/presets':
                     if not CATALOG['ready']:
                         raise ValueError('ゲームデータの読み込みが完了していません')
-                    return self.respond(200, meta_presets.save(WORK, payload, CATALOG['species']))
+                    result = meta_presets.save(WORK, payload, CATALOG['species'])
+                    if payload.get('action') == 'create':
+                        result['augmentation'] = meta_variants.schedule(WORK, result['saved_id'])
+                    return self.respond(200, result)
                 if path == '/api/meta/preview':
                     if not CATALOG['ready']:
                         raise ValueError('ゲームデータの読み込みが完了していません')
@@ -593,6 +605,7 @@ class Handler(BaseHTTPRequestHandler):
                         WORK, payload.get('csv'), CATALOG['species'],
                         expected_previous_sha256=payload.get('expected_previous_sha256'),
                         expected_sha256=payload.get('expected_sha256'))
+                    result['augmentation'] = meta_variants.schedule(WORK, 'legacy')
                     return self.respond(200, {'ok': True, **result})
                 if path in ('/api/prepare24','/api/run24'):
                     cand_parts = normalize_pokemon(payload.get('candidate'), CATALOG['species'], '自分')

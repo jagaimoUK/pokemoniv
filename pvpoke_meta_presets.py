@@ -80,13 +80,13 @@ def _entries(work: Path, obj: dict) -> list[dict]:
 
 @lru_cache(maxsize=128)
 def _content_metadata(content: str, available: bool) -> tuple[str, int]:
-    rendered = meta.serialize(live._parse(content)) if available else content
+    rendered = meta.serialize(live._parse(content, trusted=True)) if available else content
     return hashlib.sha256(rendered.encode('utf-8')).hexdigest(), len(rendered.strip().splitlines())
 
 
 def _metadata(entry: dict, obj: dict) -> dict:
     checksum, count = _content_metadata(entry['csv'], entry.get('available') is not False)
-    return {k: v for k, v in entry.items() if k != 'csv'} | {
+    return {k: v for k, v in entry.items() if k not in ('csv', 'source_csv')} | {
         'sha256': checksum, 'rows': count,
         'favorite': entry['id'] in obj['favorite_ids'],
         'default': entry['id'] == obj['default_id'],
@@ -161,13 +161,13 @@ def snapshot(work: Path, preset_id: str, species: dict,
     if expected_sha256 is not None and entry['sha256'] != expected_sha256:
         raise ValueError('選択したメタが更新されました。一覧を再取得してください')
     # Validate against the running GameMaster; never silently skip invalid opponents.
-    _, content = live._validated_rows(work, entry['csv'], species)
+    _, content = live._validated_rows(work, entry['csv'], species, trusted=True)
     path = archives.archive_dir(work) / 'meta_snapshots' / (entry['sha256'] + '.csv')
     if not path.exists():
         _atomic_write(path, content)
     elif path.read_text(encoding='utf-8') != content:
         raise ValueError('計算用メタの保存内容が一致しません')
-    return path, {k: v for k, v in entry.items() if k != 'csv'}
+    return path, {k: v for k, v in entry.items() if k not in ('csv', 'source_csv')}
 
 
 # PvPoke's battle/matrix custom-group selector currently accepts 100 entries.
@@ -182,7 +182,7 @@ def export_preset(work: Path, preset_id: str, expected_sha256: str) -> dict:
     if expected_sha256 != entry['sha256']:
         raise ValueError('プリセットの内容が更新されました。一覧を再取得してからコピーしてください')
     rows = []
-    for species, fast, charged1, charged2 in live._parse(entry['csv']):
+    for species, fast, charged1, charged2 in live._parse(entry['csv'], trusted=True):
         sid = species.lower()
         # _shadow is the species ID; -shadow tells PvPoke to apply shadow damage.
         if sid.endswith('_shadow-shadow'):
