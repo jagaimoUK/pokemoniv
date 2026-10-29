@@ -91,6 +91,7 @@ def load_catalog():
                 'name': p.get('speciesName'),
                 'dex': p.get('dex'),
                 'baseStats': p.get('baseStats'),
+                'types': p.get('types', []),
                 'fastMoves': p.get('fastMoves', []),
                 'chargedMoves': engine.charged_move_pool(p),
             }
@@ -109,7 +110,10 @@ def load_catalog():
                             'fast': fast, 'charged1': c1, 'charged2': c2})
         with LOCK:
             CATALOG.update({'ready': True, 'error': None, 'species': payload,
-                            'moves': {m['moveId']: {'name': m.get('name') or m['moveId']}
+                            'moves': {m['moveId']: {**{k: m[k] for k in (
+                                'type', 'power', 'energy', 'energyGain', 'cooldown',
+                                'buffs', 'buffTarget', 'buffApplyChance') if k in m},
+                                'name': m.get('name') or m['moveId']}
                                       for m in gm.get('moves', []) if m.get('moveId')},
                             'presets': presets, 'timestamp': gm.get('timestamp')})
         meta_variants.start(WORK, LOCK, STATUS)
@@ -712,6 +716,7 @@ if __name__ == '__main__':
         main()
     except KeyboardInterrupt:
         print('\n終了したにぇ。保存済みのCSVとZIPは残るよ。')
+
 
 
 

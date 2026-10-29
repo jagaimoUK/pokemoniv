@@ -1,0 +1,30 @@
+name: Smart movesets and saved configurations
+on:
+  push:
+    branches: [main, feature/smart-movesets-20261029]
+    paths: ['pvpoke_app_ui.py', 'pvpoke_web.py', 'tests/test_app_ui_smart_movesets.js', 'tests/test_moveset_catalog.py', 'tests/browser_smart_movesets.js', '.github/workflows/smart-movesets.yml']
+  pull_request:
+    paths: ['pvpoke_app_ui.py', 'pvpoke_web.py', 'tests/test_app_ui_smart_movesets.js', 'tests/test_moveset_catalog.py', 'tests/browser_smart_movesets.js', '.github/workflows/smart-movesets.yml']
+  workflow_dispatch:
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -q
+      - run: |
+          for test in tests/test*.js; do node "$test" || exit 1; done
+      - name: Check mobile and desktop interactions in Chromium
+        env:
+          CHROME_BIN: /usr/bin/google-chrome
+        run: |
+          npm install --prefix "$RUNNER_TEMP/layout-browser" playwright@1.62.1 --no-save
+          NODE_PATH="$RUNNER_TEMP/layout-browser/node_modules" node tests/browser_layout_smoke.js
+          NODE_PATH="$RUNNER_TEMP/layout-browser/node_modules" node tests/browser_smart_movesets.js

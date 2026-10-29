@@ -28,6 +28,8 @@ const server=http.createServer((req,res)=>{
    assert.equal(await page.evaluate(()=>document.activeElement.id),'comparisonSettings');
    assert.equal(await page.locator('#autoMoves').isChecked(),true);
    assert.equal(await page.locator('#comparisonSettings #moveSettings').count(),1);
+   assert(await page.locator('#results').evaluate(e=>Boolean(e.compareDocumentPosition(document.getElementById('metaManager'))&Node.DOCUMENT_POSITION_FOLLOWING)));
+   assert.equal(await page.locator('#moveStrategy').inputValue(),'smart');
    assert(await page.locator('#moveSettings').evaluate(e=>e.nextElementSibling.textContent.includes('自動推薦の基準を調整')));
    assert(await page.locator('#metaManager').evaluate(e=>e.nextElementSibling.textContent.includes('1. ポケモンと個体値')));
    assert.equal(await page.locator('#moveSettings #fast').count(),1);
