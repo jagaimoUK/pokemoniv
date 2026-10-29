@@ -9,13 +9,13 @@ const server=http.createServer((req,res)=>{
 (async()=>{await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;try{
  browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_BIN||undefined});
  for(const viewport of [{width:390,height:844},{width:320,height:640},{width:1280,height:900}]){
-  const page=await browser.newPage({viewport});const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  const page=await browser.newPage({viewport,hasTouch:viewport.width<600,isMobile:viewport.width<600});const errors=[];page.on('pageerror',e=>errors.push(e.message));
   const start=performance.now();await page.goto(`http://127.0.0.1:${server.address().port}/flashcards`);await page.locator('#home').waitFor({state:'visible'});
   console.log('Fresh home ms',viewport.width,Math.round(performance.now()-start));
   assert.equal(await page.locator('#deck option').count(),10);
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.click('#start');await page.locator('#card').waitFor({state:'visible'});assert(await page.locator('#correct').isDisabled());
-  const tapHalf=async(x,y=.5)=>{const b=await page.locator('#card').boundingBox();await page.mouse.click(b.x+b.width*x,b.y+b.height*y);};
+  const tapHalf=async(x,y=.5)=>{const b=await page.locator('#card').boundingBox();if(viewport.width<600)await page.touchscreen.tap(b.x+b.width*x,b.y+b.height*y);else await page.mouse.click(b.x+b.width*x,b.y+b.height*y);};
   assert(await page.locator('#grades').isHidden());await tapHalf(.2);
   assert((await page.locator('#progress').textContent()).startsWith('1 /'));assert(await page.locator('#answer').isVisible());assert(await page.locator('#reveal').isHidden());
   assert.deepEqual(await page.evaluate(()=>['again','correct'].map(id=>getComputedStyle(document.getElementById(id)).backgroundColor)),['rgb(232, 210, 200)','rgb(217, 228, 213)']);
