@@ -1,7 +1,7 @@
 name: Simple layout, handoff and exhaustive movesets
 on:
   push:
-    branches: [feature/simple-layout-movesets-20261029]
+    branches: [feature/thumb-layout-order-20261029]
   pull_request:
     paths: ['pvpoke_app_ui.py', 'pvpoke_app_selection.py', 'pvpoke_web.py', 'pvpoke_result_cache.py', 'tests/test_app_ui_*.js', 'tests/test_moveset_summary.py', '.github/workflows/simple-layout-movesets.yml']
   workflow_dispatch:

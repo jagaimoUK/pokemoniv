@@ -13,3 +13,7 @@ Move-mode nicknames use grade + species code + three 2-character move codes (at 
 Game-data/calculation content identity is returned from the verified archive manifest. Automatic multi-profile batches reject unknown revisions and stop when that identity changes, including on resume. Profiles are also checked for identical meta, mode, species and matchup axes before aggregation. A server update therefore cannot silently combine old and new move damage calculations. This detects installed updates; downloading upstream updates is a separate existing process.
 
 Tests cover full-matrix averages and strict 500 boundaries, axes, exhaustive combinations including Swift variants, weak defaults, exclusive wins, fallback, exact-IV adoption, equivalent expansion, sequential/resumed execution, forced recalculation flags, update rejection, authentication and same-tab handoff, CP preservation, failure recovery and existing export contracts. A Chromium smoke test exercises the real DOM at 390×844 and 1280×900 with fixture APIs; it does not claim physical Android/GO validation or real Ursaluna matchup ratings.
+
+## Follow-up: requested order correction
+
+The Pokémon/IV form now follows the custom-meta panel. Move settings are inside comparison settings immediately before the recommendation threshold panel. “Legal” is replaced by “moves this Pokémon can learn”; calculations are unchanged. Browser checks assert both DOM order and mobile/desktop usability.

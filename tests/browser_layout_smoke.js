@@ -27,7 +27,9 @@ const server=http.createServer((req,res)=>{
    await page.waitForFunction(()=>Math.abs(document.getElementById('comparisonSettings').getBoundingClientRect().top-16)<24);
    assert.equal(await page.evaluate(()=>document.activeElement.id),'comparisonSettings');
    assert.equal(await page.locator('#autoMoves').isChecked(),true);
-   assert.equal(await page.locator('#moveSettings').evaluate(e=>e===e.parentElement.lastElementChild),true);
+   assert.equal(await page.locator('#comparisonSettings #moveSettings').count(),1);
+   assert(await page.locator('#moveSettings').evaluate(e=>e.nextElementSibling.textContent.includes('自動推薦の基準を調整')));
+   assert(await page.locator('#metaManager').evaluate(e=>e.nextElementSibling.textContent.includes('1. ポケモンと個体値')));
    assert.equal(await page.locator('#moveSettings #fast').count(),1);
    assert(await page.locator('#run').evaluate(e=>e.getBoundingClientRect().height>=48));
    assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'No horizontal overflow');
