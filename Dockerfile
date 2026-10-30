@@ -1,12 +1,14 @@
-FROM python:3.12-slim-bookworm
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PVP_ENGINE=direct
-RUN apt-get update && apt-get install -y --no-install-recommends chromium nodejs fonts-noto-core ca-certificates gosu && rm -rf /var/lib/apt/lists/* \
+FROM python:3.12-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PVP_ENGINE=direct PVP_ALLOW_BROWSER=0
+RUN apt-get update && apt-get install -y --no-install-recommends nginx chromium nodejs fonts-noto-core ca-certificates gosu && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/chromium /usr/local/bin/chromium-browser \
     && useradd -m -u 10001 appuser
 WORKDIR /app
-COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.lock /app/requirements.lock
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 COPY *.py /app/
+# Fetch and verify the approved data while building, not on each container start.
+RUN python -c "from pathlib import Path; from pvpoke_data_snapshot import install_snapshot, SEED; from pvpoke_batch_v2 import urlget; install_snapshot(SEED, urlget)"
 COPY pvpoke_node_matrix.js /app/pvpoke_node_matrix.js
 COPY pvpoke_minior_strategy.js /app/pvpoke_minior_strategy.js
 COPY pvpoke_battle_policy.js /app/pvpoke_battle_policy.js
@@ -27,9 +29,20 @@ RUN python -c "from pvpoke_flashcards import page; assert '/*CORE*/' not in page
 RUN python -c "from pvpoke_meta_presets import bundled; assert any(p['id'] == 'pvpoke:fantasy' for p in bundled()['items'])"
 # Fail deployment at build time instead of returning 500 from /app-api/low-score.
 RUN python -c "from pvpoke_score_search import load_snapshot, evolution_descendants; assert len(load_snapshot()[1]) == 1153; assert len(evolution_descendants()) == 1025"
+COPY nginx.conf.template /app/nginx.conf.template
+COPY THIRD_PARTY_NOTICES.md /app/THIRD_PARTY_NOTICES.md
 COPY start.sh /app/start.sh
 COPY volume_bootstrap.sh /app/volume_bootstrap.sh
+COPY tests/smoke_minior_direct.py /tmp/pvpoke-build-smoke.py
 RUN chmod +x /app/start.sh /app/volume_bootstrap.sh && chown -R appuser:appuser /app
+# The real build validates proxy configuration with the runtime's unprivileged UID.
+USER appuser
+RUN PORT=8787 python /app/pvpoke_proxy_config.py \
+    && mkdir -p /tmp/pokemoniv-nginx/body /tmp/pokemoniv-nginx/proxy /tmp/pokemoniv-nginx/fastcgi /tmp/pokemoniv-nginx/uwsgi /tmp/pokemoniv-nginx/scgi \
+    && nginx -t -e stderr -c /tmp/pokemoniv-nginx.conf \
+    && PYTHONPATH=/app python /tmp/pvpoke-build-smoke.py \
+    && python -m pip inspect > /app/runtime-python-packages.json \
+    && dpkg-query -W > /app/runtime-os-packages.txt
 # Initialize the root-owned Railway mount once, then drop to appuser.
 USER root
 CMD ["/app/volume_bootstrap.sh"]

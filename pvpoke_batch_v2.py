@@ -13,6 +13,7 @@ import math
 import os
 import re
 import subprocess
+from pvpoke_child_env import child_environment
 import sys
 import time
 import urllib.parse
@@ -22,6 +23,7 @@ import pvpoke_archive
 import pvpoke_matchup_cache as matchup_cache
 from pvpoke_calculation_version import calculation_version, force_recalculate
 import pvpoke_direct_backend as direct_backend
+from pvpoke_data_snapshot import install_snapshot
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -35,7 +37,6 @@ CDP = 'http://127.0.0.1:9222'
 CAND = DIR / 'candidates.csv'
 OPPS = DIR / 'opponents.csv'
 HEADER = ['species', 'fast', 'charged1', 'charged2', 'atk', 'def', 'hp']
-RAW = 'https://raw.githubusercontent.com/pvpoke/pvpoke/master/src/'
 MAX_LEVEL = 50
 CP_CAP = 1500
 def chunk_size(name, default):
@@ -69,7 +70,10 @@ def result_filename(pair):
 def urlget(url, timeout=35):
     req = urllib.request.Request(url, headers={'User-Agent': 'PvPoke-Termux-automation/0.2'})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+        data = resp.read(5 * 1024 * 1024 + 1)
+        if len(data) > 5 * 1024 * 1024:
+            raise ValueError('PvPoke data exceeds the download size limit')
+        return data
 
 
 def setup():
@@ -91,23 +95,9 @@ def setup():
 
 
 def game_data(refresh=False):
-    DATA.mkdir(parents=True, exist_ok=True)
+    install_snapshot(DATA, urlget, refresh=refresh)
     master = DATA / 'gamemaster.json'
     pokemon_js = DATA / 'Pokemon.js'
-    for fn, url in [
-        (master, RAW + 'data/gamemaster.json'),
-        (pokemon_js, RAW + 'js/pokemon/Pokemon.js'),
-    ]:
-        if not fn.exists() or refresh:
-            print('最新データ取得:', fn.name, flush=True)
-            temp = fn.with_suffix(fn.suffix + '.tmp')
-            try:
-                temp.write_bytes(urlget(url))
-                if temp.stat().st_size < 10000:
-                    raise ValueError('取得ファイルが小さすぎます')
-                temp.replace(fn)
-            finally:
-                temp.unlink(missing_ok=True)
     gm = json.loads(master.read_text(encoding='utf-8'))
     src = pokemon_js.read_text(encoding='utf-8')
     match = re.search(r'\bvar\s+cpms\s*=\s*\[([^\]]+)\]', src, re.S)
@@ -269,6 +259,8 @@ def call_json(path, method='GET', timeout=10):
 
 
 def chromium_connect():
+    if os.environ.get('PVP_ALLOW_BROWSER', '0') != '1':
+        raise RuntimeError('ブラウザー計算は無効です。Directエンジンのエラーを確認してください')
     try:
         return call_json('/json/version', timeout=3)
     except Exception:
@@ -276,11 +268,12 @@ def chromium_connect():
         log = (DIR / 'chromium.log').open('ab')
         try:
             subprocess.Popen([
-                'chromium-browser', '--headless', '--no-sandbox', '--disable-gpu',
+                'chromium-browser', '--headless', '--disable-gpu',
                 '--disable-dev-shm-usage', '--no-first-run',
                 '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=9222',
                 '--user-data-dir=' + str(HOME / 'chromium-pvpoke-headless'), 'about:blank'
-            ], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            ], stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+                env=child_environment())
         finally:
             log.close()
         for _ in range(30):
@@ -597,14 +590,7 @@ def run(refresh=False, shield_set='all'):
                 if minior_batch:
                     # Browser fallback lacks our Minior HP and charge policy hooks.
                     raise RuntimeError(f'メテノ戦術比較失敗（通常PvPoke結果へフォールバックしません）: {error}') from error
-                print(f'  Direct engine rejected batch; using Chromium fallback: {error}', flush=True)
-                backend_fallbacks += 1
-                use_direct = False
-                if cache is not None:
-                    cache.disable()
-                if node_client is not None:
-                    node_client.close()
-                    node_client = None
+                raise RuntimeError('Direct計算に失敗しました。安全のためブラウザーへ自動切替しません') from error
         identity = (tuple(tuple(r.get(k) for k in HEADER + ['level', 'cp']) for r in crows),
                     tuple(tuple(r.get(k) for k in HEADER + ['level', 'cp']) for r in orows))
         if page is None:
