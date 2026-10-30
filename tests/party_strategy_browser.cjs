@@ -11,11 +11,23 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  await page.goto(config.url+'/app/party');await page.fill('#key',config.key);await page.click('#login');await page.waitForSelector('#workspace:not([hidden])');
  await page.click('[data-tab=settings]');await page.selectOption('#saved',await page.locator('#saved option').nth(1).getAttribute('value'));await page.click('#load');
  await page.waitForFunction(()=>document.getElementById('status').textContent.includes('読み込みました'));
+ await page.waitForSelector('#metaWeights select[data-species=quagsire]');
+ assert((await page.textContent('#metaWeights')).includes('ヌオー'));
+ await page.fill('#metaFilter','ぬおー');
+ assert.equal(await page.locator('#metaWeights select').count(),1);
+ await page.selectOption('#metaWeights select[data-species=quagsire]','4');
+ await page.fill('#metaFilter','');
+ assert.equal(await page.inputValue('#metaWeights select[data-species=quagsire]'),'4');
  const csv=JSON.parse(fs.readFileSync('tests/fixtures/strategy_rows.json')).map(x=>[x.species,x.fast,x.charged1,x.charged2,x.atk,x.def,x.hp].join(',')).join('\n');
  await page.click('[data-tab=compose]');await page.locator('#members details').first().locator('summary').click();
  const speciesInput=page.locator('#members [data-field=species]').first();await speciesInput.fill('ぬお');await page.locator('#members .suggestions button').filter({hasText:'ヌオー'}).first().click();
  assert.equal(await speciesInput.inputValue(),'ヌオー');assert.equal(await page.locator('#members [data-field=fast]').first().evaluate(el=>el.tagName),'SELECT');
  await page.click('[data-tab=selection]');await page.locator('#selection').getByRole('button',{name:'ポケモンを追加',exact:true}).click();await page.locator('#selection [data-field=species]').fill('Azumarill');await page.locator('#selection .suggestions button').first().click();assert((await page.inputValue('#enemy')).startsWith('azumarill,'));
+ await page.locator('#selection details').filter({has:page.locator('#enemy')}).locator('summary').click();
+ await page.fill('#enemy','ヌオー,マッドショット,アクアテール,ストーンエッジ,0,15,15');
+ await page.locator('#enemy').blur();
+ assert.equal(await page.locator('#selection [data-field=fast]').first().inputValue(),'MUD_SHOT');
+ assert.equal(await page.locator('#selection [data-field=fast]').first().locator('option:checked').textContent(),'マッドショット');
  await page.click('[data-tab=strategy]');await page.locator('details').filter({has:page.locator('#strategyEnemy')}).locator('summary').click();await page.fill('#strategyEnemy',csv);await page.locator('#strategyEnemy').blur();
  await page.selectOption('#strategySelf','2');await page.getByText('初手→交代→後追い（限定モデル）',{exact:true}).click();await page.selectOption('#strategyLead','1');await page.selectOption('#strategyCloser','3');
  await page.check('#includeBranch');
@@ -53,6 +65,8 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  await page.waitForFunction(()=>document.getElementById('partyState').textContent.includes('大会B'));
  assert.equal(await page.locator('#selection [data-field=atk]').first().inputValue(),'9');
  assert.equal(await page.locator('#members [data-field=atk]').first().inputValue(),aOwn==='7'?'8':'7');
+ await page.click('[data-tab=settings]');
+ assert.equal(await page.inputValue('#metaWeights select[data-species=quagsire]'),'4');
  // Real authenticated search from bundled meta; apply one suggested change if improved.
  // Autocomplete the whole party, compare endpoints and inspect a real 2-2 heatmap.
  await page.click('[data-tab=compose]');
@@ -85,6 +99,6 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  assert.equal(errors.length,0,errors.join('\n'));
  const out=process.env.STRATEGY_SCREENSHOT_DIR;
  if(out){fs.mkdirSync(out,{recursive:true});await page.screenshot({path:out+'/strategy-mobile.png',fullPage:true});}
- console.log('Mobile 390px: real authenticated gateway/worker/engine, all 4 features, 5 branches, named own/enemy save and restore, actionable swaps, iterative completion and matchup heatmap, cache reuse and stale-response guard passed');
+ console.log('Mobile 390px: real authenticated gateway/worker/engine, all 4 features, 5 branches, named own/enemy save and restore, Japanese moves and weights, actionable swaps, iterative completion and matchup heatmap, cache reuse and stale-response guard passed');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1});
