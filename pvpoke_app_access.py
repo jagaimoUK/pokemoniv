@@ -10,6 +10,7 @@ import secrets
 import threading
 import time
 from http.cookies import SimpleCookie
+from pvpoke_auth_store import CredentialStore
 
 
 class AppAccess:
@@ -39,17 +40,22 @@ class AppAccess:
                 return False
             return True
 
+    def revoke(self, raw):
+        with self._lock:
+            self._tokens.pop(raw.removeprefix('Bearer '), None)
+
 
 class BrowserLogin:
-    """Signed, renewable-only-by-relogin app cookie; never authorizes /mcp.
+    """Signed app cookie with durable per-session revocation; never authorizes /mcp.
 
     The 30-day cookie survives Railway restarts without storing the root key
-    in browser storage or a persistence layer. Changing PVP_API_KEY revokes it.
+    in browser storage. Only credential fingerprints are persisted. Changing PVP_API_KEY revokes it.
     """
     COOKIE_NAME = 'pvpoke_app_login'
 
-    def __init__(self, api_key, ttl=30 * 24 * 60 * 60):
+    def __init__(self, api_key, ttl=30 * 24 * 60 * 60, store=None):
         self.ttl = ttl
+        self.store = store or CredentialStore()
         self._secret = hashlib.sha256(('pvpoke-browser-login-v1:' + api_key).encode()).digest()
 
     def _sign(self, payload):
@@ -66,10 +72,17 @@ class BrowserLogin:
         expires = int(time.time()) + self.ttl
         payload = f'v1.{expires}.{secrets.token_urlsafe(16)}'
         value = payload + '.' + self._sign(payload)
+        self.store.active(value, 'browser', expires)
         return self._cookie(value, self.ttl, secure)
 
     def clear(self, secure=True):
         return self._cookie('', 0, secure)
+
+    def revoke(self, cookie_header):
+        if self.valid(cookie_header):
+            cookies = SimpleCookie()
+            cookies.load(cookie_header)
+            self.store.revoke(self.store.fingerprint(cookies[self.COOKIE_NAME].value), 'browser')
 
     def valid(self, cookie_header):
         if not cookie_header or len(cookie_header) > 4096:
@@ -88,6 +101,7 @@ class BrowserLogin:
             if not now < expires <= now + self.ttl:
                 return False
             payload = '.'.join(parts[:3])
-            return hmac.compare_digest(self._sign(payload), parts[3])
+            return (hmac.compare_digest(self._sign(payload), parts[3]) and
+                    self.store.active(item.value, 'browser', expires))
         except (ValueError, TypeError):
             return False

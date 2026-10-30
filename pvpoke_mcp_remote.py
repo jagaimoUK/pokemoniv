@@ -4,6 +4,8 @@ Test protocol compliance with real ChatGPT MCP client before relying on it.
 Not a hardened multi-tenant production service.
 """
 import json
+import hashlib
+import re
 from pvpoke_input_limits import MAX_APP_REQUEST_BYTES
 import base64
 import threading
@@ -14,7 +16,8 @@ from functools import lru_cache
 from urllib.parse import urlparse
 import jwt
 from jwt import PyJWKClient, InvalidTokenError
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
+from pvpoke_http_security import BoundedHTTPServer, RateBudget, safe_equal
 import pvpoke_bridge_core as backend
 from pvpoke_iv_workflow import IVWorkflow
 from pvpoke_app_ui import HTML as APP_HTML
@@ -28,8 +31,11 @@ import pvpoke_flashcards as flashcards
 APP_ACCESS = AppAccess()
 
 IV_RUNNER = IVWorkflow(backend)
+RATE_BUDGET = RateBudget()
+BACKUP_SLOTS = threading.BoundedSemaphore(1)
+APP_REQUEST_SLOTS = threading.BoundedSemaphore(4)
 
-HOST, PORT = '0.0.0.0', int(os.environ.get('PORT', '8787'))
+HOST, PORT = os.environ.get('PVP_BIND_HOST', '0.0.0.0'), int(os.environ.get('PORT', '8787'))
 API_KEY = os.environ.get('PVP_API_KEY', '')
 if len(API_KEY) < 32:
     raise SystemExit('PVP_API_KEY must be set to a random value at least 32 characters long')
@@ -70,7 +76,7 @@ def oauth_token_valid(raw):
         claims = jwt.decode(token, key.key, algorithms=['RS256'],
                             audience=JWT_AUDIENCE, issuer=AUTH0_ISSUER,
                             options={'require': ['iss', 'aud', 'exp', 'sub']}, leeway=15)
-        if not hmac.compare_digest(str(claims.get('sub', '')), AUTH0_ALLOWED_SUB):
+        if not safe_equal(str(claims.get('sub', '')), AUTH0_ALLOWED_SUB):
             return False
         if OAUTH_SCOPE:
             scopes = set(str(claims.get('scope', '')).split())
@@ -287,6 +293,54 @@ def cached_reader_cleanup():
 
 class Handler(BaseHTTPRequestHandler):
     server_version = 'PvPokeMCPLite/0.1'
+    def log_message(self, format, *args):
+        # Requests can contain sensitive query strings; never echo raw URLs.
+        logging.info('HTTP request handled')
+    def end_headers(self):
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('X-Frame-Options', 'DENY')
+        self.send_header('Referrer-Policy', 'no-referrer')
+        if APP_ORIGIN.startswith('https://'):
+            self.send_header('Strict-Transport-Security', 'max-age=86400')
+        super().end_headers()
+
+    def html_policy(self, data):
+        scripts = re.findall(rb'<script[^>]*>(.*?)</script\s*>', data, re.S | re.I)
+        hashes = ' '.join("'sha256-" + base64.b64encode(hashlib.sha256(x).digest()).decode() + "'" for x in scripts)
+        self.send_header('Content-Security-Policy',
+                         "default-src 'none'; script-src " + (hashes or "'none'") +
+                         "; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; "
+                         "base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'")
+
+    def rate_allowed(self, name, count, seconds):
+        if RATE_BUDGET.allow(name, count, seconds):
+            return True
+        self.send_response(429)
+        self.send_header('Retry-After', '10')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+        return False
+
+    def read_body(self, size):
+        # A separate absolute read deadline defeats slow byte trickles.
+        import socket
+        def expire():
+            try:
+                self.connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        timer = threading.Timer(20, expire)
+        timer.daemon = True
+        timer.start()
+        try:
+            body = self.rfile.read(size)
+            if len(body) != size:
+                raise ValueError('Incomplete request body')
+            return body
+        finally:
+            timer.cancel()
+
     def respond(self, code, obj=None, cookie=None):
         data = b'' if obj is None else json.dumps(obj, ensure_ascii=False).encode('utf-8')
         self.send_response(code)
@@ -315,16 +369,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.send_header('Content-Length', str(len(data)))
         self.send_header('Cache-Control', 'no-store')
-        self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('X-Frame-Options', 'DENY')
-        self.send_header('Referrer-Policy', 'no-referrer')
+        self.html_policy(data)
         self.end_headers()
         self.wfile.write(data)
 
     def app_request(self):
         """Only explicit app operations; never proxy arbitrary backend paths."""
         if self.path not in ('/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result',
-                             '/app-api/session', '/app-api/logout', '/app-api/meta-status',
+                             '/app-api/session', '/app-api/logout', '/app-api/visual-backup-connections', '/app-api/visual-backup-revoke', '/app-api/meta-status',
                              '/app-api/meta-preview', '/app-api/meta-apply', '/app-api/meta-presets', '/app-api/meta-preset-save', '/app-api/meta-preset-export', '/app-api/low-score', '/app-api/visual-backup-token', '/app-api/flashcards',
                              '/app-api/party/list', '/app-api/party/get', '/app-api/party/save',
                              '/app-api/party/start', '/app-api/party/status', '/app-api/party/cancel'):
@@ -338,7 +390,7 @@ class Handler(BaseHTTPRequestHandler):
             size = int(self.headers.get('Content-Length', '0'))
             if not 0 < size <= MAX_APP_REQUEST_BYTES:
                 return self.respond(413, {'error': 'Invalid body size'})
-            args = json.loads(self.rfile.read(size))
+            args = json.loads(self.read_body(size))
             if not isinstance(args, dict):
                 raise ValueError('入力はJSONオブジェクトで指定してください')
             if self.path.startswith('/app-api/party/'):
@@ -354,8 +406,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, {'expires_in_seconds': BROWSER_LOGIN.ttl},
                                     cookie=BROWSER_LOGIN.issue(secure=APP_ORIGIN.startswith('https://')))
             if self.path == '/app-api/logout':
+                BROWSER_LOGIN.revoke(self.headers.get('Cookie', ''))
+                APP_ACCESS.revoke(self.headers.get('Authorization', ''))
                 return self.respond(200, {'logged_out': True},
                                     cookie=BROWSER_LOGIN.clear(secure=APP_ORIGIN.startswith('https://')))
+            if self.path == '/app-api/visual-backup-connections':
+                return self.respond(200, {'items': BACKUP_TOKENS.store.list_active('backup')})
+            if self.path == '/app-api/visual-backup-revoke':
+                ident = args.get('id', '')
+                if not isinstance(ident, str) or not re.fullmatch('[0-9a-f]{64}', ident):
+                    raise ValueError('接続IDを確認してください')
+                BACKUP_TOKENS.store.revoke(ident, 'backup')
+                return self.respond(200, {'revoked': True})
             if self.path == '/app-api/visual-backup-token':
                 if not VISUAL_BACKUP.enabled:
                     return self.respond(503, {'error':'バックアップ保存先を準備中です'})
@@ -412,9 +474,14 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(500, {'error': 'アプリの処理に失敗しました'})
 
     def visual_backup_request(self):
-        token = self.headers.get('Authorization','').removeprefix('Bearer ')
+        if not self.rate_allowed('backup-entry', 120, 60):
+            return
+        raw = self.headers.get('Authorization', '')
+        token = raw[7:] if raw.startswith('Bearer ') else ''
         if not BACKUP_TOKENS.valid(token):
             return self.unauthorized()
+        if not self.rate_allowed('backup-owner', 12, 60):
+            return
         origin=self.headers.get('Origin')
         if origin and origin != APP_ORIGIN:
             return self.respond(403, {'error':'Origin not allowed'})
@@ -427,7 +494,7 @@ class Handler(BaseHTTPRequestHandler):
             size=int(self.headers.get('Content-Length','0'))
             if not 0 < size <= limit:
                 return self.respond(413, {'error':'バックアップの容量上限を超えています'})
-            args=json.loads(self.rfile.read(size))
+            args=json.loads(self.read_body(size))
             if not isinstance(args,dict):
                 raise ValueError()
             if self.path.endswith('/status'):
@@ -445,6 +512,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(503, {'error':'保存先に接続できません。端末内の見本は残っています'})
 
     def do_GET(self):
+        if self.path != '/health' and not self.rate_allowed('public', 300, 60):
+            return
         if self.path == '/reader-api/v1/flashcards':
             tag = flashcards.etag()
             if self.headers.get('If-None-Match') == tag:
@@ -477,6 +546,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             for name,value in [('Content-Type','text/html; charset=utf-8'),('Cache-Control','no-store'),('Referrer-Policy','no-referrer'),('X-Frame-Options','DENY'),('Content-Length',str(len(data)))]:
                 self.send_header(name,value)
+            self.html_policy(data)
             self.end_headers()
             self.wfile.write(data)
             return
@@ -496,23 +566,45 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.respond(405, {'error': 'POST /mcp for MCP requests'})
     def do_POST(self):
+        if not self.rate_allowed('entry', 300, 60):
+            return
+        if self.headers.get('Transfer-Encoding') or len(self.headers.get_all('Content-Length', [])) != 1:
+            return self.respond(400, {'error': 'Invalid request framing'})
         if self.path.startswith('/visual-backup/v1/'):
-            return self.visual_backup_request()
+            if not BACKUP_SLOTS.acquire(blocking=False):
+                return self.respond(503, {'error': 'バックアップの処理中です。少し待って再試行してください'})
+            try:
+                return self.visual_backup_request()
+            finally:
+                BACKUP_SLOTS.release()
         token = self.headers.get('Authorization', '')
-        is_api_key = hmac.compare_digest(token, 'Bearer ' + API_KEY)
+        is_api_key = safe_equal(token, 'Bearer ' + API_KEY)
         is_app = self.path.startswith('/app-api/')
         app_session = is_app and APP_ACCESS.valid(token)
-        bearer_ok = is_api_key or app_session or oauth_token_valid(token)
+        oauth_ok = (not is_api_key and not app_session and len(token) <= 4096 and token.isascii() and oauth_token_valid(token))
+        strong_auth = is_api_key or oauth_ok
+        bearer_ok = strong_auth or app_session
         cookie_ok = is_app and BROWSER_LOGIN.valid(self.headers.get('Cookie', ''))
         if not (bearer_ok or cookie_ok):
             self.unauthorized()
             return
         # A remembered cookie cannot mint a new one: relogin requires a real key.
-        if self.path == '/app-api/session' and not bearer_ok:
+        if self.path == '/app-api/session' and not strong_auth:
             self.unauthorized()
             return
+        if self.path in ('/app-api/visual-backup-token', '/app-api/visual-backup-connections', '/app-api/visual-backup-revoke') and not (strong_auth or cookie_ok):
+            return self.unauthorized()
+        if self.path in ('/app-api/run', '/app-api/party/start') and not self.rate_allowed('compute-owner', 12, 60):
+            return
+        if self.path in ('/app-api/session', '/app-api/visual-backup-token') and not self.rate_allowed('issue-owner', 12, 60):
+            return
         if is_app:
-            self.app_request()
+            if not APP_REQUEST_SLOTS.acquire(blocking=False):
+                return self.respond(503, {'error': '処理中です。少し待って再試行してください'})
+            try:
+                self.app_request()
+            finally:
+                APP_REQUEST_SLOTS.release()
             return
         if self.path != '/mcp':
             self.respond(404, {'error': 'Not found'})
@@ -530,7 +622,7 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < size <= 1_000_000:
                 self.respond(413, {'error': 'Invalid body size'})
                 return
-            data = json.loads(self.rfile.read(size))
+            data = json.loads(self.read_body(size))
             if not isinstance(data, dict) or data.get('jsonrpc') != '2.0' or not isinstance(data.get('method'), str):
                 self.respond(400, {'jsonrpc':'2.0','id':data.get('id') if isinstance(data,dict) else None,
                                    'error':{'code':-32600,'message':'Invalid Request'}})
@@ -576,7 +668,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     print(f'Local MCP test server: http://{HOST}:{PORT}/mcp', flush=True)
     print('Authenticated prototype server. HTTPS must be terminated by hosting platform.', flush=True)
-    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+    BoundedHTTPServer((HOST, PORT), Handler).serve_forever()
 
 
 

@@ -1,11 +1,11 @@
 FROM python:3.12-slim-bookworm
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PVP_ENGINE=direct
-RUN apt-get update && apt-get install -y --no-install-recommends chromium nodejs fonts-noto-core ca-certificates gosu && rm -rf /var/lib/apt/lists/* \
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PVP_ENGINE=direct PVP_ALLOW_BROWSER=0
+RUN apt-get update && apt-get install -y --no-install-recommends nginx chromium nodejs fonts-noto-core ca-certificates gosu && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/chromium /usr/local/bin/chromium-browser \
     && useradd -m -u 10001 appuser
 WORKDIR /app
-COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.lock /app/requirements.lock
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 COPY *.py /app/
 COPY pvpoke_node_matrix.js /app/pvpoke_node_matrix.js
 COPY pvpoke_minior_strategy.js /app/pvpoke_minior_strategy.js
@@ -27,6 +27,8 @@ RUN python -c "from pvpoke_flashcards import page; assert '/*CORE*/' not in page
 RUN python -c "from pvpoke_meta_presets import bundled; assert any(p['id'] == 'pvpoke:fantasy' for p in bundled()['items'])"
 # Fail deployment at build time instead of returning 500 from /app-api/low-score.
 RUN python -c "from pvpoke_score_search import load_snapshot, evolution_descendants; assert len(load_snapshot()[1]) == 1153; assert len(evolution_descendants()) == 1025"
+COPY nginx.conf.template /app/nginx.conf.template
+COPY THIRD_PARTY_NOTICES.md /app/THIRD_PARTY_NOTICES.md
 COPY start.sh /app/start.sh
 COPY volume_bootstrap.sh /app/volume_bootstrap.sh
 RUN chmod +x /app/start.sh /app/volume_bootstrap.sh && chown -R appuser:appuser /app

@@ -13,6 +13,7 @@ import math
 import os
 import re
 import subprocess
+from pvpoke_child_env import child_environment
 import sys
 import time
 import urllib.parse
@@ -269,6 +270,8 @@ def call_json(path, method='GET', timeout=10):
 
 
 def chromium_connect():
+    if os.environ.get('PVP_ALLOW_BROWSER', '0') != '1':
+        raise RuntimeError('ブラウザー計算は無効です。Directエンジンのエラーを確認してください')
     try:
         return call_json('/json/version', timeout=3)
     except Exception:
@@ -276,11 +279,12 @@ def chromium_connect():
         log = (DIR / 'chromium.log').open('ab')
         try:
             subprocess.Popen([
-                'chromium-browser', '--headless', '--no-sandbox', '--disable-gpu',
+                'chromium-browser', '--headless', '--disable-gpu',
                 '--disable-dev-shm-usage', '--no-first-run',
                 '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=9222',
                 '--user-data-dir=' + str(HOME / 'chromium-pvpoke-headless'), 'about:blank'
-            ], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            ], stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+                env=child_environment())
         finally:
             log.close()
         for _ in range(30):
@@ -597,14 +601,7 @@ def run(refresh=False, shield_set='all'):
                 if minior_batch:
                     # Browser fallback lacks our Minior HP and charge policy hooks.
                     raise RuntimeError(f'メテノ戦術比較失敗（通常PvPoke結果へフォールバックしません）: {error}') from error
-                print(f'  Direct engine rejected batch; using Chromium fallback: {error}', flush=True)
-                backend_fallbacks += 1
-                use_direct = False
-                if cache is not None:
-                    cache.disable()
-                if node_client is not None:
-                    node_client.close()
-                    node_client = None
+                raise RuntimeError('Direct計算に失敗しました。安全のためブラウザーへ自動切替しません') from error
         identity = (tuple(tuple(r.get(k) for k in HEADER + ['level', 'cp']) for r in crows),
                     tuple(tuple(r.get(k) for k in HEADER + ['level', 'cp']) for r in orows))
         if page is None:

@@ -1,7 +1,8 @@
 PvPoke direct-engine source snapshot
 Upstream: https://github.com/pvpoke/pvpoke
 Pinned commit: a23fb293300077028a65da534c73bd6367b7ef9d
-The JavaScript source files under vendor/pvpoke/src/js are unmodified copies.
+The JavaScript files are based on the pinned upstream snapshot.
+Battle.js has local strategy policy and event hooks; see THIRD_PARTY_NOTICES.md.
 
 MIT License
 
