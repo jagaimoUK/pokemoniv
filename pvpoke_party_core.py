@@ -291,6 +291,123 @@ def recommend_single_swaps(roster, candidates, opponents, matrix, weights, claus
             "baseline": before, "items": [x[3] for x in improvements[:limit]]}
 
 
+
+def iterative_party_optimization(roster, candidates, opponents, matrix, weights,
+                                 clauses, locked_slots=(), max_steps=10,
+                                 beam_width=8, max_finalists=3):
+    """Bounded monotone local search of real six-member rosters.
+
+    Every transition strictly improves rank_partial on the SAME 2-2 matrix.
+    This is a local search, not a guarantee of perfect coverage or global optimum.
+    The initial slot order and locked slots are preserved throughout.
+    """
+    if len(roster) != 6 or len(set(roster)) != 6:
+        raise ValueError("自分の6体が必要です")
+    if not 1 <= max_steps <= 10 or not 1 <= beam_width <= 16 or not 1 <= max_finalists <= 3:
+        raise ValueError("自動補完の探索上限が不正です")
+    if any(x not in clauses for x in (*roster, *candidates)):
+        raise ValueError("候補の種族制限情報がありません")
+    if len({clauses[x] for x in roster}) != 6:
+        raise ValueError("自分の6体に同種重複があります")
+    locked = set(locked_slots)
+    if any(type(x) is not int or not 0 <= x < 6 for x in locked_slots):
+        raise ValueError("固定枠が不正です")
+
+    # Include departed members as replacement choices for later steps.
+    choices = list(dict.fromkeys((*roster, *candidates)))
+    score_cache = {}
+    def score(ordered):
+        key = tuple(sorted(ordered))
+        if key not in score_cache:
+            summary = team_summary(ordered, opponents, matrix, weights)
+            if not summary["complete"]:
+                score_cache[key] = None
+            else:
+                rank = (summary["unknown_weight"], summary["d0"],
+                        summary["severity0"], summary["d1"], -summary["coverage"])
+                score_cache[key] = rank, summary
+        return score_cache[key]
+
+    baseline = score(tuple(roster))
+    if baseline is None:
+        return {"status": "unknown", "baseline": team_summary(roster, opponents, matrix, weights),
+                "finalists": [], "explored": len(score_cache),
+                "max_steps": max_steps, "beam_width": beam_width}
+
+    first = {"roster": tuple(roster), "steps": (), "score": baseline[0],
+             "summary": baseline[1], "stop": "searching"}
+    frontier = [first]
+    ended = {}
+    visited = {tuple(sorted(roster))}
+    for depth in range(max_steps):
+        new = {}
+        for state in frontier:
+            current = state["roster"]
+            current_rank = state["score"]
+            has_improvement = False
+            for slot, old in enumerate(current):
+                if slot in locked:
+                    continue
+                blocked = {clauses[x] for j, x in enumerate(current) if j != slot}
+                for candidate in choices:
+                    if candidate == old or clauses[candidate] in blocked:
+                        continue
+                    trial = list(current)
+                    trial[slot] = candidate
+                    key = tuple(sorted(trial))
+                    assessed = score(tuple(trial))
+                    if assessed is None or assessed[0] >= current_rank:
+                        continue
+                    has_improvement = True
+                    if key in visited:
+                        continue
+                    step = {"slot": slot, "out": old, "in": candidate}
+                    state_new = {"roster": tuple(trial),
+                                 "steps": (*state["steps"], step),
+                                 "score": assessed[0], "summary": assessed[1],
+                                 "stop": "searching"}
+                    existing = new.get(key)
+                    if existing is None or (state_new["score"], len(state_new["steps"]),
+                                            state_new["roster"]) < (
+                                            existing["score"], len(existing["steps"]),
+                                            existing["roster"]):
+                        new[key] = state_new
+            if not has_improvement:
+                ended[tuple(sorted(current))] = {
+                    **state, "stop": "no_further_improvement"}
+        if not new:
+            break
+        # Keep promising alternative paths rather than a single greedy chain.
+        frontier = sorted(new.values(),
+                          key=lambda s: (s["score"], len(s["steps"]), s["roster"]))[:beam_width]
+        visited.update(tuple(sorted(state["roster"])) for state in frontier)
+    else:
+        for state in frontier:
+            ended[tuple(sorted(state["roster"]))] = {**state, "stop": "step_limit"}
+
+    # A beam may have parked some paths that do not have any improving successor.
+    # The finalists here are local search endpoints, or a declared step limit.
+    results = sorted(ended.values(),
+                     key=lambda s: (s["score"], len(s["steps"]), s["roster"]))
+    finalists = []
+    for state in results[:max_finalists]:
+        finalists.append({"roster": list(state["roster"]),
+                          "steps": list(state["steps"]),
+                          "summary": state["summary"],
+                          "stop": state["stop"]})
+    return {"status": "improved" if finalists and finalists[0]["steps"] else "no_improvement",
+            "baseline": baseline[1], "finalists": finalists,
+            "explored": len(score_cache), "max_steps": max_steps,
+            "beam_width": beam_width, "scope": "候補範囲内の反復的な局所探索。全体最適・完全補完・3対3勝率は保証しません"}
+
+
+def party_matchup_heatmap(roster, opponents, matrix):
+    """Return raw PvPoke 2-2 Battle Ratings; unknown stays null."""
+    return [{"opponent": enemy,
+             "ratings": [lookup(matrix, own, enemy, STANDARD) for own in roster]}
+            for enemy in opponents]
+
+
 def rank_partial(roster, opponents, matrix, weights):
     result = team_summary(roster, opponents, matrix, weights)
     # Same-depth comparisons only. A missing cell cannot be assigned a loss.

@@ -199,6 +199,75 @@ class PartyMetaShadowIdTests(unittest.TestCase):
                                                   {"x": 1}, clause)
         self.assertEqual(incomplete["status"], "unknown")
 
+
+    def test_iterative_optimizer_reaches_second_step_and_keeps_locked_slots(self):
+        own = list("abcdef")
+        alternatives = ["g", "h"]
+        enemies = ["x", "y", "z"]
+        matrix = {(a, e, (2, 2)): 250 for a in own + alternatives for e in enemies}
+        for a, e in (("a", "x"), ("b", "y"), ("c", "z"),
+                     ("g", "x"), ("g", "y"), ("h", "z")):
+            matrix[(a, e, (2, 2))] = 650
+        result = core.iterative_party_optimization(
+            own, alternatives, enemies, matrix,
+            {e: 1/3 for e in enemies},
+            {a: a for a in own + alternatives},
+            locked_slots=[0, 1, 2], max_steps=10, beam_width=8)
+        self.assertEqual(result["status"], "improved")
+        self.assertGreaterEqual(len(result["finalists"]), 1)
+        self.assertLessEqual(len(result["finalists"]), 3)
+        best = result["finalists"][0]
+        self.assertEqual(best["roster"][:3], own[:3])
+        self.assertGreaterEqual(len(best["steps"]), 2)
+        self.assertEqual(best["summary"]["d1"], 0)
+        self.assertEqual(best["stop"], "no_further_improvement")
+        self.assertEqual(len(set(best["roster"])), 6)
+        for step in best["steps"]:
+            self.assertNotIn(step["slot"], [0, 1, 2])
+        self.assertEqual(len({tuple(sorted(p["roster"]))
+                              for p in result["finalists"]}),
+                         len(result["finalists"]))
+
+    def test_iterative_optimizer_unknown_and_no_improvement(self):
+        own = list("abcdef")
+        matrix = {(x, "enemy", (2, 2)): 600 for x in own}
+        clauses = {x: x for x in own + ["new"]}
+        none = core.iterative_party_optimization(
+            own, [], ["enemy"], matrix, {"enemy": 1}, clauses)
+        self.assertEqual(none["status"], "no_improvement")
+        self.assertEqual(none["finalists"][0]["steps"], [])
+        self.assertEqual(none["finalists"][0]["roster"], own)
+        unknown = core.iterative_party_optimization(
+            own, ["new"], ["enemy"], {}, {"enemy": 1}, clauses)
+        self.assertEqual(unknown["status"], "unknown")
+        self.assertEqual(unknown["finalists"], [])
+        # A missing candidate matchup must never count as a beneficial swap.
+        missing = core.iterative_party_optimization(
+            own, ["new"], ["enemy"], matrix, {"enemy": 1}, clauses)
+        self.assertEqual(missing["status"], "no_improvement")
+        self.assertEqual(core.party_matchup_heatmap(
+            ["a", "new"], ["enemy"], matrix),
+            [{"opponent": "enemy", "ratings": [600, None]}])
+
+    def test_iterative_optimizer_species_clause_and_limits(self):
+        own = list("abcdef")
+        matrix = {(x, "enemy", (2, 2)): 400 for x in own+["g", "h"]}
+        matrix[("g", "enemy", (2, 2))] = 650
+        matrix[("h", "enemy", (2, 2))] = 700
+        clauses = {x: x for x in own+["g"]}
+        clauses["h"] = "a"
+        result = core.iterative_party_optimization(
+            own, ["g", "h"], ["enemy"], matrix,
+            {"enemy": 1}, clauses, locked_slots=[0])
+        self.assertEqual(result["status"], "improved")
+        self.assertTrue(all(p["roster"][0] == "a" for p in result["finalists"]))
+        self.assertTrue(all("h" not in p["roster"] for p in result["finalists"]))
+        with self.assertRaises(ValueError):
+            core.iterative_party_optimization(
+                own, ["g"], ["enemy"], matrix, {"enemy": 1},
+                clauses, max_steps=11)
+
+
 class PartyStoreTests(unittest.TestCase):
     def test_saved_parties_keep_own_enemy_and_strategy_independent(self):
         with tempfile.TemporaryDirectory() as tmp:

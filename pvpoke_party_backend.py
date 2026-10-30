@@ -233,8 +233,11 @@ class PartyBuilder:
             return self._strategy(jid, args, catalog, species, cpms, engine, work)
         own_raw = args.get("members")
         locked_raw = []
-        seek_swaps = args["mode"] in ("analyze", "select") and args.get("auto_replacements") is True
-        if args.get("auto_replacements") not in (None, True, False):
+        auto_complete = args["mode"] in ("analyze", "select") and args.get("auto_complete") is True
+        seek_swaps = args["mode"] in ("analyze", "select") and (
+            args.get("auto_replacements") is True or auto_complete)
+        if (args.get("auto_replacements") not in (None, True, False) or
+                args.get("auto_complete") not in (None, True, False)):
             raise ValueError("入れ替え探索の指定が不正です")
         if not isinstance(own_raw, list):
             raise ValueError("自分のパーティ入力が必要です")
@@ -294,7 +297,7 @@ class PartyBuilder:
                         continue
                     used.add(p["roster_clause_id"])
                     replacement_pool.append(p)
-                    if len(replacement_pool) == 12:
+                    if len(replacement_pool) == (24 if auto_complete else 12):
                         break
                 swap_source = "meta_provisional"
             pool = self._unique(pool + replacement_pool)
@@ -344,6 +347,59 @@ class PartyBuilder:
                 locked_slots=locked_slots)
             swaps["source"] = swap_source
             swaps["candidate_count"] = len(recommendation_ids)
+        optimization = None
+        if auto_complete:
+            self._record(jid, "running", {"progress": 96,
+                "message": "最終パーティと弱点表を組み立てています", "cache": stats})
+            choice_ids = list(dict.fromkeys([*ids, *recommendation_ids]))
+            optimization = core.iterative_party_optimization(
+                ids, choice_ids, opponents, matrix, weights, clause,
+                locked_slots=locked_slots, max_steps=10, beam_width=8,
+                max_finalists=3)
+            optimization["source"] = swap_source
+            optimization["candidate_count"] = len(recommendation_ids)
+            if optimization["finalists"]:
+                # Show requested opposing six first, then the important and
+                # poorly-covered meta opponents. Never mix unknown with losses.
+                selected = []
+                group_ids = set()
+                for target in enemy:
+                    key = target["roster_clause_id"]
+                    if key not in group_ids:
+                        selected.append(target)
+                        group_ids.add(key)
+                def risk_key(target):
+                    ratings = [matrix.get((p, target["id"], core.STANDARD))
+                               for p in ids]
+                    best = max((x for x in ratings if x is not None), default=500)
+                    return (-int(best <= 500), -weights.get(target["id"], 0),
+                            best, target["species"])
+                for target in sorted(meta, key=risk_key):
+                    key = target["roster_clause_id"]
+                    if key not in group_ids:
+                        selected.append(target)
+                        group_ids.add(key)
+                    if len(selected) >= 20:
+                        break
+                display_ids = [p["id"] for p in selected[:20]]
+                optimization["heatmap_targets"] = display_ids
+                optimization["enemy_targets"] = [p["id"] for p in enemy]
+                optimization["baseline_heatmap"] = core.party_matchup_heatmap(
+                    ids, display_ids, matrix)
+                for proposed in optimization["finalists"]:
+                    proposed["heatmap"] = core.party_matchup_heatmap(
+                        proposed["roster"], display_ids, matrix)
+                    proposed["weaknesses"] = [
+                        {"opponent": row["opponent"],
+                         "best_rating": max((v for v in row["ratings"]
+                                             if v is not None), default=None),
+                         "answers": sum(v is not None and v > 500
+                                        for v in row["ratings"])}
+                        for row in proposed["heatmap"]
+                        if any(v is not None for v in row["ratings"]) and
+                           max((v for v in row["ratings"] if v is not None),
+                               default=0) <= 500
+                    ]
         # Standard six conditions are diagnostic weights, not battle frequencies.
         condition_weights = {(2, 2): .50, (1, 1): .20, (0, 0): .10,
                              (0, 1): .20 / 3, (0, 2): .20 / 3, (1, 2): .20 / 3}
@@ -386,7 +442,7 @@ class PartyBuilder:
                     "0-1": .20 / 3, "0-2": .20 / 3, "1-2": .20 / 3},
                 "pairs": pairs,
                 "triples": triples, "danger_pairs": threats, "selection": chosen, "search": result if args["mode"] == "build" else None,
-                "recommendations": swaps,
+                "recommendations": swaps, "optimization": optimization,
                 "calculation_version": version, "evaluation_version": core.EVALUATION_VERSION,
                 "cache": stats, "not_calculated": [
                     "通常技限定の圧力", "受け後の仕事", "観測ベースのシールド温存",
