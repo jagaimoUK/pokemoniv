@@ -17,6 +17,13 @@ textarea{min-height:95px;resize:vertical}summary{cursor:pointer;min-height:44px;
 .fields label:first-child{grid-column:1/-1}
 .tabs{margin:14px 0}.tabs button[aria-pressed=true]{background:#638b72}section[hidden],div[hidden]{display:none}
 #status{white-space:pre-wrap;border-radius:14px;background:#2a4140;padding:12px;overflow-wrap:anywhere}
+#metaWeights{display:flex;flex-direction:column;gap:7px;margin-top:10px}
+.weight-row{display:flex;gap:12px;align-items:center;justify-content:space-between;border:1px solid #4c6a5f;border-radius:14px;padding:8px 10px;background:#2a4140}
+.weight-row span{flex:1;min-width:0;overflow-wrap:anywhere}
+.weight-row select{width:115px;flex:0 0 115px;min-height:44px}
+.weight-row small{display:block;color:#abc8bd;font-size:11px;margin-top:3px}
+#metaWeightStatus{font-size:13px;margin-top:8px}
+#metaFilter{margin-top:5px}
 footer{position:fixed;bottom:0;left:0;right:0;background:#172d2cf5;border-top:1px solid #638276;padding:10px}
 footer .tools{max-width:700px;margin:auto}footer button{flex:1}
 .result{padding-top:10px;border-top:1px solid #557769;margin-top:10px}li{padding:4px 0}
@@ -73,8 +80,12 @@ footer .tools{max-width:700px;margin:auto}footer button{flex:1}
 <button id="runStrategy">詳細条件を比較する</button></section></div>
 <div id="settings" hidden><section><h2>分析条件</h2><label for="meta">メタプリセット</label><select id="meta"></select>
 <p>パーティの保存・切り替えは画面上部から操作できます。</p>
-<label for="weights">重要度（種ID:数値を1行ずつ）</label><textarea id="weights" placeholder="clodsire:4"></textarea>
-<p>技違いは同種内で重要度を分配します。詳細戦略は専用タブで条件を固定して比較します。</p></section></div>
+<h3>メタポケモン別の重要度</h3>
+<p>選択したメタに登録されているポケモンを表示します。同じポケモンの技違いはまとめて扱い、値1が標準・0は評価対象外・大きいほど重視します。</p>
+<label for="metaFilter">ポケモンを絞り込む（日本語・英語）</label><input id="metaFilter" type="search" placeholder="例：ドオー、Clodsire">
+<p id="metaWeightStatus" role="status">メタのポケモン一覧を読み込みます。</p>
+<div id="metaWeights" aria-label="メタポケモン別の重要度"></div>
+<p>この設定は保存時にパーティごとに記録されます。詳細戦略では重要度は使用しません。</p></section></div>
 <section><h2>計算状況と結果</h2><div id="status" role="status" aria-live="polite">接続を確認しています。</div><div id="result"></div></section>
 </div></main><footer><div class="tools"><button id="analyze" disabled>6体を分析</button><button id="cancel" disabled>計算を中止</button></div></footer>
 <datalist id="speciesList"></datalist><script>
@@ -83,6 +94,7 @@ const $=id=>document.getElementById(id);
 let key='',catalog={},metaItems=[],partyId=null,revision=0,activeJob=null,latest=null,inputRevision=0,lastReportRevision=-1,currentTab='compose';
 const name=id=>partyDisplay(id);
 let partyMoveNames={},rosterEditors={};
+let metaWeightRows=[],metaWeightValues={},metaWeightCache=new Map(),metaWeightTicket=0,metaWeightReady=false;
 function node(tag,text,cls){const n=document.createElement(tag);if(text!=null)n.textContent=text;if(cls)n.className=cls;return n}
 function status(text){$('status').textContent=text}
 function tab(target){currentTab=target;$('analyze').textContent=target==='strategy'?'詳細条件を比較':'6体を分析';if(target==='strategy')strategyTargets();['compose','weakness','selection','strategy','settings'].forEach(id=>$(id).hidden=id!==target);document.querySelectorAll('[data-tab]').forEach(x=>x.setAttribute('aria-pressed',String(x.dataset.tab===target)))}
@@ -96,7 +108,78 @@ async function api(path,body={}){
 function renderMon(rows=[]){$('members').replaceChildren();for(let i=0;i<6;i++)$('members').append(createMon(rows[i]||{}))}
 function getMon(){return [...$('members').children].map(readPartyCard)}
 function locks(){return [...$('members').children].flatMap((box,i)=>box.querySelector('[data-field=locked]').checked?[i]:[])}
-function getWeights(){const result={};for(const row of $('weights').value.split(/\r?\n/)){if(!row.trim())continue;const v=row.split(':');if(v.length!==2||!v[0].trim()||!Number.isFinite(Number(v[1]))||Number(v[1])<0)throw Error('重要度の形式が不正です');result[v[0].trim().toLowerCase()]=Number(v[1])}return result}
+function normalizeMetaId(value){
+ const s=String(value||'').trim().toLowerCase();
+ return s.endsWith('_shadow-shadow')?s.slice(0,-7):s;
+}
+function parseMetaWeightRows(csv){
+ const unique=new Set(),rows=[];
+ for(const line of String(csv||'').split(/\r?\n/)){
+  if(!line.trim())continue;
+  const id=normalizeMetaId(line.split(',')[0]);
+  if(!id)continue;
+  if(!catalog[id])throw Error('メタに未登録のポケモン: '+id);
+  if(!unique.has(id)){unique.add(id);rows.push(id);}
+ }
+ if(!rows.length)throw Error('メタにポケモンが登録されていません');
+ return rows;
+}
+function restoreMetaWeightValues(saved){
+ metaWeightValues={};
+ for(const [key,value] of Object.entries(saved||{})){
+  const id=catalog[key]?key:(()=>{try{return resolvePartyName(key)}catch(_){return key}})();
+  if(typeof value==='number'&&Number.isFinite(value)&&value>=0)metaWeightValues[id]=value;
+ }
+}
+function renderMetaWeightRows(){
+ const root=$('metaWeights');root.replaceChildren();
+ if(!metaWeightReady){$('metaWeightStatus').textContent='メタのポケモン一覧を確認できません。設定を再読み込みしてください。';return;}
+ const query=normalizePartyName($('metaFilter').value),filtered=metaWeightRows.filter(id=>!query||
+  [id,catalog[id]?.name,catalog[id]?.name_ja,...(catalog[id]?.aliases||[])]
+   .some(x=>x&&normalizePartyName(x).includes(query)));
+ $('metaWeightStatus').textContent='メタ登録 '+metaWeightRows.length+'種 / 表示 '+filtered.length+'種。重要度は各ポケモンのメニューで変更できます。';
+ if(!filtered.length){root.append(node('p','一致するポケモンはありません'));return;}
+ for(const id of filtered){
+  const div=node('div',null,'weight-row'),span=node('span'),ja=node('strong',partyDisplay(id));
+  const english=node('small',catalog[id]?.name||id);span.append(ja,english);
+  const select=node('select');select.dataset.species=id;select.setAttribute('aria-label',partyDisplay(id)+' の重要度');
+  let options=[0,1,2,3,4,5,10,20],value=metaWeightValues[id]??1;
+  if(!options.includes(value))options=[...options,value].sort((a,b)=>a-b);
+  for(const n of options)select.append(new Option(n===0?'0（対象外）':n===1?'1（標準）':String(n)+'（重視）',String(n)));
+  select.value=String(value);
+  select.onchange=()=>{metaWeightValues[id]=Number(select.value);inputRevision++;};
+  div.append(span,select);root.append(div);
+ }
+}
+async function loadMetaWeightRows(){
+ const selected=metaItems.find(x=>x.id===$('meta').value),ticket=++metaWeightTicket;
+ metaWeightReady=false;metaWeightRows=[];$('metaWeights').replaceChildren();
+ $('metaWeightStatus').textContent='メタ登録ポケモンを読み込み中…';
+ if(!selected){$('metaWeightStatus').textContent='メタプリセットを選択してください';return;}
+ const key=selected.id+'|'+selected.sha256;
+ try{
+  let rows=metaWeightCache.get(key);
+  if(!rows){
+   const data=await api('meta-preset-export',{id:selected.id,expected_sha256:selected.sha256});
+   rows=parseMetaWeightRows(data.csv);metaWeightCache.set(key,rows);
+  }
+  if(ticket!==metaWeightTicket)return;
+  metaWeightRows=rows;metaWeightReady=true;renderMetaWeightRows();
+ }catch(e){
+  if(ticket!==metaWeightTicket)return;
+  $('metaWeightStatus').textContent='メタの一覧を取得できません: '+e.message;
+  status('重要度一覧の読み込みに失敗: '+e.message);
+ }
+}
+function getWeights(){
+ if(!metaWeightReady)throw Error('メタの重要度一覧が準備できていません。メタプリセットを確認してください');
+ const result={};
+ for(const id of metaWeightRows){const value=metaWeightValues[id]??1;if(value!==1)result[id]=value;}
+ if(metaWeightRows.every(id=>(metaWeightValues[id]??1)===0))throw Error('重要度がすべて0です。少なくとも1体を対象にしてください');
+ return result;
+}
+$('meta').addEventListener('change',()=>{inputRevision++;loadMetaWeightRows()});
+$('metaFilter').addEventListener('input',e=>{e.stopPropagation();renderMetaWeightRows()});
 const pct=v=>(v*100).toFixed(1)+'%';
 function label(id){const r=latest?.labels?.[id];return r?name(r.species)+' '+r.ivs.join('/')+' CP'+r.cp:id.slice(0,8)}
 function addLine(parent,text){parent.append(node('p',text))}
@@ -119,7 +202,7 @@ function showReplacements(r){
   addLine(el,'深刻度: '+info.baseline.severity0.toFixed(3)+' → '+item.after.severity0.toFixed(3)+' / 補完度: '+fmt(info.baseline.coverage)+' → '+fmt(item.after.coverage));
   if(item.resolved.length)addLine(el,'新たに対応できる相手: '+item.resolved.map(x=>name(r.labels[x]?.species||x)).join('、'));
   if(item.new_holes.length)addLine(el,'注意: 新たな未対応相手 '+item.new_holes.map(x=>name(r.labels[x]?.species||x)).join('、'));
-  addLine(el,'入れ替え先の仮構成: '+replacement.moves.map(x=>partyMoveNames[x]?.name||x).join(' / ')+'、IV '+replacement.ivs.join('/')+'、CP '+replacement.cp);
+  addLine(el,'入れ替え先の仮構成: '+replacement.moves.map(partyMoveLabel).join(' / ')+'、IV '+replacement.ivs.join('/')+'、CP '+replacement.cp);
   const btn=node('button',i===0?'最優先案を6体に反映':'この案を6体に反映');
   btn.onclick=()=>applyRecommendedSwap(r,item);el.append(btn);root.append(el);
  }
@@ -258,7 +341,7 @@ async function setup(){
  const [cat,presets,saved]=await Promise.all([api('catalog'),api('meta-presets'),api('party/list')]);
  if(!cat.ready)throw Error('ゲームデータがまだ準備中です');catalog=cat.species;partyMoveNames=cat.moves||{};metaItems=presets.items;
  for(const m of metaItems.filter(x=>x.available!==false)){let o=new Option(m.name+' ('+m.rows+'件)',m.id);$('meta').append(o)}$('meta').value=presets.default_id;
- populateSaved(saved.items);renderMon();if(!rosterEditors.enemy){rosterEditors.enemy=partyRosterEditor('enemy',6);rosterEditors.pool=partyRosterEditor('pool',48);rosterEditors.strategyEnemy=partyRosterEditor('strategyEnemy',6);}$('workspace').hidden=false;$('auth').hidden=true;$('analyze').disabled=false;status('6体を入力すると分析できます')}
+ populateSaved(saved.items);renderMon();await loadMetaWeightRows();if(!rosterEditors.enemy){rosterEditors.enemy=partyRosterEditor('enemy',6);rosterEditors.pool=partyRosterEditor('pool',48);rosterEditors.strategyEnemy=partyRosterEditor('strategyEnemy',6);}$('workspace').hidden=false;$('auth').hidden=true;$('analyze').disabled=false;status('6体を入力すると分析できます')}
 $('login').onclick=async()=>{key=$('key').value.trim();try{await setup();if(key)await api('session',{}).catch(()=>{})}catch(e){$('workspace').hidden=false;status(e.message)}};
 async function saveParty(asNew=false){try{
  const obj={id:asNew?null:partyId,revision:asNew?0:revision,name:$('partyName').value,members:getMon(),locked_slots:locks(),
@@ -276,7 +359,7 @@ $('load').onclick=async()=>{try{
  const p=await api('party/get',{id});partyId=p.id;revision=p.revision;$('partyName').value=p.name;
  renderMon((p.members||[]).map((m,i)=>({...m,locked:(p.locked_slots||[]).includes(i)})));
  if(metaItems.some(x=>x.id===p.meta_preset_id))$('meta').value=p.meta_preset_id;
- $('weights').value=Object.entries(p.group_weights||{}).map(x=>x.join(':')).join('\n');
+ restoreMetaWeightValues(p.group_weights);await loadMetaWeightRows();
  const csv=rows=>(rows||[]).map(x=>[x.species,x.fast,x.charged1,x.charged2,...(['atk','def','hp'].every(k=>k in x)?[x.atk,x.def,x.hp]:[])].join(',')).join('\n');
  $('enemy').value=csv(p.opponents);$('pool').value=csv(p.candidate_pool);
  rosterEditors.enemy.refresh(p.opponents||[]);rosterEditors.pool.refresh(p.candidate_pool||[]);
