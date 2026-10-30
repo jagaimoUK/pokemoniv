@@ -21,3 +21,10 @@ jobs:
         run: |
           python -m compileall -q pvpoke_party_core.py pvpoke_party_backend.py pvpoke_party_ui.py pvpoke_web.py pvpoke_mcp_remote.py
           python -m unittest discover -s tests -p test_party_builder.py -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify embedded Party UI JavaScript syntax
+        run: |
+          python -c 'import pvpoke_party_ui as p; from pathlib import Path; Path("/tmp/party-ui.js").write_text(p.HTML.split("<script>",1)[1].split("</script>",1)[0])'
+          node --check /tmp/party-ui.js
