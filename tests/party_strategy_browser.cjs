@@ -29,9 +29,33 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  // Ensure a late response cannot replace results after an edit.
  await page.click('#runStrategy');await page.fill('#workFraction','16');
  await page.waitForFunction(()=>document.getElementById('status').textContent.includes('以前の入力の結果は表示しません'));
+ // Save two independent named snapshots and verify restored opponent, IV and strategy.
+ await page.fill('#partyName','大会A');await page.click('#saveAs');
+ await page.waitForFunction(()=>document.getElementById('partyState').textContent.includes('大会A'));
+ const partyA=await page.inputValue('#saved');
+ const aOwn=await page.locator('#members [data-field=atk]').first().inputValue();
+ const aStrategy=await page.inputValue('#strategyEnemy');
+ await page.click('[data-tab=compose]');
+ await page.locator('#members details').first().evaluate(el=>el.open=true);
+ await page.locator('#members [data-field=atk]').first().fill(aOwn==='7'?'8':'7');
+ await page.click('[data-tab=selection]');
+ await page.locator('#selection details.mon').first().evaluate(el=>el.open=true);
+ await page.locator('#selection [data-field=atk]').first().fill('9');
+ await page.fill('#partyName','大会B');await page.click('#saveAs');
+ await page.waitForFunction(()=>document.getElementById('partyState').textContent.includes('大会B'));
+ const partyB=await page.inputValue('#saved');assert.notEqual(partyA,partyB);
+ await page.selectOption('#saved',partyA);await page.click('#load');
+ await page.waitForFunction(()=>document.getElementById('partyState').textContent.includes('大会A'));
+ assert.equal(await page.locator('#members [data-field=atk]').first().inputValue(),aOwn);
+ assert.equal(await page.inputValue('#strategyEnemy'),aStrategy);
+ assert.equal(await page.locator('#selection [data-field=atk]').first().inputValue(),'');
+ await page.selectOption('#saved',partyB);await page.click('#load');
+ await page.waitForFunction(()=>document.getElementById('partyState').textContent.includes('大会B'));
+ assert.equal(await page.locator('#selection [data-field=atk]').first().inputValue(),'9');
+ assert.equal(await page.locator('#members [data-field=atk]').first().inputValue(),aOwn==='7'?'8':'7');
  assert.equal(errors.length,0,errors.join('\n'));
  const out=process.env.STRATEGY_SCREENSHOT_DIR;
  if(out){fs.mkdirSync(out,{recursive:true});await page.screenshot({path:out+'/strategy-mobile.png',fullPage:true});}
- console.log('Mobile 390px: real authenticated gateway/worker/engine, all 4 features, 5 branches, save, cache reuse and stale-response guard passed');
+ console.log('Mobile 390px: real authenticated gateway/worker/engine, all 4 features, 5 branches, named own/enemy save and restore, cache reuse and stale-response guard passed');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1});

@@ -160,6 +160,48 @@ class PartyMetaShadowIdTests(unittest.TestCase):
 
 
 class PartyStoreTests(unittest.TestCase):
+    def test_saved_parties_keep_own_enemy_and_strategy_independent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = PartyBuilder(Path(tmp))
+            own_a = [{"species": "azumarill", "fast": "BUBBLE",
+                      "charged1": "ICE_BEAM", "charged2": "PLAY_ROUGH",
+                      "atk": 0, "def": 15, "hp": 15}]
+            own_b = [{"species": "clodsire", "fast": "POISON_STING",
+                      "charged1": "STONE_EDGE", "charged2": "EARTHQUAKE",
+                      "atk": 2, "def": 15, "hp": 12}]
+            opp_a = [{"species": "corsola_galarian", "fast": "ASTONISH",
+                      "charged1": "NIGHT_SHADE", "charged2": "POWER_GEM",
+                      "atk": 5, "def": 10, "hp": 11}]
+            opp_b = [{"species": "quagsire", "fast": "MUD_SHOT",
+                      "charged1": "AQUA_TAIL", "charged2": "STONE_EDGE",
+                      "atk": 3, "def": 14, "hp": 14}]
+            a = store.save_party({"name": "大会A", "members": own_a,
+                "opponents": opp_a, "strategy": {"enemy_csv": "corsola_galarian,ASTONISH,NIGHT_SHADE,POWER_GEM", "lead_index": 1}})
+            b = store.save_party({"name": "大会B", "members": own_b,
+                "opponents": opp_b, "strategy": {"enemy_csv": "quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE", "lead_index": 2}})
+            self.assertNotEqual(a["id"], b["id"])
+            self.assertEqual(len(store.list_parties()["items"]), 2)
+            for id_, own, opp, lead in ((a["id"], own_a, opp_a, 1),
+                                         (b["id"], own_b, opp_b, 2)):
+                with self.subTest(party=id_):
+                    saved = PartyBuilder(Path(tmp)).get_party(id_)
+                    self.assertEqual(saved["members"], own)
+                    self.assertEqual(saved["opponents"], opp)
+                    self.assertEqual(saved["strategy"]["lead_index"], lead)
+            updated = store.save_party({"id": b["id"], "revision": 1,
+                "name": "大会B改", "members": own_b, "opponents": opp_a})
+            self.assertEqual(updated["revision"], 2)
+            self.assertEqual(store.get_party(a["id"])["opponents"], opp_a)
+            self.assertEqual(store.get_party(b["id"])["opponents"], opp_a)
+
+    def test_legacy_party_without_opponents_is_still_readable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = PartyBuilder(Path(tmp))
+            created = store.save_party({"name": "旧保存", "members": []})
+            party = store.get_party(created["id"])
+            self.assertIsNone(party["opponents"])
+            self.assertIsNone(party["strategy"])
+
     def test_revision_and_separate_storage(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = PartyBuilder(Path(tmp))

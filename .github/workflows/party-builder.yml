@@ -43,3 +43,8 @@ jobs:
         run: |
           docker build --tag pokemoniv-party-ci .
           docker run --rm --entrypoint python pokemoniv-party-ci -c "import pvpoke_party_ui, pvpoke_party_strategy; assert '詳細戦略' in pvpoke_party_ui.HTML"
+      - name: Mobile browser save and restore regression
+        run: |
+          npm install --no-save --no-package-lock playwright@1.57.0
+          docker run --rm -v "$PWD:/work" -w /work -e STRATEGY_CHROMIUM_PATH=/usr/bin/chromium --entrypoint node pokemoniv-party-ci tests/party_strategy_browser.cjs
+
