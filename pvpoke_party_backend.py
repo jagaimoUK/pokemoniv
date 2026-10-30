@@ -233,6 +233,9 @@ class PartyBuilder:
             return self._strategy(jid, args, catalog, species, cpms, engine, work)
         own_raw = args.get("members")
         locked_raw = []
+        seek_swaps = args["mode"] in ("analyze", "select") and args.get("auto_replacements") is True
+        if args.get("auto_replacements") not in (None, True, False):
+            raise ValueError("入れ替え探索の指定が不正です")
         if not isinstance(own_raw, list):
             raise ValueError("自分のパーティ入力が必要です")
         if args["mode"] == "build":
@@ -270,6 +273,31 @@ class PartyBuilder:
             raise ValueError("現在のプレビューはメタ最大100技構成です。プリセットを絞ってください")
         meta = self._unique(self._normalize(meta_raw, catalog, species, cpms, engine, "メタ"))
         weights = core.weight_rows(meta, args.get("group_weights"))
+        base_roster = [p["id"] for p in pool] if seek_swaps else []
+        replacement_pool = []
+        swap_source = "none"
+        if seek_swaps:
+            raw_candidates = args.get("candidate_pool") or []
+            if not isinstance(raw_candidates, list):
+                raise ValueError("入れ替え候補の形式が不正です")
+            if raw_candidates:
+                if len(raw_candidates) > MAX_POOL - len(base_roster):
+                    raise ValueError("入れ替え候補は自分の6体と合わせて最大48体です")
+                replacement_pool = self._unique(self._normalize(
+                    raw_candidates, catalog, species, cpms, engine, "入れ替え候補"))
+                swap_source = "registered"
+            else:
+                # Explore only a bounded number of meta hypotheses, not every species.
+                used = {p["roster_clause_id"] for p in pool}
+                for p in meta:
+                    if p["roster_clause_id"] in used:
+                        continue
+                    used.add(p["roster_clause_id"])
+                    replacement_pool.append(p)
+                    if len(replacement_pool) == 12:
+                        break
+                swap_source = "meta_provisional"
+            pool = self._unique(pool + replacement_pool)
         enemy_raw = args.get("opponents") or []
         if args["mode"] == "select" and len(enemy_raw) != 6:
             raise ValueError("選出計算には相手6体が必要です")
@@ -282,10 +310,12 @@ class PartyBuilder:
         version = calculation_version(engine.DATA)
         if version is None:
             raise ValueError("エンジンの計算版を検証できません。キャッシュを使わず中止しました")
+        recommendation_ids = {p["id"] for p in replacement_pool} - set(base_roster)
         matrix, stats = self._matrix(
             jid, pool, self._unique(meta + enemy), version, engine, work,
-            enemy_ids={p["id"] for p in enemy})
-        ids = [p["id"] for p in pool]
+            enemy_ids={p["id"] for p in enemy},
+            recommendation_only_ids=recommendation_ids)
+        ids = base_roster if seek_swaps else [p["id"] for p in pool]
         opponents = [p["id"] for p in meta]
         clause = {p["id"]: p["roster_clause_id"] for p in pool}
         if args["mode"] == "build":
@@ -301,6 +331,19 @@ class PartyBuilder:
         else:
             result = {"roster": ids}
         whole = core.team_summary(ids, opponents, matrix, weights)
+        swaps = None
+        if seek_swaps:
+            locked_slots = args.get("locked_slots") or []
+            if (not isinstance(locked_slots, list) or
+                    any(type(i) is not int or i < 0 or i >= len(ids)
+                        for i in locked_slots)):
+                raise ValueError("固定枠の指定が不正です")
+            swaps = core.recommend_single_swaps(
+                ids, list(recommendation_ids), opponents, matrix, weights,
+                {p["id"]: p["roster_clause_id"] for p in pool},
+                locked_slots=locked_slots)
+            swaps["source"] = swap_source
+            swaps["candidate_count"] = len(recommendation_ids)
         # Standard six conditions are diagnostic weights, not battle frequencies.
         condition_weights = {(2, 2): .50, (1, 1): .20, (0, 0): .10,
                              (0, 1): .20 / 3, (0, 2): .20 / 3, (1, 2): .20 / 3}
@@ -343,6 +386,7 @@ class PartyBuilder:
                     "0-1": .20 / 3, "0-2": .20 / 3, "1-2": .20 / 3},
                 "pairs": pairs,
                 "triples": triples, "danger_pairs": threats, "selection": chosen, "search": result if args["mode"] == "build" else None,
+                "recommendations": swaps,
                 "calculation_version": version, "evaluation_version": core.EVALUATION_VERSION,
                 "cache": stats, "not_calculated": [
                     "通常技限定の圧力", "受け後の仕事", "観測ベースのシールド温存",
@@ -414,7 +458,8 @@ class PartyBuilder:
         return {"roster": list(best), "locked": locked, "beam_width": width,
                 "candidate_count": len(candidates), "scope": "候補内の暫定結果。全探索ではありません"}
 
-    def _matrix(self, jid, pool, opponents, version, engine, work, *, enemy_ids):
+    def _matrix(self, jid, pool, opponents, version, engine, work, *, enemy_ids,
+                recommendation_only_ids=frozenset()):
         # Cache namespaced by exact prepared inputs, engine/data version and direction.
         # Standard Matrix results are never confused with detailed policy outcomes.
         matrix, stats = {}, {"hits": 0, "computed": 0}
@@ -436,7 +481,7 @@ class PartyBuilder:
                                 for q in opp_chunk:
                                     pair = (p["id"], q["id"])
                                     # All nine conditions for the 6v6; only six for meta.
-                                    if shield not in SHIELDS_META and q["id"] not in enemy_ids:
+                                    if (p["id"] in recommendation_only_ids and shield != core.STANDARD) or (shield not in SHIELDS_META and q["id"] not in enemy_ids):
                                         continue
                                     row = db.execute("SELECT rating FROM cells WHERE key=?",
                                                      (keys[pair],)).fetchone()
@@ -454,7 +499,7 @@ class PartyBuilder:
                                 for a, p in enumerate(own_chunk):
                                     for b, q in enumerate(opp_chunk):
                                         pair = (p["id"], q["id"])
-                                        if shield not in SHIELDS_META and q["id"] not in enemy_ids:
+                                        if (p["id"] in recommendation_only_ids and shield != core.STANDARD) or (shield not in SHIELDS_META and q["id"] not in enemy_ids):
                                             continue
                                         if pair not in missing_set:
                                             continue  # Valid cached cell wins; do not count as new.
