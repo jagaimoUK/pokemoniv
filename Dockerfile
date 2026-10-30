@@ -12,7 +12,7 @@ COPY pvpoke_minior_strategy.js /app/pvpoke_minior_strategy.js
 COPY pvpoke_battle_policy.js /app/pvpoke_battle_policy.js
 RUN node -e "if(require('./pvpoke_battle_policy.js').SCHEMA !== 'strategy-detail-v1') process.exit(1)"
 COPY flashcards.html flashcards_core.js flashcards_ui.js /app/
-COPY pvpoke_party_strategy_ui.js /app/pvpoke_party_strategy_ui.js
+COPY pvpoke_party_strategy_ui.js pvpoke_party_input.js /app/
 COPY data/flashcard_catalog.json /app/data/flashcard_catalog.json
 # Node loads this module at startup for *every* matrix, not just Minior.
 # Validate the deployed image here so missing modules cannot reach production.

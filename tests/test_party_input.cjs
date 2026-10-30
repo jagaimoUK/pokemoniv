@@ -1,0 +1,10 @@
+const assert=require('node:assert/strict'),fs=require('fs'),vm=require('vm');
+const cat={corsola:{name:'Corsola',name_ja:'サニーゴ',aliases:['サニーゴ'],fastMoves:['A'],chargedMoves:['B','C','D'],default_moves:{fast:'A',charged1:'C',charged2:'D'}},corsola_galarian:{name:'Corsola (Galarian)',name_ja:'サニーゴ (ガラル)',aliases:['ガラルサニーゴ'],fastMoves:['X'],chargedMoves:['Y','Z']}};
+const context={catalog:cat,module:{exports:{}}};vm.createContext(context);vm.runInContext(fs.readFileSync('pvpoke_party_input.js','utf8'),context);
+const x=context.module.exports;
+assert.equal(x.resolvePartyName('サニーゴ',cat),'corsola');assert.equal(x.resolvePartyName('さにーご',cat),'corsola');assert.equal(x.resolvePartyName('Ｃｏｒｓｏｌａ',cat),'corsola');assert.equal(x.resolvePartyName('ガラルサニーゴ',cat),'corsola_galarian');assert.equal(x.partySearch('サニーゴ',cat).length,2);
+assert.equal(x.partyDefaultMoves(cat.corsola).moves.charged1,'C');assert.equal(x.partyDefaultMoves(cat.corsola_galarian).recommended,false);
+assert.equal(context.parseCsv('サニーゴ')[0].charged1,'C');assert.equal(context.parseCsv('Corsola,A,B,C,0,15,15')[0].species,'corsola');
+assert.throws(()=>x.resolvePartyName('サニ',cat));assert.throws(()=>context.parseCsv('未登録'));
+cat.corsola_galarian.aliases.push('サニーゴ');assert.throws(()=>x.resolvePartyName('サニーゴ',cat),/複数/);
+console.log('Japanese/English names, suggestions, forms, recommended defaults, fallback and legacy CSV passed');

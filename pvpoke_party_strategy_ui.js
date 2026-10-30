@@ -1,12 +1,12 @@
 // Rendering and input only. Battle calculations run on the server.
 function strategyTargets(){
- const own=getMon();let enemies=[];try{enemies=parseCsv($('strategyEnemy').value)}catch(_){}
+ const own=getMon();let enemies=[];try{enemies=partyRosterRows('strategyEnemy')}catch(_){}
  const fill=(id,rows,fallback)=>{const el=$(id),value=el.value;el.replaceChildren();rows.forEach((m,i)=>el.append(new Option((i+1)+': '+name(m.species||'未指定'),String(i))));el.value=[...el.options].some(o=>o.value===value)?value:String(fallback)};
  fill('strategySelf',own,0);fill('strategyLead',own,1);fill('strategyCloser',own,2);fill('strategyOpponent',enemies,0);strategyWorkMoves();
 }
 function strategyWorkMoves(){
  const m=getMon()[Number($('strategySelf').value)]||{};const el=$('workMove'),old=el.value;el.replaceChildren();
- [m.charged1,m.charged2].filter(Boolean).forEach(x=>el.append(new Option(x,x)));
+ [m.charged1,m.charged2].filter(Boolean).forEach(x=>el.append(new Option(partyMoveNames[x]?.name||x,x)));
  if([...el.options].some(x=>x.value===old))el.value=old;
 }
 function manualValues(id){const raw=$(id).value.trim();if(!raw)return [];const a=raw.split(',').map(x=>x.trim());if(a.length>24||a.some(x=>!['0','1'].includes(x)))throw Error('手動方針は0または1をカンマ区切りで24回まで指定してください');return a.map(x=>x==='1')}
@@ -67,5 +67,5 @@ function showStrategy(r){
 }
 $('strategySelf').onchange=strategyWorkMoves;
 $('strategyEnemy').onchange=strategyTargets;
-$('copyEnemy').onclick=()=>{$('strategyEnemy').value=$('enemy').value;inputRevision++;strategyTargets()};
+$('copyEnemy').onclick=()=>{$('strategyEnemy').value=$('enemy').value;inputRevision++;rosterEditors.strategyEnemy?.refresh();strategyTargets()};
 $('runStrategy').onclick=()=>{strategyTargets();wrap('strategy')};

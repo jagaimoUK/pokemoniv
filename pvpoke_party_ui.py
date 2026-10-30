@@ -12,7 +12,7 @@ button:disabled{opacity:.45}input,select,textarea{width:100%;border:1px solid #6
 input[type=checkbox]{width:auto;min-height:unset}label{font-size:13px;display:block;margin:10px 0 5px}
 textarea{min-height:95px;resize:vertical}summary{cursor:pointer;min-height:44px;padding:10px 0;font-weight:bold}
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-.mon{padding:10px;border-radius:16px;background:#29413f;border:1px solid #557769}
+.suggestions{display:flex;flex-direction:column;gap:6px;margin-top:6px;max-height:260px;overflow:auto}.suggestions button{text-align:left;width:100%;font-size:13px}.mon{padding:10px;border-radius:16px;background:#29413f;border:1px solid #557769}
 .fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .fields label:first-child{grid-column:1/-1}
 .tabs{margin:14px 0}.tabs button[aria-pressed=true]{background:#638b72}section[hidden],div[hidden]{display:none}
@@ -27,15 +27,15 @@ footer .tools{max-width:700px;margin:auto}footer button{flex:1}
 <div id="workspace" hidden>
 <div class="tabs"><button data-tab="compose" aria-pressed="true">構築</button><button data-tab="weakness">弱点・補完</button><button data-tab="selection">相手と選出</button><button data-tab="strategy">詳細戦略</button><button data-tab="settings">保存・設定</button></div>
 <div id="compose"><section><h2>自分の6体</h2><p>各枠をタップして技と個体値を編集。IV省略時はPvPoke標準値を使用します。CP1500/Lv50・同一図鑑番号は1枠。</p><div class="grid" id="members"></div></section>
-<section><h2>自動構築</h2><p>候補を7列CSVで入力。固定枠を残して最大48候補から探索します。</p>
+<section><h2>自動構築</h2><p>名前から候補を追加します。固定枠を残して最大48候補から探索します。</p>
 <textarea id="pool" placeholder="azumarill,BUBBLE,ICE_BEAM,PLAY_ROUGH,0,15,15"></textarea><button id="build">候補から6体を提案</button></section></div>
 <div id="weakness" hidden><section><h2>弱点・補完</h2><div id="weakResult">分析後に表示します。</div></section></div>
-<div id="selection" hidden><section><h2>相手6体</h2><p>種ID・通常技・ゲージ技2つ（必要ならIV3つ）を1行ずつ指定してください。</p><textarea id="enemy" placeholder="clodsire,POISON_STING,STONE_EDGE,EARTHQUAKE"></textarea><button id="select">相手6体への選出を比較</button>
+<div id="selection" hidden><section><h2>相手6体</h2><p>名前から選ぶと推奨技が入ります。技をタップして変更できます。</p><textarea id="enemy" placeholder="clodsire,POISON_STING,STONE_EDGE,EARTHQUAKE"></textarea><button id="select">相手6体への選出を比較</button>
 <p>双方ともチーム全体のシールドは2枚。静的な近似であり、実際の3対3勝率ではありません。</p><div id="selectionResult"></div></section></div>
 <div id="strategy" hidden>
 <section><h2>詳細戦略の結果</h2><div id="strategyResult" aria-live="polite">対象と条件を指定して計算してください。未計算はunknownです。</div></section>
-<section id="strategyConfig"><h2>比較する対面</h2><p>自分の6体は「構築」で指定。相手は1体または6体のCSVです。通常技限定・受け後の仕事・シールド方針を一度に比較します。</p>
-<label for="strategyEnemy">相手（種ID・通常技・ゲージ技2つ、任意でIV3つ）</label><textarea id="strategyEnemy" placeholder="clodsire,POISON_STING,STONE_EDGE,EARTHQUAKE"></textarea>
+<section id="strategyConfig"><h2>比較する対面</h2><p>自分の6体は「構築」で指定。相手は名前から1体または6体を追加できます。通常技限定・受け後の仕事・シールド方針を一度に比較します。</p>
+<label for="strategyEnemy">相手のポケモン</label><textarea id="strategyEnemy" placeholder="clodsire,POISON_STING,STONE_EDGE,EARTHQUAKE"></textarea>
 <button id="copyEnemy">相手と選出の入力を使う</button><div class="fields">
 <label>対象の自分（後追い分岐では引き先）<select id="strategySelf"></select></label>
 <label>対象の相手（分岐では相手初手）<select id="strategyOpponent"></select></label></div>
@@ -65,7 +65,8 @@ footer .tools{max-width:700px;margin:auto}footer button{flex:1}
 'use strict';
 const $=id=>document.getElementById(id);
 let key='',catalog={},metaItems=[],partyId=null,revision=0,activeJob=null,latest=null,inputRevision=0,currentTab='compose';
-const name=id=>catalog[id]?.name||id;
+const name=id=>partyDisplay(id);
+let partyMoveNames={},rosterEditors={};
 function node(tag,text,cls){const n=document.createElement(tag);if(text!=null)n.textContent=text;if(cls)n.className=cls;return n}
 function status(text){$('status').textContent=text}
 function tab(target){currentTab=target;$('analyze').textContent=target==='strategy'?'詳細条件を比較':'6体を分析';if(target==='strategy')strategyTargets();['compose','weakness','selection','strategy','settings'].forEach(id=>$(id).hidden=id!==target);document.querySelectorAll('[data-tab]').forEach(x=>x.setAttribute('aria-pressed',String(x.dataset.tab===target)))}
@@ -75,22 +76,10 @@ async function api(path,body={}){
  const r=await fetch('/app-api/'+path,{method:'POST',headers:h,body:JSON.stringify(body),credentials:'same-origin'});
  const data=await r.json().catch(()=>({error:'サーバー応答を読み取れません'}));if(!r.ok)throw Error(data.error||'HTTP '+r.status);return data;
 }
-function createMon(data={}){
- const box=node('details',null,'mon'),s=node('summary',data.species?name(data.species):'ポケモンを選ぶ');
- box.append(s);const body=node('div',null,'fields');
- for(const [k,title,type] of [['species','種ID','text'],['fast','通常技','text'],['charged1','ゲージ技1','text'],['charged2','ゲージ技2','text'],['atk','攻撃IV','number'],['def','防御IV','number'],['hp','HP IV','number'],['level_override','指定レベル（任意）','number']]){
- const l=node('label',title);const input=node('input');input.dataset.field=k;input.type=type;input.value=data[k]??'';
- if(type==='number'){input.min=k==='level_override'?1:0;input.max=k==='level_override'?50:15;input.step=k==='level_override' ? 0.5 : 1}if(k==='species'){input.setAttribute('list','speciesList');input.onchange=()=>{const id=input.value.trim().toLowerCase();s.textContent=name(id);let p=catalog[id];if(p){body.querySelector('[data-field=fast]').value ||=p.fastMoves[0]||'';body.querySelector('[data-field=charged1]').value ||=p.chargedMoves[0]||'';body.querySelector('[data-field=charged2]').value ||=p.chargedMoves[1]||''}}}
- l.append(input);body.append(l)}
- const l=node('label');const locked=node('input');locked.type='checkbox';locked.dataset.field='locked';locked.checked=!!data.locked;l.append(locked,document.createTextNode(' 自動構築では固定'));body.append(l);box.append(body);return box;
-}
+/*PARTY_INPUT*/
 function renderMon(rows=[]){$('members').replaceChildren();for(let i=0;i<6;i++)$('members').append(createMon(rows[i]||{}))}
-function getMon(){return [...$('members').children].map(box=>{const item={};box.querySelectorAll('[data-field]').forEach(x=>{if(x.dataset.field==='locked'||!x.value.trim())return;item[x.dataset.field]=x.type==='number'?Number(x.value):x.value.trim()});return item})}
+function getMon(){return [...$('members').children].map(readPartyCard)}
 function locks(){return [...$('members').children].flatMap((box,i)=>box.querySelector('[data-field=locked]').checked?[i]:[])}
-function parseCsv(source){const lines=source.trim().split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
- return lines.map((line,i)=>{const p=line.split(',').map(x=>x.trim());if(![4,7].includes(p.length))throw Error((i+1)+'行目は4列または7列です');
- const x={species:p[0].toLowerCase(),fast:p[1].toUpperCase(),charged1:p[2].toUpperCase(),charged2:p[3].toUpperCase()};
- if(p.length===7){for(let n=4;n<7;n++){if(!/^(?:[0-9]|1[0-5])$/.test(p[n]))throw Error((i+1)+'行目のIVが不正です');x[['atk','def','hp'][n-4]]=Number(p[n])}}return x})}
 function getWeights(){const result={};for(const row of $('weights').value.split(/\r?\n/)){if(!row.trim())continue;const v=row.split(':');if(v.length!==2||!v[0].trim()||!Number.isFinite(Number(v[1]))||Number(v[1])<0)throw Error('重要度の形式が不正です');result[v[0].trim().toLowerCase()]=Number(v[1])}return result}
 const pct=v=>(v*100).toFixed(1)+'%';
 function label(id){const r=latest?.labels?.[id];return r?name(r.species)+' '+r.ivs.join('/')+' CP'+r.cp:id.slice(0,8)}
@@ -115,9 +104,9 @@ function show(result){latest=result;
  node('p','未計算: '+result.not_calculated.join('、')));tab(result.selection.status==='計算済み'?'selection':'weakness')}
 async function run(mode){if(activeJob)return;
  const request={mode,members:getMon(),locked_slots:locks(),meta_preset_id:$('meta').value,meta_sha256:metaItems.find(x=>x.id===$('meta').value)?.sha256,group_weights:mode==='strategy'?{}:getWeights(),ruleset:'cp1500-lv50'};
- if(mode==='build')request.candidate_pool=parseCsv($('pool').value);
- if(mode==='select')request.opponents=parseCsv($('enemy').value);
- if(mode==='strategy'){request.opponents=parseCsv($('strategyEnemy').value);request.strategy=getStrategy()}
+ if(mode==='build')request.candidate_pool=partyRosterRows('pool');
+ if(mode==='select')request.opponents=partyRosterRows('enemy');
+ if(mode==='strategy'){request.opponents=partyRosterRows('strategyEnemy');request.strategy=getStrategy()}
  const submittedRevision=inputRevision;
  const r=await api('party/start',request);activeJob=r.job_id;$('cancel').disabled=false;$('analyze').disabled=true;status('計算中...');
  for(;;){await new Promise(resolve=>setTimeout(resolve,2000));let s=await api('party/status',{job_id:activeJob});
@@ -132,19 +121,18 @@ $('cancel').onclick=()=>activeJob&&api('party/cancel',{job_id:activeJob}).then((
 function populateSaved(items){$('saved').replaceChildren(new Option('保存済みから読み込む',''));items.forEach(x=>$('saved').append(new Option(x.name,x.id)))}
 async function setup(){
  const [cat,presets,saved]=await Promise.all([api('catalog'),api('meta-presets'),api('party/list')]);
- if(!cat.ready)throw Error('ゲームデータがまだ準備中です');catalog=cat.species;metaItems=presets.items;
- for(const [id,p] of Object.entries(catalog)){let o=node('option');o.value=id;o.label=p.name||id;$('speciesList').append(o)}
+ if(!cat.ready)throw Error('ゲームデータがまだ準備中です');catalog=cat.species;partyMoveNames=cat.moves||{};metaItems=presets.items;
  for(const m of metaItems.filter(x=>x.available!==false)){let o=new Option(m.name+' ('+m.rows+'件)',m.id);$('meta').append(o)}$('meta').value=presets.default_id;
- populateSaved(saved.items);renderMon();$('workspace').hidden=false;$('auth').hidden=true;$('analyze').disabled=false;status('6体を入力すると分析できます')}
+ populateSaved(saved.items);renderMon();if(!rosterEditors.enemy){rosterEditors.enemy=partyRosterEditor('enemy',6);rosterEditors.pool=partyRosterEditor('pool',48);rosterEditors.strategyEnemy=partyRosterEditor('strategyEnemy',6);}$('workspace').hidden=false;$('auth').hidden=true;$('analyze').disabled=false;status('6体を入力すると分析できます')}
 $('login').onclick=async()=>{key=$('key').value.trim();try{await setup();if(key)await api('session',{}).catch(()=>{})}catch(e){$('workspace').hidden=false;status(e.message)}};
-$('save').onclick=async()=>{try{const obj={id:partyId,revision,name:$('partyName').value,members:getMon(),locked_slots:locks(),meta_preset_id:$('meta').value,meta_sha256:metaItems.find(x=>x.id===$('meta').value)?.sha256,group_weights:getWeights(),strategy:{...getStrategy(),enemy_csv:$('strategyEnemy').value},opponents:parseCsv($('enemy').value),candidate_pool:parseCsv($('pool').value)};
+$('save').onclick=async()=>{try{const obj={id:partyId,revision,name:$('partyName').value,members:getMon(),locked_slots:locks(),meta_preset_id:$('meta').value,meta_sha256:metaItems.find(x=>x.id===$('meta').value)?.sha256,group_weights:getWeights(),strategy:{...getStrategy(),enemy_csv:$('strategyEnemy').value},opponents:partyRosterRows('enemy'),candidate_pool:partyRosterRows('pool')};
  const r=await api('party/save',obj);partyId=r.id;revision=r.revision;populateSaved((await api('party/list')).items);status('保存済み。revision '+revision)}catch(e){status(e.message)}};
 $('load').onclick=async()=>{try{const p=await api('party/get',{id:$('saved').value});partyId=p.id;revision=p.revision;$('partyName').value=p.name;
  renderMon((p.members||[]).map((m,i)=>({...m,locked:(p.locked_slots||[]).includes(i)})));
  if(metaItems.some(x=>x.id===p.meta_preset_id))$('meta').value=p.meta_preset_id;
  $('weights').value=Object.entries(p.group_weights||{}).map(x=>x.join(':')).join('\n');
  const csv=rows=>(rows||[]).map(x=>[x.species,x.fast,x.charged1,x.charged2,...(['atk','def','hp'].every(k=>k in x)?[x.atk,x.def,x.hp]:[])].join(',')).join('\n');
- $('enemy').value=csv(p.opponents);$('pool').value=csv(p.candidate_pool);restoreStrategy(p.strategy);inputRevision++;status('読み込みました')}catch(e){status(e.message)}};
+ $('enemy').value=csv(p.opponents);$('pool').value=csv(p.candidate_pool);restoreStrategy(p.strategy);rosterEditors.enemy.refresh(p.opponents||[]);rosterEditors.pool.refresh(p.candidate_pool||[]);rosterEditors.strategyEnemy.refresh();inputRevision++;status('読み込みました')}catch(e){status(e.message)}};
 $('workspace').addEventListener('input',()=>{
  inputRevision++;
  const root=$('strategyResult');if(root.dataset.calculated&&!root.querySelector('[data-stale]')){const msg=node('p','入力が変更されています。以下は以前の条件の結果です。再計算してください。');msg.dataset.stale='true';root.prepend(msg)}
@@ -156,3 +144,5 @@ setup().catch(()=>{status('ログインが必要です。接続キーを入力�
 
 from pathlib import Path
 HTML = HTML.replace('/*STRATEGY_UI*/', Path(__file__).with_name('pvpoke_party_strategy_ui.js').read_text(encoding='utf-8'))
+
+HTML = HTML.replace('/*PARTY_INPUT*/', Path(__file__).with_name('pvpoke_party_input.js').read_text(encoding='utf-8'))
