@@ -344,6 +344,7 @@ def iterative_party_optimization(roster, candidates, opponents, matrix, weights,
         for state in frontier:
             current = state["roster"]
             current_rank = state["score"]
+            has_improvement = False
             for slot, old in enumerate(current):
                 if slot in locked:
                     continue
@@ -354,10 +355,11 @@ def iterative_party_optimization(roster, candidates, opponents, matrix, weights,
                     trial = list(current)
                     trial[slot] = candidate
                     key = tuple(sorted(trial))
-                    if key in visited:
-                        continue
                     assessed = score(tuple(trial))
                     if assessed is None or assessed[0] >= current_rank:
+                        continue
+                    has_improvement = True
+                    if key in visited:
                         continue
                     step = {"slot": slot, "out": old, "in": candidate}
                     state_new = {"roster": tuple(trial),
@@ -370,15 +372,15 @@ def iterative_party_optimization(roster, candidates, opponents, matrix, weights,
                                             existing["score"], len(existing["steps"]),
                                             existing["roster"]):
                         new[key] = state_new
+            if not has_improvement:
+                ended[tuple(sorted(current))] = {
+                    **state, "stop": "no_further_improvement"}
         if not new:
-            for state in frontier:
-                key = tuple(sorted(state["roster"]))
-                ended[key] = {**state, "stop": "no_further_improvement"}
             break
         # Keep promising alternative paths rather than a single greedy chain.
         frontier = sorted(new.values(),
                           key=lambda s: (s["score"], len(s["steps"]), s["roster"]))[:beam_width]
-        visited.update(new)
+        visited.update(tuple(sorted(state["roster"])) for state in frontier)
     else:
         for state in frontier:
             ended[tuple(sorted(state["roster"]))] = {**state, "stop": "step_limit"}
