@@ -85,12 +85,12 @@ def team_summary(team, opponents, matrix, weights, shields=STANDARD):
             "critical": critical[:15], "complete": unknown < 1e-10}
 
 
-def pair_summary(a, b, opponents, matrix, weights):
+def pair_summary(a, b, opponents, matrix, weights, shields=STANDARD):
     rescue_ab = rescue_ba = cover = hole = unknown = 0.0
     breakers = []
     for enemy in opponents:
         w = weights.get(enemy, 0)
-        ra, rb = lookup(matrix, a, enemy), lookup(matrix, b, enemy)
+        ra, rb = lookup(matrix, a, enemy, shields), lookup(matrix, b, enemy, shields)
         if ra is None or rb is None:
             unknown += w
             continue

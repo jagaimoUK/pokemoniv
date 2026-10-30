@@ -245,8 +245,8 @@ class PartyBuilder:
         if args["mode"] == "build" and len(pool_raw) < 6:
             raise ValueError("自動構築は6体以上の候補が必要です")
         pool = self._unique(self._normalize(pool_raw, catalog, species, cpms, engine, "自分の候補"))
-        if args["mode"] == "build" and any(p["species"].startswith("minior") for p in pool):
-            raise ValueError("メテノの対面ごとに方針を変える試験モデルは自動構築に使えません")
+        if any(p["species"].startswith("minior") for p in pool):
+            raise ValueError("メテノの対面ごとの最良戦略は単一の実行可能戦略ではないため、パーティ計算では未対応です")
         if len(pool) < 6 and args["mode"] == "build":
             raise ValueError("異なる候補が6体必要です")
         if args["mode"] != "build" and len(pool) != 6:
@@ -295,7 +295,25 @@ class PartyBuilder:
         else:
             result = {"roster": ids}
         whole = core.team_summary(ids, opponents, matrix, weights)
-        pairs = [core.pair_summary(a, b, opponents, matrix, weights) for a, b in __import__("itertools").combinations(ids, 2)]
+        # Standard six conditions are diagnostic weights, not battle frequencies.
+        condition_weights = {(2, 2): .50, (1, 1): .20, (0, 0): .10,
+                             (0, 1): .20 / 3, (0, 2): .20 / 3, (1, 2): .20 / 3}
+        scenarios = {str(a) + "-" + str(b): core.team_summary(
+            ids, opponents, matrix, weights, (a, b)) for a, b in SHIELDS_META}
+        pairs = []
+        for a, b in __import__("itertools").combinations(ids, 2):
+            by_condition = [(shields, core.pair_summary(a, b, opponents, matrix, weights, shields))
+                            for shields in SHIELDS_META]
+            main = core.pair_summary(a, b, opponents, matrix, weights)
+            for metric in ("balance", "coverage", "hole"):
+                main[metric] = round(sum(condition_weights[s] * v[metric]
+                                         for s, v in by_condition), 6)
+            main["standard_balance"] = next(v["balance"] for s, v in by_condition
+                                             if s == (2, 2))
+            main["conditions"] = {str(s[0]) + "-" + str(s[1]): {
+                "balance": v["balance"], "hole": v["hole"]}
+                for s, v in by_condition}
+            pairs.append(main)
         pairs.sort(key=lambda r: -r["balance"])
         triples = [{"members": list(group),
                     "summary": core.team_summary(group, opponents, matrix, weights)}
@@ -314,7 +332,10 @@ class PartyBuilder:
                   for p in self._unique(pool + meta + enemy)}
         return {"roster": ids, "meta": {"id": preset_id, "sha256": preset["sha256"],
                 "hypotheses": len(meta), "assumption": "仮説等分は使用率ではありません"},
-                "labels": labels, "team": whole, "pairs": pairs,
+                "labels": labels, "team": whole, "scenarios": scenarios,
+                "condition_weights": {"2-2": .50, "1-1": .20, "0-0": .10,
+                    "0-1": .20 / 3, "0-2": .20 / 3, "1-2": .20 / 3},
+                "pairs": pairs,
                 "triples": triples, "danger_pairs": threats, "selection": chosen, "search": result if args["mode"] == "build" else None,
                 "calculation_version": version, "evaluation_version": core.EVALUATION_VERSION,
                 "cache": stats, "not_calculated": [
