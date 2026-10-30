@@ -215,14 +215,27 @@ class PartyBuilder:
 
     def _compute(self, jid, args, catalog, species, cpms, engine, work):
         own_raw = args.get("members")
-        pool_raw = args.get("candidate_pool") if args["mode"] == "build" else own_raw
+        locked_raw = []
+        if not isinstance(own_raw, list):
+            raise ValueError("自分のパーティ入力が必要です")
+        if args["mode"] == "build":
+            indices = args.get("locked_slots") or []
+            if (not isinstance(indices, list) or
+                any(type(i) is not int or i < 0 or i >= len(own_raw) for i in indices)):
+                raise ValueError("固定枠の指定が正しくありません")
+            locked_raw = [own_raw[i] for i in dict.fromkeys(indices)]
+            pool_raw = locked_raw + (args.get("candidate_pool") or [])
+        else:
+            pool_raw = own_raw
         if not isinstance(pool_raw, list) or not 1 <= len(pool_raw) <= MAX_POOL:
-            raise ValueError("候補は1〜48体までです")
+            raise ValueError("固定枠を含む候補は1〜48体までです")
         if args["mode"] != "build" and len(own_raw) != 6:
             raise ValueError("分析するパーティは6体必要です")
         if args["mode"] == "build" and len(pool_raw) < 6:
             raise ValueError("自動構築は6体以上の候補が必要です")
         pool = self._unique(self._normalize(pool_raw, catalog, species, cpms, engine, "自分の候補"))
+        if args["mode"] == "build" and any(p["species"].startswith("minior") for p in pool):
+            raise ValueError("メテノの対面ごとに方針を変える試験モデルは自動構築に使えません")
         if len(pool) < 6 and args["mode"] == "build":
             raise ValueError("異なる候補が6体必要です")
         if args["mode"] != "build" and len(pool) != 6:
@@ -259,10 +272,8 @@ class PartyBuilder:
         opponents = [p["id"] for p in meta]
         clause = {p["id"]: p["roster_clause_id"] for p in pool}
         if args["mode"] == "build":
-            indices = args.get("locked_slots") or []
-            if not isinstance(indices, list) or any(type(i) is not int or i < 0 or i >= len(pool) for i in indices):
-                raise ValueError("固定枠の指定が正しくありません")
-            locked = [ids[i] for i in indices]
+            locked = [p["id"] for p in self._normalize(
+                locked_raw, catalog, species, cpms, engine, "固定枠")] if locked_raw else []
             # Search cannot put the same species in two slots.
             groups = {}
             for p in pool:
