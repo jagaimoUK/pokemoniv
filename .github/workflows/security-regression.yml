@@ -48,7 +48,7 @@ jobs:
       - name: Build production image and verify proxy configuration
         run: |
           docker build -t pokemoniv-security-ci .
-          docker run --rm --user 10001:10001 --entrypoint sh -e PORT=8787 pokemoniv-security-ci -c 'python /app/pvpoke_proxy_config.py && mkdir -p /tmp/pokemoniv-nginx/body /tmp/pokemoniv-nginx/proxy /tmp/pokemoniv-nginx/fastcgi /tmp/pokemoniv-nginx/uwsgi /tmp/pokemoniv-nginx/scgi && nginx -t -e /dev/stderr -c /tmp/pokemoniv-nginx.conf'
+          docker run --rm --user 10001:10001 --entrypoint sh -e PORT=8787 pokemoniv-security-ci -c 'python /app/pvpoke_proxy_config.py && mkdir -p /tmp/pokemoniv-nginx/body /tmp/pokemoniv-nginx/proxy /tmp/pokemoniv-nginx/fastcgi /tmp/pokemoniv-nginx/uwsgi /tmp/pokemoniv-nginx/scgi && nginx -t -e stderr -c /tmp/pokemoniv-nginx.conf'
           docker run --rm --user 10001:10001 -v "$PWD/tests:/tests:ro" --entrypoint python pokemoniv-security-ci -m unittest discover -s /tests -p test_proxy_gateway.py -v
           docker run --rm --entrypoint python pokemoniv-security-ci -m pip inspect > python-packages.json
           docker run --rm --entrypoint dpkg-query pokemoniv-security-ci -W > os-packages.txt

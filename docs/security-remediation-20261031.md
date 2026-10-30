@@ -1,8 +1,11 @@
 # Security remediation and release conditions (2026-10-31)
 
 Baseline: `fbf81c9af1f60c4f11c71abbcb8f2dc1ede179ef`.
-Keep this repository private. This change does not authorize public access or a
-multi-user service. The Auth0 owner restriction remains required.
+The user explicitly authorized deployment followed by publication of this
+repository on 2026-10-31, using local verification and the Railway build while
+GitHub CI is unavailable for the private repository. Publishing the source does
+not authorize anonymous app access or a multi-user service. The Auth0 owner
+restriction remains required.
 
 ## Implemented in source
 
@@ -38,14 +41,18 @@ multi-user service. The Auth0 owner restriction remains required.
   persist authentication. A stable `Security and regression` workflow runs on
   every PR and every main push with no path filters. It runs regression tests,
   a verified Gitleaks binary, dependency auditing, production image build,
-  unprivileged Nginx checks and browser initialization checks. It exports Python
-  and OS package inventories; these inventories are not a full OS vulnerability
-  audit or a complete SBOM.
-- **F08 (partial):** Production Python dependencies and their wheel hashes are
-  locked in `requirements.lock` for CPython 3.12/Linux x86_64. Termux/development
-  can still use `requirements.txt`. Image digest, OS packages and game data
-  approval/pinning remain separate work; runtime game data is still fetched as
-  before, to avoid silently changing the user's active ruleset.
+  unprivileged Nginx checks and browser initialization checks. The Railway image
+  build itself also checks Nginx under appuser and runs a real three-condition
+  Minior Node calculation. Python/OS inventories are retained inside the image;
+  these inventories are not a full OS vulnerability audit or a complete SBOM.
+- **F08:** Production Python dependencies and wheel hashes are locked for
+  CPython 3.12/Linux x86_64. The Python base image is pinned by its registry
+  digest. PvPoke data is pinned to upstream commit
+  `6477226670913974993c1f7c936331d55cd7d893`, separately from the engine source.
+  Both data files are SHA-256 verified, fetched at build time and reused offline
+  at startup. Updates require reviewing a new snapshot and hashes; a refresh
+  reloads the approved version. OS package vulnerability auditing and a complete
+  reproducible OS-package snapshot remain separate work.
 - **F09/F10:** Root `THIRD_PARTY_NOTICES.md` contains the complete upstream
   PokéAPI BSD notice and accurate PvPoke local-modification information. The
   notice is included in the image. Existing MIT text is retained. This does not
@@ -71,19 +78,22 @@ any required process fails. Nginx stays unprivileged after volume bootstrap.
 The existing result archives, party database, presets and backup object format
 are unchanged. No existing user data migration is required.
 
-## F05: release gate still requires platform configuration
+## F05: manual release while private CI is unavailable
 
-The observed main branch is unprotected and Railway `source.checkSuites` is
-false. The available connectors cannot set branch protection or this source
-field. Keep the security change on its PR until CI, including the image build,
-actually passes. Do not merge a failed or unstarted build merely because local
-unit tests passed.
+At the start of this release the main branch is unprotected and Railway
+`source.checkSuites` is false. The available connectors cannot set branch
+protection or this source field. The user explicitly authorized finishing the
+available checks, deploying, and then publishing the repository so CI can run.
+Do not interpret the earlier CI failures with zero steps as passing tests.
 
-Once Actions can execute successfully, configure main protection with the
-stable `security-regression` job and appropriate review restrictions. Enable
-Railway Wait for CI (`source.checkSuites=true`) after confirming the main-push
-workflow exists. Do not publish the repository to bypass private-plan limits.
-If automation is unavailable, use a documented manual deployment gate instead.
+The current manual gate requires local regression/security tests, the image's
+build-time data/hash and unprivileged Nginx/engine checks, a terminal Railway
+SUCCESS and low-load HTTP/browser checks. Keep the previous deployment as a
+rollback target and preserve the revocation DB. After publication, execute the
+stable Security and regression workflow, resolve real failures, then configure
+main protection and Railway Wait for CI once the required check is available.
+The hosting provider and repository privacy controls may require an interactive
+owner sign-in; do not report these settings changed without observing them.
 
 ## Verification and remaining release checks
 
@@ -95,13 +105,14 @@ token escalation, cookie replay after logout, restart persistence, separate
 sessions and backup-code revocation. The browser test is in CI for execution
 under the exact HTTP CSP and production image.
 
-Before deployment: obtain a passing image build and mobile-browser CSP check,
-then check the terminal Railway deployment status, health and unauthenticated
-401 behavior. Android clipboard/intent handoff and an actual production backup
+During deployment: use the Railway image build as the build gate, then check
+the terminal deployment status, revision-bearing health response, unauthenticated
+401 behavior and public-page browser initialization. Android clipboard/intent handoff and an actual production backup
 round trip still need device-level verification. No Android sources or APK
 signatures are changed by this patch.
 
-Before public release: finish F05, image/game-data reproducibility and OS
-auditing, confirm incident-related credential rotation, Auth0 MFA/owner
-settings, S3 private access and asset distribution rights. F12 remains an
+Remaining operational checks: finish automated F05 enforcement after public CI
+works, OS auditing, incident-related credential rotation, Auth0 MFA/owner
+settings, S3 private access and asset distribution rights. These are not claimed
+complete merely because the user authorized publishing the source. F12 remains an
 explicit single-owner design, not tenant isolation.

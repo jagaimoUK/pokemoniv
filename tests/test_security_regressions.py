@@ -5,6 +5,7 @@ import http.client
 import json
 import os
 import re
+import sqlite3
 import socket
 import tempfile
 import threading
@@ -68,6 +69,20 @@ class GatewaySecurityTests(unittest.TestCase):
         for token in ('Bearer \xe9', 'Bearer ' + 'x' * 5000, 'Basic xxx', 'Bearer', ''):
             self.assertEqual(self.request('/app-api/session', token)[0], 401)
         self.assertEqual(self.request('/app-api/session', 'Bearer ' + remote.API_KEY)[0], 200)
+
+    def test_cookie_store_failure_returns_503_without_exposing_details(self):
+        cookie = remote.BROWSER_LOGIN.issue().split(';', 1)[0]
+        with patch.object(self.store, 'active', side_effect=sqlite3.OperationalError('private-db-details')):
+            status, _, body = self.request('/app-api/meta-status', cookie=cookie)
+            self.assertEqual(status, 503)
+            self.assertNotIn(b'private-db-details', body)
+
+    def test_backup_store_failure_returns_503(self):
+        token = remote.BACKUP_TOKENS.issue()
+        with patch.object(self.store, 'active', side_effect=OSError('private-file-details')):
+            status, _, body = self.request('/visual-backup/v1/status', 'Bearer ' + token)
+            self.assertEqual(status, 503)
+            self.assertNotIn(b'private-file-details', body)
 
     def test_logout_revokes_cookie_copy_survives_store_reopen_and_keeps_other_device(self):
         key = 'Bearer ' + remote.API_KEY

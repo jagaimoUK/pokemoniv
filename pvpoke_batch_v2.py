@@ -23,6 +23,7 @@ import pvpoke_archive
 import pvpoke_matchup_cache as matchup_cache
 from pvpoke_calculation_version import calculation_version, force_recalculate
 import pvpoke_direct_backend as direct_backend
+from pvpoke_data_snapshot import install_snapshot
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -36,7 +37,6 @@ CDP = 'http://127.0.0.1:9222'
 CAND = DIR / 'candidates.csv'
 OPPS = DIR / 'opponents.csv'
 HEADER = ['species', 'fast', 'charged1', 'charged2', 'atk', 'def', 'hp']
-RAW = 'https://raw.githubusercontent.com/pvpoke/pvpoke/master/src/'
 MAX_LEVEL = 50
 CP_CAP = 1500
 def chunk_size(name, default):
@@ -70,7 +70,10 @@ def result_filename(pair):
 def urlget(url, timeout=35):
     req = urllib.request.Request(url, headers={'User-Agent': 'PvPoke-Termux-automation/0.2'})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+        data = resp.read(5 * 1024 * 1024 + 1)
+        if len(data) > 5 * 1024 * 1024:
+            raise ValueError('PvPoke data exceeds the download size limit')
+        return data
 
 
 def setup():
@@ -92,23 +95,9 @@ def setup():
 
 
 def game_data(refresh=False):
-    DATA.mkdir(parents=True, exist_ok=True)
+    install_snapshot(DATA, urlget, refresh=refresh)
     master = DATA / 'gamemaster.json'
     pokemon_js = DATA / 'Pokemon.js'
-    for fn, url in [
-        (master, RAW + 'data/gamemaster.json'),
-        (pokemon_js, RAW + 'js/pokemon/Pokemon.js'),
-    ]:
-        if not fn.exists() or refresh:
-            print('最新データ取得:', fn.name, flush=True)
-            temp = fn.with_suffix(fn.suffix + '.tmp')
-            try:
-                temp.write_bytes(urlget(url))
-                if temp.stat().st_size < 10000:
-                    raise ValueError('取得ファイルが小さすぎます')
-                temp.replace(fn)
-            finally:
-                temp.unlink(missing_ok=True)
     gm = json.loads(master.read_text(encoding='utf-8'))
     src = pokemon_js.read_text(encoding='utf-8')
     match = re.search(r'\bvar\s+cpms\s*=\s*\[([^\]]+)\]', src, re.S)

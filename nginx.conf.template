@@ -1,6 +1,6 @@
 worker_processes 1;
 pid /tmp/pokemoniv-nginx.pid;
-error_log /dev/stderr warn;
+error_log stderr warn;
 events { worker_connections 128; }
 http {
     # Do not log request URLs, query strings, authorization or cookies.

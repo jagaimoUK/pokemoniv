@@ -6,6 +6,7 @@ Not a hardened multi-tenant production service.
 import json
 import hashlib
 import re
+import sqlite3
 from pvpoke_input_limits import MAX_APP_REQUEST_BYTES
 import base64
 import threading
@@ -478,7 +479,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         raw = self.headers.get('Authorization', '')
         token = raw[7:] if raw.startswith('Bearer ') else ''
-        if not BACKUP_TOKENS.valid(token):
+        try:
+            token_ok = BACKUP_TOKENS.valid(token)
+        except (sqlite3.Error, OSError):
+            return self.respond(503, {'error': '認証の保存先に接続できません。少し待って再試行してください'})
+        if not token_ok:
             return self.unauthorized()
         if not self.rate_allowed('backup-owner', 12, 60):
             return
@@ -562,7 +567,9 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
         if self.path == '/health':
-            self.respond(200, {'ok':True, 'version':'0.2-cloud-prototype','visual_backup':{'enabled':VISUAL_BACKUP.enabled,'storage_probe':VISUAL_BACKUP.probe_ok}})
+            self.respond(200, {'ok':True, 'version':'0.3-security',
+                              'commit':os.environ.get('RAILWAY_GIT_COMMIT_SHA', ''),
+                              'visual_backup':{'enabled':VISUAL_BACKUP.enabled,'storage_probe':VISUAL_BACKUP.probe_ok}})
         else:
             self.respond(405, {'error': 'POST /mcp for MCP requests'})
     def do_POST(self):
@@ -584,7 +591,10 @@ class Handler(BaseHTTPRequestHandler):
         oauth_ok = (not is_api_key and not app_session and len(token) <= 4096 and token.isascii() and oauth_token_valid(token))
         strong_auth = is_api_key or oauth_ok
         bearer_ok = strong_auth or app_session
-        cookie_ok = is_app and BROWSER_LOGIN.valid(self.headers.get('Cookie', ''))
+        try:
+            cookie_ok = is_app and BROWSER_LOGIN.valid(self.headers.get('Cookie', ''))
+        except (sqlite3.Error, OSError):
+            return self.respond(503, {'error': '認証の保存先に接続できません。少し待って再試行してください'})
         if not (bearer_ok or cookie_ok):
             self.unauthorized()
             return

@@ -11,6 +11,10 @@ Local `Battle.js` modifications add actionPolicy, shieldPolicy and
 onMoveResolved hooks for strategy comparison and move event reporting.
 The vendored engine is therefore not an entirely unmodified upstream copy.
 Game data fetched separately is not implied to be covered by this engine snapshot.
+Approved game data and CP-multiplier source snapshot:
+`6477226670913974993c1f7c936331d55cd7d893` (2026-10-29).
+Exact SHA-256 values are in `pvpoke_data_snapshot.py`. The engine snapshot and
+data snapshot are intentionally tracked separately.
 
 ## PokéAPI
 

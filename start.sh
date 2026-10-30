@@ -31,10 +31,10 @@ done
 python /app/pvpoke_proxy_config.py
 mkdir -p /tmp/pokemoniv-nginx/body /tmp/pokemoniv-nginx/proxy /tmp/pokemoniv-nginx/fastcgi /tmp/pokemoniv-nginx/uwsgi /tmp/pokemoniv-nginx/scgi
 # Nginx is not given the application's secrets.
-env -i PATH="$PATH" nginx -t -e /dev/stderr -c /tmp/pokemoniv-nginx.conf
+env -i PATH="$PATH" nginx -t -e stderr -c /tmp/pokemoniv-nginx.conf
 PVP_BIND_HOST=127.0.0.1 PORT=8788 python /app/pvpoke_mcp_remote.py &
 APP_PID=$!
-env -i PATH="$PATH" nginx -e /dev/stderr -c /tmp/pokemoniv-nginx.conf -g 'daemon off;' &
+env -i PATH="$PATH" nginx -e stderr -c /tmp/pokemoniv-nginx.conf -g 'daemon off;' &
 PROXY_PID=$!
 while kill -0 "$WEB_PID" && kill -0 "$APP_PID" && kill -0 "$PROXY_PID"; do
   sleep 1
