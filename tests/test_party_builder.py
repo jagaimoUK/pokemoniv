@@ -1,6 +1,8 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pvpoke_party_core as core
 from pvpoke_party_backend import PartyBuilder
@@ -97,7 +99,109 @@ class PartyCoreTests(unittest.TestCase):
         self.assertEqual(len(set(clause[x] for x in r["roster"])), 6)
 
 
+
+class PartyMetaShadowIdTests(unittest.TestCase):
+    """PvPoke export spellings must become valid internal battle IDs."""
+
+    def setUp(self):
+        self.catalog = {
+            "feraligatr": {"fastMoves": ["SHADOW_CLAW"],
+                           "chargedMoves": ["HYDRO_CANNON", "ICE_BEAM"]},
+            "feraligatr_shadow": {"fastMoves": ["SHADOW_CLAW"],
+                                  "chargedMoves": ["HYDRO_CANNON", "ICE_BEAM"]},
+            "corsola_galarian": {"fastMoves": ["ASTONISH"],
+                                 "chargedMoves": ["NIGHT_SHADE", "POWER_GEM"]},
+        }
+        self.species = {
+            "feraligatr": {"dex": 160},
+            "feraligatr_shadow": {"dex": 160},
+            "corsola_galarian": {"dex": 222},
+        }
+        self.engine = SimpleNamespace(
+            HEADER=["species", "fast", "charged1", "charged2", "atk", "def", "hp"],
+            CP_CAP=1500, MAX_LEVEL=50,
+            optimize=lambda rows, species, cpms, label: [
+                {**row, "level": 20.0, "cp": 1481} for row in rows],
+        )
+
+    def normalize(self, sid, fast="SHADOW_CLAW",
+                  charged1="HYDRO_CANNON", charged2="ICE_BEAM"):
+        return PartyBuilder._normalize(
+            [{"species": sid, "fast": fast, "charged1": charged1,
+              "charged2": charged2}],
+            self.catalog, self.species, [], self.engine, "メタ")[0]
+
+    def test_pvpoke_export_shadow_suffix_uses_internal_species_id(self):
+        with patch("pvpoke_party_backend.iv_modes.select_opponent_ivs",
+                   return_value=(0, 15, 15, 1)):
+            exported = self.normalize("FERALIGATR_SHADOW-shadow")
+            native = self.normalize("feraligatr_shadow")
+            normal = self.normalize("feraligatr")
+
+        self.assertEqual(exported["species"], "feraligatr_shadow")
+        self.assertEqual(exported["meta_group_id"], "feraligatr_shadow")
+        self.assertEqual(exported["roster_clause_id"], "160")
+        self.assertEqual(exported["id"], native["id"])
+        self.assertNotEqual(exported["id"], normal["id"])
+
+    def test_other_forms_and_unknown_ids_remain_strictly_validated(self):
+        with patch("pvpoke_party_backend.iv_modes.select_opponent_ivs",
+                   return_value=(0, 15, 15, 1)):
+            galar = self.normalize("corsola_galarian", "ASTONISH",
+                                   "NIGHT_SHADE", "POWER_GEM")
+            self.assertEqual(galar["species"], "corsola_galarian")
+            for bad in ("feraligatr-shadow",
+                        "feraligatr_shadow-shadow-shadow",
+                        "unknown_shadow-shadow"):
+                with self.subTest(species=bad), self.assertRaisesRegex(
+                        ValueError, "未登録ポケモン"):
+                    self.normalize(bad)
+
+
+
 class PartyStoreTests(unittest.TestCase):
+    def test_saved_parties_keep_own_enemy_and_strategy_independent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = PartyBuilder(Path(tmp))
+            own_a = [{"species": "azumarill", "fast": "BUBBLE",
+                      "charged1": "ICE_BEAM", "charged2": "PLAY_ROUGH",
+                      "atk": 0, "def": 15, "hp": 15}]
+            own_b = [{"species": "clodsire", "fast": "POISON_STING",
+                      "charged1": "STONE_EDGE", "charged2": "EARTHQUAKE",
+                      "atk": 2, "def": 15, "hp": 12}]
+            opp_a = [{"species": "corsola_galarian", "fast": "ASTONISH",
+                      "charged1": "NIGHT_SHADE", "charged2": "POWER_GEM",
+                      "atk": 5, "def": 10, "hp": 11}]
+            opp_b = [{"species": "quagsire", "fast": "MUD_SHOT",
+                      "charged1": "AQUA_TAIL", "charged2": "STONE_EDGE",
+                      "atk": 3, "def": 14, "hp": 14}]
+            a = store.save_party({"name": "大会A", "members": own_a,
+                "opponents": opp_a, "strategy": {"enemy_csv": "corsola_galarian,ASTONISH,NIGHT_SHADE,POWER_GEM", "lead_index": 1}})
+            b = store.save_party({"name": "大会B", "members": own_b,
+                "opponents": opp_b, "strategy": {"enemy_csv": "quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE", "lead_index": 2}})
+            self.assertNotEqual(a["id"], b["id"])
+            self.assertEqual(len(store.list_parties()["items"]), 2)
+            for id_, own, opp, lead in ((a["id"], own_a, opp_a, 1),
+                                         (b["id"], own_b, opp_b, 2)):
+                with self.subTest(party=id_):
+                    saved = PartyBuilder(Path(tmp)).get_party(id_)
+                    self.assertEqual(saved["members"], own)
+                    self.assertEqual(saved["opponents"], opp)
+                    self.assertEqual(saved["strategy"]["lead_index"], lead)
+            updated = store.save_party({"id": b["id"], "revision": 1,
+                "name": "大会B改", "members": own_b, "opponents": opp_a})
+            self.assertEqual(updated["revision"], 2)
+            self.assertEqual(store.get_party(a["id"])["opponents"], opp_a)
+            self.assertEqual(store.get_party(b["id"])["opponents"], opp_a)
+
+    def test_legacy_party_without_opponents_is_still_readable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = PartyBuilder(Path(tmp))
+            created = store.save_party({"name": "旧保存", "members": []})
+            party = store.get_party(created["id"])
+            self.assertIsNone(party["opponents"])
+            self.assertIsNone(party["strategy"])
+
     def test_revision_and_separate_storage(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = PartyBuilder(Path(tmp))

@@ -18,13 +18,23 @@ function getStrategy(){
  manual_self:manualValues('manualSelf'),manual_opponent:manualValues('manualOpponent'),danger_ratio:Number($('dangerRatio').value),reserve:Number($('reserve').value),
  include_branch:$('includeBranch').checked,lead_turns:Number($('leadTurns').value),chase_delay_turns:Number($('chaseDelay').value),work};
 }
-function restoreStrategy(c){if(!c)return;$('strategyEnemy').value=c.enemy_csv||'';strategyTargets();
+function restoreStrategy(saved, fallbackEnemyCsv=''){
+ // Reset every field so switching between saved parties never keeps old settings.
+ const defaults={self_index:0,opponent_index:0,lead_index:1,closer_index:2,lead_turns:2,chase_delay_turns:2,
+  danger_ratio:0.95,reserve:1,self_bait:true,opponent_bait:true,public_moves:true,include_branch:false,
+  manual_self:[false,true,false,true],manual_opponent:[false,true,false,true],work:{kind:'charged'}};
+ const c={...defaults,...(saved||{})};
+ $('strategyEnemy').value=c.enemy_csv??fallbackEnemyCsv;
+ rosterEditors.strategyEnemy?.refresh();strategyTargets();
  const pairs={self_index:'strategySelf',opponent_index:'strategyOpponent',lead_index:'strategyLead',closer_index:'strategyCloser',lead_turns:'leadTurns',chase_delay_turns:'chaseDelay',danger_ratio:'dangerRatio',reserve:'reserve'};
- Object.entries(pairs).forEach(([k,id])=>{if(c[k]!=null)$(id).value=c[k]});strategyWorkMoves();
- ['self_bait','opponent_bait','public_moves'].forEach((k,i)=>{if(c[k]!=null)$(['selfBait','opponentBait','publicMoves'][i]).value=c[k]?'1':'0'});
- if(c.include_branch!=null)$('includeBranch').checked=c.include_branch;
- ['manual_self','manual_opponent'].forEach((k,i)=>{if(c[k])$(['manualSelf','manualOpponent'][i]).value=c[k].map(Number).join(',')});
- if(c.work){$('workKind').value=c.work.kind;if(c.work.move_id)$('workMove').value=c.work.move_id;if(c.work.hp_fraction)$('workFraction').value=c.work.hp_fraction*100}
+ Object.entries(pairs).forEach(([k,id])=>$(id).value=String(c[k]));
+ strategyWorkMoves();
+ ['self_bait','opponent_bait','public_moves'].forEach((k,i)=>$(['selfBait','opponentBait','publicMoves'][i]).value=c[k]?'1':'0');
+ $('includeBranch').checked=!!c.include_branch;
+ ['manual_self','manual_opponent'].forEach((k,i)=>$(['manualSelf','manualOpponent'][i]).value=(c[k]||[]).map(Number).join(','));
+ $('workKind').value=c.work?.kind||'charged';
+ $('workFraction').value=c.work?.hp_fraction!=null?String(c.work.hp_fraction*100):'15';
+ if(c.work?.move_id)$('workMove').value=c.work.move_id;
 }
 const outcomes={self_ko_win:'突破',opponent_ko_win:'自分が倒れる',simultaneous_ko:'同時落ち',timeout:'時間切れ',boundary:'交代境界'};
 function resourceText(p){return 'HP '+p.hp+'/'+p.max_hp+' / E '+p.energy_points+'点 / 残シールド '+p.shields+'枚'}
