@@ -38,6 +38,7 @@ class PartyBuilder:
         self._lock = threading.RLock()
         self._active = None
         self._cancel = False
+        self._previous_global = None
 
     @property
     def running(self):
@@ -187,6 +188,9 @@ class PartyBuilder:
             self._active = jid
             self._cancel = False
             self._record(jid, "queued", {"message": "準備しています", "progress": 0})
+            self._previous_global = (global_status, global_lock, dict(global_status))
+            global_status["state"] = "running"
+            global_status["message"] = "パーティ作成の計算中"
             task = threading.Thread(target=self._worker, args=(
                 jid, args, catalog, species, cpms, engine, work), daemon=True)
             task.start()
@@ -212,6 +216,12 @@ class PartyBuilder:
             with self._lock:
                 if self._active == jid:
                     self._active = None
+                    if self._previous_global:
+                        status, lock, previous = self._previous_global
+                        with lock:
+                            status.clear()
+                            status.update(previous)
+                        self._previous_global = None
 
     def _compute(self, jid, args, catalog, species, cpms, engine, work):
         own_raw = args.get("members")
@@ -291,6 +301,9 @@ class PartyBuilder:
                    for group in core.legal_triples(ids, clause=clause)]
         triples.sort(key=lambda r: (r["summary"]["unknown_weight"], r["summary"]["d0"],
                                     r["summary"]["severity0"]))
+        threats = core.dangerous_pairs(
+            [row["members"] for row in triples[:3]], opponents, matrix, weights,
+            {p["id"]: p["roster_clause_id"] for p in meta})
         chosen = (core.choose_three(ids, [p["id"] for p in enemy], matrix)
                   if enemy else {"status": "相手6体が未指定"})
         labels = {p["id"]: {"species": p["species"],
@@ -301,7 +314,7 @@ class PartyBuilder:
         return {"roster": ids, "meta": {"id": preset_id, "sha256": preset["sha256"],
                 "hypotheses": len(meta), "assumption": "仮説等分は使用率ではありません"},
                 "labels": labels, "team": whole, "pairs": pairs,
-                "triples": triples, "selection": chosen, "search": result if args["mode"] == "build" else None,
+                "triples": triples, "danger_pairs": threats, "selection": chosen, "search": result if args["mode"] == "build" else None,
                 "calculation_version": version, "evaluation_version": core.EVALUATION_VERSION,
                 "cache": stats, "not_calculated": [
                     "通常技限定の圧力", "受け後の仕事", "観測ベースのシールド温存",
@@ -350,7 +363,7 @@ class PartyBuilder:
             if next_best == best:
                 break
             best = next_best
-        return {"roster": list(best), "beam_width": width,
+        return {"roster": list(best), "locked": locked, "beam_width": width,
                 "candidate_count": len(candidates), "scope": "候補内の暫定結果。全探索ではありません"}
 
     def _matrix(self, jid, pool, opponents, version, engine, work, *, enemy_ids):

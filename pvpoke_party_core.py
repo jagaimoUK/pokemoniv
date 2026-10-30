@@ -217,6 +217,39 @@ def choose_three(ours, enemies, matrix, *, max_enemies=60):
             "recommendations": chosen}
 
 
+def dangerous_pairs(triples, opponents, matrix, weights, clauses, *, top=20, limit=10):
+    """Potential answer concentration and counter-switch traps, not certain defeats.
+
+    Pair importance sqrt(w_x*w_y) is a search priority, NOT occurrence frequency.
+    Exclude same-species move hypotheses from simultaneous opposing selections.
+    """
+    shortlist = sorted(opponents, key=lambda x: -weights.get(x, 0))[:top]
+    scored = []
+    for own in triples[:3]:
+        for x, y in combinations(shortlist, 2):
+            if clauses[x] == clauses[y]:
+                continue
+            if any(lookup(matrix, p, q) is None for p in own for q in (x, y)):
+                continue
+            deficit = (2 - max_matching(own, (x, y), matrix)) / 2
+            trap = 0.0
+            for main, counter in ((x, y), (y, x)):
+                responses = [p for p in own if lookup(matrix, p, main) > 500]
+                for answer in responses:
+                    if all(lookup(matrix, p, main) <= 500 for p in own if p != answer):
+                        trap = max(trap, (1 - strength(lookup(matrix, answer, counter))) *
+                                   min(1 - strength(lookup(matrix, p, main))
+                                       for p in own if p != answer))
+            if deficit == 0 and trap <= 0:
+                continue
+            priority = math.sqrt(weights.get(x, 0) * weights.get(y, 0)) * (deficit + .5 * trap)
+            scored.append({"own": list(own), "opponents": [x, y],
+                           "assignment_deficit": deficit, "trap_risk": round(trap, 5),
+                           "priority": round(priority, 6)})
+    scored.sort(key=lambda x: -x["priority"])
+    return scored[:limit]
+
+
 def rank_partial(roster, opponents, matrix, weights):
     result = team_summary(roster, opponents, matrix, weights)
     # Same-depth comparisons only. A missing cell cannot be assigned a loss.

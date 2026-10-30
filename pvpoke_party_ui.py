@@ -56,9 +56,9 @@ async function api(path,body={}){
 function createMon(data={}){
  const box=node('details',null,'mon'),s=node('summary',data.species?name(data.species):'ポケモンを選ぶ');
  box.append(s);const body=node('div',null,'fields');
- for(const [k,title,type] of [['species','種ID','text'],['fast','通常技','text'],['charged1','ゲージ技1','text'],['charged2','ゲージ技2','text'],['atk','攻撃IV','number'],['def','防御IV','number'],['hp','HP IV','number']]){
+ for(const [k,title,type] of [['species','種ID','text'],['fast','通常技','text'],['charged1','ゲージ技1','text'],['charged2','ゲージ技2','text'],['atk','攻撃IV','number'],['def','防御IV','number'],['hp','HP IV','number'],['level_override','指定レベル（任意）','number']]){
  const l=node('label',title);const input=node('input');input.dataset.field=k;input.type=type;input.value=data[k]??'';
- if(type==='number'){input.min=0;input.max=15;input.step=1}if(k==='species'){input.setAttribute('list','speciesList');input.onchange=()=>{const id=input.value.trim().toLowerCase();s.textContent=name(id);let p=catalog[id];if(p){body.querySelector('[data-field=fast]').value ||=p.fastMoves[0]||'';body.querySelector('[data-field=charged1]').value ||=p.chargedMoves[0]||'';body.querySelector('[data-field=charged2]').value ||=p.chargedMoves[1]||''}}}
+ if(type==='number'){input.min=k==='level_override'?1:0;input.max=k==='level_override'?50:15;input.step=k==='level_override'?.5:1}if(k==='species'){input.setAttribute('list','speciesList');input.onchange=()=>{const id=input.value.trim().toLowerCase();s.textContent=name(id);let p=catalog[id];if(p){body.querySelector('[data-field=fast]').value ||=p.fastMoves[0]||'';body.querySelector('[data-field=charged1]').value ||=p.chargedMoves[0]||'';body.querySelector('[data-field=charged2]').value ||=p.chargedMoves[1]||''}}}
  l.append(input);body.append(l)}
  const l=node('label');const locked=node('input');locked.type='checkbox';locked.dataset.field='locked';locked.checked=!!data.locked;l.append(locked,document.createTextNode(' 自動構築では固定'));body.append(l);box.append(body);return box;
 }
@@ -73,10 +73,17 @@ function getWeights(){const result={};for(const row of $('weights').value.split(
 const pct=v=>(v*100).toFixed(1)+'%';
 function label(id){const r=latest?.labels?.[id];return r?name(r.species)+' '+r.ivs.join('/')+' CP'+r.cp:id.slice(0,8)}
 function addLine(parent,text){parent.append(node('p',text))}
-function show(result){latest=result;let t=result.team;const root=$('weakResult');root.replaceChildren();
+function show(result){latest=result;
+ if(result.search){const fixed=new Set(result.search.locked||[]);
+ renderMon(result.roster.map(id=>{const p=result.labels[id];return {
+ species:p.species,fast:p.moves[0],charged1:p.moves[1],charged2:p.moves[2],
+ atk:p.ivs[0],def:p.ivs[1],hp:p.ivs[2],level_override:p.level,
+ locked:fixed.has(id)}}));}
+ let t=result.team;const root=$('weakResult');root.replaceChildren();
  root.append(node('h3','メタに対する6体の対応力'));
  addLine(root,'未対応 D0 '+pct(t.d0)+' / 担当1体 D1 '+pct(t.d1)+' / 未計算 '+pct(t.unknown_weight));
  root.append(node('h3','未対応の重要相手'));const u=node('ul');t.critical.forEach(x=>u.append(node('li',label(x.opponent)+' / 最良Rating '+x.best_rating)));root.append(u);
+ root.append(node('h3','相手の危険な2体の組み合わせ'));const threats=node('ul');(result.danger_pairs||[]).slice(0,10).forEach(x=>threats.append(node('li',x.opponents.map(label).join(' + ')+' / 担当集中 '+x.assignment_deficit+' / 釣り出し警告 '+x.trap_risk)));root.append(threats);
  root.append(node('h3','全15ペアの相互補完'));const pairs=node('ul');result.pairs.forEach(x=>pairs.append(node('li',x.members.map(label).join(' + ')+' / 補完 '+x.balance.toFixed(3)+' / 穴 '+pct(x.hole))));root.append(pairs);
  root.append(node('h3','20組の3体別の穴'));const triples=node('ul');result.triples.forEach(x=>triples.append(node('li',x.members.map(label).join(' / ')+' D0 '+pct(x.summary.d0)+' D1 '+pct(x.summary.d1))));root.append(triples);
  const sel=$('selectionResult');sel.replaceChildren();if(result.selection.status==='計算済み'){sel.append(node('h3','推奨選出（先頭が初手）'));result.selection.recommendations.forEach((x,i)=>{const b=node('div',null,'result');b.append(node('strong',(i+1)+'案: '+x.selection.map(label).join(' → ')));addLine(b,'保守的な静的比較値 '+x.worst+' / 危険な相手選出 '+x.worst_opponent.map(label).join(' / '));sel.append(b)})}else addLine(sel,result.selection.missing_condition||result.selection.status);

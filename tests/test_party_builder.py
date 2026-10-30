@@ -63,6 +63,18 @@ class PartyCoreTests(unittest.TestCase):
         self.assertEqual(core.max_matching(["a", "b"], ["x", "y"], m), 1)
         self.assertEqual(core.assignment_report(["a", "b"], ["x", "y"], m)["deficit"], .5)
 
+    def test_danger_pair_avoids_same_species_move_variants(self):
+        own = ["a", "b", "c"]
+        opp = ["x1", "x2", "y"]
+        m = {(a, b, (2, 2)): 400 for a in own for b in opp}
+        for enemy in opp:
+            m[("a", enemy, (2, 2))] = 700
+        clauses = {"x1": "x", "x2": "x", "y": "y"}
+        threats = core.dangerous_pairs([own], opp, m,
+                                       {a: 1 / 3 for a in opp}, clauses)
+        self.assertTrue(all(set(x["opponents"]) != {"x1", "x2"} for x in threats))
+        self.assertTrue(threats)
+
     def test_selection_bounds_do_not_claim_probability(self):
         own, enemy = list("abc"), list("xyz")
         m = {(a, b, shields): 600 for a in own for b in enemy
