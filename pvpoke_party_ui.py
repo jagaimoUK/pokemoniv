@@ -25,28 +25,50 @@ footer .tools{max-width:700px;margin:auto}footer button{flex:1}
 <h1>見せ合い6体・選出3体</h1><p>重要メタへの穴、15ペアの補完、20組の3体、相手6体への選出を分析するにぇ。Battle Ratingは実戦勝率ではありません。</p>
 <section id="auth"><h2>アプリに接続</h2><p>ログイン済みのブラウザでは自動接続します。</p><div class="tools"><input id="key" type="password" autocomplete="off" placeholder="接続キー"><button id="login">接続する</button></div></section>
 <div id="workspace" hidden>
-<div class="tabs"><button data-tab="compose" aria-pressed="true">構築</button><button data-tab="weakness">弱点・補完</button><button data-tab="selection">相手と選出</button><button data-tab="settings">保存・設定</button></div>
-<div id="compose"><section><h2>自分の6体</h2><p>各枠をタップして技と個体値を編集。IV省略時はPvPoke標準値を使用します。CP1500/Lv50。</p><div class="grid" id="members"></div></section>
+<div class="tabs"><button data-tab="compose" aria-pressed="true">構築</button><button data-tab="weakness">弱点・補完</button><button data-tab="selection">相手と選出</button><button data-tab="strategy">詳細戦略</button><button data-tab="settings">保存・設定</button></div>
+<div id="compose"><section><h2>自分の6体</h2><p>各枠をタップして技と個体値を編集。IV省略時はPvPoke標準値を使用します。CP1500/Lv50・同一図鑑番号は1枠。</p><div class="grid" id="members"></div></section>
 <section><h2>自動構築</h2><p>候補を7列CSVで入力。固定枠を残して最大48候補から探索します。</p>
 <textarea id="pool" placeholder="azumarill,BUBBLE,ICE_BEAM,PLAY_ROUGH,0,15,15"></textarea><button id="build">候補から6体を提案</button></section></div>
 <div id="weakness" hidden><section><h2>弱点・補完</h2><div id="weakResult">分析後に表示します。</div></section></div>
 <div id="selection" hidden><section><h2>相手6体</h2><p>種ID・通常技・ゲージ技2つ（必要ならIV3つ）を1行ずつ指定してください。</p><textarea id="enemy" placeholder="clodsire,POISON_STING,STONE_EDGE,EARTHQUAKE"></textarea><button id="select">相手6体への選出を比較</button>
 <p>双方ともチーム全体のシールドは2枚。静的な近似であり、実際の3対3勝率ではありません。</p><div id="selectionResult"></div></section></div>
+<div id="strategy" hidden>
+<section><h2>詳細戦略の結果</h2><div id="strategyResult" aria-live="polite">対象と条件を指定して計算してください。未計算はunknownです。</div></section>
+<section id="strategyConfig"><h2>比較する対面</h2><p>自分の6体は「構築」で指定。相手は1体または6体のCSVです。通常技限定・受け後の仕事・シールド方針を一度に比較します。</p>
+<label for="strategyEnemy">相手（種ID・通常技・ゲージ技2つ、任意でIV3つ）</label><textarea id="strategyEnemy" placeholder="clodsire,POISON_STING,STONE_EDGE,EARTHQUAKE"></textarea>
+<button id="copyEnemy">相手と選出の入力を使う</button><div class="fields">
+<label>対象の自分（後追い分岐では引き先）<select id="strategySelf"></select></label>
+<label>対象の相手（分岐では相手初手）<select id="strategyOpponent"></select></label></div>
+<details open><summary>受けた後に果たす仕事</summary><p>自分シールド0枚・開始HP100%と75%・相手2枚。相手の最初のゲージ技が当たった後の行動だけを数えます。</p>
+<label>計算前に固定する条件<select id="workKind"><option value="charged">指定ゲージ技を撃つ</option><option value="fast_damage">通常技で指定割合を削る</option><option value="force_shield">相手のシールドを使わせる</option></select></label>
+<label>指定するゲージ技<select id="workMove"></select></label>
+<label>通常技で削る相手最大HPの割合（%）<input id="workFraction" type="number" min="1" max="100" value="15"></label></details>
+<details><summary>シールドとブラフの詳細</summary><p>標準・ブラフ有無の4条件・観測温存・手動を別々に比較。通常技限定以外は双方が通常の攻撃方針です。</p>
+<label>相手の技構成<select id="publicMoves"><option value="1">公開チームシート（指定技が既知）</option><option value="0">非公開（公開習得技と観測履歴で判断）</option></select></label>
+<div class="fields"><label>温存・手動時の自分ブラフ<select id="selfBait"><option value="1">選択的に使う</option><option value="0">使わない</option></select></label><label>温存・手動時の相手ブラフ<select id="opponentBait"><option value="1">選択的に使う</option><option value="0">使わない</option></select></label></div>
+<p>観測温存：可能な技のダメージ上限がHPの危険閾値以上なら貼る。それ以外は初回を受け、2回目以降は温存枚数を超え、HPの半分以上の被害があり得る場合に貼ります。危険時は温存枚数より生存を優先。ダメージ上限は公開種族値からの保守的な上界で、実測確率は使いません。</p>
+<div class="fields"><label>危険閾値（現在HPに対する比率）<input id="dangerRatio" type="number" min="0.5" max="1" step="0.05" value="0.95"></label><label>平常時に温存する枚数<input id="reserve" type="number" min="0" max="2" value="1"></label></div>
+<label>自分の手動方針（受ける=0、貼る=1、相手ゲージ技の順）<input id="manualSelf" value="0,1,0,1"></label><label>相手の手動方針<input id="manualOpponent" value="0,1,0,1"></label><p>指定が尽きた後は受けます。攻撃技の正体を見る前に決める方針です。</p></details>
+<details><summary>初手→交代→後追い（限定モデル）</summary>
+<label><input id="includeBranch" type="checkbox"> 相手6体の合法な後追い候補を計算する</label>
+<div class="fields"><label>自分の初手<select id="strategyLead"></select></label><label>残り1体<select id="strategyCloser"></select></label><label>初手の経過ターン（最短）<input id="leadTurns" type="number" min="0" max="12" value="2"></label><label>相手の後追い遅延ターン（最短）<input id="chaseDelay" type="number" min="0" max="12" value="2"></label></div>
+<p>双方合計2枚から消費を引き継ぎます。交代に1ターンを使い、未処理の通常技がなくなる境界まで待つため、実際の遅延も結果に表示します。次の交代・引き直し・残り2体の実対戦はunknown。完全な3対3ではありません。</p></details>
+<button id="runStrategy">詳細条件を比較する</button></section></div>
 <div id="settings" hidden><section><h2>保存・分析条件</h2><label for="meta">メタプリセット</label><select id="meta"></select>
 <label for="partyName">パーティ名</label><input id="partyName" value="新しいパーティ" maxlength="60">
 <div class="tools"><button id="save">保存する</button><select id="saved"><option value="">保存済みを選ぶ</option></select><button id="load">読み込む</button></div>
 <label for="weights">重要度（種ID:数値を1行ずつ）</label><textarea id="weights" placeholder="clodsire:4"></textarea>
-<p>技違いは同種内で重要度を分配します。ブラフ・受け・交代後の詳細モデルは未対応です。</p></section></div>
+<p>技違いは同種内で重要度を分配します。詳細戦略は専用タブで条件を固定して比較します。</p></section></div>
 <section><h2>計算状況と結果</h2><div id="status" role="status" aria-live="polite">接続を確認しています。</div><div id="result"></div></section>
 </div></main><footer><div class="tools"><button id="analyze" disabled>6体を分析</button><button id="cancel" disabled>計算を中止</button></div></footer>
 <datalist id="speciesList"></datalist><script>
 'use strict';
 const $=id=>document.getElementById(id);
-let key='',catalog={},metaItems=[],partyId=null,revision=0,activeJob=null,latest=null;
+let key='',catalog={},metaItems=[],partyId=null,revision=0,activeJob=null,latest=null,inputRevision=0,currentTab='compose';
 const name=id=>catalog[id]?.name||id;
 function node(tag,text,cls){const n=document.createElement(tag);if(text!=null)n.textContent=text;if(cls)n.className=cls;return n}
 function status(text){$('status').textContent=text}
-function tab(target){['compose','weakness','selection','settings'].forEach(id=>$(id).hidden=id!==target);document.querySelectorAll('[data-tab]').forEach(x=>x.setAttribute('aria-pressed',String(x.dataset.tab===target)))}
+function tab(target){currentTab=target;$('analyze').textContent=target==='strategy'?'詳細条件を比較':'6体を分析';if(target==='strategy')strategyTargets();['compose','weakness','selection','strategy','settings'].forEach(id=>$(id).hidden=id!==target);document.querySelectorAll('[data-tab]').forEach(x=>x.setAttribute('aria-pressed',String(x.dataset.tab===target)))}
 document.querySelectorAll('[data-tab]').forEach(x=>x.onclick=()=>tab(x.dataset.tab));
 async function api(path,body={}){
  const h={'Content-Type':'application/json'};if(key)h.Authorization='Bearer '+key;
@@ -92,18 +114,20 @@ function show(result){latest=result;
  $('result').replaceChildren(node('p','キャッシュ再利用 '+result.cache.hits+' / 新規セル '+result.cache.computed+' / '+result.elapsed_seconds+'秒'),
  node('p','未計算: '+result.not_calculated.join('、')));tab(result.selection.status==='計算済み'?'selection':'weakness')}
 async function run(mode){if(activeJob)return;
- const request={mode,members:getMon(),locked_slots:locks(),meta_preset_id:$('meta').value,meta_sha256:metaItems.find(x=>x.id===$('meta').value)?.sha256,group_weights:getWeights(),ruleset:'cp1500-lv50'};
+ const request={mode,members:getMon(),locked_slots:locks(),meta_preset_id:$('meta').value,meta_sha256:metaItems.find(x=>x.id===$('meta').value)?.sha256,group_weights:mode==='strategy'?{}:getWeights(),ruleset:'cp1500-lv50'};
  if(mode==='build')request.candidate_pool=parseCsv($('pool').value);
  if(mode==='select')request.opponents=parseCsv($('enemy').value);
+ if(mode==='strategy'){request.opponents=parseCsv($('strategyEnemy').value);request.strategy=getStrategy()}
+ const submittedRevision=inputRevision;
  const r=await api('party/start',request);activeJob=r.job_id;$('cancel').disabled=false;$('analyze').disabled=true;status('計算中...');
  for(;;){await new Promise(resolve=>setTimeout(resolve,2000));let s=await api('party/status',{job_id:activeJob});
- if(s.status==='done'){show(s.result);status('計算完了。実戦勝率ではなく静的近似です。');break}
+ if(s.status==='done'){if(submittedRevision!==inputRevision){status('計算中に入力が変更されました。以前の入力の結果は表示しません。再計算してください。')}else{if(s.result.kind==='strategy')showStrategy(s.result);else show(s.result);status('計算完了。実戦勝率ではありません。')}break}
  if(s.status==='error'||s.status==='cancelled'){status(s.message||s.status);break}
  status('計算中 '+(s.progress||0)+'% / '+(s.message||''))}
  activeJob=null;$('cancel').disabled=true;$('analyze').disabled=false;
 }
 async function wrap(mode){try{await run(mode)}catch(e){status(e.message);activeJob=null;$('cancel').disabled=true;$('analyze').disabled=false}}
-$('analyze').onclick=()=>wrap('analyze');$('build').onclick=()=>wrap('build');$('select').onclick=()=>wrap('select');
+$('analyze').onclick=()=>{if(currentTab==='strategy')strategyTargets();wrap(currentTab==='strategy'?'strategy':'analyze')};$('build').onclick=()=>wrap('build');$('select').onclick=()=>wrap('select');
 $('cancel').onclick=()=>activeJob&&api('party/cancel',{job_id:activeJob}).then(()=>status('中止要求を送信しました'));
 function populateSaved(items){$('saved').replaceChildren(new Option('保存済みから読み込む',''));items.forEach(x=>$('saved').append(new Option(x.name,x.id)))}
 async function setup(){
@@ -113,13 +137,22 @@ async function setup(){
  for(const m of metaItems.filter(x=>x.available!==false)){let o=new Option(m.name+' ('+m.rows+'件)',m.id);$('meta').append(o)}$('meta').value=presets.default_id;
  populateSaved(saved.items);renderMon();$('workspace').hidden=false;$('auth').hidden=true;$('analyze').disabled=false;status('6体を入力すると分析できます')}
 $('login').onclick=async()=>{key=$('key').value.trim();try{await setup();if(key)await api('session',{}).catch(()=>{})}catch(e){$('workspace').hidden=false;status(e.message)}};
-$('save').onclick=async()=>{try{const obj={id:partyId,revision,name:$('partyName').value,members:getMon(),locked_slots:locks(),meta_preset_id:$('meta').value,meta_sha256:metaItems.find(x=>x.id===$('meta').value)?.sha256,group_weights:getWeights(),opponents:parseCsv($('enemy').value),candidate_pool:parseCsv($('pool').value)};
+$('save').onclick=async()=>{try{const obj={id:partyId,revision,name:$('partyName').value,members:getMon(),locked_slots:locks(),meta_preset_id:$('meta').value,meta_sha256:metaItems.find(x=>x.id===$('meta').value)?.sha256,group_weights:getWeights(),strategy:{...getStrategy(),enemy_csv:$('strategyEnemy').value},opponents:parseCsv($('enemy').value),candidate_pool:parseCsv($('pool').value)};
  const r=await api('party/save',obj);partyId=r.id;revision=r.revision;populateSaved((await api('party/list')).items);status('保存済み。revision '+revision)}catch(e){status(e.message)}};
 $('load').onclick=async()=>{try{const p=await api('party/get',{id:$('saved').value});partyId=p.id;revision=p.revision;$('partyName').value=p.name;
  renderMon((p.members||[]).map((m,i)=>({...m,locked:(p.locked_slots||[]).includes(i)})));
  if(metaItems.some(x=>x.id===p.meta_preset_id))$('meta').value=p.meta_preset_id;
  $('weights').value=Object.entries(p.group_weights||{}).map(x=>x.join(':')).join('\n');
  const csv=rows=>(rows||[]).map(x=>[x.species,x.fast,x.charged1,x.charged2,...(['atk','def','hp'].every(k=>k in x)?[x.atk,x.def,x.hp]:[])].join(',')).join('\n');
- $('enemy').value=csv(p.opponents);$('pool').value=csv(p.candidate_pool);status('読み込みました')}catch(e){status(e.message)}};
+ $('enemy').value=csv(p.opponents);$('pool').value=csv(p.candidate_pool);restoreStrategy(p.strategy);inputRevision++;status('読み込みました')}catch(e){status(e.message)}};
+$('workspace').addEventListener('input',()=>{
+ inputRevision++;
+ const root=$('strategyResult');if(root.dataset.calculated&&!root.querySelector('[data-stale]')){const msg=node('p','入力が変更されています。以下は以前の条件の結果です。再計算してください。');msg.dataset.stale='true';root.prepend(msg)}
+});
 setup().catch(()=>{status('ログインが必要です。接続キーを入力してください。')});
+/*STRATEGY_UI*/
 </script></body></html>'''
+
+
+from pathlib import Path
+HTML = HTML.replace('/*STRATEGY_UI*/', Path(__file__).with_name('pvpoke_party_strategy_ui.js').read_text(encoding='utf-8'))

@@ -728,7 +728,7 @@ function Battle(){
 
 				if(mode == "simulate"){
 					if(decisionMethod == "default"){
-						action = ActionLogic.decideAction(self, poke, opponent);
+						action = self.actionPolicy ? self.actionPolicy(self, poke, opponent) : ActionLogic.decideAction(self, poke, opponent);
 					} else{
 						action = ActionLogic.decideRandomAction(self, poke, opponent);
 					}
@@ -1184,6 +1184,12 @@ function Battle(){
 					useShield = false;
 				}
 
+				// Optional adapter hook, after all upstream shield decisions.
+				if(self.shieldPolicy){
+					var customShield = self.shieldPolicy(defender.index);
+					if(customShield !== undefined) useShield = customShield === true;
+				}
+
 				if(useShield){
 					let damageBlocked = damage-1;
 
@@ -1355,7 +1361,9 @@ function Battle(){
 			damage = 1;
 		}
 
+		var appliedDamage = Math.min(defender.hp, damage);
 		defender.hp = Math.max(0, defender.hp-damage);
+		if(self.onMoveResolved) self.onMoveResolved(attacker, defender, move, appliedDamage, defenderUsedShield);
 
 		// Adjust display time so events don't visually overlap
 		// This was really hard for my little brain to figure out so like really don't touch it

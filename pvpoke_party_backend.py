@@ -88,7 +88,7 @@ class PartyBuilder:
             raise ValueError("保存のrevisionが不正です")
         content = {k: payload.get(k) for k in (
             "members", "locked_slots", "manual_pair_tags", "meta_preset_id", "meta_sha256",
-            "group_weights", "ruleset", "opponents", "candidate_pool")}
+            "group_weights", "ruleset", "opponents", "candidate_pool", "strategy")}
         serialized = _json(content)
         if len(serialized.encode("utf-8")) > 100_000:
             raise ValueError("保存データが大きすぎます")
@@ -166,7 +166,7 @@ class PartyBuilder:
             p0["id"] = core.combatant_id(p0)
             p0["meta_group_id"] = str(raw.get("meta_group_id") or sid)
             # Species clause intentionally separate from battle identity.
-            p0["roster_clause_id"] = str(raw.get("roster_clause_id") or sid.replace("_shadow", ""))
+            p0["roster_clause_id"] = str(species[sid].get("dex") or sid.replace("_shadow", ""))
             prepared.append(p0)
         return prepared
 
@@ -175,8 +175,8 @@ class PartyBuilder:
         return list({r["id"]: r for r in reversed(rows)}.values())[::-1]
 
     def start(self, args, *, catalog, species, cpms, engine, work, global_lock, global_status):
-        if not isinstance(args, dict) or args.get("mode") not in ("analyze", "select", "build"):
-            raise ValueError("modeはanalyze/select/buildのいずれかです")
+        if not isinstance(args, dict) or args.get("mode") not in ("analyze", "select", "build", "strategy"):
+            raise ValueError("modeはanalyze/select/build/strategyのいずれかです")
         if args.get("ruleset", "cp1500-lv50") != "cp1500-lv50":
             raise ValueError("現在はCP1500/Lv50のみ対応しています")
         if os.environ.get("PVP_ENGINE", "browser").lower() not in ("direct", "node"):
@@ -225,6 +225,8 @@ class PartyBuilder:
                         self._previous_global = None
 
     def _compute(self, jid, args, catalog, species, cpms, engine, work):
+        if args["mode"] == "strategy":
+            return self._strategy(jid, args, catalog, species, cpms, engine, work)
         own_raw = args.get("members")
         locked_raw = []
         if not isinstance(own_raw, list):
@@ -341,6 +343,26 @@ class PartyBuilder:
                 "cache": stats, "not_calculated": [
                     "通常技限定の圧力", "受け後の仕事", "観測ベースのシールド温存",
                     "交代後の状態引継ぎ", "実戦3対3の勝率"]}
+
+    def _strategy(self, jid, args, catalog, species, cpms, engine, work):
+        from pvpoke_party_strategy import StrategyAnalysis, normalize_config
+        own_raw, enemy_raw = args.get("members"), args.get("opponents")
+        if not isinstance(own_raw, list) or len(own_raw) != 6:
+            raise ValueError("詳細分析には自分の6体が必要です")
+        if not isinstance(enemy_raw, list) or len(enemy_raw) not in (1, 6):
+            raise ValueError("詳細分析には相手1体または6体が必要です")
+        own = self._normalize(own_raw, catalog, species, cpms, engine, "自分6体")
+        enemy = self._normalize(enemy_raw, catalog, species, cpms, engine, "相手")
+        for roster in (own, enemy):
+            if len({p["roster_clause_id"] for p in roster}) != len(roster):
+                raise ValueError("大会の同種重複制限により同じ種族枠を複数選べません")
+        if any(p["species"].startswith("minior") for p in own + enemy):
+            raise ValueError("メテノの固定方針による詳細分析は未対応です")
+        config = normalize_config(args.get("strategy", {}), own, enemy)
+        version = calculation_version(engine.DATA)
+        if version is None:
+            raise ValueError("詳細計算のエンジン版を確認できません")
+        return StrategyAnalysis(self, jid, version, engine, work).compute(own, enemy, config)
 
     @staticmethod
     def _build_legal(ids, opponents, matrix, weights, locked, clause, args):
