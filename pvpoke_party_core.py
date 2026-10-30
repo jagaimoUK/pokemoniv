@@ -250,6 +250,47 @@ def dangerous_pairs(triples, opponents, matrix, weights, clauses, *, top=20, lim
     return scored[:limit]
 
 
+
+def recommend_single_swaps(roster, candidates, opponents, matrix, weights, clause,
+                           locked_slots=(), limit=5):
+    """Compare legal one-slot changes against the same complete 2-2 matrix.
+
+    Priority is lexicographic D0, severity, D1, coverage, not win probability.
+    Never recommend incomplete matrix rows or changing locked slots.
+    """
+    before = team_summary(roster, opponents, matrix, weights)
+    if not before["complete"]:
+        return {"status": "unknown", "baseline": before, "items": []}
+    baseline_rank = rank_partial(roster, opponents, matrix, weights)
+    locked = set(locked_slots)
+    improvements = []
+    for slot, old in enumerate(roster):
+        if slot in locked:
+            continue
+        other_clauses = {clause[x] for i, x in enumerate(roster) if i != slot}
+        for new in candidates:
+            if new == old or clause[new] in other_clauses:
+                continue
+            proposed = list(roster)
+            proposed[slot] = new
+            after = team_summary(proposed, opponents, matrix, weights)
+            if not after["complete"]:
+                continue
+            ranking = rank_partial(proposed, opponents, matrix, weights)
+            if ranking >= baseline_rank:
+                continue
+            old_holes = {x["opponent"] for x in before["critical"]}
+            new_holes = {x["opponent"] for x in after["critical"]}
+            improvements.append((ranking, slot, new, {
+                "slot": slot, "out": old, "in": new, "after": after,
+                "resolved": sorted(old_holes - new_holes)[:3],
+                "new_holes": sorted(new_holes - old_holes)[:3],
+            }))
+    improvements.sort(key=lambda x: (x[0], x[1], x[2]))
+    return {"status": "improved" if improvements else "no_improvement",
+            "baseline": before, "items": [x[3] for x in improvements[:limit]]}
+
+
 def rank_partial(roster, opponents, matrix, weights):
     result = team_summary(roster, opponents, matrix, weights)
     # Same-depth comparisons only. A missing cell cannot be assigned a loss.

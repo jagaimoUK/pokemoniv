@@ -159,6 +159,46 @@ class PartyMetaShadowIdTests(unittest.TestCase):
 
 
 
+    def test_recommendations_respect_locks_and_species_and_improvement(self):
+        roster = list("abcdef")
+        meta = ["x", "y"]
+        matrix = {(a, x, (2, 2)): 420 for a in roster + ["g", "h"] for x in meta}
+        matrix[("a", "x", (2, 2))] = 600
+        matrix[("b", "y", (2, 2))] = 600
+        matrix[("g", "x", (2, 2))] = 630
+        matrix[("g", "y", (2, 2))] = 630
+        # h is the same species as a, so it can only replace a, not another slot.
+        matrix[("h", "x", (2, 2))] = 610
+        matrix[("h", "y", (2, 2))] = 610
+        clause = {a: a for a in roster + ["g"]}
+        clause["h"] = "a"
+        result = core.recommend_single_swaps(roster, ["g", "h"], meta, matrix,
+                    {"x": .5, "y": .5}, clause, locked_slots=[2])
+        self.assertEqual(result["status"], "improved")
+        self.assertTrue(result["items"])
+        self.assertTrue(all(x["slot"] != 2 for x in result["items"]))
+        self.assertTrue(all(x["in"] != "h" or x["out"] == "a" for x in result["items"]))
+        self.assertTrue(all(x["after"]["d1"] <= result["baseline"]["d1"]
+                            for x in result["items"]))
+
+    def test_recommendations_do_not_promote_missing_cells_or_worse_teams(self):
+        roster = list("abcdef")
+        meta = ["x"]
+        matrix = {(a, "x", (2, 2)): 600 for a in roster}
+        matrix[("g", "x", (2, 2))] = 100
+        clause = {a: a for a in roster + ["g", "h"]}
+        no_change = core.recommend_single_swaps(roster, ["g"], meta, matrix,
+                                                 {"x": 1}, clause)
+        self.assertEqual(no_change["status"], "no_improvement")
+        self.assertEqual(no_change["items"], [])
+        # h's missing cell is unknown, not treated as a defeat or a success.
+        missing = core.recommend_single_swaps(roster, ["h"], meta, matrix,
+                                               {"x": 1}, clause)
+        self.assertEqual(missing["items"], [])
+        incomplete = core.recommend_single_swaps(roster, ["h"], meta, {},
+                                                  {"x": 1}, clause)
+        self.assertEqual(incomplete["status"], "unknown")
+
 class PartyStoreTests(unittest.TestCase):
     def test_saved_parties_keep_own_enemy_and_strategy_independent(self):
         with tempfile.TemporaryDirectory() as tmp:

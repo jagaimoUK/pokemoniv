@@ -15,6 +15,8 @@ os.environ['PVP_API_KEY'] = 'fixture-' + 'x'*32
 import pvpoke_batch_v2 as engine
 import pvpoke_mcp_remote as gateway
 from pvpoke_party_backend import PartyBuilder
+import pvpoke_meta_live as meta_live
+import pvpoke_meta_presets as meta_presets
 
 workspace = tempfile.TemporaryDirectory()
 work = Path(workspace.name)
@@ -29,7 +31,13 @@ catalog = {sid:{'name':p['speciesName'],'fastMoves':p['fastMoves'],'chargedMoves
 from pvpoke_app_catalog import enrich_catalog
 enrich_catalog(catalog, species)
 party = PartyBuilder(work)
-party.save_party({'name':'Browser fixture','members':json.loads((ROOT/'tests/fixtures/strategy_rows.json').read_text())})
+fixture_rows = json.loads((ROOT/'tests/fixtures/strategy_rows.json').read_text())
+party.save_party({'name':'Browser fixture','members':fixture_rows})
+meta_rows = fixture_rows + [{'species':'primeape','fast':'COUNTER',
+    'charged1':'ICE_PUNCH','charged2':'CLOSE_COMBAT'}]
+meta_csv = ''.join(','.join(row[k] for k in
+    ('species','fast','charged1','charged2')) + '\n' for row in meta_rows)
+meta_live.sync(work, meta_csv, species)
 lock = threading.RLock()
 state = {'state':'idle'}
 def request(path, payload=None, **kwargs):
@@ -46,7 +54,7 @@ def request(path, payload=None, **kwargs):
     raise ValueError(path)
 gateway.backend._request = request
 gateway.backend._token = lambda:'fixture-token'
-gateway.backend.meta_presets = lambda:{'items':[{'id':'legacy','name':'Fixture','rows':6,'sha256':'0'*64}], 'default_id':'legacy'}
+gateway.backend.meta_presets = lambda: meta_presets.listing(work)
 server=ThreadingHTTPServer(('127.0.0.1',0),gateway.Handler)
 gateway.PORT=server.server_port
 gateway.APP_ORIGIN=f'http://127.0.0.1:{server.server_port}'

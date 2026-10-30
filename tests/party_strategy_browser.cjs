@@ -53,9 +53,23 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  await page.waitForFunction(()=>document.getElementById('partyState').textContent.includes('大会B'));
  assert.equal(await page.locator('#selection [data-field=atk]').first().inputValue(),'9');
  assert.equal(await page.locator('#members [data-field=atk]').first().inputValue(),aOwn==='7'?'8':'7');
+ // Real authenticated search from bundled meta; apply one suggested change if improved.
+ await page.click('[data-tab=compose]');
+ await page.click('#recommend');
+ await page.waitForFunction(()=>document.getElementById('status').textContent.includes('計算完了'),{timeout:40000});
+ assert((await page.textContent('#swapAdvice')).includes('次に何をすればよい？'));
+ assert((await page.textContent('#swapAdvice')).includes('仮候補'));
+ const proposals=page.locator('#swapAdvice button');
+ if(await proposals.count()){
+  const old=await page.locator('#members [data-field=species]').allTextContents();
+  await proposals.first().click();
+  assert((await page.textContent('#status')).includes('まだ保存していません'));
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  assert.equal(await page.textContent('#partyState'),'未保存の変更あり（上部の保存・上書きで記録）');
+ }
  assert.equal(errors.length,0,errors.join('\n'));
  const out=process.env.STRATEGY_SCREENSHOT_DIR;
  if(out){fs.mkdirSync(out,{recursive:true});await page.screenshot({path:out+'/strategy-mobile.png',fullPage:true});}
- console.log('Mobile 390px: real authenticated gateway/worker/engine, all 4 features, 5 branches, named own/enemy save and restore, cache reuse and stale-response guard passed');
+ console.log('Mobile 390px: real authenticated gateway/worker/engine, all 4 features, 5 branches, named own/enemy save and restore, actionable swaps, cache reuse and stale-response guard passed');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1});
