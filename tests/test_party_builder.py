@@ -1,6 +1,8 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pvpoke_party_core as core
 from pvpoke_party_backend import PartyBuilder
@@ -95,6 +97,66 @@ class PartyCoreTests(unittest.TestCase):
         self.assertIn("a", r["roster"])
         self.assertNotIn("g", r["roster"])
         self.assertEqual(len(set(clause[x] for x in r["roster"])), 6)
+
+
+
+class PartyMetaShadowIdTests(unittest.TestCase):
+    """PvPoke export spellings must become valid internal battle IDs."""
+
+    def setUp(self):
+        self.catalog = {
+            "feraligatr": {"fastMoves": ["SHADOW_CLAW"],
+                           "chargedMoves": ["HYDRO_CANNON", "ICE_BEAM"]},
+            "feraligatr_shadow": {"fastMoves": ["SHADOW_CLAW"],
+                                  "chargedMoves": ["HYDRO_CANNON", "ICE_BEAM"]},
+            "corsola_galarian": {"fastMoves": ["ASTONISH"],
+                                 "chargedMoves": ["NIGHT_SHADE", "POWER_GEM"]},
+        }
+        self.species = {
+            "feraligatr": {"dex": 160},
+            "feraligatr_shadow": {"dex": 160},
+            "corsola_galarian": {"dex": 222},
+        }
+        self.engine = SimpleNamespace(
+            HEADER=["species", "fast", "charged1", "charged2", "atk", "def", "hp"],
+            CP_CAP=1500, MAX_LEVEL=50,
+            optimize=lambda rows, species, cpms, label: [
+                {**row, "level": 20.0, "cp": 1481} for row in rows],
+        )
+
+    def normalize(self, sid, fast="SHADOW_CLAW",
+                  charged1="HYDRO_CANNON", charged2="ICE_BEAM"):
+        return PartyBuilder._normalize(
+            [{"species": sid, "fast": fast, "charged1": charged1,
+              "charged2": charged2}],
+            self.catalog, self.species, [], self.engine, "メタ")[0]
+
+    def test_pvpoke_export_shadow_suffix_uses_internal_species_id(self):
+        with patch("pvpoke_party_backend.iv_modes.select_opponent_ivs",
+                   return_value=(0, 15, 15, 1)):
+            exported = self.normalize("FERALIGATR_SHADOW-shadow")
+            native = self.normalize("feraligatr_shadow")
+            normal = self.normalize("feraligatr")
+
+        self.assertEqual(exported["species"], "feraligatr_shadow")
+        self.assertEqual(exported["meta_group_id"], "feraligatr_shadow")
+        self.assertEqual(exported["roster_clause_id"], "160")
+        self.assertEqual(exported["id"], native["id"])
+        self.assertNotEqual(exported["id"], normal["id"])
+
+    def test_other_forms_and_unknown_ids_remain_strictly_validated(self):
+        with patch("pvpoke_party_backend.iv_modes.select_opponent_ivs",
+                   return_value=(0, 15, 15, 1)):
+            galar = self.normalize("corsola_galarian", "ASTONISH",
+                                   "NIGHT_SHADE", "POWER_GEM")
+            self.assertEqual(galar["species"], "corsola_galarian")
+            for bad in ("feraligatr-shadow",
+                        "feraligatr_shadow-shadow-shadow",
+                        "unknown_shadow-shadow"):
+                with self.subTest(species=bad), self.assertRaisesRegex(
+                        ValueError, "未登録ポケモン"):
+                    self.normalize(bad)
+
 
 
 class PartyStoreTests(unittest.TestCase):

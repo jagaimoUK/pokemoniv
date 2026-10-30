@@ -142,6 +142,10 @@ class PartyBuilder:
             if not isinstance(raw, dict):
                 raise ValueError(label + "の形式が不正です")
             sid = str(raw.get("species") or "").strip().lower()
+            # PvPoke CSV export adds -shadow to the actual _shadow species ID.
+            # Canonicalize before catalog/legality checks; never change the source CSV.
+            if sid.endswith("_shadow-shadow"):
+                sid = sid.removesuffix("-shadow")
             p = catalog.get(sid)
             if p is None:
                 raise ValueError(label + ": 未登録ポケモン " + sid)
