@@ -54,6 +54,21 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  assert.equal(await page.locator('#selection [data-field=atk]').first().inputValue(),'9');
  assert.equal(await page.locator('#members [data-field=atk]').first().inputValue(),aOwn==='7'?'8':'7');
  // Real authenticated search from bundled meta; apply one suggested change if improved.
+ // Autocomplete the whole party, compare endpoints and inspect a real 2-2 heatmap.
+ await page.click('[data-tab=compose]');
+ await page.click('#autoComplete');
+ await page.waitForFunction(()=>document.getElementById('status').textContent.includes('計算完了'),{timeout:60000});
+ assert((await page.textContent('#swapAdvice')).includes('自動補完の最終候補'));
+ assert(await page.locator('#swapAdvice .completion-card').count()>=1);
+ assert(await page.locator('#swapAdvice .completion-card').count()<=3);
+ const firstPlan=page.locator('#swapAdvice .completion-card').first();
+ await firstPlan.getByRole('button',{name:'弱点を視覚化'}).click();
+ assert(await firstPlan.locator('table.heatmap tbody tr').count()>=1,'heatmap must include real meta opponents');
+ assert.equal(await firstPlan.locator('table.heatmap tbody tr').first().locator('td').count(),6);
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'Heatmap must fit mobile viewport with own scrolling');
+ await firstPlan.getByRole('button',{name:'この6体を反映'}).click();
+ assert((await page.textContent('#partyState')).includes('未保存の変更あり'));
+ assert((await page.textContent('#status')).includes('再分析'));
  await page.click('[data-tab=compose]');
  await page.click('#recommend');
  await page.waitForFunction(()=>document.getElementById('status').textContent.includes('計算完了'),{timeout:40000});
@@ -70,6 +85,6 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  assert.equal(errors.length,0,errors.join('\n'));
  const out=process.env.STRATEGY_SCREENSHOT_DIR;
  if(out){fs.mkdirSync(out,{recursive:true});await page.screenshot({path:out+'/strategy-mobile.png',fullPage:true});}
- console.log('Mobile 390px: real authenticated gateway/worker/engine, all 4 features, 5 branches, named own/enemy save and restore, actionable swaps, cache reuse and stale-response guard passed');
+ console.log('Mobile 390px: real authenticated gateway/worker/engine, all 4 features, 5 branches, named own/enemy save and restore, actionable swaps, iterative completion and matchup heatmap, cache reuse and stale-response guard passed');
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1});

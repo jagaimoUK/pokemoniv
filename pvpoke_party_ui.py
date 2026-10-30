@@ -20,6 +20,13 @@ textarea{min-height:95px;resize:vertical}summary{cursor:pointer;min-height:44px;
 footer{position:fixed;bottom:0;left:0;right:0;background:#172d2cf5;border-top:1px solid #638276;padding:10px}
 footer .tools{max-width:700px;margin:auto}footer button{flex:1}
 .result{padding-top:10px;border-top:1px solid #557769;margin-top:10px}li{padding:4px 0}
+.completion-card{padding:12px;margin:10px 0;border:1px solid #6a9586;border-radius:16px;background:#29413f}
+.heat-scroll{overflow-x:auto;max-width:100%;margin:12px 0}
+.heatmap{border-collapse:separate;border-spacing:3px;text-align:center;font-size:12px;width:100%}
+.heatmap th{padding:7px 3px;min-width:51px;max-width:95px;overflow-wrap:anywhere}
+.heatmap th:first-child{min-width:95px;position:sticky;left:0;background:#203138;z-index:1;text-align:left}
+.heatmap td{white-space:pre-line;font-variant-numeric:tabular-nums;padding:8px 2px;border-radius:8px}
+.heat-win{background:#236e96;color:#fff}.heat-mid{background:#85819e;color:#fff}.heat-loss{background:#953276;color:#fff}.heat-unknown{background:#52615d;color:#fff}
 @media(max-width:550px){main{padding:12px 10px 110px}section{padding:12px}.mon{padding:8px}.fields{grid-template-columns:1fr}}
 </style></head><body><main><nav><a href="/app">← 個体値厳選</a><a href="/flashcards">フラッシュカード</a></nav>
 <h1>見せ合い6体・選出3体</h1><p>重要メタへの穴、15ペアの補完、20組の3体、相手6体への選出を分析するにぇ。Battle Ratingは実戦勝率ではありません。</p>
@@ -37,8 +44,8 @@ footer .tools{max-width:700px;margin:auto}footer button{flex:1}
 <div id="compose"><section><h2>自分の6体</h2><p>各枠をタップして技と個体値を編集。IV省略時はPvPoke標準値を使用します。CP1500/Lv50・同一図鑑番号は1枠。</p><div class="grid" id="members"></div></section>
 <section><h2>自動構築</h2><p>名前から候補を追加します。固定枠を残して最大48候補から探索します。</p>
 <textarea id="pool" placeholder="azumarill,BUBBLE,ICE_BEAM,PLAY_ROUGH,0,15,15"></textarea>
-<div class="tools"><button id="recommend">入れ替え候補を自動で探す</button><button id="build">候補から6体を提案</button></div>
-<p>まず入れ替え候補を比較し、改善した案だけを手動で反映できます。候補欄が空なら選択中のメタから最大12種を仮候補として探索します（手持ち確認・IV調整が必要）。追加探索は2-2条件の比較です。</p></section></div>
+<div class="tools"><button id="autoComplete">自動補完を最後まで実行</button><button id="recommend">1体だけ入れ替え候補を探す</button><button id="build">候補から6体を提案</button></div>
+<p>自動補完は最大10回の1体交換を繰り返し探索し、最大3案と相性表を表示します。改善が止まっても全対面への完全対応は保証しません。候補欄が空ならメタから最大24種の仮候補を利用（所持・技・IVの確認が必要）。追加探索はシールド2-2の静的比較です。</p></section></div>
 <div id="weakness" hidden><section><h2>弱点・補完</h2><div id="swapAdvice"></div><div id="weakResult">分析後に表示します。</div></section></div>
 <div id="selection" hidden><section><h2>相手6体</h2><p>名前から選ぶと推奨技が入ります。技をタップして変更できます。</p><textarea id="enemy" placeholder="clodsire,POISON_STING,STONE_EDGE,EARTHQUAKE"></textarea><button id="select">相手6体への選出を比較</button>
 <p>双方ともチーム全体のシールドは2枚。静的な近似であり、実際の3対3勝率ではありません。</p><div id="selectionResult"></div></section></div>
@@ -132,13 +139,86 @@ function applyRecommendedSwap(result,item){
  status(name(old.species)+'を'+name(next.species)+'に入れ替えました。まだ保存していません。');
  tab('compose');$('members').scrollIntoView({block:'start',behavior:'smooth'});
 }
+
+function showCompletion(result){
+ const opt=result.optimization,root=$('swapAdvice');root.replaceChildren();
+ root.append(node('h3','自動補完の最終候補'));
+ addLine(root,(opt.source==='registered'?'登録した候補':'メタからの仮候補')+' '+opt.candidate_count+'体を対象に最大'+opt.max_steps+'手・幅'+opt.beam_width+'で探索。比較した構成: '+opt.explored+'件。'+opt.scope);
+ if(opt.source==='meta_provisional')addLine(root,'仮候補は所持個体とは限りません。IV・技・CPも確認してください。');
+ if(opt.status==='unknown'){addLine(root,'未計算があるため候補は決定できません。');return}
+ if(!opt.finalists?.length){addLine(root,'到達可能な候補がありません。');return}
+ if(opt.status==='no_improvement')addLine(root,'この候補範囲では改善できる交換がありません。現在の6体を表示します。');
+ const fmt=v=>(100*v).toFixed(1)+'%';
+ const display=id=>name(result.labels[id]?.species||id);
+ function heat(parent,plan){
+  const explain=node('p','○ Rating 550以上 / △ 451〜549 / × 450以下 / ? 未計算。2-2対面の評価であり、実戦勝率ではありません。');
+  parent.append(explain);
+  const outer=node('div',null,'heat-scroll'),table=node('table',null,'heatmap'),thead=node('thead'),head=node('tr');
+  table.setAttribute('aria-label','完成候補の相性ヒートマップ');
+  head.append(node('th','相手 / 自分'));
+  for(const id of plan.roster)head.append(node('th',display(id)));
+  thead.append(head);table.append(thead);
+  const tbody=node('tbody'),enemies=new Set(opt.enemy_targets||[]);
+  for(const row of plan.heatmap||[]){
+   const tr=node('tr');tr.append(node('th',(enemies.has(row.opponent)?'相手: ':'')+display(row.opponent)));
+   for(const v of row.ratings){
+    const td=node('td',v==null?'?\n未計算':v>=550?'○\n'+v:v<=450?'×\n'+v:'△\n'+v);
+    td.className=v==null?'heat-unknown':v>=550?'heat-win':v<=450?'heat-loss':'heat-mid';
+    td.setAttribute('aria-label',v==null?'未計算':'Rating '+v);
+    tr.append(td);
+   }
+   tbody.append(tr);
+  }
+  table.append(tbody);outer.append(table);parent.append(outer);
+  const weak=plan.weaknesses||[];
+  addLine(parent,weak.length?'残る弱点（表示した相手の範囲）: '+weak.slice(0,8).map(x=>display(x.opponent)+' / 最高Rating '+x.best_rating).join('、'):'表示対象の範囲では6体全員が苦手な相手はありません。未表示・他シールド条件は別です。');
+  const alone=(plan.heatmap||[]).filter(x=>x.ratings.filter(v=>v!=null&&v>500).length===1).slice(0,8);
+  if(alone.length)addLine(parent,'担当が1体に集中: '+alone.map(x=>display(x.opponent)+' → '+display(plan.roster[x.ratings.findIndex(v=>v!=null&&v>500)])).join('、'));
+ }
+ for(const [i,plan] of opt.finalists.entries()){
+  const box=node('div',null,'completion-card');
+  box.append(node('h3','最終候補 '+String.fromCharCode(65+i)+(i===0?'（評価上位）':'')));
+  addLine(box,plan.roster.map(display).join(' / '));
+  addLine(box,'D0 未対応 '+fmt(opt.baseline.d0)+' → '+fmt(plan.summary.d0)+' / D1 担当1体 '+fmt(opt.baseline.d1)+' → '+fmt(plan.summary.d1));
+  addLine(box,'深刻度 '+opt.baseline.severity0.toFixed(3)+' → '+plan.summary.severity0.toFixed(3)+' / 補完度 '+fmt(opt.baseline.coverage)+' → '+fmt(plan.summary.coverage));
+  addLine(box,'入れ替え '+plan.steps.length+'回 / '+(plan.stop==='step_limit'?'最大10手で停止':'候補内で改善が停止'));
+  if(plan.steps.length){const d=node('details');d.append(node('summary','入れ替え履歴'));const ol=node('ol');
+   plan.steps.forEach(step=>ol.append(node('li',(step.slot+1)+'枠: '+display(step.out)+' → '+display(step.in))));
+   d.append(ol);box.append(d);}
+  const tools=node('div',null,'tools'),view=node('button','弱点を視覚化'),apply=node('button','この6体を反映');
+  tools.append(view,apply);box.append(tools);
+  const map=node('div');box.append(map);
+  view.onclick=()=>{if(map.childNodes.length)map.replaceChildren();else heat(map,plan);};
+  apply.onclick=()=>applyCompletedParty(result,plan);
+  root.append(box);
+ }
+ addLine(root,'提案の反映と保存は別操作です。比較は選択したメタの静的Ratingであり、3対3勝率ではありません。');
+}
+function applyCompletedParty(result,plan){
+ if(activeJob||latest!==result||lastReportRevision!==inputRevision){status('入力が変わったため反映できません。再計算してください。');return;}
+ const current=getMon(),fixed=locks();
+ if(current.length!==6||current.some((m,i)=>m.species!==result.labels[result.roster[i]]?.species)||fixed.some(i=>result.roster[i]!==plan.roster[i])){
+  status('6体または固定枠が変更されています。再計算してください。');return;
+ }
+ const next=plan.roster.map((id,i)=>{
+  const p=result.labels[id];if(!p)throw Error('提案のデータが見つかりません');
+  return id===result.roster[i]?{...current[i]}:{species:p.species,fast:p.moves[0],charged1:p.moves[1],charged2:p.moves[2],atk:p.ivs[0],def:p.ivs[1],hp:p.ivs[2],level_override:p.level};
+ });
+ renderMon(next.map((m,i)=>({...m,locked:fixed.includes(i)})));
+ inputRevision++;lastReportRevision=-1;latest=null;strategyTargets();
+ $('swapAdvice').replaceChildren(node('p','完成候補を反映しました。古い分析結果は無効です。再計算してください。'));
+ $('weakResult').replaceChildren();$('selectionResult').replaceChildren();$('strategyResult').replaceChildren();delete $('strategyResult').dataset.calculated;
+ $('partyState').textContent='未保存の変更あり（上部の保存・上書きで記録）';
+ status('6体の反映が完了しました。再分析し、必要なら保存してください。');
+ tab('compose');$('members').scrollIntoView({block:'start',behavior:'smooth'});
+}
 function show(result){latest=result;lastReportRevision=inputRevision;
  if(result.search){const fixed=new Set(result.search.locked||[]);
  renderMon(result.roster.map(id=>{const p=result.labels[id];return {
  species:p.species,fast:p.moves[0],charged1:p.moves[1],charged2:p.moves[2],
  atk:p.ivs[0],def:p.ivs[1],hp:p.ivs[2],level_override:p.level,
  locked:fixed.has(id)}}));}
- showReplacements(result);
+ if(result.optimization)showCompletion(result);else showReplacements(result);
  let t=result.team;const root=$('weakResult');root.replaceChildren();
  root.append(node('h3','メタに対する6体の対応力'));
  addLine(root,'未対応 D0 '+pct(t.d0)+' / 担当1体 D1 '+pct(t.d1)+' / 深刻度 '+t.severity0.toFixed(3)+' / 未計算 '+pct(t.unknown_weight));
@@ -151,9 +231,11 @@ function show(result){latest=result;lastReportRevision=inputRevision;
  const sel=$('selectionResult');sel.replaceChildren();if(result.selection.status==='計算済み'){sel.append(node('h3','推奨選出（先頭が初手）'));result.selection.recommendations.forEach((x,i)=>{const b=node('div',null,'result');b.append(node('strong',(i+1)+'案: '+x.selection.map(label).join(' → ')));addLine(b,'保守的な静的比較値 '+x.worst+' / 危険な相手選出 '+x.worst_opponent.map(label).join(' / '));sel.append(b)})}else addLine(sel,result.selection.missing_condition||result.selection.status);
  $('result').replaceChildren(node('p','キャッシュ再利用 '+result.cache.hits+' / 新規セル '+result.cache.computed+' / '+result.elapsed_seconds+'秒'),
  node('p','未計算: '+result.not_calculated.join('、')));tab(result.selection.status==='計算済み'?'selection':'weakness')}
-async function run(mode,findSwaps=false){if(activeJob)return;
+async function run(mode,findSwaps=false,autoComplete=false){if(activeJob)return;
  const request={mode,members:getMon(),locked_slots:locks(),meta_preset_id:$('meta').value,meta_sha256:metaItems.find(x=>x.id===$('meta').value)?.sha256,group_weights:mode==='strategy'?{}:getWeights(),ruleset:'cp1500-lv50'};
- if(findSwaps){request.auto_replacements=true;request.candidate_pool=partyRosterRows('pool');}
+ if(findSwaps||autoComplete)request.candidate_pool=partyRosterRows('pool');
+ if(findSwaps)request.auto_replacements=true;
+ if(autoComplete)request.auto_complete=true;
  if(mode==='build')request.candidate_pool=partyRosterRows('pool');
  if(mode==='select')request.opponents=partyRosterRows('enemy');
  if(mode==='strategy'){request.opponents=partyRosterRows('strategyEnemy');request.strategy=getStrategy()}
@@ -165,9 +247,10 @@ async function run(mode,findSwaps=false){if(activeJob)return;
  status('計算中 '+(s.progress||0)+'% / '+(s.message||''))}
  activeJob=null;$('cancel').disabled=true;$('analyze').disabled=false;
 }
-async function wrap(mode,findSwaps=false){try{await run(mode,findSwaps)}catch(e){status(e.message);activeJob=null;$('cancel').disabled=true;$('analyze').disabled=false}}
+async function wrap(mode,findSwaps=false,autoComplete=false){try{await run(mode,findSwaps,autoComplete)}catch(e){status(e.message);activeJob=null;$('cancel').disabled=true;$('analyze').disabled=false}}
 $('analyze').onclick=()=>{if(currentTab==='strategy')strategyTargets();wrap(currentTab==='strategy'?'strategy':'analyze')};
 $('recommend').onclick=()=>wrap('analyze',true);
+$('autoComplete').onclick=()=>wrap('analyze',false,true);
 $('build').onclick=()=>wrap('build');$('select').onclick=()=>wrap('select');
 $('cancel').onclick=()=>activeJob&&api('party/cancel',{job_id:activeJob}).then(()=>status('中止要求を送信しました'));
 function populateSaved(items,selected=partyId){$('saved').replaceChildren(new Option('読み込むパーティを選ぶ',''));items.forEach(x=>$('saved').append(new Option(x.name,x.id)));$('saved').value=selected||'';}
