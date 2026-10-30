@@ -34,6 +34,7 @@ import pvpoke_meta_live as meta_live
 import pvpoke_meta_presets as meta_presets
 import pvpoke_flashcards as flashcards
 import pvpoke_meta_variants as meta_variants
+from pvpoke_party_backend import PartyBuilder
 from pvpoke_app_input import app_presets
 from pvpoke_app_catalog import enrich_catalog
 
@@ -50,6 +51,7 @@ BATCH_CONFIG = WORK / 'batch24_input.json'
 BATCH_OUTPUT = WORK / 'batch24_results'
 MAX_CAND = MAX_CANDIDATES
 MAX_OPPS = 100
+PARTY = PartyBuilder(WORK)
 PRESETS = [
     ('マリルリ', 'azumarill', 'BUBBLE', 'ICE_BEAM', 'PLAY_ROUGH'),
     ('オーダイル', 'feraligatr', 'SHADOW_CLAW', 'HYDRO_CANNON', 'ICE_BEAM'),
@@ -572,7 +574,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        if path not in ('/api/prepare','/api/run','/api/prepare24','/api/run24','/api/meta/sync','/api/meta/preview','/api/meta/presets'):
+        if path not in ('/api/prepare','/api/run','/api/prepare24','/api/run24','/api/meta/sync','/api/meta/preview','/api/meta/presets',
+                        '/api/party/list','/api/party/get','/api/party/save',
+                        '/api/party/start','/api/party/status','/api/party/cancel'):
             return self.respond(404, {'error': '見つかりません'})
         # Only same-origin JS with the random session token can start a job.
         origin = self.headers.get('Origin','')
@@ -587,8 +591,37 @@ class Handler(BaseHTTPRequestHandler):
             if n < 2 or n > MAX_APP_REQUEST_BYTES:
                 raise ValueError('入力が大きすぎるか空です')
             payload = json.loads(self.rfile.read(n))
+            if not isinstance(payload, dict):
+                raise ValueError('入力はJSONオブジェクトで指定してください')
+            if path.startswith('/api/party/'):
+                action = path.rsplit('/', 1)[-1]
+                if action == 'list':
+                    return self.respond(200, PARTY.list_parties())
+                if action == 'get':
+                    return self.respond(200, PARTY.get_party(payload.get('id')))
+                if action == 'save':
+                    try:
+                        return self.respond(200, PARTY.save_party(payload))
+                    except RuntimeError as exc:
+                        return self.respond(409, {'error': str(exc)})
+                if action == 'status':
+                    return self.respond(200, PARTY.run_status(payload.get('job_id')))
+                if action == 'cancel':
+                    return self.respond(200, PARTY.cancel(payload.get('job_id')))
+                if action == 'start':
+                    with LOCK:
+                        if not CATALOG.get('ready'):
+                            raise ValueError('ゲームデータを読み込み中です')
+                        _, cpms, full_species = engine.game_data()
+                        try:
+                            response = PARTY.start(payload, catalog=CATALOG['species'],
+                                species=full_species, cpms=cpms, engine=engine, work=WORK,
+                                global_lock=LOCK, global_status=STATUS)
+                        except RuntimeError as exc:
+                            return self.respond(409, {'error': str(exc)})
+                    return self.respond(200, response)
             with LOCK:
-                if STATUS['state'] == 'running':
+                if STATUS['state'] == 'running' or PARTY.running:
                     return self.respond(409, {'error':'計算中は入力を変更できません'})
                 if path == '/api/meta/presets':
                     if not CATALOG['ready']:

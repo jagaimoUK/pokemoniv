@@ -1,0 +1,45 @@
+name: Party Builder checks
+on:
+  pull_request:
+    paths:
+      - "pvpoke_party_*"
+      - "pvpoke_battle_policy.js"
+      - "pvpoke_node_matrix.js"
+      - "pvpoke_direct_backend.py"
+      - "pvpoke_calculation_version.py"
+      - "vendor/pvpoke/**"
+      - "Dockerfile"
+      - "pvpoke_web.py"
+      - "pvpoke_mcp_remote.py"
+      - "pvpoke_app_ui.py"
+      - "tests/test_party*"
+      - "tests/test_battle_policy.cjs"
+      - "tests/fixtures/strategy*"
+      - ".github/workflows/party-builder.yml"
+  workflow_dispatch:
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: python -m pip install -r requirements.txt
+      - name: Syntax, 324-cell prechange parity, policy isolation, shared resources and API tests
+        run: |
+          python -m compileall -q pvpoke_party_core.py pvpoke_party_backend.py pvpoke_party_strategy.py pvpoke_party_ui.py pvpoke_web.py pvpoke_mcp_remote.py
+          node --check pvpoke_node_matrix.js
+          node --check pvpoke_battle_policy.js
+          python -m unittest discover -s tests -p 'test_party*.py' -v
+      - name: Verify embedded Party UI JavaScript syntax
+        run: |
+          python -c 'import pvpoke_party_ui as p; from pathlib import Path; Path("/tmp/party-ui.js").write_text(p.HTML.split("<script>",1)[1].split("</script>",1)[0])'
+          node --check /tmp/party-ui.js
+      - name: Build image and verify runtime strategy assets
+        run: |
+          docker build --tag pokemoniv-party-ci .
+          docker run --rm --entrypoint python pokemoniv-party-ci -c "import pvpoke_party_ui, pvpoke_party_strategy; assert '詳細戦略' in pvpoke_party_ui.HTML"

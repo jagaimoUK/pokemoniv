@@ -1,0 +1,68 @@
+[
+  {
+    "species": "quagsire",
+    "fast": "MUD_SHOT",
+    "charged1": "AQUA_TAIL",
+    "charged2": "STONE_EDGE",
+    "atk": 0,
+    "def": 15,
+    "hp": 15,
+    "level": 28.5,
+    "cp": 1476
+  },
+  {
+    "species": "clodsire",
+    "fast": "POISON_STING",
+    "charged1": "STONE_EDGE",
+    "charged2": "EARTHQUAKE",
+    "atk": 0,
+    "def": 15,
+    "hp": 15,
+    "level": 30.0,
+    "cp": 1496
+  },
+  {
+    "species": "azumarill",
+    "fast": "BUBBLE",
+    "charged1": "ICE_BEAM",
+    "charged2": "PLAY_ROUGH",
+    "atk": 0,
+    "def": 15,
+    "hp": 15,
+    "level": 45.5,
+    "cp": 1499
+  },
+  {
+    "species": "fearow",
+    "fast": "PECK",
+    "charged1": "DRILL_PECK",
+    "charged2": "DRILL_RUN",
+    "atk": 0,
+    "def": 15,
+    "hp": 15,
+    "level": 28.0,
+    "cp": 1476
+  },
+  {
+    "species": "skarmory",
+    "fast": "STEEL_WING",
+    "charged1": "SKY_ATTACK",
+    "charged2": "BRAVE_BIRD",
+    "atk": 0,
+    "def": 15,
+    "hp": 15,
+    "level": 27.0,
+    "cp": 1476
+  },
+  {
+    "species": "wigglytuff",
+    "fast": "CHARM",
+    "charged1": "ICY_WIND",
+    "charged2": "SWIFT",
+    "atk": 0,
+    "def": 15,
+    "hp": 15,
+    "level": 29.5,
+    "cp": 1481
+  }
+]

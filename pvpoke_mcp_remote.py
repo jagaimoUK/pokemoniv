@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pvpoke_bridge_core as backend
 from pvpoke_iv_workflow import IVWorkflow
 from pvpoke_app_ui import HTML as APP_HTML
+from pvpoke_party_ui import HTML as PARTY_HTML
 from pvpoke_app_access import AppAccess, BrowserLogin
 from pvpoke_app_input import parse_import
 from pvpoke_score_search import search_low_scores
@@ -309,7 +310,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def app_page(self):
-        data = (flashcards.page() if self.path == '/flashcards' else APP_HTML).encode('utf-8')
+        data = (flashcards.page() if self.path == '/flashcards' else PARTY_HTML if self.path == '/app/party' else APP_HTML).encode('utf-8')
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.send_header('Content-Length', str(len(data)))
@@ -324,7 +325,9 @@ class Handler(BaseHTTPRequestHandler):
         """Only explicit app operations; never proxy arbitrary backend paths."""
         if self.path not in ('/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result',
                              '/app-api/session', '/app-api/logout', '/app-api/meta-status',
-                             '/app-api/meta-preview', '/app-api/meta-apply', '/app-api/meta-presets', '/app-api/meta-preset-save', '/app-api/meta-preset-export', '/app-api/low-score', '/app-api/visual-backup-token', '/app-api/flashcards'):
+                             '/app-api/meta-preview', '/app-api/meta-apply', '/app-api/meta-presets', '/app-api/meta-preset-save', '/app-api/meta-preset-export', '/app-api/low-score', '/app-api/visual-backup-token', '/app-api/flashcards',
+                             '/app-api/party/list', '/app-api/party/get', '/app-api/party/save',
+                             '/app-api/party/start', '/app-api/party/status', '/app-api/party/cancel'):
             return self.respond(404, {'error': 'Not found'})
         origin = self.headers.get('Origin')
         if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'):
@@ -338,6 +341,15 @@ class Handler(BaseHTTPRequestHandler):
             args = json.loads(self.rfile.read(size))
             if not isinstance(args, dict):
                 raise ValueError('入力はJSONオブジェクトで指定してください')
+            if self.path.startswith('/app-api/party/'):
+                try:
+                    result = backend._request('/api/party/' + self.path.rsplit('/', 1)[-1], args,
+                                              headers={'X-PvPoke-Token': backend._token()}, timeout=75)
+                    return self.respond(200, result)
+                except backend.BridgeError as exc:
+                    if 'HTTP 409:' in str(exc):
+                        return self.respond(409, {'error': '保存競合、または他の計算中です'})
+                    raise
             if self.path == '/app-api/session':
                 return self.respond(200, {'expires_in_seconds': BROWSER_LOGIN.ttl},
                                     cookie=BROWSER_LOGIN.issue(secure=APP_ORIGIN.startswith('https://')))
@@ -447,7 +459,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        if self.path == '/flashcards':
+        if self.path in ('/flashcards', '/app/party'):
             return self.app_page()
         # This one read-only route contains only global, fixed PvP rankings
         # transformed into GO search terms. Do not expose private app APIs,

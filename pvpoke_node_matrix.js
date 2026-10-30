@@ -3,9 +3,9 @@
 /*
  * Experimental browser-free PvPoke Matrix adapter.
  *
- * Loads UNMODIFIED PvPoke battle engine sources from an independently pinned
- * checkout (PVP_PVPoke_SOURCE). No direct engine results are used in production
- * until exact parity with the browser's TeamRanker Matrix is demonstrated.
+ * Loads PvPoke battle engine sources from an independently pinned
+ * checkout (PVP_PVPOKE_SOURCE). Optional vendored hooks preserve the default
+ * TeamRanker Matrix behavior; detailed policies use an explicit protocol.
  *
  * Protocol: one JSON request per line, one JSON result per line (or --once).
  * Request: {"gamemaster_path":"/.../gamemaster.json","candidates":[...],
@@ -15,6 +15,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const readline = require("node:readline");
+const crypto = require("node:crypto");
+const strategy = require("./pvpoke_battle_policy.js");
 const minior = require("./pvpoke_minior_strategy.js");
 
 const ROOT = process.env.PVP_PVPOKE_SOURCE || "";
@@ -23,7 +25,7 @@ if (!ROOT || !fs.existsSync(path.join(ROOT, "src/js/battle/Battle.js"))) {
   process.exit(2);
 }
 
-let gm, gmDataFile;
+let gm, gmDataFile, gmDataHash;
 const defaults = () => ({
   shields: 1, ivs: "original", bait: 1, levelCap: 50,
   startHp: 1, startEnergy: 0, startCooldown: 0,
@@ -121,12 +123,15 @@ function buildGM(data) {
 }
 
 function loadMaster(filename) {
-  if (gmDataFile !== filename) {
-    const data = JSON.parse(fs.readFileSync(filename, "utf8"));
+  const raw = fs.readFileSync(filename, "utf8");
+  const hash = crypto.createHash("sha256").update(raw).digest("hex");
+  if (gmDataFile !== filename || gmDataHash !== hash) {
+    const data = JSON.parse(raw);
     if (!Array.isArray(data.pokemon) || !Array.isArray(data.moves) ||
         !data.settings) throw Error("Incomplete PvPoke GameMaster JSON");
     gm = buildGM(data);
     gmDataFile = filename;
+    gmDataHash = hash;
   }
 }
 
@@ -235,13 +240,26 @@ function matrix(req) {
   };
 }
 
+function strategyRunner(overrides = {}) {
+  return strategy.createRunner({Battle,createPokemon,DamageCalculator,ActionLogic,TimelineAction,gm,...overrides});
+}
+
 async function main() {
   const reader = readline.createInterface({input:process.stdin, crlfDelay:Infinity});
   for await (const line of reader) {
     if (!line.trim()) continue;
     try {
       const req=JSON.parse(line);
-      const result=matrix(req);
+      let result;
+      if (["detail","switch_branch","switch_prefix"].includes(req.action)) {
+        loadMaster(req.gamemaster_path);
+        const runner = strategyRunner();
+        result = req.action === "detail" ? runner.run(req.battle) :
+          req.action === "switch_prefix" ? runner.switchPrefix(req.branch) : runner.branch(req.branch);
+        result.gamemaster_hash = gmDataHash;
+        result.node_memory = {rss_mb:process.memoryUsage().rss / 1048576,
+          peak_rss_mb:process.resourceUsage().maxRSS / 1024};
+      } else result=matrix(req);
       process.stdout.write(JSON.stringify({ok:true,result})+"\n");
     } catch (error) {
       process.stdout.write(JSON.stringify({
@@ -250,4 +268,5 @@ async function main() {
     }
   }
 }
-main().catch(e=>{console.error(e);process.exit(2)});
+module.exports = {loadMaster,strategyRunner};
+if (require.main === module) main().catch(e=>{console.error(e);process.exit(2)});

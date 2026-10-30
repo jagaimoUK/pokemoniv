@@ -176,6 +176,43 @@ class DirectMatrixClient:
         except (ValueError, OSError, BrokenPipeError) as exc:
             raise DirectMatrixError(f"PvPoke Node protocol failed: {exc}") from exc
 
+    def strategy(self, action: str, payload: dict) -> dict:
+        """Explicit detail protocol; never infer resources from a Rating."""
+        if action not in ("detail", "switch_branch", "switch_prefix"):
+            raise DirectMatrixError("Unknown strategy action")
+        if self.proc is None or self.proc.poll() is not None:
+            raise DirectMatrixError("PvPoke Node process is not running")
+        request = {"action": action, "gamemaster_path": str(self.gamemaster),
+                   "battle" if action == "detail" else "branch": payload}
+        try:
+            self.proc.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
+            self.proc.stdin.flush()
+            ready, _, _ = select.select([self.proc.stdout], [], [], self.timeout_seconds)
+            if not ready:
+                self.close()  # Do not let a late response contaminate the next request.
+                raise DirectMatrixError("Strategy response timed out")
+            response = json.loads(self.proc.stdout.readline())
+            if response.get("ok") is not True:
+                raise DirectMatrixError(str(response.get("error"))[:800])
+            result = response.get("result")
+            if not isinstance(result, dict) or result.get("status") not in ("calculated", "unknown"):
+                raise DirectMatrixError("Invalid strategy response")
+            if action == "detail":
+                if result.get("schema") != "strategy-detail-v1" or len(result.get("terminal", [])) != 2:
+                    raise DirectMatrixError("Missing detailed terminal states")
+                for i, state in enumerate(result["terminal"]):
+                    if not (0 <= state["hp"] <= state["max_hp"] and
+                            0 <= state["energy_points"] <= 100 and
+                            0 <= state["shields"] <= payload["shields"][i]):
+                        raise DirectMatrixError("Invalid detailed resources")
+            sample = result.pop("node_memory", None) or linux_process_rss_mb(self.proc.pid)
+            if sample:
+                self.memory_samples.append(sample)
+            return result
+        except (ValueError, OSError, BrokenPipeError, KeyError, TypeError) as exc:
+            self.close()
+            raise DirectMatrixError(f"PvPoke strategy protocol failed: {exc}") from exc
+
     def close(self):
         if self.proc is not None:
             try:

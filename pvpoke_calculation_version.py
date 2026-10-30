@@ -10,7 +10,7 @@ SCHEMA = 1
 CALCULATION_FILES = (
     "pvpoke_batch_v2.py", "pvpoke_24_workflow.py", "pvpoke_iv_modes.py",
     "pvpoke_form_rules.py", "pvpoke_direct_backend.py", "pvpoke_node_matrix.js",
-    "pvpoke_minior_strategy.js", "pvpoke_calculation_version.py", "pvpoke_matchup_cache.py",
+    "pvpoke_minior_strategy.js", "pvpoke_battle_policy.js", "pvpoke_calculation_version.py", "pvpoke_matchup_cache.py",
 )
 
 
