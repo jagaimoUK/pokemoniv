@@ -26,13 +26,15 @@ engine.DATA = work
 cpms = [float(x) for x in re.search(r'var\s+cpms\s*=\s*\[([^\]]+)\]',js,re.S)[1].split(',') if x.strip()]
 species = {p['speciesId']:p for p in gm['pokemon']}
 catalog = {sid:{'name':p['speciesName'],'fastMoves':p['fastMoves'],'chargedMoves':p['chargedMoves']} for sid,p in species.items()}
+from pvpoke_app_catalog import enrich_catalog
+enrich_catalog(catalog, species)
 party = PartyBuilder(work)
 party.save_party({'name':'Browser fixture','members':json.loads((ROOT/'tests/fixtures/strategy_rows.json').read_text())})
 lock = threading.RLock()
 state = {'state':'idle'}
 def request(path, payload=None, **kwargs):
     args = payload or {}
-    if path == '/api/catalog':return {'ready':True,'species':catalog}
+    if path == '/api/catalog':return {'ready':True,'species':catalog,'moves':{m['moveId']:{'name':m['name']} for m in gm['moves']}}
     action = path.rsplit('/',1)[-1]
     if action == 'list':return party.list_parties()
     if action == 'get':return party.get_party(args['id'])
