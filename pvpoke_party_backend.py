@@ -192,7 +192,7 @@ class PartyBuilder:
             global_status["state"] = "running"
             global_status["message"] = "パーティ作成の計算中"
             task = threading.Thread(target=self._worker, args=(
-                jid, args, catalog, species, cpms, engine, work), daemon=True)
+                jid, args, catalog, species, cpms, engine, work, global_lock), daemon=True)
             task.start()
         return {"job_id": jid, "status": "queued"}
 
@@ -203,7 +203,7 @@ class PartyBuilder:
             self._cancel = True
             return {"cancel_requested": True}
 
-    def _worker(self, jid, args, catalog, species, cpms, engine, work):
+    def _worker(self, jid, args, catalog, species, cpms, engine, work, global_lock):
         started = time.monotonic()
         try:
             result = self._compute(jid, args, catalog, species, cpms, engine, work)
@@ -213,14 +213,15 @@ class PartyBuilder:
             status = "cancelled" if str(exc) == "cancelled" else "error"
             self._record(jid, status, {"message": str(exc)[:400], "progress": 0})
         finally:
-            with self._lock:
+            # Always acquire the shared web lock before this worker lock.
+            # The reverse order could deadlock with a concurrent start request.
+            with global_lock, self._lock:
                 if self._active == jid:
                     self._active = None
                     if self._previous_global:
-                        status, lock, previous = self._previous_global
-                        with lock:
-                            status.clear()
-                            status.update(previous)
+                        status, _, previous = self._previous_global
+                        status.clear()
+                        status.update(previous)
                         self._previous_global = None
 
     def _compute(self, jid, args, catalog, species, cpms, engine, work):
@@ -398,6 +399,7 @@ class PartyBuilder:
                                         matrix[pair + (shield,)] = row[0]
                                         stats["hits"] += 1
                             if missing:
+                                missing_set = set(missing)
                                 if client is None:
                                     client = DirectMatrixClient(
                                         gamemaster=engine.DATA / "gamemaster.json", log_dir=work)
@@ -407,6 +409,8 @@ class PartyBuilder:
                                         pair = (p["id"], q["id"])
                                         if shield not in SHIELDS_META and q["id"] not in enemy_ids:
                                             continue
+                                        if pair not in missing_set:
+                                            continue  # Valid cached cell wins; do not count as new.
                                         rating = values[a + 1][b + 1]
                                         matrix[pair + (shield,)] = rating
                                         # Minior's per-opponent policy max is not a fixed strategy.
