@@ -2,8 +2,8 @@
 
 Only instantiate when explicitly selected. Reconstructs the exact established
 PvPoke Matrix CSV shape and always validates row/column counts, IV labels and
-Battle Ratings before returning. A caller should switch to the browser engine
-if this adapter raises any error.
+Battle Ratings before returning. Adapter errors stop the calculation; callers
+must not silently switch to a less isolated browser engine.
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import os
 import select
 import shutil
 import subprocess
+from pvpoke_child_env import child_environment
 from pathlib import Path
 
 
@@ -135,7 +136,7 @@ class DirectMatrixClient:
                 cwd=str(Path(__file__).resolve().parent),
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=self._log_file, bufsize=1, text=True, encoding="utf-8",
-                env={**os.environ, "PVP_PVPOKE_SOURCE": str(self.source)}
+                env=child_environment({"PVP_PVPOKE_SOURCE": str(self.source)})
             )
         except Exception:
             self.close()

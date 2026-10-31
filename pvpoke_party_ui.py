@@ -202,7 +202,7 @@ function showReplacements(r){
   addLine(el,'深刻度: '+info.baseline.severity0.toFixed(3)+' → '+item.after.severity0.toFixed(3)+' / 補完度: '+fmt(info.baseline.coverage)+' → '+fmt(item.after.coverage));
   if(item.resolved.length)addLine(el,'新たに対応できる相手: '+item.resolved.map(x=>name(r.labels[x]?.species||x)).join('、'));
   if(item.new_holes.length)addLine(el,'注意: 新たな未対応相手 '+item.new_holes.map(x=>name(r.labels[x]?.species||x)).join('、'));
-  addLine(el,'入れ替え先の仮構成: '+replacement.moves.map(partyMoveLabel).join(' / ')+'、IV '+replacement.ivs.join('/')+'、CP '+replacement.cp);
+  addLine(el,'入れ替え先の仮構成: '+replacement.moves.map(id=>partyMoveLabel(id)).join(' / ')+'、IV '+replacement.ivs.join('/')+'、CP '+replacement.cp);
   const btn=node('button',i===0?'最優先案を6体に反映':'この案を6体に反映');
   btn.onclick=()=>applyRecommendedSwap(r,item);el.append(btn);root.append(el);
  }

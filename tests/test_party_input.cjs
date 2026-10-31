@@ -7,6 +7,7 @@ assert.equal(x.resolvePartyName('サニーゴ',cat),'corsola');assert.equal(x.re
 assert.equal(x.partyDefaultMoves(cat.corsola).moves.charged1,'C');assert.equal(x.partyDefaultMoves(cat.corsola_galarian).recommended,false);
 assert.equal(context.parseCsv('サニーゴ')[0].charged1,'C');
 assert.equal(x.partyMoveLabel('C',moveNames),'れいとうビーム');
+assert.equal(vm.runInContext("['A','C','D'].map(id=>partyMoveLabel(id)).join(' / ')",context),'たいあたり / れいとうビーム / じゃれつく');
 assert.equal(x.resolvePartyMove('れいとうびーむ',cat.corsola.chargedMoves,moveNames),'C');
 assert.equal(x.resolvePartyMove('Ice Beam',cat.corsola.chargedMoves,moveNames),'C');
 assert.equal(x.resolvePartyMove('Ｃ',cat.corsola.chargedMoves,moveNames),'C');
