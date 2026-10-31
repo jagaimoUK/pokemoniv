@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import csv
 import json
+import math
+import re
 import os
 import sqlite3
 import threading
@@ -23,7 +25,7 @@ from pvpoke_calculation_version import calculation_version
 from pvpoke_direct_backend import DirectMatrixClient
 
 MAX_POOL = 48
-MAX_META = 100
+MAX_META = meta_live.MAX_ROWS
 SHIELDS_META = ((0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2))
 MAX_PARTIES = 32
 
@@ -58,7 +60,24 @@ class PartyBuilder:
         db.execute("""CREATE TABLE IF NOT EXISTS cells(
                    key TEXT PRIMARY KEY, rating INTEGER NOT NULL,
                    created INTEGER NOT NULL)""")
+        db.execute("CREATE TABLE IF NOT EXISTS meta_weights(species TEXT PRIMARY KEY, weight REAL NOT NULL)")
         return db
+
+    def meta_weights(self, changes=None):
+        """Owner-wide defaults; atomic per-species patches preserve unrelated edits."""
+        if changes is not None:
+            if not isinstance(changes, dict) or len(changes) > MAX_META:
+                raise ValueError("重要度の更新は最大500種のオブジェクトです")
+            for sid, value in changes.items():
+                if (not isinstance(sid, str) or not re.fullmatch(r"[a-z0-9_]{1,100}", sid)
+                    or isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value < 0):
+                    raise ValueError("重要度はポケモンIDと0以上の有限数で指定してください")
+        with self._lock, self._db() as db:
+            if changes:
+                db.executemany("""INSERT INTO meta_weights VALUES(?,?)
+                    ON CONFLICT(species) DO UPDATE SET weight=excluded.weight""", changes.items())
+            return {"weights": dict(db.execute("SELECT species,weight FROM meta_weights"))}
 
     def list_parties(self):
         with self._db() as db:
@@ -273,9 +292,11 @@ class PartyBuilder:
             meta_raw = [dict(zip(engine.HEADER[:4], row))
                         for row in csv.reader(stream) if row]
         if len(meta_raw) > MAX_META:
-            raise ValueError("現在のプレビューはメタ最大100技構成です。プリセットを絞ってください")
+            raise ValueError(f"メタは最大{MAX_META}技構成です。プリセットを絞ってください")
         meta = self._unique(self._normalize(meta_raw, catalog, species, cpms, engine, "メタ"))
         weights = core.weight_rows(meta, args.get("group_weights"))
+        # Excluded groups need neither simulation nor search evaluation.
+        meta = [row for row in meta if weights[row["id"]] > 0]
         base_roster = [p["id"] for p in pool] if seek_swaps else []
         replacement_pool = []
         swap_source = "none"

@@ -1,5 +1,6 @@
 """Local browser fixture: real app gateway + worker + bundled engine, no external API."""
 import json
+import hashlib
 import os
 import re
 import sys
@@ -39,6 +40,10 @@ meta_rows = fixture_rows + [{'species':'primeape','fast':'COUNTER',
 meta_csv = ''.join(','.join(row[k] for k in
     ('species','fast','charged1','charged2')) + '\n' for row in meta_rows)
 meta_live.sync(work, meta_csv, species)
+_, alternate_csv, _ = meta_live._validated_upload(work, meta_csv, species)
+meta_presets.save(work, {'action':'create', 'revision':meta_presets.listing(work)['revision'],
+    'name':'Alternate fixture', 'csv':alternate_csv,
+    'expected_sha256':hashlib.sha256(alternate_csv.encode()).hexdigest()}, species)
 lock = threading.RLock()
 state = {'state':'idle'}
 def request(path, payload=None, **kwargs):
@@ -47,6 +52,7 @@ def request(path, payload=None, **kwargs):
         m['moveId']:{'name':m['name'],'name_ja':public_catalog()['moves'].get(m['moveId'],{}).get('ja')}
         for m in gm['moves']}}
     action = path.rsplit('/',1)[-1]
+    if action == 'meta-weights':return party.meta_weights(args.get('changes'))
     if action == 'list':return party.list_parties()
     if action == 'get':return party.get_party(args['id'])
     if action == 'save':return party.save_party(args)

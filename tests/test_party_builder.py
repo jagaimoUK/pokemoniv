@@ -311,6 +311,25 @@ class PartyStoreTests(unittest.TestCase):
             self.assertIsNone(party["opponents"])
             self.assertIsNone(party["strategy"])
 
+    def test_shared_weights_survive_restart_and_merge_species_patches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = PartyBuilder(Path(tmp))
+            self.assertEqual(store.meta_weights(), {"weights": {}})
+            store.meta_weights({"quagsire": 4, "corsola_galarian": 0})
+            reopened = PartyBuilder(Path(tmp))
+            reopened.meta_weights({"azumarill": 2})
+            self.assertEqual(reopened.meta_weights()["weights"],
+                {"quagsire": 4, "corsola_galarian": 0, "azumarill": 2})
+            reopened.meta_weights({"quagsire": 1})
+            self.assertEqual(reopened.meta_weights()["weights"]["quagsire"], 1)
+            for value in (True, -1, float("inf"), float("nan"), "4"):
+                with self.assertRaises(ValueError):
+                    reopened.meta_weights({"quagsire": value, "azumarill": 9})
+            self.assertEqual(reopened.meta_weights()["weights"]["azumarill"], 2)
+            for bad in ({"../invalid": 1}, [], {str(i): 1 for i in range(501)}):
+                with self.assertRaises(ValueError):
+                    reopened.meta_weights(bad)
+
     def test_revision_and_separate_storage(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = PartyBuilder(Path(tmp))

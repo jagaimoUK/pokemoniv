@@ -380,7 +380,8 @@ class Handler(BaseHTTPRequestHandler):
                              '/app-api/session', '/app-api/logout', '/app-api/visual-backup-connections', '/app-api/visual-backup-revoke', '/app-api/meta-status',
                              '/app-api/meta-preview', '/app-api/meta-apply', '/app-api/meta-presets', '/app-api/meta-preset-save', '/app-api/meta-preset-export', '/app-api/low-score', '/app-api/visual-backup-token', '/app-api/flashcards',
                              '/app-api/party/list', '/app-api/party/get', '/app-api/party/save',
-                             '/app-api/party/start', '/app-api/party/status', '/app-api/party/cancel'):
+                             '/app-api/party/start', '/app-api/party/status', '/app-api/party/cancel',
+                             '/app-api/party/meta-weights'):
             return self.respond(404, {'error': 'Not found'})
         origin = self.headers.get('Origin')
         if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'):

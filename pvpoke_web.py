@@ -581,7 +581,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path not in ('/api/prepare','/api/run','/api/prepare24','/api/run24','/api/meta/sync','/api/meta/preview','/api/meta/presets',
                         '/api/party/list','/api/party/get','/api/party/save',
-                        '/api/party/start','/api/party/status','/api/party/cancel'):
+                        '/api/party/start','/api/party/status','/api/party/cancel','/api/party/meta-weights'):
             return self.respond(404, {'error': '見つかりません'})
         # Only same-origin JS with the random session token can start a job.
         origin = self.headers.get('Origin','')
@@ -600,6 +600,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError('入力はJSONオブジェクトで指定してください')
             if path.startswith('/api/party/'):
                 action = path.rsplit('/', 1)[-1]
+                if action == 'meta-weights':
+                    return self.respond(200, PARTY.meta_weights(payload.get('changes')))
                 if action == 'list':
                     return self.respond(200, PARTY.list_parties())
                 if action == 'get':
