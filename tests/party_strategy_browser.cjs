@@ -18,6 +18,19 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  await page.selectOption('#metaWeights select[data-species=quagsire]','4');
  await page.fill('#metaFilter','');
  assert.equal(await page.inputValue('#metaWeights select[data-species=quagsire]'),'4');
+ await page.waitForFunction(()=>document.getElementById('metaWeightSaveStatus').textContent.includes('自動保存しました'));
+ const originalMeta=await page.inputValue('#meta');
+ const alternative=await page.locator('#meta option').filter({hasText:'Alternate fixture'}).getAttribute('value');
+ await page.selectOption('#meta',alternative);
+ await page.waitForSelector('#metaWeights select[data-species=quagsire]');
+ assert.equal(await page.inputValue('#metaWeights select[data-species=quagsire]'),'4');
+ await page.selectOption('#meta',originalMeta);
+ await page.reload();await page.waitForSelector('#workspace:not([hidden])');
+ await page.click('[data-tab=settings]');
+ await page.waitForSelector('#metaWeights select[data-species=quagsire]');
+ assert.equal(await page.inputValue('#metaWeights select[data-species=quagsire]'),'4','Shared importance survives page reload');
+ await page.selectOption('#saved',await page.locator('#saved option').nth(1).getAttribute('value'));await page.click('#load');
+ await page.waitForFunction(()=>document.getElementById('status').textContent.includes('読み込みました'));
  const csv=JSON.parse(fs.readFileSync('tests/fixtures/strategy_rows.json')).map(x=>[x.species,x.fast,x.charged1,x.charged2,x.atk,x.def,x.hp].join(',')).join('\n');
  await page.click('[data-tab=compose]');await page.locator('#members details').first().locator('summary').click();
  const speciesInput=page.locator('#members [data-field=species]').first();await speciesInput.fill('ぬお');await page.locator('#members .suggestions button').filter({hasText:'ヌオー'}).first().click();
@@ -73,6 +86,10 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  await page.click('#autoComplete');
  await page.waitForFunction(()=>document.getElementById('status').textContent.includes('計算完了'),{timeout:60000});
  assert((await page.textContent('#swapAdvice')).includes('自動補完の最終候補'));
+ await page.waitForFunction(()=>{
+  const r=document.getElementById('swapAdvice').getBoundingClientRect();
+  return !document.getElementById('weakness').hidden&&r.top>=0&&r.top<100;
+ });
  assert(await page.locator('#swapAdvice .completion-card').count()>=1);
  assert(await page.locator('#swapAdvice .completion-card').count()<=3);
  const firstPlan=page.locator('#swapAdvice .completion-card').first();
