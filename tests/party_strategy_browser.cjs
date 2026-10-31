@@ -54,7 +54,7 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  await page.waitForFunction(()=>document.getElementById('status').textContent.includes('計算完了'));
  assert((await page.textContent('#strategyResult')).includes('新規条件 0'));
  // Ensure a late response cannot replace results after an edit.
- await page.click('#runStrategy');await page.selectOption('#selfBait','0');
+ await page.click('#runStrategy');await page.selectOption('#workKind','fast_damage');
  await page.waitForFunction(()=>document.getElementById('status').textContent.includes('以前の入力の結果は表示しません'));
  // Save two independent named snapshots and verify restored opponent, IV and strategy.
  await page.fill('#partyName','大会A');await page.click('#saveAs');
