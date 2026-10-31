@@ -107,7 +107,7 @@ class PartyBuilder:
             raise ValueError("保存のrevisionが不正です")
         content = {k: payload.get(k) for k in (
             "members", "locked_slots", "manual_pair_tags", "meta_preset_id", "meta_sha256",
-            "group_weights", "ruleset", "opponents", "candidate_pool", "strategy")}
+            "group_weights", "ruleset", "opponents", "candidate_pool", "strategy", "strategy_refinement")}
         serialized = _json(content)
         if len(serialized.encode("utf-8")) > 100_000:
             raise ValueError("保存データが大きすぎます")
@@ -253,6 +253,9 @@ class PartyBuilder:
         own_raw = args.get("members")
         locked_raw = []
         auto_complete = args["mode"] in ("analyze", "select") and args.get("auto_complete") is True
+        refine = args.get("strategy_refinement", args["mode"] == "build" or auto_complete)
+        if type(refine) is not bool:
+            raise ValueError("詳細戦略の統合は真偽値で指定してください")
         seek_swaps = args["mode"] in ("analyze", "select") and (
             args.get("auto_replacements") is True or auto_complete)
         if (args.get("auto_replacements") not in (None, True, False) or
@@ -425,11 +428,30 @@ class PartyBuilder:
                         f"{a}-{b}": core.party_matchup_heatmap(proposed["roster"], display_ids, matrix, (a, b))
                         for a, b in core.ALL_SHIELDS}
                     proposed["heatmap"] = proposed["by_shield"]["2-2"]
+        refinement = None
+        if refine:
+            from pvpoke_party_strategy import StrategyAnalysis
+            finalists = (result["finalists"] if args["mode"] == "build" else
+                         optimization["finalists"] if optimization and optimization["finalists"]
+                         else [{"roster": ids}])
+            refinement = StrategyAnalysis(self, jid, version, engine, work).refine(
+                ids, finalists, {p["id"]: p for p in self._unique(pool + meta + enemy)},
+                meta, matrix, weights)
+            if args["mode"] == "build":
+                result["finalists"] = refinement["finalists"]
+                ids = result["roster"] = refinement["finalists"][0]["roster"]
+                whole = core.team_summary(ids, opponents, matrix, weights)
+            elif optimization:
+                optimization["finalists"] = refinement["finalists"]
         # Standard six conditions are diagnostic weights, not battle frequencies.
         condition_weights = {(2, 2): .50, (1, 1): .20, (0, 0): .10,
                              (0, 1): .20 / 3, (0, 2): .20 / 3, (1, 2): .20 / 3}
         scenarios = {str(a) + "-" + str(b): core.team_summary(
             ids, opponents, matrix, weights, (a, b)) for a, b in SHIELDS_META}
+        if refinement:
+            from pvpoke_party_strategy import classify_pair
+            detail_cells = {(c['member'], c['opponent']): c for c in refinement['cells']}
+            selected_targets = [p for p in meta if p['id'] in refinement['targets']]
         pairs = []
         for a, b in __import__("itertools").combinations(ids, 2):
             by_condition = [(shields, core.pair_summary(a, b, opponents, matrix, weights, shields))
@@ -443,6 +465,11 @@ class PartyBuilder:
             main["conditions"] = {str(s[0]) + "-" + str(s[1]): {
                 "balance": v["balance"], "hole": v["hole"]}
                 for s, v in by_condition}
+            if refinement:
+                roles = classify_pair(a, b, selected_targets, detail_cells, matrix)
+                main.update(roles)
+                main['detail_status'] = ('標本内を評価済み' if all(
+                    r['status'] == 'calculated' for r in roles.values()) else '一部未評価')
             pairs.append(main)
         pairs.sort(key=lambda r: -r["balance"])
         triples = [{"members": list(group),
@@ -467,9 +494,9 @@ class PartyBuilder:
                     "0-1": .20 / 3, "0-2": .20 / 3, "1-2": .20 / 3},
                 "pairs": pairs,
                 "triples": triples, "danger_pairs": threats, "selection": chosen, "search": result if args["mode"] == "build" else None,
-                "recommendations": swaps, "optimization": optimization,
+                "recommendations": swaps, "optimization": optimization, "refinement": refinement,
                 "calculation_version": version, "evaluation_version": core.EVALUATION_VERSION,
-                "cache": stats, "not_calculated": [
+                "cache": stats, "not_calculated": refinement["unknown"] if refinement else [
                     "通常技限定の圧力", "受け後の仕事", "観測ベースのシールド温存",
                     "交代後の状態引継ぎ", "実戦3対3の勝率"]}
 
@@ -536,7 +563,10 @@ class PartyBuilder:
             if next_best == best:
                 break
             best = next_best
-        return {"roster": list(best), "locked": locked, "beam_width": width,
+        finalists = sorted(set([best, *beam]),
+                           key=lambda r: (core.rank_partial(r, opponents, matrix, weights), r))[:3]
+        return {"roster": list(best), "finalists": [{"roster": list(r)} for r in finalists],
+                "locked": locked, "beam_width": width,
                 "candidate_count": len(candidates), "scope": "候補内の暫定結果。全探索ではありません"}
 
     def _matrix(self, jid, pool, opponents, version, engine, work, *, enemy_ids,

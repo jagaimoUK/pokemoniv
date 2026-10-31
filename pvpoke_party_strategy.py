@@ -8,7 +8,7 @@ import json
 import hashlib
 import math
 import time
-from pvpoke_party_core import digest
+from pvpoke_party_core import digest, lookup, rank_partial, team_summary
 from pvpoke_direct_backend import DirectMatrixClient
 
 SCHEMA = 'strategy-detail-v1'
@@ -107,19 +107,130 @@ def cell_key(version, action, request):
     return digest([SCHEMA, version, action, request, 'optimal', 'pvpoke-default-deterministic'])
 
 
+REFINEMENT_VERSION = 'party-roles-v1'
+MAX_FINALISTS = 3
+MAX_TARGETS = 3
+
+
+def refinement_targets(rosters, opponents, matrix, weights):
+    """One shared stress set, chosen BEFORE details; no per-plan cherry picking."""
+    def risk(row):
+        bests = [[lookup(matrix, p, row['id']) for p in roster] for roster in rosters]
+        known = all(v is not None for values in bests for v in values)
+        weakest = min(max(values) for values in bests) if known else None
+        return (not known, -(weights.get(row['id'], 0)),
+                weakest if known else 1001, row['id'])
+    # Collapse exact duplicates only. Different legal move/IV hypotheses stay separate.
+    return sorted({p['id']: p for p in opponents}.values(), key=risk)[:MAX_TARGETS]
+
+
+def compact_roles(normal, fast, absorb, conserve):
+    """Facts from fixed policies; no best-policy oracle and no Rating inference."""
+    results = (normal, fast, absorb, conserve)
+    if any(r.get('status') != 'calculated' for r in results):
+        return {'status': 'unknown', 'pressure': None, 'absorb': None, 'conserve': None}
+    fast_fraction = fast['damage'][0]['fast'] / fast['initial'][1]['max_hp']
+    work = work_after_hit(absorb, {'kind': 'fast_damage', 'hp_fraction': .15})
+    shield_work = work_after_hit(absorb, {'kind': 'force_shield'})
+    received = work['received_charged']
+    return {'status': 'calculated',
+        'standard_rating': normal['rating'],
+        'pressure': fast_fraction >= .5,
+        'fast_damage_fraction': round(fast_fraction, 6),
+        'fast_breakthrough': fast['breakthrough'],
+        'absorb': (work['survived_first_hit'] and
+                   (work['achieved'] or shield_work['achieved'])) if received else None,
+        'work': work, 'shield_work': shield_work,
+        'conserve': conserve['rating'] > 500,
+        'conserve_rating': conserve['rating'],
+        'conserve_shields_remaining': conserve['terminal'][0]['shields']}
+
+
+def role_team_summary(roster, targets, cells, weights):
+    """Coverage of declared roles in sampled conditions, not match win chance."""
+    metrics, evidence = {}, {}
+    for role in ('pressure', 'absorb', 'conserve'):
+        covered = known = 0.0
+        evidence[role] = []
+        for target in targets:
+            tid = target['id']
+            vals = [cells.get((p, tid), {}).get(role) for p in roster]
+            responders = [p for p, v in zip(roster, vals) if v]
+            if responders:
+                known += weights[tid]
+                covered += weights[tid]
+                evidence[role].append({'opponent': tid, 'members': responders})
+            elif all(v is not None for v in vals):
+                known += weights[tid]
+        metrics[role] = {'coverage': round(covered, 6), 'known_weight': round(known, 6)}
+    return {'metrics': metrics, 'evidence': evidence}
+
+
+def rank_refined(plans, opponents, matrix, weights, *, include_chase):
+    """Unknown never lowers a candidate: hold the ENTIRE shortlist order instead."""
+    roles = {'pressure': .25, 'absorb': .25, 'conserve': .35}
+    if include_chase:
+        roles['chase'] = .15
+    complete = all(team_summary(p['roster'], opponents, matrix, weights)['complete'] and
+                   all(p['detail']['metrics'][k]['known_weight'] >= 1 - 1e-9
+                       for k in roles) for p in plans)
+    for p in plans:
+        metrics = p['detail']['metrics']
+        p['detail']['score'] = round(sum(w * metrics[k]['coverage'] for k, w in roles.items()) /
+                                           sum(roles.values()), 6) if complete else None
+    if complete:
+        # Preserve known coverage holes and their depth. Details discriminate
+        # between comparable shortlists; they cannot erase a sole static answer.
+        plans.sort(key=lambda p: (*rank_partial(p['roster'], opponents, matrix, weights)[:3],
+                                 -p['detail']['score'],
+                                 *rank_partial(p['roster'], opponents, matrix, weights)[3:],
+                                 p['static_rank']))
+    for i, p in enumerate(plans, 1):
+        p['rank'] = i
+    return complete
+
+
+def classify_pair(a, b, targets, cells, matrix):
+    """Directional rescue roles plus raw role evidence, separately from static BR."""
+    result = {}
+    for role in ('pressure', 'absorb'):
+        known, evidence, rescue = 0, [], []
+        for target in targets:
+            tid = target['id']
+            vals = [cells.get((p, tid), {}).get(role) for p in (a, b)]
+            if any(v is None for v in vals):
+                continue
+            known += 1
+            for member, other, value in ((a, b, vals[0]), (b, a, vals[1])):
+                if value:
+                    evidence.append({'member': member, 'opponent': tid})
+                    rating = lookup(matrix, other, tid)
+                    if rating is not None and rating <= 500:
+                        rescue.append({'member': member, 'covers_for': other, 'opponent': tid})
+        result[role] = {'status': 'calculated' if known == len(targets) and targets else 'unknown',
+                        'evaluated': known, 'total': len(targets),
+                        'evidence': evidence, 'rescue': rescue}
+    return result
+
+
 class StrategyAnalysis:
     def __init__(self, builder, jid, version, engine, work):
         self.builder, self.jid, self.version = builder, jid, version
         self.engine, self.work = engine, work
         self.gamemaster_hash = hashlib.sha256((engine.DATA / "gamemaster.json").read_bytes()).hexdigest()
         self.client = None
+        self.memo = {}
+        self.progress = 20
         self.stats = {'hits': 0, 'computed': 0, 'new_battles': 0, 'compute_seconds': 0,
-                      'cache_seconds': 0, 'node_peak_rss_mb': None}
+                      'cache_seconds': 0, 'node_peak_rss_mb': None, 'memory_hits': 0}
 
     def resolve(self, action, request):
         if self.builder._cancel:
             raise ValueError('cancelled')
         key = cell_key(self.version, action, {"gamemaster_hash": self.gamemaster_hash, "request": request})
+        if key in self.memo:
+            self.stats['memory_hits'] += 1
+            return self.memo[key]
         tick = time.monotonic()
         with self.builder._db() as db:
             db.execute('''CREATE TABLE IF NOT EXISTS strategy_cells(
@@ -130,7 +241,8 @@ class StrategyAnalysis:
                 db.execute('UPDATE strategy_cells SET accessed=? WHERE key=?', (time.time_ns(), key))
                 self.stats['hits'] += 1
                 self.stats['cache_seconds'] += time.monotonic() - tick
-                return json.loads(row[0])
+                self.memo[key] = json.loads(row[0])
+                return self.memo[key]
         if self.client is None:
             self.client = DirectMatrixClient(gamemaster=self.engine.DATA / 'gamemaster.json', log_dir=self.work)
         value = self.client.strategy(action, request)
@@ -153,8 +265,115 @@ class StrategyAnalysis:
                         break
                     db.execute('DELETE FROM strategy_cells WHERE key=?', (old,))
                     used -= old_size
-        self.builder._record(self.jid, 'running', {'progress': 20, 'message': '詳細条件を比較しています', 'cache': self.stats})
+        self.memo[key] = value
+        self.builder._record(self.jid, 'running', {'progress': self.progress, 'message': '詳細条件を比較しています', 'cache': self.stats})
         return value
+
+    def refine(self, baseline, finalists, rows, targets, matrix, weights):
+        """Bounded second pass: <=24 own rows * 3 targets * 4 detail policies.
+
+        At most four lead/switch prefixes plus eight chases. All are exact-cache
+        requests; the cap is independent of the original pool/meta sizes.
+        """
+        started = time.monotonic()
+        self.progress = 96
+        plans = [dict(p, roster=list(p['roster']), static_rank=i + 1)
+                 for i, p in enumerate(finalists[:MAX_FINALISTS])]
+        rosters = [baseline] + [p['roster'] for p in plans]
+        selected = refinement_targets(rosters, targets, matrix, weights)
+        own = sorted({p for roster in rosters for p in roster})
+        total = sum(weights.get(p['id'], 0) for p in selected)
+        target_weights = {p['id']: weights.get(p['id'], 0) / total for p in selected} if total else {}
+        cells = {}
+        try:
+            for pid in own:
+                for target in selected:
+                    tid = target['id']
+                    if any(rows[x]['species'].startswith('minior') for x in (pid, tid)):
+                        cells[pid, tid] = {'status': 'unknown', 'reason': 'メテノの固定戦略は未対応'}
+                        continue
+                    standard = {'kind': 'standard'}
+                    base = {'self': combat(rows[pid]), 'opponent': combat(target), 'shields': [2, 2],
+                            'initial': [{}, {}], 'bait': [True, True],
+                            'attack_policies': ['standard', 'standard'],
+                            'shield_policies': [standard, standard], 'public_moves': True}
+                    normal = self.resolve('detail', base)
+                    fast = self.resolve('detail', dict(base, attack_policies=['fast_only', 'standard']))
+                    absorb = self.resolve('detail', dict(base, shields=[0, 2]))
+                    conserve_policy = {'kind': 'conserve', 'danger_ratio': .95, 'reserve': 1}
+                    conserve = self.resolve('detail', dict(base, public_moves=False,
+                        shield_policies=[conserve_policy, conserve_policy]))
+                    cells[pid, tid] = compact_roles(normal, fast, absorb, conserve)
+            unique_rosters = {tuple(r): r for r in rosters}
+            summaries = {}
+            include_chase = len({p['roster_clause_id'] for p in selected}) >= 2
+            for key, roster in unique_rosters.items():
+                summary = role_team_summary(roster, selected, cells, target_weights)
+                summary['branch'] = {'status': 'unknown', 'reason': '後追いの異なる種族条件が不足'}
+                if include_chase:
+                    summary['branch'] = self._refine_branch(roster, rows, selected, cells, matrix)
+                    branch = summary['branch']
+                    summary['metrics']['chase'] = {
+                        'coverage': branch['worst_rating'] / 1000
+                                    if branch['status'] == 'calculated' else 0,
+                        'known_weight': 1 if branch['status'] == 'calculated' else 0}
+                summaries[key] = summary
+            for p in plans:
+                p['detail'] = dict(summaries[tuple(p['roster'])])
+                p['summary'] = team_summary(p['roster'], [t['id'] for t in targets], matrix, weights)
+            complete = rank_refined(plans, [t['id'] for t in targets], matrix, weights,
+                                    include_chase=include_chase)
+            return {'version': REFINEMENT_VERSION, 'status': 'calculated' if complete else 'unknown',
+                'ranking_changed': any(p['rank'] != p['static_rank'] for p in plans),
+                'finalists': plans, 'targets': [p['id'] for p in selected],
+                'target_weights': target_weights, 'target_count': len(targets),
+                'baseline': summaries[tuple(baseline)],
+                'cells': [{'member': p, 'opponent': q, **value} for (p, q), value in cells.items()],
+                'cache': self.stats, 'elapsed_seconds': round(time.monotonic() - started, 3),
+                'budget': {'max_finalists': MAX_FINALISTS, 'max_targets': MAX_TARGETS,
+                           'max_detail_cells': 288, 'max_branch_requests': 12},
+                'criteria': {'pressure': '通常技限定・2-2で相手最大HPの50%以上を削る',
+                    'absorb': '0-2で最初のゲージ技を生存し、その後通常技で15%以上削るかシールドを奪う',
+                    'conserve': '双方が1枚温存する固定方針・技非公開、Rating>500',
+                    'chase': '固定した初手→引き先に対する標本内の最悪後追いRating / 1000（標準PvPoke参照）'},
+                'ranking_rule': '未計算があれば順位維持。静的な未対応数・深刻度を優先し、同等案を役割指標で比較（通常技25・受け25・温存35・後追い15）。後追い条件なしは残りを正規化。',
+                'unknown': ['標本外の詳細条件', '交代再開・残り2体の実対戦・交代タイマー',
+                            '完全な3対3・実戦勝率', '相手IVの感度分析'],
+                'scope': '一次探索の上位案・重要度順の最大3技/IV仮説のみ。全メタ・全選出の保証ではありません'}
+        finally:
+            if self.client:
+                self.client.close()
+
+    def _refine_branch(self, roster, rows, targets, cells, matrix):
+        # Declare one safe switch against the entire sampled set, NOT a separate
+        # best action after discovering which opponent chose to chase.
+        if any(cells.get((p, t['id']), {}).get('conserve_rating') is None
+               for p in roster for t in targets):
+            return {'status': 'unknown', 'reason': '引き先を選ぶための詳細条件が未計算'}
+        safe = max(sorted(roster), key=lambda p: min(cells[p, t['id']]['conserve_rating'] for t in targets))
+        enemy_lead = targets[0]
+        options = [p for p in roster if p != safe]
+        if any(lookup(matrix, p, enemy_lead['id']) is None for p in options):
+            return {'status': 'unknown', 'reason': '初手の標準条件が未計算'}
+        lead = min(options, key=lambda p: (lookup(matrix, p, enemy_lead['id']), p))
+        base = {'lead': combat(rows[lead]), 'safe': combat(rows[safe]),
+                'opponent_lead': combat(enemy_lead), 'shields': [2, 2], 'bait': [True, True],
+                'lead_turns': 2, 'chase_delay_turns': 2}
+        prefix = self.resolve('switch_prefix', base)
+        chases = []
+        for target in targets:
+            if target['roster_clause_id'] == enemy_lead['roster_clause_id']:
+                continue
+            branch = self.resolve('switch_branch', dict(base, chaser=combat(target), prefix=prefix))
+            chases.append({'opponent': target['id'], 'status': branch['status'],
+                           'rating': branch.get('chase', {}).get('rating'),
+                           'realized': branch.get('realized'), 'reason': branch.get('reason')})
+        complete = all(c['status'] == 'calculated' for c in chases)
+        return {'status': 'calculated' if complete else 'unknown',
+                'lead': lead, 'safe': safe, 'opponent_lead': enemy_lead['id'], 'chases': chases,
+                'remaining_two': {'status': 'unknown', 'members': [lead] + [p for p in roster if p not in (lead, safe)][:1]},
+                'worst_rating': min(c['rating'] for c in chases) if complete else None,
+                'model': '標本内の限定分岐。初手・引き先は固定、残り2体との連携は未評価'}
 
     def compute(self, own, enemy, cfg):
         try:
