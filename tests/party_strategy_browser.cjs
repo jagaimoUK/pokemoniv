@@ -94,8 +94,29 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  assert(await page.locator('#swapAdvice .completion-card').count()<=3);
  const firstPlan=page.locator('#swapAdvice .completion-card').first();
  await firstPlan.getByRole('button',{name:'弱点を視覚化'}).click();
- assert(await firstPlan.locator('table.heatmap tbody tr').count()>=1,'heatmap must include real meta opponents');
- assert.equal(await firstPlan.locator('table.heatmap tbody tr').first().locator('td').count(),6);
+ const comparison=page.locator('.party-comparison');
+ assert(await comparison.locator('table.heatmap tbody tr').count()>=1,'comparison must include real meta opponents');
+ assert(await comparison.locator('table.heatmap tbody tr').count()<=8,'page remains compact');
+ for(const [own,enemy] of [['0','0'],['1','1'],['2','2'],['0','2'],['2','0']]){
+  await comparison.getByLabel('自分のシールド',{exact:true}).selectOption(own);
+  await comparison.getByLabel('相手のシールド',{exact:true}).selectOption(enemy);
+  assert.equal(await comparison.locator('table').getAttribute('data-shields'),own+'-'+enemy);
+  assert(!(await comparison.locator('tbody').textContent()).includes('未計算'));
+ }
+ await comparison.getByLabel('比較表示',{exact:true}).selectOption('slots');
+ assert.equal(await comparison.locator('table tbody tr').first().locator('td').count(),6);
+ assert.equal(await comparison.locator('table tbody tr').first().locator('td span').count(),12);
+ assert.equal(await comparison.locator('.compare-scroll').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,'comparison fits mobile width without horizontal scrolling');
+ const rowCount=await comparison.locator('tbody tr').count();assert(rowCount<=8);
+ await comparison.getByLabel('比較する提案',{exact:true}).selectOption('0');
+ const history=firstPlan.locator('details').filter({hasText:'入れ替え履歴'});
+ if(await history.count()){
+  await history.locator('summary').click();
+  assert((await history.textContent()).includes('交換直前の6体・2枚対2枚'));
+  assert((await history.textContent()).includes('改善した相手'));
+ }
+ // Visual controls must not invalidate the proposal before applying it.
+
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'Heatmap must fit mobile viewport with own scrolling');
  await firstPlan.getByRole('button',{name:'この6体を反映'}).click();
  assert((await page.textContent('#partyState')).includes('未保存の変更あり'));
