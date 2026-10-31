@@ -39,6 +39,7 @@ jobs:
           python -m compileall -q pvpoke_party_core.py pvpoke_party_backend.py pvpoke_party_strategy.py pvpoke_party_ui.py pvpoke_web.py pvpoke_mcp_remote.py
           node --check pvpoke_node_matrix.js
           node --check pvpoke_battle_policy.js
+          node tests/test_party_input.cjs
           python -m unittest discover -s tests -p 'test_party*.py' -v
       - name: Verify embedded Party UI JavaScript syntax
         run: |

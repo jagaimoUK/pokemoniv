@@ -37,6 +37,7 @@ import pvpoke_meta_variants as meta_variants
 from pvpoke_party_backend import PartyBuilder
 from pvpoke_app_input import app_presets
 from pvpoke_app_catalog import enrich_catalog
+from pvpoke_flashcards import public_catalog
 
 HOST = '127.0.0.1'
 PORT = 8765
@@ -110,12 +111,16 @@ def load_catalog():
                 continue
             presets.append({'name': ja, 'species': sid,
                             'fast': fast, 'charged1': c1, 'charged2': c2})
+        # Share the already-bundled Japanese move dictionary with the Party UI.
+        # Persist only canonical move IDs; localized labels never enter calculations.
+        move_ja = public_catalog().get('moves', {})
         with LOCK:
             CATALOG.update({'ready': True, 'error': None, 'species': payload,
                             'moves': {m['moveId']: {**{k: m[k] for k in (
                                 'type', 'power', 'energy', 'energyGain', 'cooldown',
                                 'buffs', 'buffTarget', 'buffApplyChance') if k in m},
-                                'name': m.get('name') or m['moveId']}
+                                'name': m.get('name') or m['moveId'],
+                                'name_ja': move_ja.get(m['moveId'], {}).get('ja')}
                                       for m in gm.get('moves', []) if m.get('moveId')},
                             'presets': presets, 'timestamp': gm.get('timestamp')})
         meta_variants.start(WORK, LOCK, STATUS)

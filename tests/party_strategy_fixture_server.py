@@ -29,6 +29,7 @@ cpms = [float(x) for x in re.search(r'var\s+cpms\s*=\s*\[([^\]]+)\]',js,re.S)[1]
 species = {p['speciesId']:p for p in gm['pokemon']}
 catalog = {sid:{'name':p['speciesName'],'fastMoves':p['fastMoves'],'chargedMoves':p['chargedMoves']} for sid,p in species.items()}
 from pvpoke_app_catalog import enrich_catalog
+from pvpoke_flashcards import public_catalog
 enrich_catalog(catalog, species)
 party = PartyBuilder(work)
 fixture_rows = json.loads((ROOT/'tests/fixtures/strategy_rows.json').read_text())
@@ -42,7 +43,9 @@ lock = threading.RLock()
 state = {'state':'idle'}
 def request(path, payload=None, **kwargs):
     args = payload or {}
-    if path == '/api/catalog':return {'ready':True,'species':catalog,'moves':{m['moveId']:{'name':m['name']} for m in gm['moves']}}
+    if path == '/api/catalog':return {'ready':True,'species':catalog,'moves':{
+        m['moveId']:{'name':m['name'],'name_ja':public_catalog()['moves'].get(m['moveId'],{}).get('ja')}
+        for m in gm['moves']}}
     action = path.rsplit('/',1)[-1]
     if action == 'list':return party.list_parties()
     if action == 'get':return party.get_party(args['id'])
@@ -55,6 +58,7 @@ def request(path, payload=None, **kwargs):
 gateway.backend._request = request
 gateway.backend._token = lambda:'fixture-token'
 gateway.backend.meta_presets = lambda: meta_presets.listing(work)
+gateway.backend.export_meta_preset = lambda id, sha: meta_presets.export_preset(work, id, sha)
 server=ThreadingHTTPServer(('127.0.0.1',0),gateway.Handler)
 gateway.PORT=server.server_port
 gateway.APP_ORIGIN=f'http://127.0.0.1:{server.server_port}'
