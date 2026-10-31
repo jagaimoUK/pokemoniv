@@ -104,11 +104,37 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
   assert(!(await comparison.locator('tbody').textContent()).includes('未計算'));
  }
  await comparison.getByLabel('比較表示',{exact:true}).selectOption('slots');
- assert.equal(await comparison.locator('table tbody tr').first().locator('td').count(),6);
- assert.equal(await comparison.locator('table tbody tr').first().locator('td span').count(),12);
+ assert.equal(await comparison.evaluate(el=>el.open),true);
+ assert.equal(await comparison.locator('table tbody tr').count(),6);
+ assert.equal(await comparison.locator('table tbody tr').first().locator('td').count(),2);
+ assert.equal(await comparison.locator('table tbody tr').first().locator('td strong').count(),2);
+ assert(!/初 |案 |[1-6]枠/.test(await comparison.locator('table').textContent()));
+ for(const width of [360,390]){
+  await page.setViewportSize({width,height:844});
+  assert(await comparison.evaluate(el=>el.getBoundingClientRect().width>=innerWidth-2),'comparison uses full viewport');
+  assert(await comparison.locator('td strong').first().evaluate(el=>parseFloat(getComputedStyle(el).fontSize)>=18),'Pokemon names remain readable');
+  assert(await comparison.locator('td span').first().evaluate(el=>parseFloat(getComputedStyle(el).fontSize)>=22),'ratings remain readable');
+  assert.equal(await comparison.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);
+ }
+ await comparison.getByRole('button',{name:'次の相手'}).click();
+ assert((await comparison.locator('.compare-paging').textContent()).includes('2–2'));
+ await comparison.getByLabel('自分のシールド',{exact:true}).selectOption('1');
+ assert((await comparison.locator('.compare-paging').textContent()).includes('2–2'),'shield change keeps opponent');
+ await comparison.getByLabel('比較表示',{exact:true}).selectOption('summary');
+ assert(await comparison.locator('tbody tr').count()<=8);
+ await comparison.getByLabel('比較表示',{exact:true}).selectOption('slots');
  assert.equal(await comparison.locator('.compare-scroll').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,'comparison fits mobile width without horizontal scrolling');
  const rowCount=await comparison.locator('tbody tr').count();assert(rowCount<=8);
  await comparison.getByLabel('比較する提案',{exact:true}).selectOption('0');
+ await page.keyboard.press('Escape');
+ await page.waitForFunction(()=>!document.querySelector('.party-comparison').open&&document.body.style.overflow==='');
+ assert.equal(await comparison.evaluate(el=>el.open),false);
+ assert.equal(await page.evaluate(()=>document.body.style.overflow),'');
+ await firstPlan.getByRole('button',{name:'弱点を視覚化'}).click();
+ await comparison.getByRole('button',{name:'比較を閉じる'}).click();
+ await page.waitForFunction(()=>!document.querySelector('.party-comparison').open&&document.body.style.overflow==='');
+ assert.equal(await comparison.evaluate(el=>el.open),false);
+ assert.equal(await page.evaluate(()=>document.body.style.overflow),'');
  const history=firstPlan.locator('details').filter({hasText:'入れ替え履歴'});
  if(await history.count()){
   await history.locator('summary').click();
