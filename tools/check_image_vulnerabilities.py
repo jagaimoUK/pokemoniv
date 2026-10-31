@@ -7,6 +7,8 @@ from pathlib import Path
 
 
 def summarize(report):
+    if not isinstance(report.get('Results'), list):
+        raise ValueError('Scanner report is missing package scan results')
     findings = [row for result in report.get('Results', [])
                 for row in (result.get('Vulnerabilities') or [])]
     counts = Counter(row.get('Severity', 'UNKNOWN') for row in findings)

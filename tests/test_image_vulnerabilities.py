@@ -8,6 +8,10 @@ spec.loader.exec_module(audit)
 
 
 class ImageAuditTests(unittest.TestCase):
+    def test_missing_scan_results_are_not_a_clean_scan(self):
+        with self.assertRaises(ValueError):
+            audit.summarize({})
+
     def test_no_findings_passes(self):
         self.assertFalse(audit.summarize({'Results': [{'Vulnerabilities': None}]})[1])
 
