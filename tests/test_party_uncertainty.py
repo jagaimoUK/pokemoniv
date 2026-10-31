@@ -152,8 +152,14 @@ class UncertaintyEngineTests(unittest.TestCase):
             self.assertEqual(result['roster'],result['uncertainty']['finalists'][0]['roster'])
             self.assertTrue(all(self.ids[0] in p['roster'] for p in result['uncertainty']['finalists']))
             self.assertEqual(len(result['pairs']),15)
+            self.assertNotIn('相手IVの感度分析',result['not_calculated'])
+            self.assertIn('技・IV感度の未評価条件（標本外を含む）',result['not_calculated'])
             args['opponent_uncertainty']=False
             self.assertIsNone(self.builder._compute('u',args,CATALOG,SPECIES,CPMS,engine,self.work)['uncertainty'])
+            optimized=self.builder._compute('u',dict(args,mode='analyze',auto_complete=True,
+                opponent_uncertainty=True),CATALOG,SPECIES,CPMS,engine,self.work)
+            self.assertEqual(optimized['optimization']['finalists'],optimized['uncertainty']['finalists'])
+            self.assertTrue(all(p['roster'][0]==self.ids[0] for p in optimized['optimization']['finalists']))
             for value in ('yes',1,None):
                 with self.assertRaises(ValueError):self.builder._compute('u',dict(args,opponent_uncertainty=value),CATALOG,SPECIES,CPMS,engine,self.work)
             with self.assertRaisesRegex(ValueError,'8'):

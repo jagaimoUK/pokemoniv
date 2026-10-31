@@ -513,6 +513,12 @@ class PartyBuilder:
                   "ivs": [p["atk"], p["def"], p["hp"]],
                   "cp": p["cp"], "level": p["level"]}
                   for p in self._unique(pool + meta + enemy)}
+        not_calculated = list(refinement["unknown"]) if refinement else [
+            "通常技限定の圧力", "受け後の仕事", "観測ベースのシールド温存",
+            "交代後の状態引継ぎ", "実戦3対3の勝率"]
+        if uncertainty:
+            not_calculated = [x for x in not_calculated if x != "相手IVの感度分析"]
+            not_calculated.append("技・IV感度の未評価条件（標本外を含む）")
         return {"roster": ids, "meta": {"id": preset_id, "sha256": preset["sha256"],
                 "hypotheses": len(meta), "assumption": "仮説等分は使用率ではありません"},
                 "labels": labels, "team": whole, "scenarios": scenarios,
@@ -523,9 +529,7 @@ class PartyBuilder:
                 "recommendations": swaps, "optimization": optimization, "refinement": refinement,
                 "uncertainty": uncertainty,
                 "calculation_version": version, "evaluation_version": core.EVALUATION_VERSION,
-                "cache": stats, "not_calculated": refinement["unknown"] if refinement else [
-                    "通常技限定の圧力", "受け後の仕事", "観測ベースのシールド温存",
-                    "交代後の状態引継ぎ", "実戦3対3の勝率"]}
+                "cache": stats, "not_calculated": not_calculated}
 
     def _strategy(self, jid, args, catalog, species, cpms, engine, work):
         from pvpoke_party_strategy import StrategyAnalysis, normalize_config
