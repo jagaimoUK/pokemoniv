@@ -29,10 +29,20 @@ footer{position:fixed;bottom:0;left:0;right:0;background:#172d2cf5;border-top:1p
 footer .tools{max-width:700px;margin:auto}footer button{flex:1}
 .result{padding-top:10px;border-top:1px solid #557769;margin-top:10px}li{padding:4px 0}
 .completion-card{padding:12px;margin:10px 0;border:1px solid #6a9586;border-radius:16px;background:#29413f}
-.party-comparison{scroll-margin-top:16px;border:1px solid #6a9586;border-radius:16px;padding:10px;margin:10px 0}
-.compare-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.compare-controls label{margin:3px 0}
-.party-comparison .compare-heatmap{table-layout:fixed;font-size:11px}.party-comparison .compare-heatmap th,.party-comparison .compare-heatmap td{min-width:0;max-width:none;padding:5px 2px;overflow-wrap:anywhere;white-space:pre-line}.party-comparison .compare-heatmap th:first-child{min-width:0;width:25%}.party-comparison .compare-heatmap td span{display:block;padding:4px 1px;border-radius:6px;margin:2px 0}
-.compare-scroll{max-height:52vh;overflow:auto}.party-comparison .compare-heatmap thead th{position:sticky;top:0;background:#203138;z-index:2}
+dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100%;height:100dvh;max-height:100dvh;border:0;border-radius:0;padding:0;background:#122126;color:#e2f1e9;overflow-y:auto;overscroll-behavior:contain;font-size:16px}
+.party-comparison::backdrop{background:#122126}
+.compare-header{position:sticky;top:0;z-index:5;background:#122126;padding:12px max(12px,env(safe-area-inset-right)) 12px max(12px,env(safe-area-inset-left));display:flex;justify-content:space-between;align-items:center;gap:12px;border-bottom:1px solid #47645d}.compare-header h2{margin:0;font-size:20px}.compare-header button{flex-shrink:0}
+.compare-content{max-width:900px;margin:auto;padding:12px 12px max(24px,env(safe-area-inset-bottom))}.compare-content>p{font-size:16px;margin:12px 0}
+.compare-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.compare-controls label{margin:3px 0;font-size:16px}.compare-controls select{font-size:16px;min-height:48px;padding:10px 6px}
+.party-comparison .compare-heatmap{table-layout:fixed;font-size:16px;width:100%;border-spacing:6px}
+.party-comparison .compare-heatmap th,.party-comparison .compare-heatmap td{min-width:0;max-width:none;white-space:normal;overflow-wrap:anywhere;padding:12px 8px}
+.party-comparison .compare-heatmap th{font-size:17px;position:static;text-align:center;background:#203138;border-radius:12px}
+.party-comparison .compare-heatmap th:first-child{min-width:0;width:auto;position:static}
+.party-comparison .compare-heatmap td{border-radius:14px;vertical-align:top}
+.party-comparison .compare-heatmap td strong{display:block;font-size:18px;line-height:1.5;font-weight:600}
+.party-comparison .compare-heatmap td span{display:block;padding:8px 0 2px;font-size:22px;line-height:1.4}
+.party-comparison .compare-heatmap td small{display:block;font-size:16px;line-height:1.5}
+.compare-scroll{overflow:visible;max-height:none;margin:12px 0}.compare-opponent{font-size:22px;line-height:1.5;margin:16px 0 8px}.compare-paging{justify-content:space-between;margin:14px 0}.compare-paging span{font-size:16px}
 .heat-scroll{overflow-x:auto;max-width:100%;margin:12px 0}
 .heatmap{border-collapse:separate;border-spacing:3px;text-align:center;font-size:12px;width:100%}
 .heatmap th{padding:7px 3px;min-width:51px;max-width:95px;overflow-wrap:anywhere}
@@ -263,10 +273,17 @@ function showCompletion(result){
  if(opt.status==='no_improvement')addLine(root,'この候補範囲では改善できる交換がありません。現在の6体を表示します。');
  const fmt=v=>(100*v).toFixed(1)+'%';
  const display=id=>name(result.labels[id]?.species||id);
- const comparison=node('div',null,'party-comparison');comparison.hidden=true;root.append(comparison);
+ const comparison=node('dialog',null,'party-comparison');comparison.setAttribute('aria-label','パーティの相性比較');root.append(comparison);
  function heat(parent,index){
-  parent.hidden=false;parent.replaceChildren();
-  parent.append(node('h3','最初の6体と提案パーティの比較'));
+  parent.replaceChildren();
+  const header=node('div',null,'compare-header'),close=node('button','比較を閉じる');
+  header.append(node('h2','パーティの相性比較'),close);parent.append(header);
+  const content=node('div',null,'compare-content');parent.append(content);
+  const previousOverflow=document.body.style.overflow;
+  close.onclick=()=>parent.close();
+  parent.onclose=()=>{document.body.style.overflow=previousOverflow;};
+  document.body.style.overflow='hidden';
+  parent.showModal();
   const controls=node('div',null,'compare-controls');
   controls.addEventListener('input',e=>e.stopPropagation());
   function select(title,options,value){const label=node('label',title),x=node('select');
@@ -274,12 +291,13 @@ function showCompletion(result){
   const candidate=select('比較する提案',opt.finalists.map((p,i)=>[i,'候補 '+String.fromCharCode(65+i)]),index);
   const own=select('自分のシールド',[[0,'0枚'],[1,'1枚'],[2,'2枚']],2);
   const enemy=select('相手のシールド',[[0,'0枚'],[1,'1枚'],[2,'2枚']],2);
-  const mode=select('比較表示',[['summary','全体の対応力'],['slots','6枠の相性表']],'summary');
-  parent.append(controls);
-  addLine(parent,'○ 550以上 / △ 451〜549 / × 450以下 / ? 未計算。勝てる担当数はRating>500。静的な1対1比較で、3対3勝率ではありません。探索と入れ替え理由の基準は2枚対2枚です。');
-  const summary=node('p'),outer=node('div',null,'heat-scroll compare-scroll'),paging=node('div',null,'tools');
+  const mode=select('比較表示',[['slots','ポケモン別の相性'],['summary','全体の対応力']],'slots');
+  content.append(controls);
+  const legend=node('details');legend.append(node('summary','記号と比較条件の説明'));
+  addLine(legend,'○ 550以上 / △ 451〜549 / × 450以下 / ? 未計算。勝てる担当数はRating>500。静的な1対1比較で、3対3勝率ではありません。探索と入れ替え理由の基準は2枚対2枚です。');content.append(legend);
+  const summary=node('p'),opponent=node('h3',null,'compare-opponent'),outer=node('div',null,'compare-scroll'),paging=node('div',null,'tools compare-paging');
   const previous=node('button','前へ'),next=node('button','次へ'),info=node('span');
-  paging.append(previous,info,next);parent.append(summary,outer,paging);let page=0;
+  paging.append(previous,info,next);content.append(opponent,paging,outer,summary);let page=0;
   const symbol=v=>v==null?'?':v>=550?'○':v<=450?'×':'△';
   const tone=v=>v==null?'heat-unknown':v>=550?'heat-win':v<=450?'heat-loss':'heat-mid';
   function stats(row){const r=row?.ratings||[];return r.length!==6||r.some(x=>x==null)?{best:null,answers:null}:{best:Math.max(...r),answers:r.filter(x=>x>500).length};}
@@ -294,27 +312,34 @@ function showCompletion(result){
    summary.textContent='表示対象 '+rows.length+'相手 / 新たに対応 '+gained+' / 対応を失う '+lost+' / 未計算 '+unknown+'。同じ相手・同じシールド条件で比較。';
    const table=node('table',null,'heatmap compare-heatmap'),thead=node('thead'),head=node('tr');
    table.setAttribute('aria-label','最初と提案後の相性比較');table.dataset.shields=key;table.dataset.mode=mode.value;
-   head.append(node('th','相手'));
-   if(mode.value==='summary'){head.append(node('th','最初：最高Rating / 担当数'),node('th','提案後：最高Rating / 担当数'),node('th','変化'));}
-   else for(let i=0;i<6;i++)head.append(node('th',(i+1)+'枠\n初 '+display((opt.baseline_roster||result.roster)[i])+'\n案 '+display(plan.roster[i])));
+   const slots=mode.value==='slots',size=slots?1:8;
+   page=Math.max(0,Math.min(page,Math.ceil(rows.length/size)-1));
+   if(slots)head.append(node('th','最初の6体'),node('th','提案後'));
+   else head.append(node('th','相手'),node('th','最初の6体'),node('th','提案後'));
    thead.append(head);table.append(thead);const body=node('tbody');
-   page=Math.max(0,Math.min(page,Math.ceil(rows.length/8)-1));
-   for(const r of rows.slice(page*8,page*8+8)){
-    const tr=node('tr');tr.append(node('th',display(r.before.opponent)));
-    if(mode.value==='summary'){
-     const a=stats(r.before),b=stats(r.after);
-     for(const v of [a,b]){const td=node('td',v.best==null?'? 未計算':symbol(v.best)+' '+v.best+' / '+v.answers+'体');td.className=tone(v.best);tr.append(td);}
-     tr.append(node('td',a.best==null||b.best==null?'?':(b.answers-a.answers>=0?'+':'')+(b.answers-a.answers)+'体\nRating '+(b.best-a.best>=0?'+':'')+(b.best-a.best)));
+   opponent.textContent=slots&&rows[page]?'対 '+display(rows[page].before.opponent):'全体の対応力';
+   for(const r of rows.slice(page*size,page*size+size)){
+    if(!slots){
+     const tr=node('tr');tr.append(node('th',display(r.before.opponent)));
+     for(const row of [r.before,r.after]){const v=stats(row),td=node('td');td.className=tone(v.best);
+      td.append(node('span',v.best==null?'?':symbol(v.best)+' '+v.best),node('small',v.answers==null?'未計算':'勝てる担当 '+v.answers+'体'));tr.append(td);}
+     body.append(tr);
     }else for(let i=0;i<6;i++){
-     const td=node('td');for(const [label,row] of [['初',r.before],['案',r.after]]){const v=row?.ratings?.[i]??null,cell=node('span',label+' '+symbol(v)+' '+(v??'?'));cell.className=tone(v);td.append(cell);}tr.append(td);
+     const tr=node('tr');
+     for(const [roster,row] of [[opt.baseline_roster||result.roster,r.before],[plan.roster,r.after]]){
+      const v=row?.ratings?.[i]??null,td=node('td');td.className=tone(v);
+      td.append(node('strong',display(roster[i])),node('span',symbol(v)+' '+(v??'?')));tr.append(td);
+     }
+     body.append(tr);
     }
-    body.append(tr);
    }
    table.append(body);outer.replaceChildren(table);
-   info.textContent=rows.length?(page*8+1)+'–'+Math.min(rows.length,page*8+8)+' / '+rows.length:'比較データがありません';
-   previous.disabled=page===0;next.disabled=(page+1)*8>=rows.length;
+   info.textContent=rows.length?(page*size+1)+'–'+Math.min(rows.length,page*size+size)+' / '+rows.length:'比較データがありません';
+   previous.textContent=slots?'前の相手':'前へ';next.textContent=slots?'次の相手':'次へ';
+   previous.disabled=page===0;next.disabled=(page+1)*size>=rows.length;
   }
-  for(const x of [candidate,own,enemy,mode])x.onchange=()=>{page=0;draw();};
+  for(const x of [candidate,own,enemy])x.onchange=()=>draw();
+  mode.onchange=()=>{page=0;draw();};
   previous.onclick=()=>{page--;draw();};next.onclick=()=>{page++;draw();};draw();
  }
  for(const [i,plan] of opt.finalists.entries()){
@@ -326,7 +351,7 @@ function showCompletion(result){
   addLine(box,'入れ替え '+plan.steps.length+'回 / '+(plan.stop==='step_limit'?'最大10手で停止':'候補内で改善が停止'));
   if(plan.steps.length){const d=node('details');d.append(node('summary','入れ替え履歴'));const ol=node('ol');
    plan.steps.forEach(step=>{
-    const li=node('li');li.append(node('strong',(step.slot+1)+'枠: '+display(step.out)+' → '+display(step.in)));
+    const li=node('li');li.append(node('strong',display(step.out)+' → '+display(step.in)));
     const reason=step.reason;
     if(reason){
      addLine(li,'交換直前の6体・2枚対2枚で比較。改善した相手 '+reason.benefit_count+' / 悪化した相手 '+reason.cost_count+'（重要度順に各最大5件）');
@@ -342,7 +367,7 @@ function showCompletion(result){
    d.append(ol);box.append(d);}
   const tools=node('div',null,'tools'),view=node('button','弱点を視覚化'),apply=node('button','この6体を反映');
   tools.append(view,apply);box.append(tools);
-  view.onclick=()=>{heat(comparison,i);requestAnimationFrame(()=>comparison.scrollIntoView({block:'start',behavior:'smooth'}));};
+  view.onclick=()=>heat(comparison,i);
   apply.onclick=()=>applyCompletedParty(result,plan);
   root.append(box);
  }
