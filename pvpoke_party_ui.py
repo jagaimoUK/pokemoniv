@@ -68,6 +68,11 @@ dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100
 <textarea id="pool" placeholder="azumarill,BUBBLE,ICE_BEAM,PLAY_ROUGH,0,15,15"></textarea>
 <label><input id="strategyRefinement" type="checkbox" checked> 詳細戦略を構築と補完に反映</label>
 <p>一次探索の上位最大3案を、共通の重要相手最大3条件で追加比較します。未評価がある場合は順位を維持します。外すと従来の高速な静的評価のみ。1体交換候補の順位は静的評価です。</p>
+<details><summary>相手の技・個体値が不明なときの比較</summary>
+<label><input id="opponentUncertainty" type="checkbox"> 上位案の技・IV感度を比較する（追加計算）</label>
+<p>重要度上位2グループ・各最大2技構成を、入力IV・積最大・攻撃最大・防御最大で比較。同じ担当が条件変更にも対応できるかを調べます。標本内の頑健性であり勝率ではありません。通常の高速探索では追加計算しません。</p>
+<label for="hypotheses">追加する相手の技構成（任意・最大8件）</label><textarea id="hypotheses" placeholder="名前から相手の別技構成を追加"></textarea>
+<p>メタに含まれる相手の別技構成を追加できます。対象外の種・上限を超える技構成は計算せず、結果に範囲を表示します。1体交換候補の順位は静的評価のままです。</p></details>
 <div class="tools"><button id="autoComplete">自動補完を最後まで実行</button><button id="recommend">1体だけ入れ替え候補を探す</button><button id="build">候補から6体を提案</button></div>
 <p>自動補完は最大10回の1体交換を繰り返し探索し、最大3案と相性表を表示します。改善が止まっても全対面への完全対応は保証しません。候補欄が空ならメタから最大24種の仮候補を利用（所持・技・IVの確認が必要）。追加探索はシールド2-2の静的比較です。</p></section></div>
 <div id="weakness" hidden><section><h2>弱点・補完</h2><div id="swapAdvice"></div><div id="weakResult">分析後に表示します。</div></section></div>
@@ -419,13 +424,48 @@ function showRefinement(result,root){
   else addLine(facts,'後追い：未評価（'+(b.reason||'一部の分岐が未評価')+'）');
   for(const c of b.chases||[])addLine(facts,'後追い '+label(c.opponent)+'：'+(c.rating??'未評価'));
   box.append(facts);
-  if(result.search){const apply=node('button',p.rank===1?'採用中の6体':'この6体を反映');apply.disabled=p.rank===1;
-   apply.onclick=()=>{const fixed=locks(),remaining=p.roster.filter(id=>!fixed.some(i=>result.roster[i]===id));
-    const ordered=result.roster.map((id,i)=>fixed.includes(i)?id:remaining.shift());
-    applyCompletedParty(result,{roster:ordered});};box.append(apply);}
+  if(result.search)addBuildChoice(result,p,box);
   root.append(box);
  }
  addLine(root,'詳細計算 '+detail.elapsed_seconds+'秒 / 再利用 '+detail.cache.hits+' / 同一ジョブ内再利用 '+detail.cache.memory_hits+' / 新規対戦 '+detail.cache.new_battles);
+}
+function addBuildChoice(result,plan,box){
+ const selected=plan.roster.every(id=>result.roster.includes(id));
+ const apply=node('button',selected?'採用中の6体':'この6体を反映');apply.disabled=selected;
+ apply.onclick=()=>{const fixed=locks(),remaining=plan.roster.filter(id=>!fixed.some(i=>result.roster[i]===id));
+  const ordered=result.roster.map((id,i)=>fixed.includes(i)?id:remaining.shift());
+  applyCompletedParty(result,{roster:ordered});};box.append(apply);
+}
+function showUncertainty(result,root){
+ const r=result.uncertainty;if(!r)return;
+ const panel=node('div');panel.dataset.uncertainty='true';root.append(panel);
+ panel.append(node('h3','相手の技・IVに対する頑健性'));
+ addLine(panel,r.status==='unknown'?'未評価条件があるため、比較前の全候補順位を維持しました。':
+  r.ranking_changed?'技・IV感度により最終推薦の順位が変わりました。':'技・IV感度を比較し、推薦順を維持しました。');
+ addLine(panel,'最大'+r.budget.max_groups+'グループ・各'+r.budget.max_movesets+'技構成の標本内評価。追加対面 '+r.evaluated_cells+'/'+r.requested_cells+' / '+r.elapsed_seconds+'秒。勝率ではありません。');
+ const modes={source:'入力・標準IV',rank1:'積最大IV',attack:'攻撃最大IV',defense:'防御最大IV'};
+ const assumptions=node('details');assumptions.append(node('summary','調べた技・IV・CPと評価範囲'));
+ for(const g of r.groups){addLine(assumptions,name(g.species)+'：採用技構成 '+Math.min(g.available_movesets,2)+' / 候補 '+g.available_movesets);
+  for(const h of g.hypotheses){const p=h.combatant;addLine(assumptions,
+   h.iv_modes.map(m=>modes[m]).join('・')+' / '+[p.fast,p.charged1,p.charged2].map(partyMoveLabel).join(' / ')+
+   ' / IV '+[p.atk,p.def,p.hp].join('/')+' / Lv '+(p.level_override??p.level)+' / CP '+(p.cp??'未評価')+
+   (h.status==='unknown'?' / 未評価：'+h.reason:''));}}
+ if(r.unused_alternatives.length)addLine(assumptions,'対象グループ外の追加入力 '+r.unused_alternatives.length+'件は未評価です。');
+ r.notes.forEach(t=>addLine(assumptions,t));panel.append(assumptions);
+ for(const plan of r.finalists){const box=node('div',null,'result');
+  box.append(node('strong','最終推薦 '+plan.uncertainty_rank+'位（感度比較前 '+plan.before_uncertainty_rank+'位）'));
+  addLine(box,plan.roster.map(label).join(' / '));
+  const s=plan.uncertainty;addLine(box,s.status==='calculated'?
+   '標本内で固定担当が不足する重み '+s.uncovered_weight.toFixed(3)+' / 固定担当の最悪Ratingの加重値 '+s.guaranteed_rating:'頑健性は未評価を含みます。');
+  const d=node('details');d.append(node('summary','担当を固定した評価変動と代替不能な役割'));
+  for(const g of s.groups){addLine(d,'対 '+name(g.species)+' / 固定担当の最良最悪Rating '+(g.best_fixed_responder_rating??'未評価'));
+   for(const m of g.members)addLine(d,label(m.member)+'：'+(m.worst_rating==null?'未評価':
+    m.worst_rating+'〜'+m.best_rating+' / 変動幅 '+m.spread+(m.robust_answer?' / 全標本でRating>500':'')));}
+  for(const u of s.unique_answers){const group=r.groups.find(g=>g.id===u.group);addLine(d,
+   label(u.member)+'を外すと、'+name(group.species)+'への標本内の頑健な担当がなくなります。');}
+  box.append(d);if(result.search)addBuildChoice(result,plan,box);panel.append(box);
+ }
+ addLine(panel,'詳細セル再利用 '+r.cache.hits+' / 同一ジョブ内再利用 '+r.cache.memory_hits+' / 新規対戦 '+r.cache.new_battles);
 }
 function show(result){latest=result;lastReportRevision=inputRevision;
  if(result.search){const fixed=new Set(result.search.locked||[]);
@@ -435,7 +475,9 @@ function show(result){latest=result;lastReportRevision=inputRevision;
  locked:fixed.has(id)}}));}
  if(result.optimization)showCompletion(result);else showReplacements(result);
  let t=result.team;const root=$('weakResult');root.replaceChildren();
- showRefinement(result,root);
+ showUncertainty(result,root);
+ if(result.uncertainty&&result.refinement){const d=node('details');d.append(node('summary','技・IV感度比較前の詳細戦略の順位'));showRefinement(result,d);root.append(d);}
+ else showRefinement(result,root);
  root.append(node('h3','メタに対する6体の対応力'));
  addLine(root,'未対応 D0 '+pct(t.d0)+' / 担当1体 D1 '+pct(t.d1)+' / 深刻度 '+t.severity0.toFixed(3)+' / 未計算 '+pct(t.unknown_weight));
  root.append(node('h3','シールド条件別の未対応'));const cases=node('ul');Object.entries(result.scenarios||{}).forEach(([k,v])=>cases.append(node('li',k+' : D0 '+pct(v.d0)+' / D1 '+pct(v.d1))));root.append(cases);
@@ -469,6 +511,8 @@ function partyCalculationRequest(mode,findSwaps=false,autoComplete=false){
  if(mode==='build')request.candidate_pool=partyRosterRows('pool');
  if(mode==='select')request.opponents=partyRosterRows('enemy');
  if(mode==='strategy'){request.opponents=partyRosterRows('strategyEnemy');request.strategy=getStrategy()}
+ if(mode!=='strategy'){request.opponent_uncertainty=$('opponentUncertainty').checked;
+  if(request.opponent_uncertainty)request.opponent_hypotheses=partyRosterRows('hypotheses');}
  return request;
 }
 async function run(mode,findSwaps=false,autoComplete=false){if(activeJob)return;
@@ -494,13 +538,14 @@ async function setup(){
  metaWeightDefaults=defaults.weights||{};restoreMetaWeightValues();
  if(!cat.ready)throw Error('ゲームデータがまだ準備中です');catalog=cat.species;partyMoveNames=cat.moves||{};metaItems=presets.items;
  for(const m of metaItems.filter(x=>x.available!==false)){let o=new Option(m.name+' ('+m.rows+'件)',m.id);$('meta').append(o)}$('meta').value=presets.default_id;
- populateSaved(saved.items);renderMon();await loadMetaWeightRows();if(!rosterEditors.enemy){rosterEditors.enemy=partyRosterEditor('enemy',6);rosterEditors.pool=partyRosterEditor('pool',48);rosterEditors.strategyEnemy=partyRosterEditor('strategyEnemy',6);}$('workspace').hidden=false;$('auth').hidden=true;$('analyze').disabled=false;status('6体を入力すると分析できます')}
+ populateSaved(saved.items);renderMon();await loadMetaWeightRows();if(!rosterEditors.enemy){rosterEditors.enemy=partyRosterEditor('enemy',6);rosterEditors.pool=partyRosterEditor('pool',48);rosterEditors.strategyEnemy=partyRosterEditor('strategyEnemy',6);rosterEditors.hypotheses=partyRosterEditor('hypotheses',8);}$('workspace').hidden=false;$('auth').hidden=true;$('analyze').disabled=false;status('6体を入力すると分析できます')}
 $('login').onclick=async()=>{key=$('key').value.trim();try{await setup();if(key)await api('session',{}).catch(()=>{})}catch(e){$('workspace').hidden=false;status(e.message)}};
 async function saveParty(asNew=false){try{
  await flushMetaWeights();
  const obj={id:asNew?null:partyId,revision:asNew?0:revision,name:$('partyName').value,members:getMon(),locked_slots:locks(),
   meta_preset_id:$('meta').value,meta_sha256:metaItems.find(x=>x.id===$('meta').value)?.sha256,group_weights:getWeights(),
-  strategy:{...getStrategy(),enemy_csv:$('strategyEnemy').value},strategy_refinement:$('strategyRefinement').checked,opponents:partyRosterRows('enemy'),candidate_pool:partyRosterRows('pool')};
+  strategy:{...getStrategy(),enemy_csv:$('strategyEnemy').value},strategy_refinement:$('strategyRefinement').checked,opponents:partyRosterRows('enemy'),candidate_pool:partyRosterRows('pool'),
+  opponent_uncertainty:$('opponentUncertainty').checked,opponent_hypotheses:partyRosterRows('hypotheses')};
  const r=await api('party/save',obj);partyId=r.id;revision=r.revision;
  $('partyState').textContent='保存中のパーティ: '+obj.name+'（revision '+revision+'）';
  status('保存済み。自分・相手・詳細戦略を記録しました。revision '+revision);
@@ -519,6 +564,8 @@ $('load').onclick=async()=>{try{
  rosterEditors.enemy.refresh(p.opponents||[]);rosterEditors.pool.refresh(p.candidate_pool||[]);
  restoreStrategy(p.strategy,csv(p.opponents));
  $('strategyRefinement').checked=p.strategy_refinement!==false;
+ $('opponentUncertainty').checked=p.opponent_uncertainty===true;
+ $('hypotheses').value=csv(p.opponent_hypotheses);rosterEditors.hypotheses.refresh(p.opponent_hypotheses||[]);
  latest=null;lastReportRevision=-1;$('swapAdvice').replaceChildren();$('weakResult').replaceChildren();$('selectionResult').replaceChildren();
  $('strategyResult').replaceChildren();delete $('strategyResult').dataset.calculated;
  inputRevision++;$('partyState').textContent='保存中のパーティ: '+p.name+'（revision '+revision+'）';

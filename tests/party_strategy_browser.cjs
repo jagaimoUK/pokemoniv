@@ -204,10 +204,45 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  await launch('#build');await done();
  assert(!(await page.textContent('#weakResult')).includes('構築に使った詳細戦略'));
  assert((await page.textContent('#weakResult')).includes('通常技の圧力：未評価'));
+ // Optional bounded opponent sensitivity: Japanese legal moves, persisted
+ // settings, exact-job completion, cached rerun and mobile report.
+ await page.click('[data-tab=compose]');
+ await page.getByText('相手の技・個体値が不明なときの比較',{exact:true}).click();
+ assert.equal(await page.isChecked('#opponentUncertainty'),false);
+ await page.check('#opponentUncertainty');await page.check('#strategyRefinement');
+ await page.locator('details').filter({has:page.locator('#hypotheses')}).last().locator('summary').click();
+ await page.fill('#hypotheses','ヌオー,マッドショット,アクアテール,ヘドロばくだん,0,15,15');
+ await page.locator('#hypotheses').blur();
+ await page.click('#save');await page.waitForFunction(()=>document.getElementById('status').textContent.includes('保存済み'));
+ await page.uncheck('#opponentUncertainty');
+ await page.click('#load');await page.waitForFunction(()=>document.getElementById('status').textContent.includes('読み込みました'));
+ assert.equal(await page.isChecked('#opponentUncertainty'),true);
+ assert((await page.inputValue('#hypotheses')).includes('SLUDGE_BOMB'));
+ await launch('#build');await done();
+ const sensitivity=page.locator('#weakResult [data-uncertainty]');
+ assert.equal(await sensitivity.count(),1);
+ assert((await sensitivity.textContent()).includes('最大2グループ・各2技構成'));
+ assert((await sensitivity.textContent()).includes('担当を固定した評価変動'));
+ assert((await sensitivity.textContent()).includes('勝率ではありません'));
+ const report=await page.evaluate(()=>latest.uncertainty);
+ assert(report.requested_cells<=report.budget.max_cells);
+ assert(report.groups.some(g=>g.available_movesets===2));
+ assert(report.groups.every(g=>g.hypotheses.every(h=>h.combatant.cp<=1500)));
+ assert.equal(await sensitivity.locator('.result button:disabled').count(),1,'Exactly the selected final party is marked active');
+ for(const width of [360,390]){
+  await page.setViewportSize({width,height:844});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'Sensitivity report fits mobile width');
+ }
+ await page.click('[data-tab=compose]');await launch('#build');await done();
+ assert.equal(await page.evaluate(()=>latest.uncertainty.cache.computed),0,'Same normalized hypotheses reuse the detail cache');
+ const chooseSensitivity=page.locator('#weakResult [data-uncertainty] button:not([disabled])').first();
+ if(await chooseSensitivity.count()){
+  await chooseSensitivity.click();assert((await page.textContent('#status')).includes('再分析'));
+ }
  assert.equal(errors.length,0,errors.join('\n'));
  const out=process.env.STRATEGY_SCREENSHOT_DIR;
  if(out){fs.mkdirSync(out,{recursive:true});await page.screenshot({path:out+'/strategy-mobile.png',fullPage:true});}
- console.log('Mobile 390px: real authenticated gateway/worker/engine, all 4 features, 5 branches, named own/enemy save and restore, Japanese moves and weights, actionable swaps, iterative completion and matchup heatmap, cache reuse and stale-response guard passed');
+ console.log('Mobile 360/390px: real authenticated gateway/worker/engine, strategy, branches, save/restore, Japanese moves and weights, bounded move/IV sensitivity, actionable swaps, completion and heatmap, cache reuse and stale-response guard passed');
  }catch(e){if(page){console.error('Final app status:',await page.locator('#status').textContent());
   if(lastStart){const current=await page.evaluate(x=>partyCalculationRequest(x.mode,!!x.auto_replacements,!!x.auto_complete),lastStart).catch(()=>null);
    for(const k of Object.keys(lastStart))if(JSON.stringify(lastStart[k])!==JSON.stringify(current?.[k]))console.error('Changed calculation field:',k,JSON.stringify(lastStart[k]),JSON.stringify(current?.[k]));}}
