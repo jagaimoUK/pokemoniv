@@ -60,7 +60,7 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  await page.waitForFunction(()=>document.getElementById('partyState').textContent.includes('大会A'));
  assert.equal(await page.locator('#members [data-field=atk]').first().inputValue(),aOwn);
  assert.equal(await page.inputValue('#strategyEnemy'),aStrategy);
- assert.equal(await page.locator('#selection [data-field=atk]').first().inputValue(),'');
+ assert.equal(await page.locator('#selection [data-field=atk]').first().inputValue(),'0','Restore the attack IV provided by the Japanese CSV');
  await page.selectOption('#saved',partyB);await page.click('#load');
  await page.waitForFunction(()=>document.getElementById('partyState').textContent.includes('大会B'));
  assert.equal(await page.locator('#selection [data-field=atk]').first().inputValue(),'9');
