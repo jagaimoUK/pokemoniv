@@ -3,11 +3,23 @@
 const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=require('node:fs'),assert=require('node:assert/strict');
 (async()=>{
  const server=spawn('python',['tests/party_strategy_fixture_server.py'],{stdio:['ignore','pipe','pipe']});
- let browser,page;
+ let browser,page,lastStart;
  try{
  const config=await new Promise((resolve,reject)=>{let buffer='';server.stdout.on('data',chunk=>{buffer+=chunk;const at=buffer.indexOf('\n');if(at>=0)try{resolve(JSON.parse(buffer.slice(0,at)))}catch(e){reject(e)}});server.on('exit',c=>reject(Error('Fixture server exited '+c)));server.stderr.on('data',()=>{});});
  browser=await chromium.launch({headless:true,executablePath:process.env.STRATEGY_CHROMIUM_PATH||undefined,args:['--no-sandbox','--disable-dev-shm-usage']});
  page=await browser.newPage({viewport:{width:390,height:844}});const errors=[];page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(8000);
+ page.on('request',r=>{if(r.url().endsWith('/app-api/party/start'))lastStart=r.postDataJSON()});
+ async function launch(selector){
+  // A previous "done" message may remain until the next start response arrives.
+  // Observe this exact job before waiting for completion or editing its inputs.
+  const started=page.waitForResponse(r=>r.url().endsWith('/app-api/party/start'));
+  await page.click(selector);const response=await started;
+  assert.equal(response.status(),200,await response.text());const job=await response.json();
+  await page.waitForFunction(id=>activeJob===id,job.job_id,{timeout:10000});
+ }
+ async function done(message='計算完了'){
+  await page.waitForFunction(text=>activeJob===null&&document.getElementById('status').textContent.includes(text),message,{timeout:60000});
+ }
  await page.goto(config.url+'/app/party');await page.fill('#key',config.key);await page.click('#login');await page.waitForSelector('#workspace:not([hidden])');
  await page.click('[data-tab=settings]');await page.selectOption('#saved',await page.locator('#saved option').nth(1).getAttribute('value'));await page.click('#load');
  await page.waitForFunction(()=>document.getElementById('status').textContent.includes('読み込みました'));
@@ -44,18 +56,19 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  await page.click('[data-tab=strategy]');await page.locator('details').filter({has:page.locator('#strategyEnemy')}).locator('summary').click();await page.fill('#strategyEnemy',csv);await page.locator('#strategyEnemy').blur();
  await page.selectOption('#strategySelf','2');await page.getByText('初手→交代→後追い（限定モデル）',{exact:true}).click();await page.selectOption('#strategyLead','1');await page.selectOption('#strategyCloser','3');
  await page.check('#includeBranch');
- await page.click('#runStrategy');await page.waitForFunction(()=>document.getElementById('strategyResult').textContent.includes('詳細条件 9/9'),null,{timeout:20000});
+ await launch('#runStrategy');await done();
+ assert((await page.textContent('#strategyResult')).includes('詳細条件 9/9'));
  assert((await page.textContent('#strategyResult')).includes('完全な3対3'));
  assert((await page.textContent('#strategyResult')).includes('後追い 5/5'));
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'Mobile page must not overflow horizontally');
  await page.click('[data-tab=settings]');await page.click('#save');await page.waitForFunction(()=>document.getElementById('status').textContent.includes('保存済み'));
- await page.click('[data-tab=strategy]');await page.click('#runStrategy');
+ await page.click('[data-tab=strategy]');await launch('#runStrategy');
  await page.fill('#partyName','計算条件を変えない名前の変更');
- await page.waitForFunction(()=>document.getElementById('status').textContent.includes('計算完了'));
+ await done();
  assert((await page.textContent('#strategyResult')).includes('新規条件 0'));
  // Ensure a late response cannot replace results after an edit.
- await page.click('#runStrategy');await page.selectOption('#workKind','fast_damage');
- await page.waitForFunction(()=>document.getElementById('status').textContent.includes('以前の入力の結果は表示しません'));
+ await launch('#runStrategy');await page.selectOption('#workKind','fast_damage');
+ await done('以前の入力の結果は表示しません');
  // Save two independent named snapshots and verify restored opponent, IV and strategy.
  await page.fill('#partyName','大会A');await page.click('#saveAs');
  await page.waitForFunction(()=>document.getElementById('partyState').textContent.includes('大会A'));
@@ -85,17 +98,22 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  // Real authenticated search from bundled meta; apply one suggested change if improved.
  // Autocomplete the whole party, compare endpoints and inspect a real 2-2 heatmap.
  await page.click('[data-tab=compose]');
- await page.click('#autoComplete');
- await page.waitForFunction(()=>document.getElementById('status').textContent.includes('計算完了'),null,{timeout:60000});
+ await launch('#autoComplete');await done();
  assert((await page.textContent('#swapAdvice')).includes('自動補完の最終候補'));
  assert((await page.textContent('#weakResult')).includes('構築に使った詳細戦略'));
  assert((await page.textContent('#weakResult')).includes('一次探索'));
  assert((await page.textContent('#weakResult')).includes('通常技の圧力'));
  assert((await page.textContent('#weakResult')).includes('ゲージ技を受ける役割'));
+ const pairRoles=page.locator('#weakResult details[data-pair-roles]');
+ assert.equal(await pairRoles.count(),15);
+ assert.equal(await pairRoles.first().evaluate(el=>el.open),false,'Role evidence starts collapsed on mobile');
  await page.waitForFunction(()=>{
   const r=document.getElementById('swapAdvice').getBoundingClientRect();
   return !document.getElementById('weakness').hidden&&r.top>=0&&r.top<100;
  });
+ await pairRoles.first().locator('summary').click();
+ assert.equal(await pairRoles.first().evaluate(el=>el.open),true);
+ await pairRoles.first().locator('summary').click();
  assert(await page.locator('#swapAdvice .completion-card').count()>=1);
  assert(await page.locator('#swapAdvice .completion-card').count()<=3);
  const firstPlan=page.locator('#swapAdvice .completion-card').first();
@@ -154,8 +172,7 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  assert((await page.textContent('#partyState')).includes('未保存の変更あり'));
  assert((await page.textContent('#status')).includes('再分析'));
  await page.click('[data-tab=compose]');
- await page.click('#recommend');
- await page.waitForFunction(()=>document.getElementById('status').textContent.includes('計算完了'),null,{timeout:40000});
+ await launch('#recommend');await done();
  assert((await page.textContent('#swapAdvice')).includes('次に何をすればよい？'));
  assert((await page.textContent('#swapAdvice')).includes('仮候補'));
  const proposals=page.locator('#swapAdvice button');
@@ -170,8 +187,7 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  await page.click('[data-tab=compose]');
  await page.evaluate(text=>{const el=document.getElementById('pool');el.value=text;
   el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));},csv+'\nprimeape,COUNTER,ICE_PUNCH,CLOSE_COMBAT');
- await page.click('#build');
- await page.waitForFunction(()=>document.getElementById('status').textContent.includes('計算完了'),null,{timeout:60000});
+ await launch('#build');await done();
  assert((await page.textContent('#weakResult')).includes('構築に使った詳細戦略'));
  assert(await page.locator('#weakResult .completion-card').count()<=3);
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
@@ -185,14 +201,16 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  await page.check('#strategyRefinement');await page.click('#load');
  await page.waitForFunction(()=>document.getElementById('status').textContent.includes('読み込みました'));
  assert.equal(await page.isChecked('#strategyRefinement'),false);
- await page.click('#build');
- await page.waitForFunction(()=>document.getElementById('status').textContent.includes('計算完了'),null,{timeout:60000});
+ await launch('#build');await done();
  assert(!(await page.textContent('#weakResult')).includes('構築に使った詳細戦略'));
  assert((await page.textContent('#weakResult')).includes('通常技の圧力：未評価'));
  assert.equal(errors.length,0,errors.join('\n'));
  const out=process.env.STRATEGY_SCREENSHOT_DIR;
  if(out){fs.mkdirSync(out,{recursive:true});await page.screenshot({path:out+'/strategy-mobile.png',fullPage:true});}
  console.log('Mobile 390px: real authenticated gateway/worker/engine, all 4 features, 5 branches, named own/enemy save and restore, Japanese moves and weights, actionable swaps, iterative completion and matchup heatmap, cache reuse and stale-response guard passed');
- }catch(e){if(page)console.error('Final app status:',await page.locator('#status').textContent());throw e;
+ }catch(e){if(page){console.error('Final app status:',await page.locator('#status').textContent());
+  if(lastStart){const current=await page.evaluate(x=>partyCalculationRequest(x.mode,!!x.auto_replacements,!!x.auto_complete),lastStart).catch(()=>null);
+   for(const k of Object.keys(lastStart))if(JSON.stringify(lastStart[k])!==JSON.stringify(current?.[k]))console.error('Changed calculation field:',k,JSON.stringify(lastStart[k]),JSON.stringify(current?.[k]));}}
+ throw e;
  }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1});

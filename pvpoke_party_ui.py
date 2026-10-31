@@ -435,20 +435,21 @@ function show(result){latest=result;lastReportRevision=inputRevision;
  locked:fixed.has(id)}}));}
  if(result.optimization)showCompletion(result);else showReplacements(result);
  let t=result.team;const root=$('weakResult');root.replaceChildren();
- root.append(node('h3','メタに対する6体の対応力'));
  showRefinement(result,root);
+ root.append(node('h3','メタに対する6体の対応力'));
  addLine(root,'未対応 D0 '+pct(t.d0)+' / 担当1体 D1 '+pct(t.d1)+' / 深刻度 '+t.severity0.toFixed(3)+' / 未計算 '+pct(t.unknown_weight));
  root.append(node('h3','シールド条件別の未対応'));const cases=node('ul');Object.entries(result.scenarios||{}).forEach(([k,v])=>cases.append(node('li',k+' : D0 '+pct(v.d0)+' / D1 '+pct(v.d1))));root.append(cases);
  root.append(node('h3','未対応の重要相手'));const u=node('ul');t.critical.forEach(x=>u.append(node('li',label(x.opponent)+' / 最良Rating '+x.best_rating)));root.append(u);
  root.append(node('h3','相手の危険な2体の組み合わせ'));const threats=node('ul');(result.danger_pairs||[]).slice(0,10).forEach(x=>threats.append(node('li',x.opponents.map(label).join(' + ')+' / 担当集中 '+x.assignment_deficit+' / 釣り出し警告 '+x.trap_risk)));root.append(threats);
  root.append(node('h3','全15ペアの相互補完'));const pairs=node('ul');result.pairs.forEach(x=>{
-  const li=node('li',x.members.map(label).join(' + ')+' / 攻守の補完 '+x.balance.toFixed(3)+' / 穴 '+pct(x.hole));
+  const li=node('li'),detail=node('details');detail.dataset.pairRoles='true';
+  detail.append(node('summary',x.members.map(id=>name(result.labels[id]?.species||id)).join(' + ')+' / 攻守の補完 '+x.balance.toFixed(3)+' / 穴 '+pct(x.hole)));
   for(const [k,title] of [['pressure','通常技の圧力'],['absorb','ゲージ技を受ける役割']]){
-   const role=x[k];addLine(li,title+'：'+(role?role.evaluated+'/'+role.total+'条件を評価（標本内）':'未評価'));
-   for(const e of role?.evidence||[])addLine(li,label(e.member)+' → '+label(e.opponent));
-   for(const e of role?.rescue||[])addLine(li,label(e.covers_for)+'が静的2-2で対応できない '+label(e.opponent)+' に '+label(e.member)+' がこの役割を担当');
-   if(role?.status==='unknown')addLine(li,'未評価条件あり。役割なし・敗北とは判定していません。');
-  }pairs.append(li);
+   const role=x[k];addLine(detail,title+'：'+(role?role.evaluated+'/'+role.total+'条件を評価（標本内）':'未評価'));
+   for(const e of role?.evidence||[])addLine(detail,label(e.member)+' → '+label(e.opponent));
+   for(const e of role?.rescue||[])addLine(detail,label(e.covers_for)+'が静的2-2で対応できない '+label(e.opponent)+' に '+label(e.member)+' がこの役割を担当');
+   if(role?.status==='unknown')addLine(detail,'未評価条件あり。役割なし・敗北とは判定していません。');
+  }li.append(detail);pairs.append(li);
  });root.append(pairs);
  root.append(node('h3','注目ペアのCore Breaker'));const cb=node('ul');result.pairs.slice(0,5).forEach(x=>{if(x.core_breakers.length)cb.append(node('li',x.members.map(label).join(' + ')+' に共通して有利: '+x.core_breakers.slice(0,3).map(z=>label(z.opponent)).join('、')))});root.append(cb);
  root.append(node('h3','20組の3体別の穴'));const triples=node('ul');result.triples.forEach(x=>triples.append(node('li',x.members.map(label).join(' / ')+' D0 '+pct(x.summary.d0)+' D1 '+pct(x.summary.d1))));root.append(triples);
