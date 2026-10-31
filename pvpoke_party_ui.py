@@ -460,8 +460,7 @@ function show(result){latest=result;lastReportRevision=inputRevision;
  const target=proposed?$('swapAdvice'):$(currentTab==='selection'?'selectionResult':'weakResult');
  requestAnimationFrame(()=>target.scrollIntoView({block:'start',behavior:'smooth'}));
 }
-async function run(mode,findSwaps=false,autoComplete=false){if(activeJob)return;
- await flushMetaWeights();
+function partyCalculationRequest(mode,findSwaps=false,autoComplete=false){
  const request={mode,members:getMon(),locked_slots:locks(),meta_preset_id:$('meta').value,meta_sha256:metaItems.find(x=>x.id===$('meta').value)?.sha256,group_weights:mode==='strategy'?{}:getWeights(),ruleset:'cp1500-lv50',strategy_refinement:$('strategyRefinement').checked};
  if(findSwaps||autoComplete)request.candidate_pool=partyRosterRows('pool');
  if(findSwaps)request.auto_replacements=true;
@@ -469,10 +468,15 @@ async function run(mode,findSwaps=false,autoComplete=false){if(activeJob)return;
  if(mode==='build')request.candidate_pool=partyRosterRows('pool');
  if(mode==='select')request.opponents=partyRosterRows('enemy');
  if(mode==='strategy'){request.opponents=partyRosterRows('strategyEnemy');request.strategy=getStrategy()}
- const submittedRevision=inputRevision;
+ return request;
+}
+async function run(mode,findSwaps=false,autoComplete=false){if(activeJob)return;
+ await flushMetaWeights();
+ const request=partyCalculationRequest(mode,findSwaps,autoComplete),submitted=JSON.stringify(request);
+ function inputsStillMatch(){try{return submitted===JSON.stringify(partyCalculationRequest(mode,findSwaps,autoComplete))}catch(_){return false}}
  const r=await api('party/start',request);activeJob=r.job_id;$('cancel').disabled=false;$('analyze').disabled=true;status('計算中...');
  for(;;){await new Promise(resolve=>setTimeout(resolve,2000));let s=await api('party/status',{job_id:activeJob});
- if(s.status==='done'){if(submittedRevision!==inputRevision){status('計算中に入力が変更されました。以前の入力の結果は表示しません。再計算してください。')}else{if(s.result.kind==='strategy')showStrategy(s.result);else show(s.result);status('計算完了。実戦勝率ではありません。')}break}
+ if(s.status==='done'){if(!inputsStillMatch()){status('計算中に入力が変更されました。以前の入力の結果は表示しません。再計算してください。')}else{if(s.result.kind==='strategy')showStrategy(s.result);else show(s.result);status('計算完了。実戦勝率ではありません。')}break}
  if(s.status==='error'||s.status==='cancelled'){status(s.message||s.status);break}
  status('計算中 '+(s.progress||0)+'% / '+(s.message||''))}
  activeJob=null;$('cancel').disabled=true;$('analyze').disabled=false;
