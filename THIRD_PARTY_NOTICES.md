@@ -43,3 +43,9 @@ Pokémon and Pokémon character names are trademarks of Nintendo.
 The open source software licenses above do not grant additional rights to
 Pokémon trademarks, character artwork or other separately protected assets.
 No license for this project's own code is selected by this notice.
+
+## Node.js runtime
+
+The Node.js 22 runtime is copied from the pinned official Node Docker image.
+Its complete license and third-party notices are retained in the deployed image
+at `/app/vendor/node/LICENSE`. The CI-only browser image is separate from production.

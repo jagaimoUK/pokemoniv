@@ -42,10 +42,9 @@ jobs:
         run: |
           python - <<'PY'
           import json, urllib.request
-          from pvpoke_batch_v2 import RAW
+          from pvpoke_batch_v2 import game_data
           try:
-              with urllib.request.urlopen(RAW+'data/gamemaster.json',timeout=30) as response:
-                  gm=json.load(response)
+              gm, _, _ = game_data()
               rows=[p for p in gm['pokemon'] if str(p.get('speciesId','')).startswith('minior')]
               for p in rows:
                   print(json.dumps({'id':p.get('speciesId'), 'name':p.get('speciesName'),
