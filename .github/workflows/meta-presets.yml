@@ -24,7 +24,7 @@ jobs:
       - run: python -m unittest discover -s tests
       - run: for file in tests/test_app_*.js; do node "$file"; done
       - run: python -m compileall -q .
-      - run: docker build -t pokemoniv-meta-presets .
+      - run: docker build --target browser-check -t pokemoniv-meta-presets .
       - name: Check preset layout in Chromium
         run: >-
           docker run --rm --entrypoint sh -v "$PWD:/work" -e PYTHONPATH=/app

@@ -34,7 +34,7 @@ jobs:
           python -m pip_audit -r requirements.lock --disable-pip --no-deps
       - name: Secret scan of reachable Git history
         run: |
-          curl -fsSL --retry 2 https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
+          curl -fsSL --connect-timeout 15 --max-time 120 --retry 2 https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
           echo '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tar.gz' | sha256sum -c -
           tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
           /tmp/gitleaks git --redact --no-banner --log-opts='--all'
@@ -54,11 +54,12 @@ jobs:
           docker run --rm --entrypoint dpkg-query pokemoniv-security-ci -W > os-packages.txt
       - name: Mobile browser initialization under CSP
         run: |
+          docker build --target browser-check -t pokemoniv-browser-ci .
           npm install --no-save --no-package-lock playwright@1.57.0
-          docker run --rm -v "$PWD:/work" -w /work -e STRATEGY_CHROMIUM_PATH=/usr/bin/chromium --entrypoint node pokemoniv-security-ci tests/security_browser.cjs
+          docker run --rm -v "$PWD:/work" -w /work -e STRATEGY_CHROMIUM_PATH=/usr/bin/chromium --entrypoint node pokemoniv-browser-ci tests/security_browser.cjs
       - name: Audit operating-system and application packages and create SBOM
         run: |
-          curl -fsSL --retry 2 https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz -o /tmp/trivy.tar.gz
+          curl -fsSL --connect-timeout 15 --max-time 120 --retry 2 https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz -o /tmp/trivy.tar.gz
           echo 'c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0  /tmp/trivy.tar.gz' | sha256sum -c -
           tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
           /tmp/trivy image --timeout 10m --scanners vuln --format json --output image-vulnerabilities.json pokemoniv-security-ci

@@ -1,8 +1,10 @@
-FROM python:3.12-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337
+FROM node:22-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS node-runtime
+FROM python:3.12-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337 AS runtime
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PVP_ENGINE=direct PVP_ALLOW_BROWSER=0
-RUN apt-get update && apt-get install -y --no-install-recommends nginx chromium nodejs fonts-noto-core ca-certificates gosu && rm -rf /var/lib/apt/lists/* \
-    && ln -sf /usr/bin/chromium /usr/local/bin/chromium-browser \
+RUN apt-get update && apt-get install -y --no-install-recommends nginx libstdc++6 ca-certificates gosu && rm -rf /var/lib/apt/lists/* \
     && useradd -m -u 10001 appuser
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/LICENSE /app/vendor/node/LICENSE
 WORKDIR /app
 COPY requirements.lock /app/requirements.lock
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock
@@ -46,3 +48,10 @@ RUN PORT=8787 python /app/pvpoke_proxy_config.py \
 # Initialize the root-owned Railway mount once, then drop to appuser.
 USER root
 CMD ["/app/volume_bootstrap.sh"]
+
+# Browser binaries are isolated to a CI-only target, never the default deployment.
+FROM runtime AS browser-check
+RUN apt-get update && apt-get install -y --no-install-recommends chromium fonts-noto-core \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/chromium /usr/local/bin/chromium-browser
+FROM runtime AS production

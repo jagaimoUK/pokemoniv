@@ -46,7 +46,7 @@ jobs:
           node --check /tmp/party-ui.js
       - name: Build image and verify runtime strategy assets
         run: |
-          docker build --tag pokemoniv-party-ci .
+          docker build --target browser-check --tag pokemoniv-party-ci .
           docker run --rm --entrypoint python pokemoniv-party-ci -c "import pvpoke_party_ui, pvpoke_party_strategy; assert '詳細戦略' in pvpoke_party_ui.HTML"
       - name: Mobile browser save and restore regression
         run: |
