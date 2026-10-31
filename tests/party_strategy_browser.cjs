@@ -86,6 +86,10 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  await page.click('#autoComplete');
  await page.waitForFunction(()=>document.getElementById('status').textContent.includes('計算完了'),{timeout:60000});
  assert((await page.textContent('#swapAdvice')).includes('自動補完の最終候補'));
+ assert((await page.textContent('#weakResult')).includes('構築に使った詳細戦略'));
+ assert((await page.textContent('#weakResult')).includes('一次探索'));
+ assert((await page.textContent('#weakResult')).includes('通常技の圧力'));
+ assert((await page.textContent('#weakResult')).includes('ゲージ技を受ける役割'));
  await page.waitForFunction(()=>{
   const r=document.getElementById('swapAdvice').getBoundingClientRect();
   return !document.getElementById('weakness').hidden&&r.top>=0&&r.top<100;
@@ -160,6 +164,29 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   assert.equal(await page.textContent('#partyState'),'未保存の変更あり（上部の保存・上書きで記録）');
  }
+ // Candidate build uses the same refinement and can explicitly opt out.
+ await page.click('[data-tab=compose]');
+ await page.evaluate(text=>{const el=document.getElementById('pool');el.value=text;
+  el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));},csv+'\nprimeape,COUNTER,ICE_PUNCH,CLOSE_COMBAT');
+ await page.click('#build');
+ await page.waitForFunction(()=>document.getElementById('status').textContent.includes('計算完了'),{timeout:60000});
+ assert((await page.textContent('#weakResult')).includes('構築に使った詳細戦略'));
+ assert(await page.locator('#weakResult .completion-card').count()<=3);
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ const refinedApply=page.locator('#weakResult .completion-card button:not([disabled])').first();
+ if(await refinedApply.count()){
+  await refinedApply.click();
+  assert((await page.textContent('#status')).includes('再分析'));
+ }
+ await page.click('[data-tab=compose]');await page.uncheck('#strategyRefinement');
+ await page.click('#save');await page.waitForFunction(()=>document.getElementById('status').textContent.includes('保存済み'));
+ await page.check('#strategyRefinement');await page.click('#load');
+ await page.waitForFunction(()=>document.getElementById('status').textContent.includes('読み込みました'));
+ assert.equal(await page.isChecked('#strategyRefinement'),false);
+ await page.click('#build');
+ await page.waitForFunction(()=>document.getElementById('status').textContent.includes('計算完了'),{timeout:60000});
+ assert(!(await page.textContent('#weakResult')).includes('構築に使った詳細戦略'));
+ assert((await page.textContent('#weakResult')).includes('通常技の圧力：未評価'));
  assert.equal(errors.length,0,errors.join('\n'));
  const out=process.env.STRATEGY_SCREENSHOT_DIR;
  if(out){fs.mkdirSync(out,{recursive:true});await page.screenshot({path:out+'/strategy-mobile.png',fullPage:true});}
