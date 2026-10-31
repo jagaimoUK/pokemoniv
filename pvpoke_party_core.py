@@ -391,8 +391,15 @@ def iterative_party_optimization(roster, candidates, opponents, matrix, weights,
                      key=lambda s: (s["score"], len(s["steps"]), s["roster"]))
     finalists = []
     for state in results[:max_finalists]:
+        before, explained = list(roster), []
+        for step in state["steps"]:
+            after = list(before)
+            after[step["slot"]] = step["in"]
+            explained.append({**step, "reason": explain_party_swap(
+                before, after, step["out"], step["in"], opponents, matrix, weights)})
+            before = after
         finalists.append({"roster": list(state["roster"]),
-                          "steps": list(state["steps"]),
+                          "steps": explained,
                           "summary": state["summary"],
                           "stop": state["stop"]})
     return {"status": "improved" if finalists and finalists[0]["steps"] else "no_improvement",
@@ -401,10 +408,36 @@ def iterative_party_optimization(roster, candidates, opponents, matrix, weights,
             "beam_width": beam_width, "scope": "候補範囲内の反復的な局所探索。全体最適・完全補完・3対3勝率は保証しません"}
 
 
-def party_matchup_heatmap(roster, opponents, matrix):
-    """Return raw PvPoke 2-2 Battle Ratings; unknown stays null."""
+def explain_party_swap(before, after, old, new, opponents, matrix, weights, limit=5):
+    """Consequences of one actual search step, using the fixed 2-2 search basis."""
+    benefits, costs = [], []
+    for enemy in opponents:
+        a = [lookup(matrix, own, enemy) for own in before]
+        b = [lookup(matrix, own, enemy) for own in after]
+        if any(v is None for v in a + b):
+            continue
+        na, nb = sum(v > 500 for v in a), sum(v > 500 for v in b)
+        row = {"opponent": enemy, "weak_members": [own for own, v in zip(before, a) if v <= 500],
+               "before_answers": na, "after_answers": nb,
+               "before_best": max(a), "after_best": max(b),
+               "out_rating": lookup(matrix, old, enemy), "in_rating": lookup(matrix, new, enemy),
+               "weight": weights.get(enemy, 0)}
+        if nb > na or max(b) > max(a):
+            benefits.append(row)
+        if nb < na or max(b) < max(a):
+            costs.append(row)
+    benefits.sort(key=lambda r: (r["before_answers"] != 0, -r["weight"],
+                                r["before_answers"], -r["after_best"]))
+    costs.sort(key=lambda r: (r["after_answers"] != 0, -r["weight"], r["after_answers"]))
+    return {"shields": [2, 2], "before_roster": list(before), "after_roster": list(after),
+            "benefits": benefits[:limit], "costs": costs[:limit],
+            "benefit_count": len(benefits), "cost_count": len(costs)}
+
+
+def party_matchup_heatmap(roster, opponents, matrix, shields=STANDARD):
+    """Raw ratings in a declared shield condition; unknown stays null."""
     return [{"opponent": enemy,
-             "ratings": [lookup(matrix, own, enemy, STANDARD) for own in roster]}
+             "ratings": [lookup(matrix, own, enemy, shields) for own in roster]}
             for enemy in opponents]
 
 

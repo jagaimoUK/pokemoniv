@@ -380,6 +380,17 @@ class PartyBuilder:
             optimization["source"] = swap_source
             optimization["candidate_count"] = len(recommendation_ids)
             if optimization["finalists"]:
+                # Expand only the original roster and the final proposals, not the search pool.
+                compare_ids = set(ids)
+                for proposed in optimization["finalists"]:
+                    compare_ids.update(proposed["roster"])
+                matrix, extra = self._matrix(
+                    jid, [p for p in pool if p["id"] in compare_ids],
+                    self._unique(meta + enemy), version, engine, work,
+                    enemy_ids={p["id"] for p in enemy}, full_conditions=True, known=matrix)
+                stats = {k: stats[k] + extra[k] for k in stats}
+                optimization["shields"] = [list(s) for s in core.ALL_SHIELDS]
+                optimization["baseline_roster"] = list(ids)
                 # Show requested opposing six first, then the important and
                 # poorly-covered meta opponents. Never mix unknown with losses.
                 selected = []
@@ -390,9 +401,9 @@ class PartyBuilder:
                         selected.append(target)
                         group_ids.add(key)
                 def risk_key(target):
-                    ratings = [matrix.get((p, target["id"], core.STANDARD))
-                               for p in ids]
-                    best = max((x for x in ratings if x is not None), default=500)
+                    ratings = [max((matrix.get((p, target["id"], shield), 500) for p in ids), default=500)
+                               for shield in core.ALL_SHIELDS]
+                    best = min((x for x in ratings if x is not None), default=500)
                     return (-int(best <= 500), -weights.get(target["id"], 0),
                             best, target["species"])
                 for target in sorted(meta, key=risk_key):
@@ -405,22 +416,15 @@ class PartyBuilder:
                 display_ids = [p["id"] for p in selected[:20]]
                 optimization["heatmap_targets"] = display_ids
                 optimization["enemy_targets"] = [p["id"] for p in enemy]
-                optimization["baseline_heatmap"] = core.party_matchup_heatmap(
-                    ids, display_ids, matrix)
+                optimization["baseline_by_shield"] = {
+                    f"{a}-{b}": core.party_matchup_heatmap(ids, display_ids, matrix, (a, b))
+                    for a, b in core.ALL_SHIELDS}
+                optimization["baseline_heatmap"] = optimization["baseline_by_shield"]["2-2"]
                 for proposed in optimization["finalists"]:
-                    proposed["heatmap"] = core.party_matchup_heatmap(
-                        proposed["roster"], display_ids, matrix)
-                    proposed["weaknesses"] = [
-                        {"opponent": row["opponent"],
-                         "best_rating": max((v for v in row["ratings"]
-                                             if v is not None), default=None),
-                         "answers": sum(v is not None and v > 500
-                                        for v in row["ratings"])}
-                        for row in proposed["heatmap"]
-                        if any(v is not None for v in row["ratings"]) and
-                           max((v for v in row["ratings"] if v is not None),
-                               default=0) <= 500
-                    ]
+                    proposed["by_shield"] = {
+                        f"{a}-{b}": core.party_matchup_heatmap(proposed["roster"], display_ids, matrix, (a, b))
+                        for a, b in core.ALL_SHIELDS}
+                    proposed["heatmap"] = proposed["by_shield"]["2-2"]
         # Standard six conditions are diagnostic weights, not battle frequencies.
         condition_weights = {(2, 2): .50, (1, 1): .20, (0, 0): .10,
                              (0, 1): .20 / 3, (0, 2): .20 / 3, (1, 2): .20 / 3}
@@ -536,10 +540,10 @@ class PartyBuilder:
                 "candidate_count": len(candidates), "scope": "候補内の暫定結果。全探索ではありません"}
 
     def _matrix(self, jid, pool, opponents, version, engine, work, *, enemy_ids,
-                recommendation_only_ids=frozenset()):
+                recommendation_only_ids=frozenset(), full_conditions=False, known=None):
         # Cache namespaced by exact prepared inputs, engine/data version and direction.
         # Standard Matrix results are never confused with detailed policy outcomes.
-        matrix, stats = {}, {"hits": 0, "computed": 0}
+        matrix, stats = dict(known or {}), {"hits": 0, "computed": 0}
         total = len(pool) * len(opponents) * 9
         done = 0
         with self._db() as db:
@@ -558,7 +562,9 @@ class PartyBuilder:
                                 for q in opp_chunk:
                                     pair = (p["id"], q["id"])
                                     # All nine conditions for the 6v6; only six for meta.
-                                    if (p["id"] in recommendation_only_ids and shield != core.STANDARD) or (shield not in SHIELDS_META and q["id"] not in enemy_ids):
+                                    if not full_conditions and ((p["id"] in recommendation_only_ids and shield != core.STANDARD) or (shield not in SHIELDS_META and q["id"] not in enemy_ids)):
+                                        continue
+                                    if pair + (shield,) in matrix:
                                         continue
                                     row = db.execute("SELECT rating FROM cells WHERE key=?",
                                                      (keys[pair],)).fetchone()
@@ -576,7 +582,7 @@ class PartyBuilder:
                                 for a, p in enumerate(own_chunk):
                                     for b, q in enumerate(opp_chunk):
                                         pair = (p["id"], q["id"])
-                                        if (p["id"] in recommendation_only_ids and shield != core.STANDARD) or (shield not in SHIELDS_META and q["id"] not in enemy_ids):
+                                        if not full_conditions and ((p["id"] in recommendation_only_ids and shield != core.STANDARD) or (shield not in SHIELDS_META and q["id"] not in enemy_ids)):
                                             continue
                                         if pair not in missing_set:
                                             continue  # Valid cached cell wins; do not count as new.
@@ -593,7 +599,7 @@ class PartyBuilder:
                                 if self._cancel:
                                     raise ValueError("cancelled")
                             self._record(jid, "running", {"progress": min(95, 2 + int(91 * done / total)),
-                                "message": "対面を計算しています", "cache": stats})
+                                "message": "比較用の全シールド条件を計算しています" if full_conditions else "対面を計算しています", "cache": stats})
                 # Bound storage size; never delete parties or saved analyses.
                 db.execute("""DELETE FROM cells WHERE key IN
                            (SELECT key FROM cells ORDER BY created DESC LIMIT -1 OFFSET 120000)""")
