@@ -52,10 +52,15 @@ class FlashcardTests(unittest.TestCase):
 
     def test_variant_ratings_exclude_headers_and_summary_columns(self):
         candidates=[dict(species='a',fast='F',charged1='X',charged2='Y'),dict(species='a',fast='F',charged1='X',charged2='Z'),dict(species='a',fast='F',charged1='Y',charged2='Z')]
-        m=[['','opponent','Wins','Losses','Draws','Average'],['a',600,1,0,0,600],['b',580,1,0,0,580],['c',579,1,0,0,579]]
-        chosen=variants.choose_variants(candidates,[m]*6)
-        self.assertEqual(len(chosen),2)
-        self.assertEqual(chosen[0][1],600)
+        m=[['','one','two','Wins','Losses','Draws','Average'],
+           ['a',400,400,99,0,0,999],['b',600,580,1,0,0,0],['c',579,560,1,0,0,0]]
+        chosen=variants.choose_variants(candidates,[m]*6,1,['one','two'])
+        self.assertEqual(len(chosen),1)
+        self.assertEqual(chosen[0][0][-1],'Z')
+        self.assertEqual(chosen[0][1],['one','two'])
+        self.assertEqual(variants.choose_variants(candidates,[m]*6,1,['same','same']),[])
+        m[1][1]=650
+        self.assertEqual(variants.choose_variants(candidates,[m]*6,1,['one','two']),[])
 
     def test_background_compare_and_apply_conflict(self):
         with tempfile.TemporaryDirectory() as root,patch.dict(os.environ,{'PVP_ARCHIVE_DIR':root}):
@@ -69,7 +74,7 @@ class FlashcardTests(unittest.TestCase):
             self.assertEqual(live.uploaded_path(work).with_suffix('.csv.bak').read_text(),csv)
 
     def test_interrupted_evaluation_resumes_completed_species(self):
-        job={'source_csv':'a,F,X,Y\n','evaluated':{'a':{'species':'a','tested':3,'chosen':[{'row':['a','F','X','Z'],'mean_rating':600}]}}}
+        job={'source_csv':'a,F,X,Y\n','evaluated':{'a':{'species':'a','tested':3,'chosen':[{'row':['a','F','X','Z'],'new_species':['x','y']}]}}}
         class Client:
             def simulate(self,*args):raise AssertionError('completed species must not be recalculated')
         with patch.object(variants,'prepared_rows',return_value=[]):

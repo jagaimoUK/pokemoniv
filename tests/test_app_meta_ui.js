@@ -1,7 +1,7 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const script=fs.readFileSync('pvpoke_app_ui.py','utf8').split('<script>')[1].split('</script>')[0];
-const elements={},calls=[];
-function element(){const e={value:'',textContent:'',hidden:false,disabled:false,children:[],style:{},attrs:{},setAttribute(k,v){this.attrs[k]=v},getAttribute(k){return this.attrs[k]},append(x){this.children.push(x)},replaceChildren(){this.children=[]}};Object.defineProperty(e,'id',{set(v){elements[v]=e}});return e;}
+const downloads=[],blobs=[];const elements={},calls=[];
+function element(){const e={click(){downloads.push(this.download)},value:'',textContent:'',hidden:false,disabled:false,children:[],style:{},attrs:{},setAttribute(k,v){this.attrs[k]=v},getAttribute(k){return this.attrs[k]},append(x){this.children.push(x)},replaceChildren(){this.children=[]}};Object.defineProperty(e,'id',{set(v){elements[v]=e}});return e;}
 const el=id=>elements[id]??=element();
 // Real textareas normalize line endings when files are loaded into the editor.
 let metaTextValue='';Object.defineProperty(el('metaText'),'value',{get(){return metaTextValue},set(v){metaTextValue=String(v).replace(/\r\n?/g,'\n')}});
@@ -11,7 +11,7 @@ const items=[{id:'legacy',name:'既存',rows:87,source:'legacy',sha256:'a'.repea
  ...Array.from({length:5},(_,i)=>({id:'pvpoke:'+i,name:'Cup '+i,rows:20,sha256:'b'.repeat(64)})),
  {id:'pvpoke:bad',name:'未完成',rows:1,available:false,unavailable_reason:'通常技なし'}];
 let state={revision:0,default_id:'legacy',retrieved:'2026-10-27',items};let failSave=false,denyClipboard=false,exportRows=1,exportFail=false,exportDeferred=null,previewFail=false,previewDeferred=null,expectedCSV=original;const copied=[];
-const context={document:{getElementById:el,createElement:element},navigator:{clipboard:{async writeText(text){if(denyClipboard)throw Error('clipboard denied');copied.push(text);}}},URLSearchParams,location:{hash:''},sessionStorage:{getItem(){return null},setItem(){},removeItem(){}},
+const context={Blob,URL:{createObjectURL(blob){blobs.push(blob);return 'blob:test'},revokeObjectURL(){}},setTimeout(fn){fn()},document:{getElementById:el,createElement:element},navigator:{clipboard:{async writeText(text){if(denyClipboard)throw Error('clipboard denied');copied.push(text);}}},URLSearchParams,location:{hash:''},sessionStorage:{getItem(){return null},setItem(){},removeItem(){}},
 fetch:async(path,opts)=>{
  const data=JSON.parse(opts.body);calls.push({path,data});
  if(path==='/app-api/catalog')return {status:401,ok:false};
@@ -21,7 +21,7 @@ fetch:async(path,opts)=>{
   if(exportFail)return {status:400,ok:false,json:async()=>({error:'内容が更新されました'})};
   if(exportDeferred)await exportDeferred;
   const parts=Array.from({length:Math.ceil(exportRows/100)},(_,i)=>({start:i*100+1,end:Math.min((i+1)*100,exportRows),csv:('part'+i+','+original).trim()}));
-  out={id:data.id,sha256:data.expected_sha256,name:'Export test',rows:exportRows,parts};
+  out={id:data.id,sha256:data.expected_sha256,name:'Export test',csv:original,manual_csv:original,rows:exportRows,parts};
  }
  else if(path==='/app-api/meta-preview'){
   if(previewDeferred)await previewDeferred;
@@ -36,6 +36,10 @@ fetch:async(path,opts)=>{
   if(data.action==='create'){
    assert.equal(data.csv,expectedCSV);assert.equal(data.expected_sha256,'c'.repeat(64));
    const id='custom:'+(state.items.filter(p=>p.source==='custom').length+1);state.items.push({id,name:data.name,rows:1,source:'custom',sha256:'c'.repeat(64)});state.saved_id=id;
+  }else if(data.action==='update'||data.action==='compact'){
+   assert.equal(data.id,'custom:3');
+   if(data.action==='update')assert.equal(data.csv,expectedCSV);
+   state.saved_id=data.id;
   }else if(data.action==='default'){
    state.default_id=data.id;state.items.forEach(p=>p.default=p.id===data.id);
   }else if(data.action==='favorite')state.items.find(p=>p.id===data.id).favorite=data.favorite;
@@ -120,6 +124,19 @@ vm.createContext(context);vm.runInContext(script,context);
  await el('metaTextPreview').onclick();assert.equal(calls.filter(c=>c.path==='/app-api/meta-preview').length,previews);
  assert(el('metaNotice').textContent.includes('貼り付けてください'));
  el('metaCancel').onclick();assert.equal(el('metaText').value,'');
+ // Download and both update modes share the authenticated, hash-bound APIs.
+ context.chooseMeta('custom:3');
+ await el('metaDownload').onclick();assert.equal(downloads.length,1);
+ assert((await blobs[0].text()).includes(original.trim()));
+ el('metaSaveMode').value='append';el('metaSaveMode').onchange();
+ el('metaText').value=original;expectedCSV=original+'\n'+original;
+ await el('metaTextPreview').onclick();assert(el('metaPreview').textContent.includes('手動構成へ追加'));
+ await el('metaApply').onclick();assert.equal(calls.at(-1).data.action,'update');
+ el('metaSaveMode').value='replace';el('metaSaveMode').onchange();
+ el('metaText').value=original;expectedCSV=original;
+ await el('metaTextPreview').onclick();await el('metaApply').onclick();
+ assert.equal(calls.at(-1).data.csv,original);
+ await el('metaCompact').onclick();assert.equal(calls.at(-1).data.action,'compact');
  console.log('File-free meta paste: preview, duplicate notice, save, edit invalidation, errors, races and cancel OK');
  console.log('Meta CSV export: selected ID/hash, split parts, clipboard fallback, failures and stale responses OK');
  console.log('Meta presets: quick 4, default, favorites, named upload, read-only selection, failures OK');

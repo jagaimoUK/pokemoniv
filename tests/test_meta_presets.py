@@ -26,6 +26,27 @@ class MetaPresetTests(unittest.TestCase):
         self.env.stop()
         self.tmp.cleanup()
 
+    def test_update_compact_and_conflict_keep_manual_rows(self):
+        made=self.create();pid=made['saved_id']
+        entry=presets.resolve(self.work,pid)
+        content=CSV+CSV2
+        result=presets.save(self.work,{'action':'update','id':pid,'revision':made['revision'],
+            'expected_previous_sha256':entry['sha256'], 'csv':content,
+            'expected_sha256':live.digest(content)},SPECIES)
+        self.assertEqual(presets.resolve(self.work,pid)['source_csv'],content)
+        self.assertTrue(presets.store_path(self.work).with_suffix('.json.bak').exists())
+        with self.assertRaises(ValueError):
+            presets.save(self.work,{'action':'update','id':pid,'revision':result['revision'],
+                'expected_previous_sha256':entry['sha256'],'csv':CSV},SPECIES)
+        obj=presets._read(self.work);obj['items'][0]['csv']=content+CSV2
+        presets._write(self.work,obj)
+        current=presets.resolve(self.work,pid)
+        presets.save(self.work,{'action':'compact','id':pid,'revision':obj['revision'],
+            'expected_previous_sha256':current['sha256']},SPECIES)
+        self.assertEqual(presets.resolve(self.work,pid)['csv'],content)
+        exported=presets.export_preset(self.work,pid,presets.resolve(self.work,pid)['sha256'])
+        self.assertEqual(exported['manual_csv'],content)
+
     def create(self, name='日常用', csv=CSV, revision=None):
         if revision is None:
             revision = presets.listing(self.work)['revision']

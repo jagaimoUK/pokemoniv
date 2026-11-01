@@ -1,8 +1,8 @@
 """Persistent, single-worker evaluation of additional meta movesets.
 
-The user's saved rows are retained. All legal charged pairs and all legal
-fast moves are compared against the submitted meta (Default IVs, six shields).
-Adds pairs within 20 average Rating points of that species' best tested pair.
+The user's saved rows are retained. A bounded sample of up to six additional
+profiles per species is compared against up to 32 opponents (six shields).
+Adds at most one profile per species only for new sampled coverage.
 No usage-frequency proxy and no ChatGPT MCP calls.
 """
 import hashlib
@@ -22,7 +22,6 @@ import pvpoke_meta_live as live
 from pvpoke_direct_backend import DirectMatrixClient
 
 SHIELDS = ((0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2))
-MARGIN = 20
 _runtime = None
 _queue = queue.Queue()
 _queued = set()
@@ -50,8 +49,12 @@ def start(work, lock, status):
     directory(work).mkdir(parents=True, exist_ok=True)
     for path in directory(work).glob('*.json'):
         try:
-            if json.loads(path.read_text())['state'] in ('queued', 'running'):
-                enqueue(path)
+            job = json.loads(path.read_text())
+            if job['state'] in ('queued', 'running'):
+                if job.get('minimal_policy') != 1:
+                    job['state'] = 'obsolete'; save(path, job)
+                else:
+                    enqueue(path)
         except (OSError, ValueError, KeyError):
             continue
     threading.Thread(target=worker, daemon=True, name='meta-variants').start()
@@ -68,13 +71,17 @@ def schedule(work, preset_id):
         return {'state': 'unavailable'}
     entry = presets.resolve(work, preset_id)
     gm_sha = hashlib.sha256((engine.DATA / 'gamemaster.json').read_bytes()).hexdigest()
-    cache_key = hashlib.sha256((preset_id + entry['sha256'] + gm_sha + 'variants-v2').encode()).hexdigest()
+    cache_key = hashlib.sha256((preset_id + entry['sha256'] + gm_sha + 'variants-v3-minimal').encode()).hexdigest()
     path = directory(work) / (cache_key + '.json')
     if not path.exists():
-        save(path, {'state': 'queued', 'id': preset_id, 'source_sha256': entry['sha256'],
-                    'source_csv': entry['csv'], 'gm_sha256': gm_sha, 'progress': 0,
-                    'policy': 'Default IVs; six shields; best mean Rating minus 20; all legal fast moves', 'created': time.time()})
+        save(path, {'minimal_policy': 1, 'state': 'queued', 'id': preset_id, 'source_sha256': entry['sha256'],
+                    'source_csv': entry.get('source_csv') or entry['csv'], 'gm_sha256': gm_sha, 'progress': 0,
+                    'policy': 'sampled coverage; >=2 new species with Rating>=550 vs manual<=500; max1/species,8/meta', 'created': time.time()})
     obj = json.loads(path.read_text())
+    if obj['state'] == 'complete':
+        # Reapply cached evidence after an explicit restore/update of the same
+        # manual source; no battle work is repeated for completed species.
+        obj['state'] = 'queued'; save(path, obj)
     if obj['state'] in ('queued', 'running'):
         enqueue(path)
     return {k: obj.get(k) for k in ('state', 'progress', 'total', 'added')}
@@ -109,34 +116,78 @@ def prepared_rows(rows, species, cpms):
     return result
 
 
-def choose_variants(candidates, matrices):
-    # DirectMatrixClient returns a header plus candidate rows, with four
-    # summary columns after the actual opponent Ratings. Exclude all summaries.
-    means = [sum(float(v) for m in matrices for v in m[i+1][1:-4]) /
-             sum(len(m[i+1])-5 for m in matrices) for i in range(len(candidates))]
-    best = max(means)
-    return [(tuple(c[k] for k in ('species', 'fast', 'charged1', 'charged2')), means[i])
-            for i, c in enumerate(candidates) if means[i] >= best - MARGIN]
+def row_key(row):
+    return row[0].removesuffix('-shadow'), row[1], *sorted(row[2:])
+
+
+def choose_variants(candidates, matrices, manual_count, opponent_species):
+    """Require new wins over ALL manual profiles; count species, not shields."""
+    choices = []
+    for i in range(manual_count, len(candidates)):
+        gains = set()
+        for matrix in matrices:
+            for j, sid in enumerate(opponent_species):
+                value = matrix[i+1][j+1]
+                baseline = [matrix[k+1][j+1] for k in range(manual_count)]
+                if value is not None and all(v is not None for v in baseline) and value >= 550 and max(baseline) <= 500:
+                    gains.add(sid)
+        if len(gains) >= 2:
+            row = tuple(candidates[i][k] for k in ('species','fast','charged1','charged2'))
+            choices.append((row, sorted(gains)))
+    return sorted(choices, key=lambda x: (-len(x[1]), x[0]))[:1]
+
+
+def shortlist(rows, pokemon, moves):
+    """Cheap, bounded sample; manual profiles are always tested first."""
+    manual = list(dict.fromkeys(rows))
+    known = {row_key(r) for r in manual}
+    def score(row):
+        f, a, b = (moves.get(x, {}) for x in row[1:])
+        fast = (f.get('power',0)+1.4*f.get('energyGain',0))/max(1,f.get('cooldown',500)/500)
+        return fast + sum(m.get('power',0)/max(1,m.get('energy',1)) for m in (a,b))
+    options = [(manual[0][0], f, a, b) for f in pokemon['fastMoves']
+               for a,b in combinations(engine.charged_move_pool(pokemon),2)]
+    if any(m not in moves for r in options for m in r[1:]):
+        return manual
+    options = sorted((r for r in options if row_key(r) not in known), key=lambda r: (-score(r),r))
+    # Sample distinct charged type/effect roles before filling by efficiency.
+    selected, roles = [], set()
+    for r in options:
+        role = (r[1], tuple(sorted((moves.get(m,{}).get('type',''),
+                 str(moves.get(m,{}).get('buffs',[]))) for m in r[2:])))
+        if role not in roles:
+            roles.add(role); selected.append(r)
+        if len(selected) == 6: break
+    return manual + selected
 
 
 def evaluate(job, client, species, cpms, lock, runtime_status, checkpoint):
     rows = trusted_rows(job['source_csv'])
-    opponents = prepared_rows(rows, species, cpms)
+    target_groups = {}
+    for r in rows:
+        target_groups.setdefault(r[0], r)
+    targets = [r for r in target_groups.values() if not r[0].startswith('minior')][:32]
+    if not targets:
+        return rows, [], 0
+    opponents = prepared_rows(targets, species, cpms)
+    moves = None
     groups = {}
     for sid, fast, *_ in rows:
         sid = sid.removesuffix('-shadow') if sid.endswith('_shadow-shadow') else sid
-        groups.setdefault(sid, set()).add(fast)
+        groups.setdefault(sid, []).append((sid, fast, *_[0:2]))
     extra, evidence = [], []
+    groups = dict([(sid, profiles) for sid, profiles in groups.items() if not sid.startswith('minior')][:8])
     job['total'] = len(groups)
     completed = job.setdefault('evaluated', {})
     for number, (sid, fasts) in enumerate(groups.items(), 1):
         if sid in completed:
-            extra.extend(tuple(r['row']) for r in completed[sid]['chosen'])
+            extra.extend((tuple(r['row']), r['new_species']) for r in completed[sid]['chosen'])
             evidence.append(completed[sid])
             job['progress'] = number
             continue
-        variants = [(sid, f, a, b) for f in species[sid]['fastMoves']
-                    for a, b in combinations(engine.charged_move_pool(species[sid]), 2)]
+        if moves is None:
+            moves = {m['moveId']: m for m in json.loads((engine.DATA / 'gamemaster.json').read_text())['moves']}
+        variants = shortlist(fasts, species[sid], moves)
         candidates = prepared_rows(variants, species, cpms)
         if not candidates:
             raise ValueError(sid + ': 比較できる技構成がありません')
@@ -147,16 +198,16 @@ def evaluate(job, client, species, cpms, lock, runtime_status, checkpoint):
                     matrices = [client.simulate(candidates, opponents, shields) for shields in SHIELDS]
                     break
             threading.Event().wait(1)
-        chosen = choose_variants(candidates, matrices)
-        extra.extend(r for r, _ in chosen)
+        chosen = choose_variants(candidates, matrices, len(set(fasts)), [r[0] for r in targets])
+        extra.extend(chosen)
         item = {'species': sid, 'tested': len(candidates),
-                'chosen': [{'row': r, 'mean_rating': round(mean, 3)} for r, mean in chosen]}
+                'chosen': [{'row': r, 'new_species': mean} for r, mean in chosen]}
         evidence.append(item)
         completed[sid] = item
         job['progress'] = number; checkpoint(job)
     known = {(r[0].removesuffix('-shadow'), r[1], *sorted(r[2:])) for r in rows}
     added = []
-    for row in extra:
+    for row, gains in sorted(extra, key=lambda x: (-len(x[1]), x[0]))[:max(0, min(8, 500-len(rows)))]:
         key = (row[0], row[1], *sorted(row[2:]))
         if key not in known:
             known.add(key); added.append(row)
@@ -175,7 +226,7 @@ def apply(work, job, rows):
     else:
         obj = presets._read(work)
         entry = next(p for p in obj['items'] if p['id'] == job['id'])
-        entry['source_csv'] = current['csv']
+        entry['source_csv'] = job['source_csv']
         entry['csv'] = content
         presets._write(work, obj)
     return True
@@ -200,7 +251,7 @@ def worker():
             with lock:
                 while runtime_status['state'] == 'running':
                     lock.release(); threading.Event().wait(1); lock.acquire()
-                applied = apply(work, job, rows) if count else True
+                applied = apply(work, job, rows)
                 job.update(state='complete' if applied else 'obsolete', added=count, evidence=evidence)
                 save(path, job)
         except Exception as exc:
