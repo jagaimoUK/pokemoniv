@@ -1,0 +1,12 @@
+[
+  {
+    "name": "keep-recent-validation-images",
+    "action": {"type": "Keep"},
+    "mostRecentVersions": {"packageNamePrefixes": ["pokemoniv"], "keepCount": 2}
+  },
+  {
+    "name": "delete-old-validation-images",
+    "action": {"type": "Delete"},
+    "condition": {"tagState": "any", "olderThan": "604800s", "packageNamePrefixes": ["pokemoniv"]}
+  }
+]
