@@ -74,7 +74,7 @@ def _write(work: Path, obj: dict) -> None:
 
 def _entries(work: Path, obj: dict) -> list[dict]:
     return [{'id': 'legacy', 'name': 'これまでのカスタムメタ', 'cp': 1500,
-             'source': 'legacy', 'csv': live.active_path(work).read_text(encoding='utf-8-sig')},
+             'source': 'legacy', 'source_csv': obj.get('legacy_source_csv'), 'csv': live.active_path(work).read_text(encoding='utf-8-sig')},
             *obj['items'], *bundled()['items']]
 
 
@@ -132,6 +132,25 @@ def save(work: Path, args: dict, species: dict) -> dict:
         preset_id = 'custom:' + uuid.uuid4().hex
         obj['items'].append({'id': preset_id, 'name': name, 'cp': 1500,
                              'source': 'custom', 'csv': content})
+    elif action in ('update', 'compact'):
+        preset_id = args.get('id')
+        current = resolve(work, preset_id)
+        if current['source'] not in ('custom', 'legacy'):
+            raise ValueError('公式プリセットは別名で保存して編集してください')
+        if args.get('expected_previous_sha256') != current['sha256']:
+            raise ValueError('メタが更新されました。一覧を再取得してください')
+        incoming = (current.get('source_csv') or current['csv']) if action == 'compact' else args.get('csv')
+        _, content, input_info = live._validated_upload(work, incoming, species)
+        if action != 'compact' and args.get('expected_sha256') != hashlib.sha256(content.encode()).hexdigest():
+            raise ValueError('プレビューと内容が異なります。もう一度確認してください')
+        if preset_id == 'legacy':
+            target = live.uploaded_path(work)
+            _atomic_write(target.with_suffix('.csv.bak'), current['csv'])
+            _atomic_write(target, content)
+            obj['legacy_source_csv'] = content
+        else:
+            entry = next(p for p in obj['items'] if p['id'] == preset_id)
+            entry.update(csv=content, source_csv=content)
     elif action in ('default', 'favorite'):
         preset_id = args.get('id')
         entry = next((p for p in _entries(work, obj) if p['id'] == preset_id), None)
@@ -196,5 +215,5 @@ def export_preset(work: Path, preset_id: str, expected_sha256: str) -> dict:
         for i in range(0, len(rows), PVP_IMPORT_LIMIT)
     ]
     return {'id': entry['id'], 'name': entry['name'], 'sha256': entry['sha256'],
-            'rows': len(rows), 'csv': meta.serialize(rows).rstrip('\n'),
+            'rows': len(rows), 'manual_csv': entry.get('source_csv') or entry['csv'], 'csv': meta.serialize(rows).rstrip('\n'),
             'parts': parts, 'max_import_rows': PVP_IMPORT_LIMIT}

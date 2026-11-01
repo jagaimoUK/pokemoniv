@@ -38,7 +38,7 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <section class="card" id="queuePanel" hidden><h2>連続計算するポケモン</h2><pre id="queuePreview"></pre><p class="note">表示した順にすべて計算します。複数種の内容は上の貼り付け欄から編集できます。</p><button id="singleForm" class="secondary">単一種のフォームに戻す</button></section>
 <section class="card" id="comparisonSettings" tabindex="-1"><h2>2. 比較と推薦の設定</h2>
 <div class="meta-presets"><div class="meta-current"><span class="meta-caption">使用中</span><p id="selectedMeta" class="meta-current-name" aria-live="polite">メタプリセットを読み込み中です。</p><span id="metaCurrentCount" class="meta-count"></span><span id="metaCurrentBadges" class="meta-badges"></span></div>
-<div class="meta-toolbar"><button id="metaChoose" class="secondary" aria-expanded="false" aria-controls="metaChooser">プリセットを選ぶ</button><button id="metaExport" class="secondary" disabled>PvPoke用にコピー</button></div>
+<div class="meta-toolbar"><button id="metaChoose" class="secondary" aria-expanded="false" aria-controls="metaChooser">プリセットを選ぶ</button><button id="metaDownload" class="secondary" type="button">CSVをダウンロード</button><button id="metaCompact" class="secondary" type="button">自動追加を見直す</button><button id="metaExport" class="secondary" disabled>PvPoke用にコピー</button></div>
 <p id="metaExportStatus" class="note" aria-live="polite"></p><div id="metaExportParts" class="actions" hidden></div>
 <div id="metaExportFallback" hidden><label for="metaExportText">PvPoke貼り付け用（手動コピー）</label><textarea id="metaExportText" readonly spellcheck="false"></textarea></div>
 <details class="meta-help"><summary>PvPokeへの貼り付け方</summary><p class="note">PvPokeのBattle → Multi／Matrixで、対戦相手一覧のImport/Exportへ貼り付けてImportを押します。リーグはCP1500にしてください。100件超は分割して確認します。編集後は下の「カスタムメタを追加」へ直接貼り付けるか、TXT・CSVで読み込めます。レベル・個体値付きの8列も種と技だけを保存します。</p></details>
@@ -69,13 +69,13 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <section class="card" id="results" tabindex="-1" hidden></section>
 <details class="card" id="metaManager">
 <summary>カスタムメタを追加</summary>
-<p class="note">貼り付けたメタやTXT・CSVを名前付きで最大50件保存できます。これまでのメタや他のプリセットは上書きしません。普段使うメタは選択欄からデフォルトに指定してください。</p>
+<p class="note">貼り付けたメタやTXT・CSVを名前付きで最大50件保存できます。追加・置換は選択中のカスタムメタへ保存します。公式プリセットは別名で保存してください。自動追加は手動構成にない対応が増える場合だけ、各種1構成・全体8構成までです。先頭8種・相手32種・追加候補各6構成の標本で判定し、全技の対応保証はしません。普段使うメタは選択欄からデフォルトに指定してください。</p>
 <p class="note" id="metaStatus">現在のメタを確認しています。</p>
-<label for="metaName">保存するプリセット名</label><input id="metaName" maxlength="60" placeholder="普段使うメタ">
+<label for="metaSaveMode">保存方法</label><select id="metaSaveMode"><option value="create">別のプリセットとして保存</option><option value="append">選択中の手動構成へ追加</option><option value="replace">選択中のメタを全置換</option></select><label for="metaName">保存するプリセット名</label><input id="metaName" maxlength="60" placeholder="普段使うメタ">
 <label for="metaText">メタを貼り付け</label><textarea id="metaText" spellcheck="false" aria-describedby="metaInputHelp" placeholder="quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE"></textarea>
 <div class="meta-toolbar"><button id="metaTextPreview" class="secondary" type="button">貼り付けた内容を確認</button></div>
 <details><summary>ファイルから読み込む（TXT／CSV）</summary><label for="metaFile">メタ一覧（最大80KB）</label><input id="metaFile" type="file" accept=".txt,.csv,text/plain,text/csv"></details>
-<p class="note" id="metaInputHelp">species,fast,charged1,charged2 の4列、または level,atk,def,hp を加えた8列を貼り付けできます。保存するのは種と技だけです。入力のレベル・個体値は使わず、計算時は選択した対戦相手の個体値条件を使います。同じ種と技構成はまとめ、最大500技構成まで。「内容を確認」→「別のプリセットとして保存」の順に操作してください。</p>
+<p class="note" id="metaInputHelp">species,fast,charged1,charged2 の4列、または level,atk,def,hp を加えた8列を貼り付けできます。保存するのは種と技だけです。入力のレベル・個体値は使わず、計算時は選択した対戦相手の個体値条件を使います。同じ種と技構成はまとめ、最大500技構成まで。保存方法と対象メタを選び、「内容を確認」→保存の順に操作してください。追加では同種の別技も保持し、全置換では入力にない構成を除きます。</p>
 <div id="metaPreview" class="status" hidden></div>
 <div class="actions"><button id="metaApply" class="secondary" disabled>別のプリセットとして保存</button><button id="metaCancel" class="secondary" type="button">選択を取り消す</button></div>
 <p id="metaNotice" class="note" aria-live="polite"></p>
@@ -402,9 +402,11 @@ function resetMetaUpload(){metaPending=null;el('metaApply').disabled=true;el('me
 function chosenMeta(){return metaState?.items.find(p=>p.id===selectedMetaId);}
 function syncMetaControls(){
  el('metaDefault').disabled=!!chosenMeta()?.default||active||metaWorking||!!batchState||!!runRef;
+ el('metaDownload').disabled=metaExportWorking||!chosenMeta();
+ el('metaCompact').disabled=active||metaWorking||!!batchState||!!runRef||!['custom','legacy'].includes(chosenMeta()?.source);
  el('metaExport').disabled=metaExportWorking||!chosenMeta()||chosenMeta().available===false;
  const blocked=active||metaWorking||!!batchState||!!runRef;
- for(const id of ['metaChoose','metaAll','metaFavorite','metaName','metaFile','metaText','metaTextPreview','metaApply'])el(id).disabled=blocked;
+ for(const id of ['metaSaveMode','metaChoose','metaAll','metaFavorite','metaName','metaFile','metaText','metaTextPreview','metaApply'])el(id).disabled=blocked;
  for(const button of el('metaQuick').children)button.disabled=blocked;
  el('metaReload').disabled=active||metaWorking;
  el('metaApply').disabled=blocked||!metaPending||!metaState;
@@ -501,6 +503,28 @@ el('metaExport').onclick=async()=>{
  }catch(e){if(selectedMetaId===selected.id)el('metaExportStatus').textContent='コピーできませんでした：'+e.message;}
  finally{metaExportWorking=false;syncMetaControls();}
 };
+el('metaDownload').onclick=async()=>{
+ if(metaExportWorking||!chosenMeta())return;
+ const selected={...chosenMeta()};metaExportWorking=true;syncMetaControls();
+ try{
+  const d=await api('meta-preset-export',{id:selected.id,expected_sha256:selected.sha256});
+  if(chosenMeta()?.id!==selected.id||chosenMeta()?.sha256!==selected.sha256)return;
+  if(d.id!==selected.id||d.sha256!==selected.sha256||typeof d.csv!=='string')throw Error('取得したメタが一致しません');
+  const url=URL.createObjectURL(new Blob(['\ufeff'+d.csv+'\n'],{type:'text/csv;charset=utf-8'}));
+  const a=document.createElement('a');a.href=url;a.download=selected.name.replace(/[\\/:*?"<>|]/g,'_')+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  el('metaExportStatus').textContent=d.rows+'構成をCSVでダウンロードしました。';
+ }catch(e){el('metaExportStatus').textContent=e.message;}
+ finally{metaExportWorking=false;syncMetaControls();}
+};
+el('metaCompact').onclick=async()=>{
+ if(active||metaWorking||batchState||runRef||!chosenMeta())return;
+ const selected={...chosenMeta()};metaWorking=true;syncMetaControls();
+ try{
+  metaState=await api('meta-preset-save',{action:'compact',id:selected.id,expected_previous_sha256:selected.sha256,revision:metaState.revision});
+  clearMetaExport();resetMetaUpload();renderMetaChoices();metaNotice('保存されていた手動構成に戻し、必要な追加だけ再判定します。由来不明の構成は保持します。');
+ }catch(e){metaNotice(e.message,true);}finally{metaWorking=false;syncMetaControls();}
+};
+el('metaSaveMode').onchange=()=>{resetMetaUploadPreviewOnly();el('metaApply').textContent={create:'別のプリセットとして保存',append:'選択中へ追加して上書き',replace:'選択中を全置換して保存'}[el('metaSaveMode').value];};
 async function previewMetaInput(file=null){
  if(active||metaWorking||batchState||runRef){metaNotice('計算中はメタを更新できません。',true);return;}
  resetMetaUploadPreviewOnly();metaWorking=true;syncMetaControls();metaNotice('メタの内容と技を確認中です。');
@@ -509,11 +533,20 @@ async function previewMetaInput(file=null){
   if(file&&el('metaFile').files?.[0]!==file)return;
   if(file){el('metaText').value=content;content=el('metaText').value;} // Textareas normalize CRLF/CR to LF.
   if(!content.trim())throw Error('メタの内容を貼り付けてください。');
-  const preview=await api('meta-preview',{csv:content});
+  const mode=el('metaSaveMode').value||'create',target={...chosenMeta()};
+  if(mode!=='create'&&!['custom','legacy'].includes(target.source))throw Error('公式プリセットは別名で保存してください。');
+  let prepared=content;
+  if(mode==='append'){
+   const previous=await api('meta-preset-export',{id:target.id,expected_sha256:target.sha256});
+   if(previous.id!==target.id||previous.sha256!==target.sha256)throw Error('追加先のメタが一致しません');
+   prepared=(previous.manual_csv||previous.csv)+'\n'+content;
+  }
+  const preview=await api('meta-preview',{csv:prepared});
+  if((el('metaSaveMode').value||'create')!==mode||chosenMeta()?.id!==target.id||chosenMeta()?.sha256!==target.sha256)return;
   if(el('metaText').value!==content||(file&&el('metaFile').files?.[0]!==file))return;
-  metaPending={content,preview};
+  metaPending={content,prepared,preview,mode,target};
   if(file&&!el('metaName').value.trim())el('metaName').value=file.name.replace(/\.(txt|csv)$/i,'').slice(0,60);
-  const lines=['入力 '+(preview.input_rows??preview.rows)+'行 → 保存 '+preview.rows+'技構成','既存のメタは上書きしません。'];
+  const lines=['入力 '+(preview.input_rows??preview.rows)+'行 → 保存 '+preview.rows+'技構成',mode==='create'?'既存のメタは上書きしません。別名で保存します。':target.name+(mode==='append'?'の手動構成へ追加します。自動追加分は再判定します。':'を入力内容で全置換します。')];
   if(preview.duplicate_count){
    lines.push('重複 '+preview.duplicate_count+'行を統合しました。');
    if(preview.duplicate_lines?.length)lines.push('重複した行：'+preview.duplicate_lines.join(', ')+(preview.duplicate_count>preview.duplicate_lines.length?' ほか':''));
@@ -523,7 +556,7 @@ async function previewMetaInput(file=null){
    if(preview.custom_stats_lines?.length)lines.push('対象行：'+preview.custom_stats_lines.join(', ')+(preview.custom_stats_count>preview.custom_stats_lines.length?' ほか':''));
   }
   el('metaPreview').textContent=lines.join('\n');el('metaPreview').hidden=false;
-  metaNotice('内容と名前を確認し、別のプリセットとして保存してください。');
+  metaNotice('内容・保存方法・対象メタを確認して保存してください。');
  }catch(e){metaPending=null;metaNotice(e.message+'（元のメタは変更されていません）',true);}
  finally{metaWorking=false;syncMetaControls();}
 }
@@ -542,11 +575,12 @@ el('metaCancel').onclick=()=>{if(metaWorking)return;resetMetaUpload();metaNotice
 el('metaApply').onclick=async()=>{
  if(active||metaWorking||batchState||runRef||!metaPending||!metaState)return;
  if(el('metaText').value!==metaPending.content){resetMetaUploadPreviewOnly();metaNotice('内容が確認後に変わりました。もう一度確認してください。',true);return;}
- if(!el('metaName').value.trim()){metaNotice('プリセット名を入力してください。',true);return;}
- const {content,preview}=metaPending;
+ if(metaPending.mode==='create'&&!el('metaName').value.trim()){metaNotice('プリセット名を入力してください。',true);return;}
+ const {content,prepared,preview,mode,target}=metaPending;
+ if(mode!==(el('metaSaveMode').value||'create')||chosenMeta()?.id!==target.id||chosenMeta()?.sha256!==target.sha256){resetMetaUploadPreviewOnly();metaNotice('保存先が変わりました。もう一度確認してください。',true);return;}
  metaWorking=true;syncMetaControls();el('metaCancel').disabled=true;
  try{
-  const saved=await api('meta-preset-save',{action:'create',name:el('metaName').value.trim(),csv:content,expected_sha256:preview.sha256,revision:metaState.revision});
+  const saved=await api('meta-preset-save',{action:mode==='create'?'create':'update',id:target.id,expected_previous_sha256:target.sha256,name:el('metaName').value.trim(),csv:prepared,expected_sha256:preview.sha256,revision:metaState.revision});
   metaState=saved;selectedMetaId=saved.saved_id;clearMetaExport();resetMetaUpload();el('metaName').value='';renderMetaChoices();
   metaNotice('保存完了：'+preview.rows+'技構成'+(preview.duplicate_count?'（重複'+preview.duplicate_count+'行を統合）':'')+'。今回の計算に選択しました。普段使う場合はデフォルトに指定してください。');
  }catch(e){metaNotice(e.message+'（既存のメタは維持されます。一覧を再取得して確認してください）',true);}

@@ -634,7 +634,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not CATALOG['ready']:
                         raise ValueError('ゲームデータの読み込みが完了していません')
                     result = meta_presets.save(WORK, payload, CATALOG['species'])
-                    if payload.get('action') == 'create':
+                    if payload.get('action') in ('create', 'update', 'compact'):
                         result['augmentation'] = meta_variants.schedule(WORK, result['saved_id'])
                     return self.respond(200, result)
                 if path == '/api/meta/preview':
@@ -649,6 +649,9 @@ class Handler(BaseHTTPRequestHandler):
                         WORK, payload.get('csv'), CATALOG['species'],
                         expected_previous_sha256=payload.get('expected_previous_sha256'),
                         expected_sha256=payload.get('expected_sha256'))
+                    store = meta_presets._read(WORK)
+                    store['legacy_source_csv'] = meta_live.active_path(WORK).read_text(encoding='utf-8-sig')
+                    meta_presets._write(WORK, store)
                     result['augmentation'] = meta_variants.schedule(WORK, 'legacy')
                     return self.respond(200, {'ok': True, **result})
                 if path in ('/api/prepare24','/api/run24'):
