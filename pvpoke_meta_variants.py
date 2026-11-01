@@ -78,6 +78,10 @@ def schedule(work, preset_id):
                     'source_csv': entry.get('source_csv') or entry['csv'], 'gm_sha256': gm_sha, 'progress': 0,
                     'policy': 'sampled coverage; >=2 new species with Rating>=550 vs manual<=500; max1/species,8/meta', 'created': time.time()})
     obj = json.loads(path.read_text())
+    if obj['state'] == 'complete':
+        # Reapply cached evidence after an explicit restore/update of the same
+        # manual source; no battle work is repeated for completed species.
+        obj['state'] = 'queued'; save(path, obj)
     if obj['state'] in ('queued', 'running'):
         enqueue(path)
     return {k: obj.get(k) for k in ('state', 'progress', 'total', 'added')}

@@ -21,6 +21,21 @@ class MinimalMetaTests(unittest.TestCase):
         self.assertEqual(len({variants.row_key(r) for r in result}),len(result))
         self.assertEqual(variants.shortlist([row],SPECIES[row[0]],{}),[row])
 
+    def test_completed_evidence_is_reused_after_explicit_restore(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work=Path(tmp);(work/'gamemaster.json').write_text(json.dumps(GM))
+            with patch.object(engine,'DATA',work), patch.object(variants,'directory',return_value=work), \
+                 patch.object(variants,'_runtime',(work,None,None)), \
+                 patch.object(variants.presets,'resolve',return_value={'sha256':'same','csv':'a,F,X,Y\n'}), \
+                 patch.object(variants,'enqueue'):
+                variants.schedule(work,'custom:x')
+                path=next(p for p in work.glob('*.json') if p.name!='gamemaster.json')
+                obj=json.loads(path.read_text());obj.update(state='complete',evaluated={'a':{'chosen':[]}})
+                variants.save(path,obj)
+                result=variants.schedule(work,'custom:x')
+                self.assertEqual(result['state'],'queued')
+                self.assertEqual(json.loads(path.read_text())['evaluated'],obj['evaluated'])
+
     def test_real_engine_preserves_input_and_limits_work(self):
         before=copy.deepcopy(ROWS)
         with tempfile.TemporaryDirectory() as tmp:
