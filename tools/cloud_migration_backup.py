@@ -151,6 +151,17 @@ def _private_write(path, body):
         os.fsync(fp.fileno())
 
 
+def _publish_new_directory(staging, destination):
+    # rename(directory, destination) can replace an existing empty directory on
+    # POSIX. Reserve the destination with an exclusive mkdir instead. If the
+    # process is interrupted while publishing, keep the private partial copy;
+    # it cannot pass verification until the manifest is moved last.
+    destination.mkdir(mode=0o700)
+    for path in sorted(staging.iterdir(), key=lambda p: p.name == 'manifest.json'):
+        path.rename(destination / path.name)
+    staging.rmdir()
+
+
 def backup(roots, destination):
     roots = _roots(roots)
     destination = Path(destination).absolute()
@@ -208,7 +219,7 @@ def backup(roots, destination):
         # A successful backup includes a separate restore and full verification.
         with tempfile.TemporaryDirectory(prefix=".pokemoniv-restore-check-", dir=destination.parent) as tmp:
             restore(staging, Path(tmp) / "restored")
-        staging.rename(destination)
+        _publish_new_directory(staging, destination)
         return summary(manifest, destination)
     finally:
         if staging.exists():
@@ -277,7 +288,7 @@ def restore(bundle, destination):
                 raise ValueError("Restored database differs")
             if "zip" in entry:
                 zip_inventory(target)
-        staging.rename(destination)
+        _publish_new_directory(staging, destination)
         return summary(manifest, destination)
     finally:
         if staging.exists():

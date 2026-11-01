@@ -8,7 +8,7 @@ const DB='pokemon-move-flashcards', STORES=['kv','reviews'];
 function fail(){throw Error('バックアップの形式が不正です。元のファイルを確認してください。');}
 function validate(data){
  if(!data||data.format!==FORMAT||!data.local||!data.session||!data.flashcards)fail();
- if(JSON.stringify(data).length>MAX_BYTES)fail();
+ if(new TextEncoder().encode(JSON.stringify(data)).byteLength>MAX_BYTES)fail();
  for(const [area,keys] of [[data.local,LOCAL],[data.session,SESSION]]){
   if(Object.keys(area).length!==keys.length||Object.keys(area).some(k=>!keys.includes(k)))fail();
   for(const key of keys)if(area[key]!==null&&typeof area[key]!=='string')fail();

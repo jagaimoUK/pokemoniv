@@ -57,6 +57,16 @@ class BackupTests(unittest.TestCase):
             with self.assertRaises((FileExistsError, ValueError)):
                 action()
 
+    def test_publish_cannot_replace_a_concurrently_created_empty_directory(self):
+        staging, destination = self.base / 'ready', self.base / 'already-created'
+        staging.mkdir()
+        (staging / 'content').write_bytes(b'keep')
+        destination.mkdir()
+        with self.assertRaises(FileExistsError):
+            backup._publish_new_directory(staging, destination)
+        self.assertEqual(list(destination.iterdir()), [])
+        self.assertEqual((staging / 'content').read_bytes(), b'keep')
+
     def test_corruption_and_extra_file_refused_before_restore(self):
         self.make()
         path = self.bundle / 'files/volume/unknown-important-data'

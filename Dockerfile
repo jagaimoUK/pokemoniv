@@ -9,6 +9,7 @@ WORKDIR /app
 COPY requirements.lock /app/requirements.lock
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 COPY *.py /app/
+COPY tools/cloud_migration_*.py /app/tools/
 # Fetch and verify the approved data while building, not on each container start.
 RUN python -c "from pathlib import Path; from pvpoke_data_snapshot import install_snapshot, SEED; from pvpoke_batch_v2 import urlget; install_snapshot(SEED, urlget)"
 COPY pvpoke_node_matrix.js /app/pvpoke_node_matrix.js

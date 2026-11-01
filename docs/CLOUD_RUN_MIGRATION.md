@@ -202,9 +202,23 @@ Cookieはドメインが変わると移らない。再ログインが必要。Ht
 
 Androidは今回変更していない。APK内にRailway URLが埋め込まれている箇所を検索し、Cloud Runへ移る場合はURL変更または移行期間中の旧API互換プロキシを設計する。旧URLを突然止めると共有画面・見本バックアップ・フラッシュカードが切れる恐れがある。Android WebViewとChromeの保存領域も同一とは限らない。APK署名・versionCode・実機確認はこの後の別ゲート。
 
+今回のソース検索では `android-integration/overlayqueue/OverlayCopyQueueImportActivity.kt:86` の非厳選検索へのリンクがRailway固定だった。`flashcards_ui.js` のORIGIN定数も旧URLだが、現行ファイルでその定数の使用は見つからなかった。不要なURL一括置換はしない。Auth0の `JWT_AUDIENCE` は論理的なAPI識別子でもあるため、ホスト移行を理由に機械的に変えない。既存issuer/audienceと既存トークンを検証し、変更が本当に必要な場合だけ別途移行する。
+
+## 8a. 実施した検証の記録
+
+- 元のmainのローカル基準：395 tests、失敗なし、5 skipped。
+- 初回PRコミット `24b0fa5058fdb2a2e581c863b7a60e4c4b0084b1`：GitHubの16チェックすべてsuccess。Docker本番image、privateポート検証、8080待受・health・未認証拒否・Cloud Run本番ガード、390px Chromium/CSP、160件の個体値再開情報・手動技・IndexedDBの別profile復元・再読込・競合拒否・quota rollbackが成功。依存/履歴秘密/OS監査も成功。
+- その後のレビュー補強：同時に作成された復元先への上書き禁止、UTF-8での容量上限、実JSONダウンロード照合、ツールのcontainer同梱、imageサイズのログ出力。
+- 補強後ローカル：416 tests、409成功/7 skipped（Docker・Nginx等の環境依存を含む）。新規のcloud系は23 tests、21成功/2 Docker skipped。既存JavaScript suitesとmigration schema checks成功。補強版のDocker/ブラウザは最新PR CIを確認する。
+- 実データ、実Cloud Runの再起動/scale zero/複数instance、Firestore、R2本物の障害・データ一致、Android実機は未確認。
+
+GitHub CIは既存のpath filterに従い、複数の既存workflowがDockerfile変更で動く。新規workflowは増やしていないが、既存の重複Dockerビルドを統合する余地は残る。本移行と無関係なCI再設計は今回行わない。検証用の合成データだけをCIへ渡す。
+
 ## 9. 配備・IAM・CI/CDの手順
 
 `cloudbuild.cloudrun.yaml` は**完成した本番CI/CDではない**。費用承認後の使い捨て検証配備用テンプレート。既定の `_COST_APPROVAL` は `NOT_APPROVED` で、初段が停止する。承認後に `APPROVED_VALIDATION_ONLY` を明示する。
+
+ゲートで止まってもCloud Buildそのものの起動時間は計上されるため、**承認前にbuildをsubmitしてはいけない**。
 
 事前に承認が必要なもの：請求アカウント紐付け、API有効化、Firestore/GCS/R2/Registry/Cloud Runリソース、Secretの設定、Google/GitHub接続、セキュリティ権限・予算変更。現段階では作成しない。
 

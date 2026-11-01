@@ -56,6 +56,7 @@ jobs:
           docker image inspect --format '{{.Size}}' pokemoniv-security-ci > image-uncompressed-bytes.txt
           # Approximation only: Registry accounts compressed layers and sharing.
           docker save pokemoniv-security-ci | gzip -n | wc -c > image-compressed-tar-estimate-bytes.txt
+          python -c 'import json; from pathlib import Path; print(json.dumps({"image_uncompressed_bytes": int(Path("image-uncompressed-bytes.txt").read_text()), "compressed_tar_estimate_bytes": int(Path("image-compressed-tar-estimate-bytes.txt").read_text())}))'
       - name: Cloud Run validation port, health, authentication and production guard
         env:
           PVP_CLOUD_IMAGE: pokemoniv-security-ci
