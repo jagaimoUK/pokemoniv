@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+python /app/pvpoke_cloud_runtime.py
 : "${PVP_API_KEY:?Set a random 32+ character PVP_API_KEY in the host secret settings}"
 if [ "${#PVP_API_KEY}" -lt 32 ]; then
   echo 'PVP_API_KEY must be at least 32 characters' >&2

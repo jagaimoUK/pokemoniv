@@ -7,6 +7,7 @@ import json
 import hashlib
 import re
 import sqlite3
+import pvpoke_browser_migration as browser_migration
 from pvpoke_input_limits import MAX_APP_REQUEST_BYTES
 import base64
 import threading
@@ -365,7 +366,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def app_page(self):
-        data = (flashcards.page() if self.path == '/flashcards' else PARTY_HTML if self.path == '/app/party' else APP_HTML).encode('utf-8')
+        data = (browser_migration.page() if self.path == '/app/migration' else flashcards.page() if self.path == '/flashcards' else PARTY_HTML if self.path == '/app/party' else APP_HTML).encode('utf-8')
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.send_header('Content-Length', str(len(data)))
@@ -534,7 +535,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        if self.path in ('/flashcards', '/app/party'):
+        if self.path in ('/flashcards', '/app/party', '/app/migration'):
             return self.app_page()
         # This one read-only route contains only global, fixed PvP rankings
         # transformed into GO search terms. Do not expose private app APIs,

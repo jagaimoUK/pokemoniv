@@ -9,6 +9,7 @@ WORKDIR /app
 COPY requirements.lock /app/requirements.lock
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 COPY *.py /app/
+COPY tools/cloud_migration_*.py /app/tools/
 # Fetch and verify the approved data while building, not on each container start.
 RUN python -c "from pathlib import Path; from pvpoke_data_snapshot import install_snapshot, SEED; from pvpoke_batch_v2 import urlget; install_snapshot(SEED, urlget)"
 COPY pvpoke_node_matrix.js /app/pvpoke_node_matrix.js
@@ -16,6 +17,7 @@ COPY pvpoke_minior_strategy.js /app/pvpoke_minior_strategy.js
 COPY pvpoke_battle_policy.js /app/pvpoke_battle_policy.js
 RUN node -e "if(require('./pvpoke_battle_policy.js').SCHEMA !== 'strategy-detail-v1') process.exit(1)"
 COPY flashcards.html flashcards_core.js flashcards_ui.js /app/
+COPY pvpoke_browser_migration.js /app/
 COPY pvpoke_party_strategy_ui.js pvpoke_party_input.js /app/
 COPY data/flashcard_catalog.json /app/data/flashcard_catalog.json
 # Node loads this module at startup for *every* matrix, not just Minior.

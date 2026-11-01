@@ -53,6 +53,14 @@ jobs:
           docker run --rm -v "$PWD:/work" -w /work --entrypoint python pokemoniv-security-ci -m unittest discover -s tests -p 'test*.py'
           docker run --rm --entrypoint python pokemoniv-security-ci -m pip inspect > python-packages.json
           docker run --rm --entrypoint dpkg-query pokemoniv-security-ci -W > os-packages.txt
+          docker image inspect --format '{{.Size}}' pokemoniv-security-ci > image-uncompressed-bytes.txt
+          # Approximation only: Registry accounts compressed layers and sharing.
+          docker save pokemoniv-security-ci | gzip -n | wc -c > image-compressed-tar-estimate-bytes.txt
+          python -c 'import json; from pathlib import Path; print(json.dumps({"image_uncompressed_bytes": int(Path("image-uncompressed-bytes.txt").read_text()), "compressed_tar_estimate_bytes": int(Path("image-compressed-tar-estimate-bytes.txt").read_text())}))'
+      - name: Cloud Run validation port, health, authentication and production guard
+        env:
+          PVP_CLOUD_IMAGE: pokemoniv-security-ci
+        run: python -m unittest discover -s tests -p 'test_cloud_container.py' -v
       - name: Mobile browser initialization under CSP
         run: |
           docker build --target browser-check -t pokemoniv-browser-ci .
@@ -75,4 +83,6 @@ jobs:
             os-packages.txt
             image-vulnerabilities.json
             image-sbom.cdx.json
+            image-uncompressed-bytes.txt
+            image-compressed-tar-estimate-bytes.txt
           retention-days: 14

@@ -1,0 +1,86 @@
+# MANUAL, APPROVAL-GATED validation only. Never point a main trigger at this file.
+# No resource/API/billing creation, no production bucket or Railway credentials.
+substitutions:
+  _COST_APPROVAL: 'NOT_APPROVED'
+  _REGION: us-central1
+  _REPOSITORY: pokemoniv-validation
+  _SERVICE: pokemoniv-validation
+  _RUNTIME_SERVICE_ACCOUNT: REPLACE_WITH_VALIDATION_ACCOUNT
+  _API_KEY_SECRET_VERSION: REPLACE_WITH_VALIDATION_ONLY_SECRET_VERSION
+steps:
+  - id: approval-and-configuration
+    name: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        test '${_COST_APPROVAL}' = 'APPROVED_VALIDATION_ONLY' || { echo 'Cost approval required; no resources changed.' >&2; exit 1; }
+        test '${_RUNTIME_SERVICE_ACCOUNT}' != REPLACE_WITH_VALIDATION_ACCOUNT
+        test '${_API_KEY_SECRET_VERSION}' != REPLACE_WITH_VALIDATION_ONLY_SECRET_VERSION
+        case '${_SERVICE}' in *validation*) ;; *) echo 'Validation service name required' >&2; exit 1;; esac
+        case '${_REPOSITORY}' in *validation*) ;; *) echo 'Validation repository required' >&2; exit 1;; esac
+        # Require an operator-provisioned, explicitly marked disposable service.
+        # Knowing its URL before deploy avoids an extra revision just to set origin.
+        test "$$(gcloud run services describe '${_SERVICE}' --project='$PROJECT_ID' --region='${_REGION}' --format='value(metadata.labels.pokemoniv_role)')" = validation
+        validation_url="$$(gcloud run services describe '${_SERVICE}' --project='$PROJECT_ID' --region='${_REGION}' --format='value(status.url)')"
+        case "$$validation_url" in https://*.run.app) ;; *) echo 'Expected an existing Cloud Run validation URL' >&2; exit 1;; esac
+        printf 'PVP_CLOUD_MODE: "validation"\nPVP_ARCHIVE_DIR: "/tmp/pokemoniv-validation"\nPVP_ENGINE: "direct"\nPVP_ALLOW_BROWSER: "0"\nPVP_MCP_URL: "%s/mcp"\n' "$$validation_url" > /workspace/cloudrun-validation-env.yaml
+  - id: build-existing-dockerfile
+    name: gcr.io/cloud-builders/docker
+    args: [build, --target, production, -t, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/pokemoniv:$BUILD_ID', '.']
+  - id: offline-regression
+    name: gcr.io/cloud-builders/docker
+    args:
+      - run
+      - --rm
+      - --network=none
+      - --entrypoint
+      - python
+      - -v
+      - /workspace:/work:ro
+      - -w
+      - /work
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/pokemoniv:$BUILD_ID'
+      - -m
+      - unittest
+      - discover
+      - -s
+      - tests
+      - -p
+      - test_cloud*.py
+  - id: image-size-evidence
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args: [-ceu, 'docker image inspect --format="{{.Size}}" "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/pokemoniv:$BUILD_ID"']
+  - id: push-validation-image
+    name: gcr.io/cloud-builders/docker
+    args: [push, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/pokemoniv:$BUILD_ID']
+  - id: deploy-private-disposable-validation
+    name: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - '${_SERVICE}'
+      - '--project=$PROJECT_ID'
+      - '--region=${_REGION}'
+      - '--image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/pokemoniv:$BUILD_ID'
+      - '--service-account=${_RUNTIME_SERVICE_ACCOUNT}'
+      - '--no-allow-unauthenticated'
+      - '--min=0'
+      - '--max=1'
+      - '--concurrency=8'
+      - '--cpu=1'
+      # Railway 24h sampled peak ~0.883 GB; tmpfs adds to Cloud Run memory.
+      # This is a validation starting point, not a production sizing claim.
+      - '--memory=2Gi'
+      - '--cpu-throttling'
+      - '--timeout=300'
+      - '--port=8080'
+      - '--env-vars-file=/workspace/cloudrun-validation-env.yaml'
+      - '--set-secrets=PVP_API_KEY=${_API_KEY_SECRET_VERSION}'
+      - '--quiet'
+options:
+  # Default e2-standard-2 qualifies for the current promotional free minutes.
+  logging: CLOUD_LOGGING_ONLY
+timeout: 1200s
