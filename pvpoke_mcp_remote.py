@@ -28,6 +28,7 @@ from pvpoke_app_input import parse_import
 from pvpoke_score_search import search_low_scores
 from pvpoke_reader_cleanup import reader_cleanup_payload
 import pvpoke_flashcards as flashcards
+import pvpoke_browser_migration as browser_migration
 
 APP_ACCESS = AppAccess()
 
@@ -365,7 +366,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def app_page(self):
-        data = (flashcards.page() if self.path == '/flashcards' else PARTY_HTML if self.path == '/app/party' else APP_HTML).encode('utf-8')
+        data = (browser_migration.page() if self.path == '/app/migration' else flashcards.page() if self.path == '/flashcards' else PARTY_HTML if self.path == '/app/party' else APP_HTML).encode('utf-8')
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.send_header('Content-Length', str(len(data)))
@@ -534,7 +535,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        if self.path in ('/flashcards', '/app/party'):
+        if self.path in ('/flashcards', '/app/party', '/app/migration'):
             return self.app_page()
         # This one read-only route contains only global, fixed PvP rankings
         # transformed into GO search terms. Do not expose private app APIs,
