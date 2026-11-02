@@ -136,7 +136,7 @@ class IVWorkflow:
 
         with self._lock:
             current = self.backend.status()
-            if current.get("state") == "running":
+            if current.get("state") in ("running", "cancelling"):
                 raise ValueError("A PvPoke calculation is already running")
             meta = (self.backend.meta_preset_status(meta_preset_id) if meta_preset_id is not None
                     else self.backend.meta_status())
@@ -184,6 +184,23 @@ class IVWorkflow:
         result["preview"] = started["preview"]
         return result
 
+    def cancel(self, run_ref: str) -> dict:
+        """A request may cancel only its exact active IV run, never another job."""
+        if not isinstance(run_ref, str) or not run_ref:
+            raise ValueError("run_ref is required")
+        with self._lock:
+            ticket = self._ticket
+            if ticket is None or ticket["run_ref"] != run_ref:
+                raise ValueError("Unknown or superseded run_ref")
+            current = self.backend.status()
+            if current.get("started_at") != ticket["started_at"] or not current.get("batch24"):
+                raise ValueError("PvPoke job identity changed or the server restarted")
+            if current.get("state") not in ("running", "cancelling"):
+                return {"run_ref": run_ref, "state": current.get("state"), "cancelled": False}
+            result = self.backend.cancel()
+            return {"run_ref": run_ref, "state": result["state"],
+                    "cancelled": result["cancelled"]}
+
     def result(self, run_ref: str, wait_seconds: int = 12) -> dict:
         """Bounded long poll avoids repeated model/tool round-trips."""
         if not isinstance(wait_seconds, int) or not 0 <= wait_seconds <= 20:
@@ -205,6 +222,10 @@ class IVWorkflow:
             current = self.backend.status()
             if current.get("started_at") != ticket["started_at"] or not current.get("batch24"):
                 raise ValueError("PvPoke job identity changed or the server restarted")
+            if current.get("state") in ("cancelling", "cancelled"):
+                return {"run_ref": run_ref, "state": current["state"],
+                        "message": "計算を中止しました" if current["state"] == "cancelled"
+                                   else "計算の停止を処理中"}
             if current.get("state") == "error":
                 return {"run_ref": run_ref, "state": "error",
                         "message": current.get("message"),

@@ -85,6 +85,12 @@ class FakeBackend:
             "candidate_count": 2, "opponent_count": 87, "shield_cases": 6,
         }}
 
+    def cancel(self):
+        if self.state == "running":
+            self.state = "cancelling"
+            return {"state": "cancelling", "cancelled": True}
+        return {"state": self.state, "cancelled": False}
+
     def status(self):
         return {"state": self.state, "started_at": self.time,
                 "batch24": self.state != "idle",
@@ -169,6 +175,23 @@ class IVWorkflowTests(unittest.TestCase):
         result = workflow.result(start["run_ref"])
         self.assertEqual(result["state"], "error")
         self.assertEqual(result["exit_code"], 4)
+
+    def test_cancel_requires_exact_run_and_stops_worker(self):
+        backend = FakeBackend()
+        workflow = IVWorkflow(backend)
+        start = workflow.run(CANDIDATE, IVS, wait_seconds=0)
+        with self.assertRaisesRegex(ValueError, "Unknown"):
+            workflow.cancel("another-run")
+        self.assertEqual(backend.state, "running")
+        answer = workflow.cancel(start["run_ref"])
+        self.assertTrue(answer["cancelled"])
+        self.assertEqual(backend.state, "cancelling")
+        self.assertEqual(workflow.result(start["run_ref"], wait_seconds=0)["state"], "cancelling")
+        with self.assertRaisesRegex(ValueError, "already running"):
+            workflow.run(CANDIDATE, IVS, wait_seconds=0)
+        backend.state = "cancelled"
+        self.assertEqual(workflow.result(start["run_ref"], wait_seconds=0)["state"], "cancelled")
+        self.assertFalse(workflow.cancel(start["run_ref"])["cancelled"])
 
     def test_detailed_all_four_modes_are_complete(self):
         backend = FakeBackend({"batch_mode": "detailed"})

@@ -377,7 +377,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def app_request(self):
         """Only explicit app operations; never proxy arbitrary backend paths."""
-        if self.path not in ('/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result',
+        if self.path not in ('/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result', '/app-api/cancel',
                              '/app-api/session', '/app-api/logout', '/app-api/visual-backup-connections', '/app-api/visual-backup-revoke', '/app-api/meta-status',
                              '/app-api/meta-preview', '/app-api/meta-apply', '/app-api/meta-presets', '/app-api/meta-preset-save', '/app-api/meta-preset-export', '/app-api/low-score', '/app-api/visual-backup-token', '/app-api/flashcards',
                              '/app-api/party/list', '/app-api/party/get', '/app-api/party/save',
@@ -455,6 +455,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not cat.get('ready'):
                     raise ValueError('ゲームデータを読み込み中です。少し待ってください')
                 result = parse_import(args.get('text'), cat, args.get('current'))
+            elif self.path == '/app-api/cancel':
+                result = IV_RUNNER.cancel(args.get('run_ref'))
             elif self.path == '/app-api/run':
                 if args.get('report_format', 'app') not in ('app', 'decision'):
                     raise ValueError('評価方法はappまたはdecisionです')
