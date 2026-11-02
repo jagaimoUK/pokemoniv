@@ -67,6 +67,7 @@ steps:
       - '--image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/pokemoniv:$BUILD_ID'
       - '--service-account=${_RUNTIME_SERVICE_ACCOUNT}'
       - '--no-allow-unauthenticated'
+      - '--invoker-iam-check'
       - '--min=0'
       - '--max=1'
       - '--concurrency=8'

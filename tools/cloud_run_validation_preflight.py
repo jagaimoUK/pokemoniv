@@ -79,13 +79,19 @@ def inspect(project: str, region: str, service: str = "pokemoniv-validation",
             label = data.get("metadata", {}).get("labels", {}).get(
                 "pokemoniv_role", "missing"
             )
+            # Even without allUsers IAM bindings, the service can be public
+            # when the Invoker IAM check itself is disabled.
+            bypass = str(data.get("metadata", {}).get("annotations", {}).get(
+                "run.googleapis.com/invoker-iam-disabled", "false")).lower() == "true"
+            if bypass:
+                private = "no"
             rc, policy = call("run", "services", "get-iam-policy", service,
                               "--project=" + project, "--region=" + region,
                               "--format=json")
             if rc == 0:
                 members = {member for binding in json.loads(policy).get("bindings", [])
                            for member in binding.get("members", [])}
-                private = "no" if ("allUsers" in members or
+                private = "no" if (private == "no" or "allUsers" in members or
                                    "allAuthenticatedUsers" in members) else "yes"
         except (ValueError, TypeError, AttributeError):
             label = "invalid"

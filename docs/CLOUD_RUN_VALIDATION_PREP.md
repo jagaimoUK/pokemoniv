@@ -34,6 +34,7 @@ python3 tools/cloud_run_validation_preflight.py --project PROJECT_ID --region us
 秘密の取得、Registry作成、Cloud Runデプロイは一切行わない。
 終了コード2は未準備、0は既存リソースの簡易確認を通過した意味。
 Cloud Runサービスが private か、ラベルが validation かもチェックする。
+  IAMのallUsers許可に加え、Invoker IAMチェック無効化も公開として拒否する。
 JSONの `ready_for_review=true` は本番移行・実デプロイを許可する意味ではない。
 
 結果にある `unknown_or_denied` は権限不足または取得失敗の可能性があり、

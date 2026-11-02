@@ -52,6 +52,16 @@ class PreflightTest(unittest.TestCase):
         self.assertFalse(result["ready_for_review"])
         self.assertEqual(result["service_private_iam"], "no")
 
+    def test_refuse_disabled_invoker_iam_check(self):
+        def runner(args):
+            if args[:3] == ["run", "services", "describe"]:
+                return 0, ('{"metadata":{"labels":{"pokemoniv_role":"validation"},'
+                           '"annotations":{"run.googleapis.com/invoker-iam-disabled":"true"}}}')
+            return fake(args)
+        result = MODULE.inspect("test-project-1", "us-central1", runner=runner)
+        self.assertFalse(result["ready_for_review"])
+        self.assertEqual(result["service_private_iam"], "no")
+
     def test_refuse_production_resource_names(self):
         with self.assertRaises(ValueError):
             MODULE.inspect("test-project-1", "us-central1", service="pokemoniv")
