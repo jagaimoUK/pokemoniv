@@ -26,7 +26,7 @@ const server=http.createServer((req,res)=>{
    await page.waitForFunction(()=>document.getElementById('ivs').value==='0,11,12');
    await page.waitForFunction(()=>Math.abs(document.getElementById('comparisonSettings').getBoundingClientRect().top-16)<24);
    assert.equal(await page.evaluate(()=>document.activeElement.id),'comparisonSettings');
-   assert.equal(await page.locator('#autoMoves').isChecked(),true);
+   assert.equal(await page.locator('#autoMoves').isChecked(),false);
    assert.equal(await page.locator('#comparisonSettings #moveSettings').count(),1);
    assert(await page.locator('#results').evaluate(e=>Boolean(e.compareDocumentPosition(document.getElementById('metaManager'))&Node.DOCUMENT_POSITION_FOLLOWING)));
    assert.equal(await page.locator('#moveStrategy').inputValue(),'smart');
