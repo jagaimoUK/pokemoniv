@@ -78,6 +78,9 @@ steps:
       - '--cpu-throttling'
       - '--timeout=300'
       - '--port=8080'
+      # TCP-only startup succeeds when nginx binds, even if the upstream
+      # Python HTTP gateway is still booting. Require an actual 2xx /health.
+      - '--startup-probe=httpGet.path=/health,httpGet.port=8080,periodSeconds=5,timeoutSeconds=3,failureThreshold=36'
       - '--env-vars-file=/workspace/cloudrun-validation-env.yaml'
       - '--set-secrets=PVP_API_KEY=${_API_KEY_SECRET_VERSION}'
       - '--quiet'

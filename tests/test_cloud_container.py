@@ -36,6 +36,8 @@ class CloudContainerTests(unittest.TestCase):
                 with urllib.request.urlopen(base + '/health', timeout=2) as response:
                     self.assertEqual(response.status, 200)
                     break
+            except urllib.error.HTTPError as error:
+                self.fail('Public port accepted traffic before HTTP upstream became ready: HTTP ' + str(error.code))
             except (urllib.error.URLError, TimeoutError, ConnectionError):
                 if time.monotonic() >= deadline:
                     self.fail('Container never became healthy: ' + self.docker('logs', container).stdout[-1500:])

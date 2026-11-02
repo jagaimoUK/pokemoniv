@@ -32,6 +32,19 @@ class CloudRuntimeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 render(port)
 
+    def test_nginx_waits_until_backend_is_ready(self):
+        script = Path('start.sh').read_text()
+        self.assertIn("http://127.0.0.1:8765/api/status", script)
+        self.assertIn("http://127.0.0.1:8788/health", script)
+        self.assertLess(script.index("WEB_READY=0"), script.index("APP_READY=0"))
+        self.assertLess(script.index("APP_READY=0"), script.index("nginx -e stderr -c"))
+        self.assertIn("Web engine did not become ready", script)
+        self.assertIn("HTTP gateway did not become ready", script)
+
+    def test_cloud_run_uses_http_startup_probe(self):
+        cloudbuild = Path('cloudbuild.cloudrun.yaml').read_text()
+        self.assertIn("'--startup-probe=httpGet.path=/health,httpGet.port=8080", cloudbuild)
+
     def test_backup_page_is_embedded_for_csp_and_in_container(self):
         html = page()
         self.assertIn('pokemoniv-browser-backup-v1', html)
