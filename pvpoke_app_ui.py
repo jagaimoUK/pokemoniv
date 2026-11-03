@@ -52,7 +52,7 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <label for="evaluation">評価方法</label><select id="evaluation"><option value="app">アプリで自動推薦</option><option value="gpt">GPTで評価（比較情報を作成）</option></select>
 <label for="focus">重要な相手（英語名・1行1つ、省略可）</label><textarea id="focus" style="min-height:80px" placeholder="Corviknight&#10;Feraligatr"></textarea><p class="note">名前が一致する技構成をすべて重視します。省略時は独自の役割を全対面から探します。</p>
 <details  id="moveSettings"><summary>技の設定</summary>
-<label class="checkline" for="autoMoves"><input id="autoMoves" type="checkbox" checked> 有力な技構成も自動で比較</label>
+<label class="checkline" for="autoMoves"><input id="autoMoves" type="checkbox"> 有力な技構成も自動で比較</label>
 <label for="moveStrategy">自動比較の範囲</label><select id="moveStrategy"><option value="smart">推奨：有力で役割の違う構成に絞る（自動選択は最大6構成）</option><option value="all">全組み合わせを比較（時間がかかります）</option></select>
 <p class="note">推奨では威力・エネルギー効率から有力候補を選び、タイプ・発動の速さ・能力変化の違いを優先します。登録した構成と入力で指定した構成は省きません。選外の構成の勝敗は未計算です。</p>
 <label for="moveThreshold">残す平均Ratingの下限（500付近の目安）</label><input id="moveThreshold" type="number" min="0" max="1000" value="450" step="1">
@@ -66,7 +66,7 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 </details>
 <details><summary>自動推薦の基準を調整</summary><label for="lead">勝ち方向で採用するRating差（既定20）</label><input id="lead" type="number" min="1" max="1000" step="1" value="20"><p class="note">500の境界を越える役割は差にかかわらず確認します。負けたままのRating差は自動推薦にしません。</p></details>
 <label class="checkline" for="forceRecalculate"><input type="checkbox" id="forceRecalculate"> 保存結果を使わず再計算</label><p class="note">同じ対戦条件では過去の結果を再利用します。ゲームデータ・計算コードの更新時は自動で再計算します。</p>
-<div class="actions"><button id="run">計算して推薦を表示</button><button id="resume" class="secondary" hidden>前の計算を再開</button><button id="disconnect" class="secondary">接続を解除</button></div><p class="note">CP1500以下・最大Lv50。自分0/相手1、自分0/相手2、自分1/相手2も比較します。</p></section>
+<div class="actions"><button id="run">計算して推薦を表示</button><button id="cancelRun" class="secondary" type="button" hidden>計算を中止</button><button id="resume" class="secondary" hidden>前の計算を再開</button><button id="disconnect" class="secondary">接続を解除</button></div><p class="note">CP1500以下・最大Lv50。自分0/相手1、自分0/相手2、自分1/相手2も比較します。</p></section>
 <section class="card" id="results" tabindex="-1" hidden></section>
 <details class="card" id="metaManager">
 <summary>カスタムメタを追加</summary>
@@ -86,7 +86,8 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <label for="ivs">攻撃,防御,HP（1行1体・最大4,096通り）</label><textarea id="ivs" spellcheck="false" placeholder="0,11,12&#10;3,13,8&#10;2,15,13"></textarea></section>
 </div></main><script>
 'use strict';
-const el=id=>document.getElementById(id);let importedSingle=null;let credential='',catalog={},presets=[],active=false,runRef=null,lastResult=null,importedJobs=null,batchState=null,metaPending=null,metaWorking=false;let metaState=null,selectedMetaId=null,metaExportWorking=false;let moveCatalog={},readerImportPending=false,readerImportInFlight=false,readerInputText=null;
+const el=id=>document.getElementById(id);let calculating=false,stopRequested=false,stopPromise=null,stopError=null;
+let importedSingle=null;let credential='',catalog={},presets=[],active=false,runRef=null,lastResult=null,importedJobs=null,batchState=null,metaPending=null,metaWorking=false;let metaState=null,selectedMetaId=null,metaExportWorking=false;let moveCatalog={},readerImportPending=false,readerImportInFlight=false,readerInputText=null;
 function message(s,error=false){const x=el('message');x.hidden=false;x.textContent=s;x.className='status'+(error?' error':'');}
 async function api(path,data={}){const headers={'Content-Type':'application/json'};if(credential)headers.Authorization='Bearer '+credential;const r=await fetch('/app-api/'+path,{method:'POST',credentials:'same-origin',headers,body:JSON.stringify(data)});if(r.status===401){const e=Error('ログインの有効期限が切れました。接続キーで再接続してください。');e.status=401;throw e;}let out;try{out=await r.json();}catch{throw Error('応答を確認できません。接続を確認してください。');}if(!r.ok){const e=Error(out.error||'通信エラー');e.status=r.status;throw e;}return out;}
 // Keep the legacy cleanup tool accessible by explicit URL only.
@@ -122,7 +123,7 @@ function setCandidate(p){inputPokemonStatus=null;el('species').value=p.species;e
 function setPreset(){const p=presets.find(x=>presetKey(x)===el('preset').value);if(p)setCandidate(p);}
 function resolveTypedSpecies(){const raw=el('species').value.normalize('NFKC').trim().toLowerCase();if(['gourgeist','pumpkaboo','パンプジン','バケッチャ'].includes(raw)){message('このポケモンはサイズごとに能力が異なります。こだましゅ/XS、ちゅうだましゅ/通常、おおだましゅ/XL、ギガだましゅ/XXLを指定してください。',true);return;}const found=Object.entries(catalog).filter(([sid,p])=>[sid,p.name,p.name_ja,...(p.aliases||[])].some(x=>x&&String(x).normalize('NFKC').trim().toLowerCase()===raw));if(found.length===1)el('species').value=found[0][0];else if(found.length>1)message('複数のフォルムが一致しました。サイズやフォルムを指定してください。',true);}
 
-function setBusy(value){active=value;for(const id of ['bulkNormal','bulkShadow','bulkPurified','bulkStatusUndo'])el(id).disabled=value;for(const id of ['run','resume','disconnect','importInput','singleForm','forceRecalculate','autoMoves','moveStrategy','moveThreshold','movesetTarget','addMoveset','fast','charged1','charged2'])el(id).disabled=value;for(const id of ['preset','allSpecies','species','ivs'])el(id).disabled=value||!!importedJobs;el('metaFile').disabled=value;el('metaApply').disabled=value||!metaPending||metaWorking;el('run').textContent=value?'計算を確認中…':'計算して結果を表示';renderSavedMovesets(editingMovesetSpecies());syncMetaControls();if(!value&&readerImportPending&&!readerImportInFlight)Promise.resolve().then(autoImportReader);}
+function setBusy(value){active=value;for(const id of ['bulkNormal','bulkShadow','bulkPurified','bulkStatusUndo'])el(id).disabled=value;for(const id of ['run','resume','disconnect','importInput','singleForm','forceRecalculate','autoMoves','moveStrategy','moveThreshold','movesetTarget','addMoveset','fast','charged1','charged2'])el(id).disabled=value;for(const id of ['preset','allSpecies','species','ivs'])el(id).disabled=value||!!importedJobs;el('metaFile').disabled=value;el('metaApply').disabled=value||!metaPending||metaWorking;el('run').textContent=value?'計算を確認中…':'計算して結果を表示';el('cancelRun').hidden=!(value&&calculating);el('cancelRun').disabled=!(value&&calculating)||stopRequested;renderSavedMovesets(editingMovesetSpecies());syncMetaControls();if(!value&&readerImportPending&&!readerImportInFlight)Promise.resolve().then(autoImportReader);}
 function node(tag,text,parent,cls=''){const n=document.createElement(tag);n.textContent=text;if(cls)n.className=cls;parent.append(n);return n;}
 async function copy(text,button){try{await navigator.clipboard.writeText(text);button.textContent='コピーしました';}catch{const root=el('message');message('コピーできませんでした。下の欄から選択してコピーしてください。',true);const area=node('textarea',text,root);area.value=text;area.readOnly=true;area.focus();area.select();}}
 // Result labels are resolved against the active catalog, including form names.
@@ -638,7 +639,38 @@ el('bulkStatusUndo').onclick=()=>{
 
 function cacheBatch(){try{sessionStorage.setItem('pvpoke-app-batch',JSON.stringify(batchState));}catch{message('再開情報を保存できませんでした。計算が終わるまで画面を開いておいてください。',true);}}
 function setImportedJobs(jobs){importedSingle=jobs?.length===1?jobs[0]:null;importedJobs=jobs&&jobs.length>1?jobs:null;el('queuePanel').hidden=!importedJobs;for(const id of ['preset','allSpecies','species','ivs'])el(id).disabled=!!importedJobs;if(importedJobs)el('queuePreview').textContent=jobs.map((j,i)=>(i+1)+'. '+j.name+'：'+j.candidate_count+'個体\n   '+[j.candidate.fast,j.candidate.charged1,j.candidate.charged2].join(' / ')+'\n'+(j.warnings||[]).join('\n')).join('\n\n');refreshMovesetTarget();}
-async function finish(result){while(result.state==='running'){message('全対面を計算中です。'+(batchState?' '+(batchState.index+1)+' / '+batchState.jobs.length+'構成':''));result=await api('result',{run_ref:runRef,wait_seconds:12});}if(result.state!=='done'||!result.complete)throw Error(result.message||'計算が完了していません。');return result;}
+async function stopActiveRun(){
+ if(!runRef)return;
+ if(!stopPromise){
+  const ref=runRef;
+  stopPromise=(async()=>{
+   const response=await api('cancel',{run_ref:ref});
+   if(response.state!=='cancelling')return response;
+   // Wait for the process group to exit before allowing a new calculation.
+   for(let attempt=0;attempt<5;attempt++){
+    const status=await api('result',{run_ref:ref,wait_seconds:2});
+    if(status.state!=='cancelling'&&status.state!=='running')return status;
+   }
+   throw Error('サーバーの計算停止を確認できません。後で状態を確認してください。');
+  })();
+ }
+ try{return await stopPromise;}catch(e){stopError=e;throw e;}
+}
+async function honorStop(){
+ if(!stopRequested)return;
+ await stopActiveRun();
+ throw Error('計算を中止しました');
+}
+async function finish(result){
+ while(result.state==='running'){
+  await honorStop();
+  message('全対面を計算中です。'+(batchState?' '+(batchState.index+1)+' / '+batchState.jobs.length+'構成':''));
+  result=await api('result',{run_ref:runRef,wait_seconds:12});
+ }
+ await honorStop();
+ if(result.state!=='done'||!result.complete)throw Error(result.message||'計算が完了していません。');
+ return result;
+}
 const MOVESET_STORAGE='pvpoke-app-movesets-v1';
 let savedMovesets=readSavedMovesets();
 function readSavedMovesets(){try{const data=JSON.parse(localStorage.getItem(MOVESET_STORAGE)||'{}');return data&&typeof data==='object'&&!Array.isArray(data)?data:{};}catch{return {};}}
@@ -802,6 +834,7 @@ function renderBatchResults(){
 
 async function executeBatch(){
  for(;batchState.index<batchState.jobs.length;){
+  await honorStop();
   const job=batchState.jobs[batchState.index];
   message(job.name+'｜'+moveLabel(job.candidate)+'（'+(batchState.index+1)+' / '+batchState.jobs.length+'構成）');
   let result;
@@ -813,6 +846,7 @@ async function executeBatch(){
    result=await api('run',data);runRef=result.run_ref;batchState.run_ref=runRef;
    sessionStorage.setItem('pvpoke-app-run',runRef);cacheBatch();
   }
+  await honorStop();
   result=await finish(result);
   if(batchState.compare_moves??batchState.auto_moves){
    if(!/^[a-f0-9]{64}$/.test(result.calculation_version||''))throw Error('計算データの更新版を識別できません。単一構成で計算するか、計算環境の設定を確認してください');
@@ -822,7 +856,7 @@ async function executeBatch(){
   result.display_name=job.name;
   result.source_sections=job.source_sections||[];result.source_records=job.source_records||[];result.pokemon_status=job.pokemon_status;
   result.moveset_group=job.moveset_group;result.moveset_plan=job.moveset_plan;
-  batchState.meta_sha256=result.meta_sha256;batchState.results.push(result);batchState.index++;
+  batchState.meta_sha256=result.meta_sha256;await honorStop();batchState.results.push(result);batchState.index++;
   batchState.run_ref=null;runRef=null;sessionStorage.removeItem('pvpoke-app-run');cacheBatch();
   renderBatchResults();
  }
@@ -857,9 +891,34 @@ async function autoImportReader(){
 }
 el('importInput').onclick=importInput;
 el('evaluation').onchange=()=>{el('run').textContent=el('evaluation').value==='app'?'計算して推薦を表示':'GPT評価用の比較情報を作成';};
+function handleCalculationError(e){
+ if(stopRequested&&!stopError){
+  batchState=null;runRef=null;
+  sessionStorage.removeItem('pvpoke-app-run');sessionStorage.removeItem('pvpoke-app-batch');
+  el('resume').hidden=true;
+  message('計算を中止しました。完了済みの結果は表示したままです。');
+  return;
+ }
+ if(batchState&&!batchState.results.length&&!batchState.run_ref){
+  batchState=null;sessionStorage.removeItem('pvpoke-app-batch');
+ }
+ message((stopError||e).message+'\n完了済みの結果は表示を保持しています。後続の対象は未実行です。',true);
+ el('resume').hidden=!(runRef||batchState);
+}
+el('cancelRun').onclick=async()=>{
+ if(!active||!calculating||stopRequested)return;
+ stopRequested=true;el('cancelRun').disabled=true;
+ message('中止を要求しました。処理終了を確認中です。');
+ if(runRef){
+  try{await stopActiveRun();}catch(e){
+   message('サーバー側の停止を確認できませんでした: '+e.message,true);
+  }
+ }
+};
 async function startSelection(){
  if(active||metaWorking)return;
  if(!chosenMeta()){message('メタプリセットを選択してください。',true);return;}
+ calculating=true;stopRequested=false;stopPromise=null;stopError=null;
  setBusy(true);el('results').hidden=true;
  try{
   const current=currentCandidate();
@@ -880,13 +939,17 @@ async function startSelection(){
    report_format:el('evaluation').value==='app'?'app':'decision',force_recalculate:el('forceRecalculate').checked===true,
    policy:{meaningful_win_lead:Number(el('lead').value)}};
   cacheBatch();await executeBatch();
- }catch(e){
-  if(batchState&&!batchState.results.length&&!batchState.run_ref){batchState=null;sessionStorage.removeItem('pvpoke-app-batch');}
-  message(e.message+'\n完了済みの結果は表示を保持しています。後続の対象は未実行です。',true);el('resume').hidden=!(runRef||batchState);
- }finally{setBusy(false);}
+ }catch(e){handleCalculationError(e);}finally{calculating=false;setBusy(false);}
 }
 el('run').onclick=startSelection;
-el('resume').onclick=async()=>{if(active||!(runRef||batchState))return;setBusy(true);try{if(batchState){await executeBatch();}else{render(await finish(await api('result',{run_ref:runRef,wait_seconds:12})));runRef=null;sessionStorage.removeItem('pvpoke-app-run');el('resume').hidden=true;message('計算と結果の確認が完了しました。');}}catch(e){message(e.message,true);}finally{setBusy(false);}};
+el('resume').onclick=async()=>{
+ if(active||!(runRef||batchState))return;
+ calculating=true;stopRequested=false;stopPromise=null;stopError=null;setBusy(true);
+ try{
+  if(batchState){await executeBatch();}
+  else{render(await finish(await api('result',{run_ref:runRef,wait_seconds:12})));runRef=null;sessionStorage.removeItem('pvpoke-app-run');el('resume').hidden=true;message('計算と結果の確認が完了しました。');}
+ }catch(e){handleCalculationError(e);}finally{calculating=false;setBusy(false);}
+};
 el('disconnect').onclick=async()=>{try{await api('logout');}catch(e){message('ログアウトできませんでした。再試行してください。',true);return;}credential='';catalog={};metaState=null;selectedMetaId=null;clearMetaExport();nameEntries=[];opponentLabels.clear();displayedResults=[];nicknameBindings=[];presets=[];lastResult=null;setImportedJobs(null);batchState=null;el('results').replaceChildren();el('workspace').hidden=true;el('login').hidden=false;resetMetaUpload();message('接続を解除しました。このブラウザのログイン情報も削除しました。');};
 // Reader-to-browser handoff is kept in a URL fragment, never sent in an HTTP request.
 function receiveReaderInput(){

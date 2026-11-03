@@ -219,6 +219,11 @@ def start24(candidate: dict, ivs: str, batch_mode: str = 'simple', *,
             'next': 'get_status が done になったら get_24_summary と get_results(mode=...) で分析してください'}
 
 
+def cancel() -> dict:
+    """Stop the current IV worker; the server validates the active job identity."""
+    return _request('/api/cancel', {}, headers={'X-PvPoke-Token': _token()}, timeout=15)
+
+
 def status() -> dict:
     result = _request('/api/status')
     logs = result.get('logs', [])

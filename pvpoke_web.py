@@ -15,6 +15,7 @@ from datetime import datetime
 import io
 import json
 import os
+import signal
 from pathlib import Path
 import secrets
 import shutil
@@ -67,6 +68,8 @@ PRESETS = [
 # Status data is process-local; output ZIP survives server restarts.
 TOKEN = secrets.token_urlsafe(32)
 LOCK = threading.RLock()
+ACTIVE_PROCESS = None
+CANCEL_REQUESTED = False
 STATUS = {
     'state': 'idle', 'message': '入力を準備してね', 'logs': deque(maxlen=120),
     'exit_code': None, 'started_at': None, 'finished_at': None, 'batch24': False,
@@ -320,7 +323,40 @@ def worker(shields):
     print('DONE:', LATEST_ZIP, flush=True)
 
 
+def stop_process_group(process):
+    """Terminate only this calculation's child process group, not the web service."""
+    if process.poll() is not None:
+        return
+    try:
+        if os.name == 'posix':
+            os.killpg(process.pid, signal.SIGTERM)
+        else:
+            process.terminate()
+    except ProcessLookupError:
+        return
+
+    def force_stop():
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            try:
+                if os.name == 'posix':
+                    os.killpg(process.pid, signal.SIGKILL)
+                else:
+                    process.kill()
+            except ProcessLookupError:
+                pass
+    threading.Thread(target=force_stop, daemon=True).start()
+
+
 def background_run(shields, batch24=False, batch_mode='simple', meta_file=None, cache_context=None, force=False):
+    global ACTIVE_PROCESS
+    process = None
+    with LOCK:
+        if CANCEL_REQUESTED:
+            STATUS.update({'state': 'cancelled', 'message': '計算を中止しました',
+                           'finished_at': datetime.now().isoformat(timespec='microseconds')})
+            return
     if batch24:
         command = [sys.executable, '-u', str(Path(__file__).resolve().parent / 'pvpoke_24_workflow.py'),
                    '--run', '--config', str(BATCH_CONFIG), '--output', str(BATCH_OUTPUT),
@@ -328,18 +364,26 @@ def background_run(shields, batch24=False, batch_mode='simple', meta_file=None, 
     else:
         command = [sys.executable, str(Path(__file__).resolve()), '--worker', shields]
     try:
-        p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              text=True, bufsize=1, cwd=str(HOME),
+                             start_new_session=(os.name == 'posix'),
                              env={**os.environ, **({"PVP_FORCE_RECALCULATE":"1"} if force else {})})
-        for line in p.stdout:
+        with LOCK:
+            ACTIVE_PROCESS = process
+            stop_now = CANCEL_REQUESTED
+        if stop_now:
+            stop_process_group(process)
+        for line in process.stdout:
             line = line.rstrip('\r\n')
             if not line:
                 continue
             with LOCK:
                 STATUS['logs'].append(line)
                 STATUS['message'] = line[-180:]
-        code = p.wait()
-        if code == 0 and batch24:
+        code = process.wait()
+        with LOCK:
+            cancelled = CANCEL_REQUESTED
+        if code == 0 and batch24 and not cancelled:
             # Verify all 24 files and atomically save the final ZIP first.
             # Only after durable save succeeds may we remove the temporary
             # browser CSV chunks and extracted results.
@@ -357,15 +401,22 @@ def background_run(shields, batch24=False, batch_mode='simple', meta_file=None, 
         with LOCK:
             STATUS['exit_code'] = code
             STATUS['batch24'] = bool(batch24)
-            STATUS['state'] = 'done' if code == 0 and result_zip is not None and result_zip.is_file() else 'error'
+            STATUS['state'] = ('cancelled' if CANCEL_REQUESTED else
+                               'done' if code == 0 and result_zip is not None and result_zip.is_file() else 'error')
             STATUS['finished_at'] = datetime.now().isoformat(timespec='microseconds')
-            STATUS['message'] = 'ZIPが完成しました' if STATUS['state']=='done' else '計算が中断されました。ログを確認してね'
+            STATUS['message'] = ('計算を中止しました' if CANCEL_REQUESTED else
+                                 'ZIPが完成しました' if STATUS['state']=='done' else
+                                 '計算が中断されました。ログを確認してね')
     except Exception as exc:
         with LOCK:
             STATUS['logs'].append(f'ERROR: {exc}')
-            STATUS['state'] = 'error'
-            STATUS['message'] = str(exc)
+            STATUS['state'] = 'cancelled' if CANCEL_REQUESTED else 'error'
+            STATUS['message'] = '計算を中止しました' if CANCEL_REQUESTED else str(exc)
             STATUS['finished_at'] = datetime.now().isoformat(timespec='microseconds')
+    finally:
+        with LOCK:
+            if ACTIVE_PROCESS is process:
+                ACTIVE_PROCESS = None
 
 
 HTML = r'''<!DOCTYPE html>
@@ -578,8 +629,9 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(404, {'error': '見つかりません'})
 
     def do_POST(self):
+        global CANCEL_REQUESTED
         path = urlparse(self.path).path
-        if path not in ('/api/prepare','/api/run','/api/prepare24','/api/run24','/api/meta/sync','/api/meta/preview','/api/meta/presets',
+        if path not in ('/api/prepare','/api/run','/api/prepare24','/api/run24','/api/cancel','/api/meta/sync','/api/meta/preview','/api/meta/presets',
                         '/api/party/list','/api/party/get','/api/party/save',
                         '/api/party/start','/api/party/status','/api/party/cancel','/api/party/meta-weights'):
             return self.respond(404, {'error': '見つかりません'})
@@ -598,6 +650,19 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(n))
             if not isinstance(payload, dict):
                 raise ValueError('入力はJSONオブジェクトで指定してください')
+            if path == '/api/cancel':
+                with LOCK:
+                    if not STATUS['batch24']:
+                        return self.respond(409, {'error': '厳選計算は実行されていません'})
+                    if STATUS['state'] not in ('running', 'cancelling'):
+                        return self.respond(200, {'state': STATUS['state'], 'cancelled': False})
+                    CANCEL_REQUESTED = True
+                    STATUS['state'] = 'cancelling'
+                    STATUS['message'] = '厳選計算の停止を処理中'
+                    process = ACTIVE_PROCESS
+                if process is not None:
+                    stop_process_group(process)
+                return self.respond(200, {'state': 'cancelling', 'cancelled': True})
             if path.startswith('/api/party/'):
                 action = path.rsplit('/', 1)[-1]
                 if action == 'meta-weights':
@@ -628,7 +693,7 @@ class Handler(BaseHTTPRequestHandler):
                             return self.respond(409, {'error': str(exc)})
                     return self.respond(200, response)
             with LOCK:
-                if STATUS['state'] == 'running' or PARTY.running:
+                if STATUS['state'] in ('running', 'cancelling') or PARTY.running:
                     return self.respond(409, {'error':'計算中は入力を変更できません'})
                 if path == '/api/meta/presets':
                     if not CATALOG['ready']:
@@ -710,6 +775,7 @@ class Handler(BaseHTTPRequestHandler):
                             'batch_mode': batch_mode,
                         }, ensure_ascii=False), encoding='utf-8')
                         temp.replace(BATCH_CONFIG)
+                        CANCEL_REQUESTED = False
                         STATUS.update({'state':'running', 'message':'メタ比較を準備中',
                                        'logs':deque(maxlen=120), 'exit_code':None,
                                        'started_at':datetime.now().isoformat(timespec='microseconds'),
@@ -723,6 +789,7 @@ class Handler(BaseHTTPRequestHandler):
                     STATUS.update({'state':'idle', 'message':'入力を確認できました。計算開始を押してください',
                                    'logs':deque(maxlen=120), 'exit_code':None})
                 if path == '/api/run':
+                    CANCEL_REQUESTED = False
                     STATUS.update({'state':'running', 'message':'計算を準備中',
                                    'logs':deque(maxlen=120), 'exit_code':None,
                                    'started_at':datetime.now().isoformat(timespec='microseconds'),
