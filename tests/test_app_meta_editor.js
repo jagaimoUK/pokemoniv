@@ -16,6 +16,7 @@ ctx.fetch=async(path,opts)=>{const data=JSON.parse(opts.body);calls.push({path,d
  assert.equal(ctx.metaResolveSpecies('サニーゴ(ガラル)'),'corsola_galarian');
  const card=get('metaEditorRows').children[0],fields=card.children.find(e=>e.className==='meta-edit-fields');
  const fast=fields.children.find(e=>e.textContent==='技1').children[0];fast.value='Steel Wing';fast.oninput();fast.onchange();
+ assert.equal(fast.disabled,false,'loaded editor fields must be enabled after the export finishes');
  assert.equal(vm.runInContext('metaDraft.rows[0].fast',ctx),'STEEL_WING');
  get('metaEditorRows').children[1].children.find(e=>e.className==='secondary meta-edit-remove').onclick();
  assert.equal(vm.runInContext('metaDraft.rows.length',ctx),1);

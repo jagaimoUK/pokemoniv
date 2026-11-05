@@ -466,7 +466,7 @@ async function openMetaEditor(){
   el('metaEditorName').value=target.name.slice(0,54)+'（編集）';el('metaEditorCopyName').hidden=['custom','legacy'].includes(target.source);
   el('metaEditorSave').textContent=['custom','legacy'].includes(target.source)?'変更を保存':'編集したコピーを保存';
   el('metaEditor').hidden=false;renderMetaEditor();metaEditorError('保存するまで計算には反映されません。保存後は、この一覧だけを計算対象にします。');
- }catch(e){metaNotice(e.message,true);}finally{metaWorking=false;syncMetaControls();syncMetaEditor();}
+ }catch(e){metaNotice(e.message,true);}finally{metaWorking=false;syncMetaControls();syncMetaEditor();if(metaDraft)renderMetaEditor();}
 }
 function renderMetaEditor(){
  if(!metaDraft)return;

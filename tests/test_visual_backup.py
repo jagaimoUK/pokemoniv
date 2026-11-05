@@ -6,6 +6,7 @@ import io
 import json
 import os
 import struct
+import tempfile
 import threading
 import unittest
 import zipfile
@@ -14,6 +15,10 @@ from http.server import ThreadingHTTPServer
 
 os.environ.setdefault('PVP_API_KEY', 'test-' + 'x' * 32)
 from visual_backup import VisualBackup, BackupTokens, BackupError, MODEL, validate_archive
+from pvpoke_app_access import BrowserLogin
+from pvpoke_auth_store import CredentialStore
+from pvpoke_http_security import RateBudget
+from pathlib import Path
 
 def archive(species='zigzagoon', **changes):
     row={'recordId':'test-1','speciesId':species,'origin':'manual','createdAt':1}
@@ -79,12 +84,21 @@ class GatewayTests(unittest.TestCase):
         import pvpoke_mcp_remote as remote
         cls.remote=remote
         cls.backend=VisualBackup(MemoryS3(),'private')
-        cls.patcher=patch.object(remote,'VISUAL_BACKUP',cls.backend);cls.patcher.start()
+        # HTTP tests must not share a runner's durable credentials/rate budget.
+        cls.temp=tempfile.TemporaryDirectory()
+        cls.store=CredentialStore(Path(cls.temp.name)/'auth.sqlite3')
+        cls.patchers=[patch.object(remote,'VISUAL_BACKUP',cls.backend),
+                      patch.object(remote,'BROWSER_LOGIN',BrowserLogin(remote.API_KEY,store=cls.store)),
+                      patch.object(remote,'BACKUP_TOKENS',BackupTokens(remote.API_KEY,store=cls.store)),
+                      patch.object(remote,'RATE_BUDGET',RateBudget())]
+        for patcher in cls.patchers: patcher.start()
         cls.server=ThreadingHTTPServer(('127.0.0.1',0),remote.Handler)
         cls.thread=threading.Thread(target=cls.server.serve_forever,daemon=True);cls.thread.start()
     @classmethod
     def tearDownClass(cls):
-        cls.server.shutdown();cls.server.server_close();cls.thread.join();cls.patcher.stop()
+        cls.server.shutdown();cls.server.server_close();cls.thread.join()
+        for patcher in reversed(cls.patchers): patcher.stop()
+        cls.temp.cleanup()
     def request(self,path,token='',args=None,cookie=''):
         c=http.client.HTTPConnection(*self.server.server_address)
         c.request('POST',path,json.dumps(args or {}),{'Content-Type':'application/json','Authorization':'Bearer '+token,'Cookie':cookie})
@@ -107,6 +121,6 @@ class GatewayTests(unittest.TestCase):
         etag=json.loads(body)['etag'];data=archive()
         self.assertEqual(self.request('/visual-backup/v1/upload',token,{'expectedEtag':etag,'archive':base64.b64encode(data).decode()})[0],200)
         status,body,_=self.request('/visual-backup/v1/download',token)
-        self.assertEqual(status,200);self.assertEqual(base64.b64decode(json.loads(body)['archive']),data)
+        self.assertEqual(status,200,body);self.assertEqual(base64.b64decode(json.loads(body)['archive']),data)
 
 if __name__=='__main__': unittest.main()

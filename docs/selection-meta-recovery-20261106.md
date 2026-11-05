@@ -28,7 +28,9 @@ Added tests cover gender filters, cleanup XXL inclusion, duplicate start identit
 
 The previous security gate reported two fixable HIGH findings in apt/libapt-pkg7.0 (3.0.3 -> 3.0.4). The production image explicitly upgrades those packages and asserts the minimum apt version. The scanner and its failure policy remain unchanged; unfixed vulnerabilities are still reported. Browser-test CJK fonts affect only the CI browser image. Full image and browser checks must pass before merge; deploy success and production asset/API checks are required before claiming the site is updated.
 
-Local tests are followed by one grouped PR update, reusing PR #91 rather than creating parallel feature PRs. The previous main commit/deployment is the rollback reference. Existing persistent schemas remain backward compatible; meta writes preserve .bak files. Actual smartphone GO search behavior, mobile connection conditions and user-specific presets require device confirmation.
+The first CI browser run caught editor inputs still disabled after export; rendering now repeats after the loading lock is cleared, with a regression assertion. A backup HTTP test returned 503 in one CI job while passing in others; the old fixture reused the default durable authentication database. Its HTTP credential store and rate budget are now isolated in a temporary fixture, and failed response assertions include the body for diagnosis. This does not establish the precise cause of that earlier transient 503 or change production authentication.
+
+Local tests are followed by grouped PR updates, reusing PR #91 rather than creating parallel feature PRs. The previous main commit/deployment is the rollback reference. Existing persistent schemas remain backward compatible; meta writes preserve .bak files. Actual smartphone GO search behavior, mobile connection conditions and user-specific presets require device confirmation.
 
 ## Learning points
 
