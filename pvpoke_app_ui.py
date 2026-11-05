@@ -49,7 +49,7 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <div class="meta-settings"><button id="metaFavorite" class="secondary" aria-pressed="false">☆ お気に入り</button><button id="metaDefault" class="secondary">デフォルトにする</button></div>
 <p id="metaPresetNote" class="note"></p>
 </div><p class="note">カップ別の対戦相手一覧を切り替えます。CP1500対応。出場できるポケモンかどうかはカップのルールも確認してください。</p></div><label for="batchMode">計算条件</label><select id="batchMode"><option value="simple">簡易：Default × 6条件</option><option value="detailed">詳細：4つの相手IV × 6条件</option></select>
-<label for="evaluation">評価方法</label><select id="evaluation"><option value="app">アプリで自動推薦</option><option value="gpt">GPTで評価（比較情報を作成）</option></select>
+<select id="evaluation" hidden aria-hidden="true"><option value="app">アプリで自動推薦</option></select>
 <label for="focus">重要な相手（英語名・1行1つ、省略可）</label><textarea id="focus" style="min-height:80px" placeholder="Corviknight&#10;Feraligatr"></textarea><p class="note">名前が一致する技構成をすべて重視します。省略時は独自の役割を全対面から探します。</p>
 <details  id="moveSettings"><summary>技の設定</summary>
 <label class="checkline" for="autoMoves"><input id="autoMoves" type="checkbox"> 有力な技構成も自動で比較</label>
@@ -238,11 +238,8 @@ function statusSearch(search,status){
 }
 function xxlProtectedSearch(search){
  if(!search||typeof search!=='string')return search;
- const terms=search.toLowerCase().split('&').map(x=>x.trim());
- // Pumpkin/Gourgeist super-size is a distinct battle form and requires &xxl.
- // Never create the impossible &xxl&!xxl combination.
- if(terms.includes('xxl')||terms.includes('!xxl'))return search;
- return search+'&!xxl';
+ // Ordinary XXL individuals must remain in exact-IV search results.
+ return search.split('&').filter(term=>term.trim().toLowerCase()!=='!xxl').join('&');
 }
 function individualSearches(result,iv){
  const records=(result.source_records||[]).filter(r=>r.ivs===iv.ivs);
@@ -699,7 +696,7 @@ function renderSavedMovesets(sid){
 }
 el('movesetTarget').onchange=()=>{const sid=editingMovesetSpecies(),job=importedJobs?.find(j=>j.candidate.species===sid);moves(job?.candidate||catalog[sid]?.default_moves||{},sid);};
 el('addMoveset').onclick=()=>{
- if(active)return;const sid=editingMovesetSpecies(),c={species:sid,fast:el('fast').value,charged1:el('charged1').value,charged2:el('charged2').value,enabled:true};
+ if(active)return;el('evaluation').value='app';el('run').textContent='計算して結果を表示';const sid=editingMovesetSpecies(),c={species:sid,fast:el('fast').value,charged1:el('charged1').value,charged2:el('charged2').value,enabled:true};
  if(!validMoveset(c)){el('movesetNotice').textContent='通常技と、異なるゲージ技2個を選んでください。';return;}
  const rows=registeredMovesets(sid),old=rows.find(x=>movesetKey(x)===movesetKey(c));if(old)old.enabled=true;else rows.push(c);savedMovesets[sid]=rows;
  el('movesetNotice').textContent=old?'登録済みの構成を計算対象にしました。':'技の組み合わせを登録しました。';persistMovesets();renderSavedMovesets(sid);
@@ -890,7 +887,7 @@ async function autoImportReader(){
  try{el('importText').value=readerInputText;await importInput();}finally{readerImportInFlight=false;if(readerImportPending)Promise.resolve().then(autoImportReader);}
 }
 el('importInput').onclick=importInput;
-el('evaluation').onchange=()=>{el('run').textContent=el('evaluation').value==='app'?'計算して推薦を表示':'GPT評価用の比較情報を作成';};
+el('evaluation').onchange=()=>{el('evaluation').value='app';el('run').textContent='計算して結果を表示';};
 function handleCalculationError(e){
  if(stopRequested&&!stopError){
   batchState=null;runRef=null;
@@ -916,6 +913,7 @@ el('cancelRun').onclick=async()=>{
  }
 };
 async function startSelection(){
+ el('evaluation').value='app';
  if(active||metaWorking)return;
  if(!chosenMeta()){message('メタプリセットを選択してください。',true);return;}
  calculating=true;stopRequested=false;stopPromise=null;stopError=null;
