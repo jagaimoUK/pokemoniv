@@ -70,6 +70,8 @@ def schedule(work, preset_id):
     if _runtime is None or Path(work) != _runtime[0] or not (engine.DATA / 'gamemaster.json').is_file():
         return {'state': 'unavailable'}
     entry = presets.resolve(work, preset_id)
+    if entry.get('manual_only'):
+        return {'state': 'manual'}
     gm_sha = hashlib.sha256((engine.DATA / 'gamemaster.json').read_bytes()).hexdigest()
     cache_key = hashlib.sha256((preset_id + entry['sha256'] + gm_sha + 'variants-v3-minimal').encode()).hexdigest()
     path = directory(work) / (cache_key + '.json')
@@ -216,7 +218,7 @@ def evaluate(job, client, species, cpms, lock, runtime_status, checkpoint):
 
 def apply(work, job, rows):
     current = presets.resolve(work, job['id'])
-    if current['sha256'] != job['source_sha256']:
+    if current.get('manual_only') or current['sha256'] != job['source_sha256']:
         return False
     content = csv_meta.serialize(rows)
     if job['id'] == 'legacy':

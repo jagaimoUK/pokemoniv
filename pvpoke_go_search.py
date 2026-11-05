@@ -64,6 +64,20 @@ def _regional_go_name(name: str, species_id: str | None = None) -> tuple[str, st
     return cleaned.strip(), "&" + region
 
 
+def gender_go_name(name: str, species_id: str | None = None) -> tuple[str, str]:
+    """Gender labels are GO filters, never literal form suffixes in a species name."""
+    text = unicodedata.normalize("NFKC", name).strip()
+    sid = (species_id or "").casefold()
+    sex = re.search(r"(?:_|-)(female|male)(?:_|-|$)", sid)
+    suffix = re.search(r"(?:\s*[(（]\s*(female|male|オス|メス)\s*[)）]|(?:\s+|_)(female|male)|\s*([♀♂]))$", text, re.I)
+    gender = sex.group(1) if sex else None
+    if suffix:
+        token = next(x for x in suffix.groups() if x).casefold()
+        gender = gender or ("female" if token in ("female", "メス", "♀") else "male")
+        text = text[:suffix.start()].strip()
+    return text, ("&" + gender if gender else "")
+
+
 def search_string(name: str, iv: str, shadow: bool = False, species_id: str | None = None) -> str:
     values = [int(x) for x in iv.split("/")]
     if len(values) != 3 or any(not 0 <= x <= 15 for x in values):
@@ -81,6 +95,7 @@ def search_string(name: str, iv: str, shadow: bool = False, species_id: str | No
     else:
         size_filter = ""
         name, regional_filter = _regional_go_name(name, species_id)
+    name, gender_filter = gender_go_name(name, species_id)
     # PvPoke UI names contain display-only form labels. GO species searches
     # do not accept literal "(Core)", "(Meteor)", "(Origin)", etc. as names.
     # Keep verified filters (region, pumpkin size, shadow) separate; for other
@@ -91,5 +106,6 @@ def search_string(name: str, iv: str, shadow: bool = False, species_id: str | No
         raise ValueError("Pokémon GO search requires an unqualified species name")
     def bucket(x):
         return 0 if x == 0 else 1 if x <= 5 else 2 if x <= 10 else 3 if x < 15 else 4
-    return species_search_term(name, species_id) + regional_filter + "".join(f"&{bucket(x)}{label}" for x, label in zip(values, ("attack", "defense", "hp"))) + size_filter + ("&shadow" if shadow else "")
+    return species_search_term(name, species_id) + regional_filter + gender_filter + "".join(f"&{bucket(x)}{label}" for x, label in zip(values, ("attack", "defense", "hp"))) + size_filter + ("&shadow" if shadow else "")
+
 

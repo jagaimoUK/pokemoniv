@@ -15,6 +15,7 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 .meta-presets{margin-bottom:18px}.meta-current{display:flex;align-items:center;flex-wrap:wrap;gap:6px 9px;padding:0 0 10px}.meta-caption{font-size:12px;color:#afc0d6}.meta-current-name{font-size:16px;font-weight:650;line-height:1.5;margin:0;color:#ecf3ff;overflow-wrap:anywhere}.meta-count{font-size:12px;color:#afc0d6;white-space:nowrap}.meta-badges{display:inline-flex;align-items:center;flex-wrap:wrap;gap:5px}.meta-tag{display:inline-flex;align-items:center;font-size:11px;font-weight:600;line-height:1.5;padding:2px 7px;border-radius:999px;background:#263d3a;color:#b9e6cf;white-space:nowrap}.meta-star{color:#e8cc85;background:#3c372b}
 .meta-toolbar,.meta-quick,.meta-settings{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.meta-toolbar button,.meta-settings button{flex:0 1 auto;min-height:44px;padding:9px 12px;font-size:13px;border-radius:12px;max-width:100%}.meta-toolbar{margin-bottom:8px}.meta-settings{margin-top:12px}.meta-settings button[aria-pressed=true],.meta-settings .is-set{border-color:#83bba5;background:#233d35;color:#caeedb}.meta-presets button:focus-visible{outline:3px solid #b9e6cf;outline-offset:3px}.meta-presets button:not(:disabled):active{filter:brightness(1.18)}
 .meta-chooser{margin-top:10px;padding:14px;border:1px solid #41586b;border-radius:16px;background:#142130}.meta-hint{font-size:12px;line-height:1.5;margin:0 0 9px;color:#afc0d6}.meta-quick{align-items:flex-start}.meta-chip{display:inline-flex;align-items:center;justify-content:flex-start;gap:7px;flex:0 1 auto;max-width:100%;min-height:44px;padding:9px 11px;border:1px solid #526979;border-radius:13px;background:#1b2d3d;color:#e8eef9;text-align:left;font-size:13px;line-height:1.5}.meta-chip[aria-pressed=true]{border-color:#91cbb0;background:#29483c;color:#e4f8eb}.meta-chip-mark{flex:none;width:15px;color:#b1c5d4;text-align:center}.meta-chip[aria-pressed=true] .meta-chip-mark{color:#c5f2d8}.meta-chip-name{min-width:0;overflow-wrap:anywhere}.meta-chip .meta-tag{font-size:10px;padding:1px 6px;flex:none}.meta-all-row{display:flex;align-items:center;gap:8px}.meta-all-row select{min-width:0;flex:1;font-size:13px}.meta-all-row button{flex:none;width:44px;min-height:44px;padding:8px;border-radius:12px;font-size:21px}.meta-help{margin:8px 0;font-size:12px}.meta-help summary{color:#afc0d6}.meta-presets .note:empty{display:none}.meta-presets .note{line-height:1.6}
+.meta-edit-row{position:relative;border:1px solid #486252;border-radius:16px;padding:14px 60px 14px 14px;margin:10px 0;background:#192e2b}.meta-edit-heading{font-weight:650;margin-bottom:8px}.meta-edit-remove{position:absolute;right:8px;top:8px;width:44px;padding:6px;border-radius:50%;min-height:44px}.meta-edit-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.meta-edit-fields label{margin:0;font-size:12px}.meta-edit-fields input{margin-top:4px;min-width:0;font-size:14px}.meta-edit-error{color:#ffb6b6;font-size:12px;margin:6px 0 0}@media(max-width:420px){.meta-edit-fields{grid-template-columns:1fr}.meta-edit-row{padding-right:55px}}
 </style></head><body><nav class="quick-nav" aria-label="ページ内の移動"><a href="/app/party" aria-label="パーティ作成">6/3<br>構築</a><a href="#pageTop" aria-label="ページ上部に戻る">↑<br>上へ</a></nav><main id="pageTop">
 <header><div class="eyebrow">PVP IV SELECTION</div><h1>役割から選ぶ、個体値厳選</h1><p>対戦計算からおすすめ・理由・検索式まで。アプリの自動推薦と、これまでのGPT評価を使い分けられます。</p></header>
 <section class="card" id="login"><h2>アプリに接続</h2><p class="note">初回だけ接続キー、または有効なアクセストークンを入力してください。APIキー自体は端末へ保存しません。</p><label for="credential">接続キー</label><input id="credential" type="password" autocomplete="off"><label class="checkline" for="remember"><input id="remember" type="checkbox" checked>このブラウザのログインを30日間維持する</label><p class="note">共有端末ではチェックを外してください。短期アクセストークンは元の期限まで有効です。ログアウトでこのブラウザのセッションを失効できます。</p><div class="actions"><button id="connect">接続する</button></div></section>
@@ -43,6 +44,16 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <p id="metaExportStatus" class="note" aria-live="polite"></p><div id="metaExportParts" class="actions" hidden></div>
 <div id="metaExportFallback" hidden><label for="metaExportText">PvPoke貼り付け用（手動コピー）</label><textarea id="metaExportText" readonly spellcheck="false"></textarea></div>
 <details class="meta-help"><summary>PvPokeへの貼り付け方</summary><p class="note">PvPokeのBattle → Multi／Matrixで、対戦相手一覧のImport/Exportへ貼り付けてImportを押します。リーグはCP1500にしてください。100件超は分割して確認します。編集後は下の「カスタムメタを追加」へ直接貼り付けるか、TXT・CSVで読み込めます。レベル・個体値付きの8列も種と技だけを保存します。</p></details>
+<button id="metaEdit" class="secondary" type="button">選択中のメタの内容を編集</button>
+<section id="metaEditor" class="meta-chooser" hidden aria-label="メタのポケモンと技を編集">
+<p class="meta-hint">ポケモンと技を日本語・英語の候補から変更できます。右の×で削除。変更は保存するまで反映されません。</p>
+<div id="metaEditorCopyName"><label for="metaEditorName">編集用コピーの名前</label><input id="metaEditorName" maxlength="60"></div>
+<label for="metaEditorFilter">一覧内を絞り込む</label><input id="metaEditorFilter" type="search" autocomplete="off">
+<datalist id="metaEditorSpecies"></datalist><p id="metaEditorCount" class="note"></p><div id="metaEditorRows"></div>
+<button id="metaEditorMore" class="secondary" type="button" hidden>さらに50件を表示</button>
+<div class="actions"><button id="metaEditorAdd" class="secondary" type="button">ポケモンを追加</button><button id="metaEditorUndo" class="secondary" type="button" disabled>削除を戻す</button></div>
+<p id="metaEditorStatus" class="note" role="status" aria-live="polite"></p>
+<div class="actions"><button id="metaEditorSave" type="button">変更を保存</button><button id="metaEditorCancel" class="secondary" type="button">変更を破棄して閉じる</button></div></section>
 <div id="metaChooser" class="meta-chooser" hidden>
 <p class="meta-hint">よく使うプリセット</p><div id="metaQuick" class="meta-quick" role="group" aria-label="よく使うメタ"></div>
 <label for="metaAll">すべてのメタプリセット</label><div class="meta-all-row"><select id="metaAll"></select><button id="metaReload" class="secondary" aria-label="一覧を再取得" title="一覧を再取得">↻</button></div>
@@ -89,7 +100,29 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 const el=id=>document.getElementById(id);let calculating=false,stopRequested=false,stopPromise=null,stopError=null;
 let importedSingle=null;let credential='',catalog={},presets=[],active=false,runRef=null,lastResult=null,importedJobs=null,batchState=null,metaPending=null,metaWorking=false;let metaState=null,selectedMetaId=null,metaExportWorking=false;let moveCatalog={},readerImportPending=false,readerImportInFlight=false,readerInputText=null;
 function message(s,error=false){const x=el('message');x.hidden=false;x.textContent=s;x.className='status'+(error?' error':'');}
-async function api(path,data={}){const headers={'Content-Type':'application/json'};if(credential)headers.Authorization='Bearer '+credential;const r=await fetch('/app-api/'+path,{method:'POST',credentials:'same-origin',headers,body:JSON.stringify(data)});if(r.status===401){const e=Error('ログインの有効期限が切れました。接続キーで再接続してください。');e.status=401;throw e;}let out;try{out=await r.json();}catch{throw Error('応答を確認できません。接続を確認してください。');}if(!r.ok){const e=Error(out.error||'通信エラー');e.status=r.status;throw e;}return out;}
+function calculationRequestId(){return 'web-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2)+'-'+Math.random().toString(36).slice(2);}
+const retryableReads=new Set(['catalog','result','meta-presets','meta-preset-export','meta-status','meta-preview','low-score','import']);
+async function api(path,data={}){
+ const payload=path==='run'?{...data,request_id:data.request_id||calculationRequestId()}:data;
+ const safe=retryableReads.has(path)||(path==='run'&&!!payload.request_id);
+ for(let attempt=0;;attempt++){
+  const headers={'Content-Type':'application/json'};if(credential)headers.Authorization='Bearer '+credential;
+  const controller=typeof AbortController!=='undefined'?new AbortController():null;
+  const timer=controller?setTimeout(()=>controller.abort(),45000):null;
+  try{
+   const r=await fetch('/app-api/'+path,{method:'POST',credentials:'same-origin',headers,body:JSON.stringify(payload),...(controller?{signal:controller.signal}:{})});
+   if(r.status===401){const e=Error('ログインの有効期限が切れました。接続キーで再接続してください。');e.status=401;throw e;}
+   let out;try{out=await r.json();}catch{const e=Error('応答の途中で通信が切れました');e.transient=true;throw e;}
+   if(!r.ok){const e=Error(out.error||'通信エラー');e.status=r.status;e.transient=[408,429,500,502,503,504].includes(r.status);throw e;}
+   return out;
+  }catch(e){
+   const temporary=e.transient||e.name==='TypeError'||e.name==='AbortError'||/failed to fetch|network|fetch failed/i.test(e.message);
+   if(!safe||!temporary||attempt>=5)throw e;
+   if(calculating)message('通信を再接続しています（'+(attempt+1)+' / 5）。完了済みの結果と実行中の計算は保持しています。');
+   await new Promise(resolve=>typeof setTimeout==='function'?setTimeout(resolve,Math.min(5000,750*2**attempt)):resolve());
+  }finally{if(timer!==null)clearTimeout(timer);}
+ }
+}
 // Keep the legacy cleanup tool accessible by explicit URL only.
 // The ordinary IV selection screen no longer advertises low-score cleanup.
 function updateLowScorePanelVisibility(){
@@ -225,6 +258,7 @@ function nicknameFor(result,row,ivs=row.ivs){
 function normalizedRegionalSearch(search){
  if(typeof search!=='string')return search;
  const terms={alolan:'alola',galarian:'galar',hisuian:'hisui',paldean:'paldea'};
+ search=search.replace(/^Nidoran\s*(?:\(\s*(Female|Male)\s*\)|([♀♂])|(?:_|\s+)(Female|Male))(?=&|$)/i,(_,a,b,c)=>'Nidoran&'+(['female','♀'].includes((a||b||c).toLowerCase())?'female':'male'));
  return search.replace(/^flab(?:é|e\u0301|e)b(?:é|e\u0301|e)(?=&|$)/i,'669').replace(/^(.+?)\s*\(\s*(Alolan|Galarian|Hisuian|Paldean)\s*\)(?:\s*\(\s*Shadow\s*\))?(?=&|$)/i,
   (_match,base,adjective)=>base.trim()+'&'+terms[adjective.toLowerCase()]);
 }
@@ -239,7 +273,10 @@ function statusSearch(search,status){
 function xxlProtectedSearch(search){
  if(!search||typeof search!=='string')return search;
  // Ordinary XXL individuals must remain in exact-IV search results.
- return search.split('&').filter(term=>term.trim().toLowerCase()!=='!xxl').join('&');
+ const parts=search.split('&');
+ // Pumpkin average form genuinely needs size exclusions; ordinary individuals do not.
+ if(/^(Pumpkaboo|Gourgeist)$/i.test(parts[0])&&['!xxs','!xs','!xl'].every(x=>parts.includes(x)))return search;
+ return parts.filter(term=>term.trim().toLowerCase()!=='!xxl').join('&');
 }
 function individualSearches(result,iv){
  const records=(result.source_records||[]).filter(r=>r.ivs===iv.ivs);
@@ -398,18 +435,106 @@ function render(result,append=false){
 }
 function metaNotice(text,error=false){el('metaNotice').textContent=text;el('metaNotice').style.color=error?'#ffb6b6':'';}
 function resetMetaUpload(){metaPending=null;el('metaApply').disabled=true;el('metaPreview').hidden=true;el('metaPreview').textContent='';el('metaFile').value='';el('metaText').value='';}
+let metaDraft=null,metaEditorLimit=50;
+function metaEditorBlocked(){return active||metaWorking||!!batchState||!!runRef;}
+function metaSpeciesLabel(sid){const p=catalog[sid]||{};return [p.name_ja,p.name].filter(Boolean).join(' / ')||sid;}
+function metaMoveLabel(id){const m=moveCatalog[id]||{};return [m.name_ja,m.name].filter(Boolean).join(' / ')||id;}
+function metaInputKey(value){return String(value||'').normalize('NFKC').toLowerCase().replace(/[\s（）()]/g,'');}
+function metaResolveSpecies(value){const key=metaInputKey(value);const matches=Object.entries(catalog).filter(([sid,p])=>[sid,p.name,p.name_ja,...(p.aliases||[]),metaSpeciesLabel(sid)].some(v=>v&&metaInputKey(v)===key));return matches.length===1?matches[0][0]:null;}
+function metaResolveMove(value,ids){const key=metaInputKey(value);const matches=ids.filter(id=>[id,moveCatalog[id]?.name,moveCatalog[id]?.name_ja,metaMoveLabel(id)].some(v=>v&&metaInputKey(v)===key));return matches.length===1?matches[0]:null;}
+function syncMetaEditor(){
+ el('metaEdit').disabled=metaEditorBlocked()||!chosenMeta()||!!metaDraft;
+ el('metaEditorSave').disabled=metaEditorBlocked()||!metaDraft;
+ el('metaEditorCancel').disabled=metaWorking;
+ el('metaEditorAdd').disabled=metaEditorBlocked()||!metaDraft||metaDraft.rows.length>=500;
+ el('metaEditorUndo').disabled=metaEditorBlocked()||!metaDraft?.undo;
+}
+function metaEditorError(text){el('metaEditorStatus').textContent=text;}
+async function openMetaEditor(){
+ if(metaEditorBlocked()||!chosenMeta()||metaDraft)return;
+ const target={...chosenMeta()},revision=metaState.revision;metaWorking=true;syncMetaControls();
+ try{
+  const data=await api('meta-preset-export',{id:target.id,expected_sha256:target.sha256});
+  if(chosenMeta()?.id!==target.id||chosenMeta()?.sha256!==target.sha256)throw Error('メタが変わりました。もう一度開いてください。');
+  if(data.id!==target.id||data.sha256!==target.sha256)throw Error('取得したメタが一致しません');
+  const rows=String(data.csv||'').trim().split(/\r?\n/).filter(Boolean).map(line=>{
+   const fields=line.split(',').map(x=>x.trim());if(fields.length!==4)throw Error('メタの列を読み取れません');
+   return {species:fields[0].replace(/-shadow$/,''),fast:fields[1],charged1:fields[2],charged2:fields[3],invalid:{}};
+  });
+  if(!rows.length||rows.length>500)throw Error('編集対象は1〜500構成です');
+  metaDraft={target,revision,rows,dirty:false,undo:null};metaEditorLimit=50;
+  el('metaEditorName').value=target.name.slice(0,54)+'（編集）';el('metaEditorCopyName').hidden=['custom','legacy'].includes(target.source);
+  el('metaEditorSave').textContent=['custom','legacy'].includes(target.source)?'変更を保存':'編集したコピーを保存';
+  el('metaEditor').hidden=false;renderMetaEditor();metaEditorError('保存するまで計算には反映されません。保存後は、この一覧だけを計算対象にします。');
+ }catch(e){metaNotice(e.message,true);}finally{metaWorking=false;syncMetaControls();syncMetaEditor();}
+}
+function renderMetaEditor(){
+ if(!metaDraft)return;
+ const root=el('metaEditorRows');root.replaceChildren();
+ const filter=metaInputKey(el('metaEditorFilter').value);
+ const filtered=metaDraft.rows.map((row,index)=>({row,index})).filter(({row})=>!filter||metaInputKey(metaSpeciesLabel(row.species)).includes(filter));
+ el('metaEditorCount').textContent=metaDraft.rows.length+'構成 / 表示 '+Math.min(filtered.length,metaEditorLimit)+'件'+(metaDraft.dirty?'・未保存':'');
+ const speciesList=el('metaEditorSpecies');speciesList.replaceChildren();for(const sid of Object.keys(catalog)){const o=node('option','',speciesList);o.value=metaSpeciesLabel(sid);}
+ for(const {row,index} of filtered.slice(0,metaEditorLimit)){
+  const card=node('div','',root,'meta-edit-row'),heading=node('div',(index+1)+'. '+metaSpeciesLabel(row.species),card,'meta-edit-heading');
+  const remove=node('button','×',card,'secondary meta-edit-remove');remove.type='button';remove.setAttribute?.('aria-label',metaSpeciesLabel(row.species)+'の構成を削除');remove.disabled=metaEditorBlocked();
+  remove.onclick=()=>{if(metaEditorBlocked())return;metaDraft.undo={index,row};metaDraft.rows.splice(index,1);metaDraft.dirty=true;renderMetaEditor();syncMetaEditor();};
+  const fields=node('div','',card,'meta-edit-fields'),error=node('p','',card,'meta-edit-error');
+  function field(label,value,listId,onchange){const wrap=node('label',label,fields),input=node('input','',wrap);input.value=value;input.setAttribute?.('list',listId);input.setAttribute?.('autocomplete','off');input.disabled=metaEditorBlocked();input.oninput=()=>{row.invalid[label]=true;metaDraft.dirty=true;};input.onchange=()=>{if(metaEditorBlocked())return;const ok=onchange(input.value);row.invalid[label]=!ok;error.textContent=ok?'':'候補から正しい'+label+'を選んでください。';};return input;}
+  field('ポケモン',catalog[row.species]?metaSpeciesLabel(row.species):'', 'metaEditorSpecies',value=>{
+   const sid=metaResolveSpecies(value);if(!sid)return false;const p=catalog[sid];row.species=sid;
+   const d=p.default_moves||{};row.fast=p.fastMoves.includes(row.fast)?row.fast:(d.fast||p.fastMoves[0]||'');
+   row.charged1=p.chargedMoves.includes(row.charged1)?row.charged1:(d.charged1||p.chargedMoves[0]||'');
+   row.charged2=p.chargedMoves.includes(row.charged2)&&row.charged2!==row.charged1?row.charged2:((p.chargedMoves||[]).find(x=>x===d.charged2&&x!==row.charged1)||(p.chargedMoves||[]).find(x=>x!==row.charged1)||'');
+   row.invalid={};metaDraft.dirty=true;renderMetaEditor();return true;
+  });
+  for(const [key,label,pool] of [['fast','技1','fastMoves'],['charged1','技2A','chargedMoves'],['charged2','技2B','chargedMoves']]){
+   const ids=catalog[row.species]?.[pool]||[],listId='meta-edit-'+index+'-'+key,list=node('datalist','',card);list.id=listId;
+   for(const id of ids){const o=node('option','',list);o.value=metaMoveLabel(id);}
+   field(label,metaMoveLabel(row[key]),listId,value=>{const id=metaResolveMove(value,ids);if(!id)return false;row[key]=id;metaDraft.dirty=true;return true;});
+  }
+  if(Object.values(row.invalid).some(Boolean))error.textContent='候補から種と技を選んでください。';
+ }
+ el('metaEditorMore').hidden=filtered.length<=metaEditorLimit;syncMetaEditor();
+}
+async function saveMetaEditor(){
+ if(metaEditorBlocked()||!metaDraft)return;
+ const draft=metaDraft;
+ if(!draft.rows.length||draft.rows.some(r=>!validMoveset(r)||Object.values(r.invalid).some(Boolean))){metaEditorError('各行のポケモン・通常技・異なるゲージ技2つを確認してください。空の一覧は保存できません。');return;}
+ const content=draft.rows.map(r=>[r.species,r.fast,r.charged1,r.charged2].join(',')).join('\n')+'\n';
+ metaWorking=true;syncMetaControls();syncMetaEditor();renderMetaEditor();
+ try{
+  const preview=await api('meta-preview',{csv:content});
+  const update=['custom','legacy'].includes(draft.target.source);
+  const saved=await api('meta-preset-save',{action:update?'update':'create',id:draft.target.id,revision:draft.revision,
+   expected_previous_sha256:draft.target.sha256,expected_sha256:preview.sha256,csv:content,
+   name:el('metaEditorName').value.trim(),exact_rows:true});
+  metaState=saved;selectedMetaId=saved.saved_id;metaDraft=null;el('metaEditor').hidden=true;clearMetaExport();renderMetaChoices();
+  metaNotice('保存しました。'+preview.rows+'構成を計算対象にします。削除した構成は自動補完しません。');
+ }catch(e){metaEditorError('保存できませんでした。編集内容は残っています：'+e.message);}
+ finally{metaWorking=false;syncMetaControls();syncMetaEditor();if(metaDraft)renderMetaEditor();}
+}
+el('metaEdit').onclick=openMetaEditor;
+el('metaEditorSave').onclick=saveMetaEditor;
+el('metaEditorCancel').onclick=()=>{if(metaWorking)return;metaDraft=null;el('metaEditor').hidden=true;syncMetaControls();syncMetaEditor();};
+el('metaEditorFilter').oninput=()=>{metaEditorLimit=50;renderMetaEditor();};
+el('metaEditorMore').onclick=()=>{metaEditorLimit+=50;renderMetaEditor();};
+el('metaEditorAdd').onclick=()=>{if(!metaDraft||metaEditorBlocked())return;metaDraft.rows.push({species:'',fast:'',charged1:'',charged2:'',invalid:{}});metaDraft.dirty=true;el('metaEditorFilter').value='';metaEditorLimit=500;renderMetaEditor();};
+el('metaEditorUndo').onclick=()=>{if(!metaDraft?.undo||metaEditorBlocked())return;metaDraft.rows.splice(metaDraft.undo.index,0,metaDraft.undo.row);metaDraft.undo=null;metaDraft.dirty=true;renderMetaEditor();};
+
 function chosenMeta(){return metaState?.items.find(p=>p.id===selectedMetaId);}
 function syncMetaControls(){
  el('metaDefault').disabled=!!chosenMeta()?.default||active||metaWorking||!!batchState||!!runRef;
  el('metaDownload').disabled=metaExportWorking||!chosenMeta();
  el('metaCompact').disabled=active||metaWorking||!!batchState||!!runRef||!['custom','legacy'].includes(chosenMeta()?.source);
  el('metaExport').disabled=metaExportWorking||!chosenMeta()||chosenMeta().available===false;
- const blocked=active||metaWorking||!!batchState||!!runRef;
+ const blocked=active||metaWorking||!!batchState||!!runRef||!!metaDraft;
+ el('metaFavorite').disabled=blocked;el('metaDefault').disabled=el('metaDefault').disabled||!!metaDraft;
  for(const id of ['metaSaveMode','metaChoose','metaAll','metaFavorite','metaName','metaFile','metaText','metaTextPreview','metaApply'])el(id).disabled=blocked;
  for(const button of el('metaQuick').children)button.disabled=blocked;
- el('metaReload').disabled=active||metaWorking;
+ el('metaReload').disabled=active||metaWorking||!!metaDraft;
  el('metaApply').disabled=blocked||!metaPending||!metaState;
- el('run').disabled=active||metaWorking||!metaState;
+ el('run').disabled=active||metaWorking||!metaState||!!metaDraft;syncMetaEditor();
 }
 function renderMetaChoices(){
  if(!metaState)return;
@@ -444,7 +569,7 @@ function renderMetaChoices(){
  el('metaAll').value=selectedMetaId||'';syncMetaControls();
 }
 function chooseMeta(id){
- if(active||metaWorking||batchState||runRef)return;
+ if(active||metaWorking||batchState||runRef||metaDraft)return;
  const p=metaState?.items.find(x=>x.id===id);
  if(!p||p.available===false)return;
  selectedMetaId=id;clearMetaExport();renderMetaChoices();el('metaChooser').hidden=true;el('metaChoose').setAttribute?.('aria-expanded','false');
@@ -662,7 +787,7 @@ async function finish(result){
  while(result.state==='running'){
   await honorStop();
   message('全対面を計算中です。'+(batchState?' '+(batchState.index+1)+' / '+batchState.jobs.length+'構成':''));
-  result=await api('result',{run_ref:runRef,wait_seconds:12});
+  result=await api('result',{run_ref:runRef,wait_seconds:2});
  }
  await honorStop();
  if(result.state!=='done'||!result.complete)throw Error(result.message||'計算が完了していません。');
@@ -835,11 +960,13 @@ async function executeBatch(){
   const job=batchState.jobs[batchState.index];
   message(job.name+'｜'+moveLabel(job.candidate)+'（'+(batchState.index+1)+' / '+batchState.jobs.length+'構成）');
   let result;
-  if(batchState.run_ref){runRef=batchState.run_ref;result=await api('result',{run_ref:runRef,wait_seconds:12});}
+  if(batchState.run_ref){runRef=batchState.run_ref;result=await api('result',{run_ref:runRef,wait_seconds:2});}
   else{
    const data={candidate:job.candidate,ivs:job.ivs,batch_mode:batchState.batch_mode,focus_opponents:batchState.focus,report_format:batchState.report_format,selection_policy:batchState.policy,force_recalculate:batchState.force_recalculate===true,wait_seconds:0};
    if(batchState.meta_sha256)data.expected_meta_sha256=batchState.meta_sha256;
    if(batchState.meta_preset_id)data.meta_preset_id=batchState.meta_preset_id;
+   batchState.start_request_id=batchState.start_request_id||calculationRequestId();cacheBatch();
+   data.request_id=batchState.start_request_id;
    result=await api('run',data);runRef=result.run_ref;batchState.run_ref=runRef;
    sessionStorage.setItem('pvpoke-app-run',runRef);cacheBatch();
   }
@@ -854,7 +981,7 @@ async function executeBatch(){
   result.source_sections=job.source_sections||[];result.source_records=job.source_records||[];result.pokemon_status=job.pokemon_status;
   result.moveset_group=job.moveset_group;result.moveset_plan=job.moveset_plan;
   batchState.meta_sha256=result.meta_sha256;await honorStop();batchState.results.push(result);batchState.index++;
-  batchState.run_ref=null;runRef=null;sessionStorage.removeItem('pvpoke-app-run');cacheBatch();
+  batchState.run_ref=null;delete batchState.start_request_id;runRef=null;sessionStorage.removeItem('pvpoke-app-run');cacheBatch();
   renderBatchResults();
  }
  message(batchState.jobs.length+'構成すべての計算と推薦が完了しました。');
@@ -896,7 +1023,7 @@ function handleCalculationError(e){
   message('計算を中止しました。完了済みの結果は表示したままです。');
   return;
  }
- if(batchState&&!batchState.results.length&&!batchState.run_ref){
+ if(batchState&&!batchState.results.length&&!batchState.run_ref&&!batchState.start_request_id){
   batchState=null;sessionStorage.removeItem('pvpoke-app-batch');
  }
  message((stopError||e).message+'\n完了済みの結果は表示を保持しています。後続の対象は未実行です。',true);
@@ -914,7 +1041,7 @@ el('cancelRun').onclick=async()=>{
 };
 async function startSelection(){
  el('evaluation').value='app';
- if(active||metaWorking)return;
+ if(active||metaWorking||metaDraft)return;
  if(!chosenMeta()){message('メタプリセットを選択してください。',true);return;}
  calculating=true;stopRequested=false;stopPromise=null;stopError=null;
  setBusy(true);el('results').hidden=true;
@@ -945,7 +1072,7 @@ el('resume').onclick=async()=>{
  calculating=true;stopRequested=false;stopPromise=null;stopError=null;setBusy(true);
  try{
   if(batchState){await executeBatch();}
-  else{render(await finish(await api('result',{run_ref:runRef,wait_seconds:12})));runRef=null;sessionStorage.removeItem('pvpoke-app-run');el('resume').hidden=true;message('計算と結果の確認が完了しました。');}
+  else{render(await finish(await api('result',{run_ref:runRef,wait_seconds:2})));runRef=null;sessionStorage.removeItem('pvpoke-app-run');el('resume').hidden=true;message('計算と結果の確認が完了しました。');}
  }catch(e){handleCalculationError(e);}finally{calculating=false;setBusy(false);}
 };
 el('disconnect').onclick=async()=>{try{await api('logout');}catch(e){message('ログアウトできませんでした。再試行してください。',true);return;}credential='';catalog={};metaState=null;selectedMetaId=null;clearMetaExport();nameEntries=[];opponentLabels.clear();displayedResults=[];nicknameBindings=[];presets=[];lastResult=null;setImportedJobs(null);batchState=null;el('results').replaceChildren();el('workspace').hidden=true;el('login').hidden=false;resetMetaUpload();message('接続を解除しました。このブラウザのログイン情報も削除しました。');};
@@ -972,6 +1099,7 @@ const access=new URLSearchParams(location.hash.slice(1)).get('access');
 if(access){history.replaceState(null,'',location.pathname+location.search);el('remember').checked=false;el('credential').value=access;connect(false);}else{receiveReaderInput();connect(true);}
 if(typeof window!=='undefined')window.addEventListener('hashchange',()=>{if(receiveReaderInput())autoImportReader();});
 </script></body></html>'''
+
 
 
 

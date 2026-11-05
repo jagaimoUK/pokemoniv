@@ -26,6 +26,22 @@ class MetaPresetTests(unittest.TestCase):
         self.env.stop()
         self.tmp.cleanup()
 
+    def test_editor_rows_are_exact_and_old_augmentation_cannot_restore_deletions(self):
+        import pvpoke_meta_variants as variants
+        made=self.create(csv=CSV+CSV2);pid=made['saved_id'];old=presets.resolve(self.work,pid)
+        updated=presets.save(self.work,{'action':'update','id':pid,'revision':made['revision'],
+            'expected_previous_sha256':old['sha256'],'expected_sha256':live.digest(CSV),
+            'csv':CSV,'exact_rows':True},SPECIES)
+        current=presets.resolve(self.work,pid)
+        self.assertEqual(current['csv'],CSV)
+        self.assertTrue(current['manual_only'])
+        self.assertFalse(variants.apply(self.work,{'id':pid,'source_sha256':current['sha256']},[]))
+        self.assertEqual(presets.resolve(self.work,pid)['csv'],CSV)
+        with self.assertRaises(ValueError):
+            presets.save(self.work,{'action':'update','id':pid,'revision':made['revision'],
+                'expected_previous_sha256':current['sha256'],'csv':CSV2},SPECIES)
+        self.assertEqual(presets.resolve(self.work,pid)['csv'],CSV)
+
     def test_update_compact_and_conflict_keep_manual_rows(self):
         made=self.create();pid=made['saved_id']
         entry=presets.resolve(self.work,pid)

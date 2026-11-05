@@ -269,7 +269,7 @@ def call_tool(name, args):
                              args.get('wait_seconds', 12),
                              args.get('expected_meta_sha256'),
                              args.get('report_format', 'decision'), args.get('selection_policy'),
-                             args.get('meta_preset_id'), args.get('force_recalculate', False))
+                             args.get('meta_preset_id'), args.get('force_recalculate', False), args.get('request_id'))
     if name == 'get_iv_selection_result':
         return IV_RUNNER.result(args['run_ref'], args.get('wait_seconds', 12))
     if name == 'get_status':
@@ -353,7 +353,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Set-Cookie', cookie)
         self.send_header('Content-Length', str(len(data)))
         self.end_headers()
-        if data: self.wfile.write(data)
+        if data:
+            try:
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):
+                # A disconnected poll does not mean the calculation failed.
+                pass
     def unauthorized(self):
         self.send_response(401)
         challenge = 'Bearer'

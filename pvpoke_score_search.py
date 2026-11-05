@@ -6,7 +6,7 @@ are surfaced for manual review rather than silently broadened.
 """
 from __future__ import annotations
 
-from pvpoke_go_search import species_search_term
+from pvpoke_go_search import species_search_term, gender_go_name
 
 from functools import lru_cache
 import json
@@ -178,7 +178,8 @@ def _search_term(entry, forms_by_dex, english_species):
     """
     name = entry["name"]
     labels = re.findall(r"\(([^()]*)\)", name)
-    species = species_search_term(english_species)
+    base_name, gender_filter = gender_go_name(english_species)
+    species = species_search_term(base_name)
     shadow = "シャドウ" in labels
     regions = [REGIONAL[x] for x in labels if x in REGIONAL]
     unknown = [x for x in labels if x != "シャドウ" and x not in REGIONAL]
@@ -186,7 +187,7 @@ def _search_term(entry, forms_by_dex, english_species):
         return None, "検索式で姿・性別を厳密に区別できません"
     if not species or any(c in species for c in ",:;|&!\n\r"):
         return None, "検索文字列に使えない文字があります"
-    suffix = []
+    suffix = [gender_filter[1:]] if gender_filter else []
     if regions:
         suffix.append(regions[0])
     else:
@@ -446,3 +447,4 @@ def search_low_scores(params=None, species_catalog=None):
                              for x in selected[:15]],
         "notice": "CP1500向けの保存済みランキングです。削除の安全性・他リーグでの性能は保証しません。",
     }
+
