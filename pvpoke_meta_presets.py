@@ -74,7 +74,7 @@ def _write(work: Path, obj: dict) -> None:
 
 def _entries(work: Path, obj: dict) -> list[dict]:
     return [{'id': 'legacy', 'name': 'これまでのカスタムメタ', 'cp': 1500,
-             'source': 'legacy', 'source_csv': obj.get('legacy_source_csv'), 'csv': live.active_path(work).read_text(encoding='utf-8-sig')},
+             'source': 'legacy', 'manual_only': obj.get('legacy_manual_only', False), 'source_csv': obj.get('legacy_source_csv'), 'csv': live.active_path(work).read_text(encoding='utf-8-sig')},
             *obj['items'], *bundled()['items']]
 
 
@@ -116,6 +116,8 @@ def save(work: Path, args: dict, species: dict) -> dict:
         raise ValueError('別の画面でプリセットが更新されました。一覧を再取得してください')
     action = args.get('action')
     input_info = {}
+    if not isinstance(args.get('exact_rows', False), bool):
+        raise ValueError('exact_rows must be true or false')
     if action == 'create':
         name = args.get('name')
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 60:
@@ -131,7 +133,7 @@ def save(work: Path, args: dict, species: dict) -> dict:
             raise ValueError('プレビューと内容が異なります。もう一度確認してください')
         preset_id = 'custom:' + uuid.uuid4().hex
         obj['items'].append({'id': preset_id, 'name': name, 'cp': 1500,
-                             'source': 'custom', 'csv': content})
+                             'source': 'custom', 'csv': content, 'manual_only': args.get('exact_rows', False)})
     elif action in ('update', 'compact'):
         preset_id = args.get('id')
         current = resolve(work, preset_id)
@@ -148,9 +150,10 @@ def save(work: Path, args: dict, species: dict) -> dict:
             _atomic_write(target.with_suffix('.csv.bak'), current['csv'])
             _atomic_write(target, content)
             obj['legacy_source_csv'] = content
+            obj['legacy_manual_only'] = args.get('exact_rows', False)
         else:
             entry = next(p for p in obj['items'] if p['id'] == preset_id)
-            entry.update(csv=content, source_csv=content)
+            entry.update(csv=content, source_csv=content, manual_only=args.get('exact_rows', False))
     elif action in ('default', 'favorite'):
         preset_id = args.get('id')
         entry = next((p for p in _entries(work, obj) if p['id'] == preset_id), None)

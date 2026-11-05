@@ -102,6 +102,27 @@ class FakeBackend:
 
 
 class IVWorkflowTests(unittest.TestCase):
+    def test_retry_request_returns_same_job_without_starting_twice(self):
+        b=FakeBackend();runner=IVWorkflow(b)
+        first=runner.run(CANDIDATE,IVS,wait_seconds=0,request_id='web-request-123456')
+        again=runner.run(CANDIDATE,IVS,wait_seconds=0,request_id='web-request-123456')
+        self.assertEqual(first['run_ref'],again['run_ref'])
+        self.assertEqual(b.run_count,1)
+        with self.assertRaisesRegex(ValueError,'different calculation'):
+            runner.run(CANDIDATE,'1,2,3',wait_seconds=0,request_id='web-request-123456')
+        self.assertEqual(b.run_count,1)
+
+    def test_superseded_or_invalid_retry_id_does_not_replay_old_work(self):
+        b=FakeBackend();runner=IVWorkflow(b)
+        runner.run(CANDIDATE,IVS,wait_seconds=0,request_id='web-request-123456')
+        b.state='done'
+        runner.run(CANDIDATE,IVS,wait_seconds=0,request_id='web-request-654321')
+        with self.assertRaisesRegex(ValueError,'superseded'):
+            runner.run(CANDIDATE,IVS,wait_seconds=0,request_id='web-request-123456')
+        with self.assertRaises(ValueError):
+            runner.run(CANDIDATE,IVS,wait_seconds=0,request_id='invalid')
+        self.assertEqual(b.run_count,2)
+
     def test_direct_core_form_runs_battle_with_meteor_identity(self):
         backend = FakeBackend()
         runner = IVWorkflow(backend)

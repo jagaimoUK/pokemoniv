@@ -58,6 +58,7 @@ jobs:
           docker build --target browser-check -t pokemoniv-browser-ci .
           npm install --no-save --no-package-lock playwright@1.57.0
           docker run --rm -v "$PWD:/work" -w /work -e STRATEGY_CHROMIUM_PATH=/usr/bin/chromium --entrypoint node pokemoniv-browser-ci tests/security_browser.cjs
+          docker run --rm -v "$PWD:/work" -w /work -e CHROME_BIN=/usr/bin/chromium --entrypoint node pokemoniv-browser-ci tests/browser_meta_editor_smoke.cjs
       - name: Audit operating-system and application packages and create SBOM
         run: |
           curl -fsSL --connect-timeout 15 --max-time 120 --retry 2 https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz -o /tmp/trivy.tar.gz
@@ -75,4 +76,5 @@ jobs:
             os-packages.txt
             image-vulnerabilities.json
             image-sbom.cdx.json
+            meta-editor-qa
           retention-days: 14

@@ -29,15 +29,7 @@ def reader_cleanup_payload(species_catalog):
         for row in review_groups
     ]
     items = ranked_items[:2] + review_items + ranked_items[2:]
-    # GO cannot sort equally XXL-sized Pokémon by their actual height via query.
-    # Preserve every XXL in both ranked and review cleanup searches.  Apply
-    # *after* compaction, so the no-favorite and shadow/region contracts stay intact.
-    for item in items:
-        suffixes = item["search"].lower().split("&")
-        if "xxl" in suffixes:
-            raise ValueError("XXL限定の候補は手動確認が必要です")
-        if "!xxl" not in suffixes:
-            item["search"] += "&!xxl"
+    # Do not hide otherwise matching XXL individuals. Explicit size-only queries stay intact.
     if not items:
         raise ValueError("安全に表現できる検索式がありません。ランキングと図鑑を確認してください")
     if len(items) > 10000 or any(
@@ -50,7 +42,7 @@ def reader_cleanup_payload(species_catalog):
         "mode": "practical",
         "threshold": 70,
         "excluded_favorites": False,
-        "excluded_xxl": True,
+        "excluded_xxl": False,
         "original_query_count": len(result["queries"]) + len(result["unranked_queries"]),
         "optimized_query_count": len(items),
         "single_query_complete": len(items) == 1,

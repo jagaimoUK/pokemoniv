@@ -95,6 +95,7 @@ class IVWorkflow:
         self.backend = backend
         self._lock = threading.RLock()
         self._ticket = None
+        self._request_ids = []
 
     def run(self, candidate: dict, ivs: str, batch_mode: str = "simple",
             focus_opponents: list[str] | None = None,
@@ -102,8 +103,14 @@ class IVWorkflow:
             focus_limit: int = 20, wait_seconds: int = 12,
             expected_meta_sha256: str | None = None,
             report_format: str = "decision", selection_policy: dict | None = None,
-            meta_preset_id: str | None = None, force_recalculate: bool = False) -> dict:
+            meta_preset_id: str | None = None, force_recalculate: bool = False, request_id: str | None = None) -> dict:
         requested_at = time.monotonic()
+        if request_id is not None and (not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,80}", request_id)):
+            raise ValueError("Invalid calculation request_id")
+        request_body = json.dumps([candidate, ivs, batch_mode, focus_opponents, highlight_limit,
+            review_limit, focus_limit, expected_meta_sha256, report_format, selection_policy,
+            meta_preset_id, force_recalculate], sort_keys=True)
+
         if report_format not in ("decision", "decision-v1", "compact", "app"):
             raise ValueError("report_format must be decision, decision-v1, compact or app")
         if not isinstance(force_recalculate, bool):
@@ -135,6 +142,12 @@ class IVWorkflow:
             raise ValueError("focus_limit must be 0..20")
 
         with self._lock:
+            if request_id is not None and self._ticket and self._ticket.get("request_id") == request_id:
+                if self._ticket.get("request_body") != request_body:
+                    raise ValueError("request_id was used for different calculation inputs")
+                return self.result(self._ticket["run_ref"], wait_seconds=0)
+            if request_id is not None and request_id in self._request_ids:
+                raise ValueError("Calculation request has been superseded; resume its exact result")
             current = self.backend.status()
             if current.get("state") in ("running", "cancelling"):
                 raise ValueError("A PvPoke calculation is already running")
@@ -160,7 +173,7 @@ class IVWorkflow:
             if status.get("state") not in ("running", "done") or not started_at:
                 raise ValueError("Could not verify the new PvPoke job start")
             ticket = {
-                "run_ref": uuid.uuid4().hex,
+                "run_ref": uuid.uuid4().hex, "request_id": request_id, "request_body": request_body,
                 "candidate": own, "iv_rows": rows, "batch_mode": batch_mode,
                 "started_at": started_at,
                 "server_meta_sha256": actual_sha,
@@ -179,6 +192,8 @@ class IVWorkflow:
                 "result_cache": started.get("preview", {}).get("result_cache", {"reused":False}),
             }
             self._ticket = ticket
+            if request_id is not None:
+                self._request_ids = (self._request_ids + [request_id])[-128:]
 
         result = self.result(ticket["run_ref"], wait_seconds=wait_seconds)
         result["preview"] = started["preview"]
