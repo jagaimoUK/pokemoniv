@@ -13,7 +13,7 @@ const receiver=content.match(/function receiveReaderInput\(\)\{[\s\S]*?\n\}\ncon
 assert(receiver,'Reader receiver must be defined before access handling');
 const values={importText:{value:''}};
 let hash='',url='',notice='',error=false;
-const ctx={URLSearchParams,Uint8Array,TextDecoder,atob,active:false,readerInputText:null,readerImportPending:false,
+const ctx={configureReaderAutomation(){},URLSearchParams,Uint8Array,TextDecoder,atob,active:false,readerInputText:null,readerImportPending:false,
   location:{get hash(){return hash},pathname:'/app',search:'?from=android'},
   history:{replaceState(a,b,c){url=c}},
   el:id=>values[id],
@@ -41,3 +41,4 @@ assert(!vm.runInContext('receiveReaderInput()',ctx));
 assert.strictEqual(values.importText.value,prior,'Oversized input must not replace or truncate existing text');
 hash='#pageTop'; assert(!vm.runInContext('receiveReaderInput()',ctx));
 console.log('Reader IV handoff / invalid payload / back-to-top accessibility: OK');
+
