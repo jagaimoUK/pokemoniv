@@ -19,6 +19,10 @@ for(const mutate of [
  x=>x.flashcards.reviews.push(['a',{}]),x=>delete x.flashcards.kv,
  x=>x.flashcards.kv=[[123,{}]],x=>x.session={},
 ]){const invalid=structuredClone(incoming);mutate(invalid);assert.throws(()=>M.validate(invalid));}
+const withModes=structuredClone(incoming);withModes.local['pvpoke-app-selection-modes-v1']='{"corsola":"detailed"}';
+M.validate(withModes);assert.equal(M.covers(withModes,withModes),true);
+const changedMode=structuredClone(withModes);changedMode.local['pvpoke-app-selection-modes-v1']='{"quagsire":"detailed"}';
+assert(M.conflicts(changedMode,withModes).includes('local:pvpoke-app-selection-modes-v1'));
 assert(!require('fs').readFileSync('pvpoke_browser_migration.js','utf8').includes('document.cookie'));
 console.log('Browser migration schema, allowlist, conflict and completeness checks: PASS');
 

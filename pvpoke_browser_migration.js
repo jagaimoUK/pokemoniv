@@ -2,7 +2,7 @@
 (function(root){
 'use strict';
 const FORMAT='pokemoniv-browser-backup-v1', MAX_BYTES=20*1024*1024;
-const LOCAL=['pvpoke-app-movesets-v1'];
+const LOCAL=['pvpoke-app-movesets-v1','pvpoke-app-selection-modes-v1'];
 const SESSION=['pvpoke-app-batch','pvpoke-app-run'];
 const DB='pokemon-move-flashcards', STORES=['kv','reviews'];
 function fail(){throw Error('バックアップの形式が不正です。元のファイルを確認してください。');}
@@ -10,8 +10,10 @@ function validate(data){
  if(!data||data.format!==FORMAT||!data.local||!data.session||!data.flashcards)fail();
  if(new TextEncoder().encode(JSON.stringify(data)).byteLength>MAX_BYTES)fail();
  for(const [area,keys] of [[data.local,LOCAL],[data.session,SESSION]]){
-  if(Object.keys(area).length!==keys.length||Object.keys(area).some(k=>!keys.includes(k)))fail();
-  for(const key of keys)if(area[key]!==null&&typeof area[key]!=='string')fail();
+  if(Object.keys(area).some(k=>!keys.includes(k)))fail();
+  const required=area===data.local?['pvpoke-app-movesets-v1']:keys;
+  if(required.some(k=>!Object.hasOwn(area,k)))fail();
+  for(const key of Object.keys(area))if(area[key]!==null&&typeof area[key]!=='string')fail();
  }
  if(data.integrity!==undefined){const i=data.integrity;
   if(!i||i.algorithm!=='SHA-256'||!Number.isSafeInteger(i.bytes)||i.bytes<0||!(/^[a-f0-9]{64}$/).test(i.value))fail();
@@ -87,7 +89,7 @@ async function verifyIntegrity(data){
 function previewText(data){
  const local=Object.values(data.local).filter(x=>x!==null).length;
  const session=Object.values(data.session).filter(x=>x!==null).length;
- return 'ブラウザ内：技構成 '+local+'項目、計算再開情報 '+session+'項目、フラッシュカード設定 '+data.flashcards.kv.length+'件、復習記録 '+data.flashcards.reviews.length+'件。サーバーのSQLite・ZIPやAndroidの読み取り履歴は含みません。';
+ return 'ブラウザ内：技構成・厳選設定 '+local+'項目、計算再開情報 '+session+'項目、フラッシュカード設定 '+data.flashcards.kv.length+'件、復習記録 '+data.flashcards.reviews.length+'件。サーバーのSQLite・ZIPやAndroidの読み取り履歴は含みません。';
 }
 function download(data){
  const blob=new Blob([JSON.stringify(data)],{type:'application/json'}),url=URL.createObjectURL(blob);
