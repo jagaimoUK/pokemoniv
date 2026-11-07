@@ -21,7 +21,20 @@ const server=http.createServer(async(req,res)=>{let body='';for await(const chun
  browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_BIN||process.env.STRATEGY_CHROMIUM_PATH||undefined});
  for(const width of [390,1280]){
   const page=await browser.newPage({viewport:{width,height:900}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
-  await page.goto('http://127.0.0.1:'+server.address().port+'/app');await page.locator('#metaEdit').click();
+  await page.goto('http://127.0.0.1:'+server.address().port+'/app');
+  await page.locator('#selectionSettingsOpen').click();
+  await page.locator('#selectionModeFilter').fill('サニーゴ');
+  assert.equal(await page.locator('#selectionModeRows input[type=checkbox]').count(),1);
+  await page.locator('#selectionModeRows input[type=checkbox]').check();
+  assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('pvpoke-app-selection-modes-v1')).corsola_galarian),'detailed');
+  assert(await page.locator('#selectionModeRows').innerText().then(s=>s.includes('詳細厳選')));
+  assert(await page.evaluate(()=>document.getElementById('selectionSettings').scrollWidth<=document.getElementById('selectionSettings').clientWidth+2),'settings horizontal overflow');
+  if(width===390){fs.mkdirSync('meta-editor-qa',{recursive:true});await page.locator('#selectionSettings').screenshot({path:'meta-editor-qa/selection-settings-mobile.png'});}
+  await page.keyboard.press('Escape');assert(await page.locator('#selectionSettings').isHidden());
+  await page.reload();await page.locator('#selectionSettingsOpen').click();await page.locator('#selectionModeFilter').fill('Corsola');
+  assert(await page.locator('#selectionModeRows input[type=checkbox]').isChecked());
+  await page.locator('#selectionSettingsClose').click();
+  await page.locator('#metaEdit').click();
   await page.locator('#metaEditorRows .meta-edit-row').first().waitFor();
   assert.equal(await page.locator('#metaEditorRows .meta-edit-row').count(),2);
   assert(await page.locator('#metaEditorRows').innerText().then(s=>s.includes('サニーゴ')));
