@@ -30,6 +30,22 @@ class AppSelectionTests(unittest.TestCase):
         self.assertEqual(rows['0/11/12']['search_string'], 'Quagsire&0attack&3defense&3hp')
         self.assertEqual(result['total_ratings_checked'], 54)
 
+    def test_gourgeist_emits_comparable_default_axis_for_normal_and_detailed(self):
+        a, b = '0/11/12', '3/13/8'
+        data = matrix({a: [550, 500, 480], b: [550, 500, 480]})
+        alternate = matrix({a: [600, 490, 480], b: [600, 490, 480]})
+        detailed = {'default': data, **{mode: alternate for mode in MODES[1:]}}
+        normal_result = recommend({'default': data}, {**CANDIDATE, 'species': 'gourgeist_small'},
+                                  'Gourgeist (Small)', ['Quagsire'])
+        detailed_result = recommend(detailed, {**CANDIDATE, 'species': 'gourgeist_super'},
+                                    'Gourgeist (Super)', ['Quagsire'])
+        summary = normal_result['size_comparison']
+        self.assertEqual(summary, detailed_result['size_comparison'])
+        self.assertEqual(summary['focus'], '010' * 6)
+        self.assertEqual(summary['rows'][a]['outcomes'], '210' * 6)
+        self.assertEqual(summary['rows'][a], summary['rows'][b])
+        self.assertNotIn('size_comparison', recommend({'default': data}, CANDIDATE, 'Quagsire'))
+
     def test_loss_only_rating_lead_is_reviewed_not_recommended(self):
         data = matrix({'0/11/12': [480, 450], '3/13/8': [450, 480]})
         result = recommend({'default': data}, CANDIDATE, 'Quagsire')

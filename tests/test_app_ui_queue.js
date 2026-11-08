@@ -96,6 +96,52 @@ vm.runInContext("catalog={swadloon:{name:'Swadloon',name_ja:'クルマユ',nickn
 
  console.log('Safe nicknames, shared stages, strongest Rating, precise IV and refreshed copies: OK');
 
+ // Four sizes share one shortlist. A lower-average priority matchup is kept
+ // ahead of a high-average redundant result; same IVs in different sizes stay distinct.
+ const sizeIds=['gourgeist_small','gourgeist_average','gourgeist_large','gourgeist_super'];
+ const sizeTerms=['xs','!xxs&!xs&!xl&!xxl','xl','xxl'];
+ const patterns=['220000','220000','002000','000200','000020','000002','200000','020000'];
+ context.sizeResults=sizeIds.map((sid,i)=>{
+  const r=staged(sid,'0/11/12',540,'Other','s1',i);
+  r.selection.mode_count=i%2?4:1;
+  r.selection.size_comparison={axis:'common',focus:'001000',rows:{}};
+  const seed=r.selection.recommendations[0];
+  r.selection.recommendations=['0/11/12','1/12/13'].map((iv,j)=>{
+   const n=i*2+j;
+   r.selection.size_comparison.rows[iv]={outcomes:patterns[n],mean:600-n};
+   return {...seed,ivs:iv,search_string:'Gourgeist&'+sizeTerms[i]+'&'+j+'attack&3defense&3hp',
+    equivalent_candidates:j?[]:[{ivs:'0/12/12',search_string:'Gourgeist&'+sizeTerms[i]}]};
+  });
+  r.source_records=[400+i,500+i].map(cp=>({ivs:'0/11/12',cp,species:sid,
+   search_string:'Gourgeist&'+sizeTerms[i]+'&0attack&3defense&3hp&cp'+cp}));
+  return r;
+ });
+ context.sizeIds=sizeIds;
+ vm.runInContext(`for(const [i,sid] of sizeIds.entries())catalog[sid]={name:'Gourgeist',name_ja:'パンプジン '+i,nickname_code:'Gou'+i};prepareLabels();`,context);
+ vm.runInContext(`batchState={jobs:sizeResults,results:sizeResults,index:sizeResults.length};renderBatchResults()`,context);
+ const group=vm.runInContext('displayedResults',context);
+ const savedSizes=Array.from(group.flatMap(r=>r.selection.recommendations.map(row=>[row.rank,r.candidate.species,row.ivs])));
+ assert.equal(savedSizes.length,4);
+ assert.deepEqual(Array.from(savedSizes.sort((a,b)=>a[0]-b[0]),a=>Array.from(a)),[
+  [1,'gourgeist_small','0/11/12'],[2,'gourgeist_average','0/11/12'],
+  [3,'gourgeist_average','1/12/13'],[4,'gourgeist_large','0/11/12'],
+ ]);
+ assert.equal(group[0].selection.recommendations[0].equivalent_candidates.length,0);
+ assert(group[0].selection.additional_candidates.some(row=>row.ivs==='0/12/12'));
+ const sizeExport=JSON.parse(vm.runInContext('overlayExport(displayedResults)',context));
+ assert.equal(sizeExport.items.length,4);
+ assert(sizeExport.items.some(row=>row.search.includes('&xs&')&&row.cp===400));
+ assert(!sizeExport.items.some(row=>row.cp===500));
+ await els.allCopyActions.children[0].onclick();
+ assert.equal(copied.at(-1).split('\n').length,8);
+ assert(flat(els.results).some(x=>x.textContent.includes('全サイズ合計で最大4体')));
+ assert.equal(context.sizeResults.reduce((n,r)=>n+r.selection.recommendations.length,0),8,'Saved raw results remain intact');
+ vm.runInContext(`batchState={jobs:sizeResults,results:sizeResults.slice(0,2),index:2};renderBatchResults()`,context);
+ assert(flat(els.results).some(x=>x.textContent.includes('暫定結果')));
+ const legacy=vm.runInContext(`curateGourgeist(sizeResults.map(r=>({...r,selection:{...r.selection,size_comparison:null}})))`,context);
+ assert.equal(legacy.reduce((n,r)=>n+r.selection.recommendations.length,0),4);
+ console.log('Gourgeist across all sizes, priority matchup, partial resume, and exact four-copy cap: OK');
+
 })();
 
 

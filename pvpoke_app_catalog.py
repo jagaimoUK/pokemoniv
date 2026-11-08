@@ -39,11 +39,15 @@ def enrich_catalog(payload: dict, species: dict) -> None:
                                     ja + '(シャドウ)', ja + ' (シャドウ)'])
             english = entry.get('name') or sid
             suffix = english[english.find('('):] if '(' in english else ''
+            localized = japanese_form_suffix(suffix)
             if suffix:
                 # Accept the source display form with or without the space
                 # preceding parentheses, regardless of Japanese/English suffix.
-                aliases.extend([ja + suffix, ja + ' ' + suffix])
-            entry['name_ja'] = ja + japanese_form_suffix(suffix) if suffix else ja + ((' (' + region + ')') if region else '')
+                aliases.extend([ja + suffix, ja + ' ' + suffix, ja + localized, ja + ' ' + localized])
+            entry['name_ja'] = ja + localized if suffix else ja + ((' (' + region + ')') if region else '')
+            if sid == 'oinkologne' and 'oinkologne_male' not in species:
+                # PvPoke's unsuffixed ID is the male form. Android always writes its sex.
+                aliases.extend([ja + '(オス)', ja + ' (オス)'])
             # Minior begins PvP battles in Meteor Form and changes to Core mid-battle.
             # Unlike regional forms, an unqualified Japanese name is unambiguous here.
             if sid == 'minior_meteor':
