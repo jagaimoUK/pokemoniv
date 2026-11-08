@@ -324,7 +324,9 @@ function xxlProtectedSearch(search){
  return parts.filter(term=>term.trim().toLowerCase()!=='!xxl').join('&');
 }
 function individualSearches(result,iv){
- const records=(result.source_records||[]).filter(r=>r.ivs===iv.ivs);
+ const matches=(result.source_records||[]).filter(r=>r.ivs===iv.ivs);
+ // A size-group slot represents one owned Pokémon when the reader supplies CP.
+ const records=result.gourgeist_group?matches.slice(0,1):matches;
  return records.length?records.map(r=>({search:xxlProtectedSearch(statusSearch(r.search_string,result.pokemon_status)),cp:r.cp,species:r.species})):[{search:xxlProtectedSearch(statusSearch(iv.search_string,result.pokemon_status))}];
 }
 function overlayExport(results){
@@ -421,6 +423,8 @@ function render(result,append=false){
  if(!selection){node('h2','GPT評価用の比較情報',panel);node('p','今回の比較情報をコピーしてGPTに評価を依頼できます。',panel);const b=node('button','比較情報をコピー',panel);b.onclick=()=>copy('以下のPvPoke実測比較を、個体値厳選の基準で評価してください。おすすめ個体と英語検索式を示してください。\n'+JSON.stringify(result),b);return;}
  if(result.moveset_comparison)renderMovesetComparison(result,panel);
  node('h2','おすすめ個体',panel);
+ if(result.gourgeist_group)node('p','パンプジンは全サイズ合計で最大4体。順位はサイズをまたいだ順位です。'+
+  (result.gourgeist_group.pending?'未完了のサイズがあるため、現在は暫定結果です。':''),panel,'note');
  node('p','検索式ではXXLの実際の身長を比較できないため、通常の検索式からXXLを除外します。XXLは手動で比較し、最大の個体を残してください。サイズがフォルムそのものを表す場合は例外です。',panel,'note');
  if(selection.input_notices)selection.input_notices.forEach(n=>node('p',n,panel,'note'));
  if(selection.minior_experimental)node('p','メテノの戦術比較（試験版）：流星で即撃ち／コアまで温存／状況判断を同じ条件で比較。表示Ratingは各対面で最良の戦術を選んだ上限値です。実機のCP・レベル調整が未検証のため、この結果だけで個体を博士に送らないでください。',panel,'note');
@@ -970,7 +974,8 @@ function combineMovesets(results,threshold){
    const previous=chosen.get(item.ivs);
    if(previous&&previous.moveset_mean>=mean)continue;
    // Equivalence is specific to one profile. Never reuse it across configurations.
-   chosen.set(item.ivs,{...row,ivs:item.ivs,search_string:item.search_string,equivalent_candidates:[],chosen_moves:result.candidate,moveset_mean:mean,comparison_peer:null,comparison_differences:[],comparison_difference_count:0});
+   const sizeRow=result.selection.size_comparison?.rows?.[item.ivs];
+   chosen.set(item.ivs,{...row,ivs:item.ivs,...(sizeRow?{size_row:sizeRow}:{}),search_string:item.search_string,equivalent_candidates:[],chosen_moves:result.candidate,moveset_mean:mean,comparison_peer:null,comparison_differences:[],comparison_difference_count:0});
   }
  });
  const rows=[...chosen.values()].sort((a,b)=>Number(String(b.grade).startsWith('S'))-Number(String(a.grade).startsWith('S'))||b.moveset_mean-a.moveset_mean||a.ivs.localeCompare(b.ivs));
@@ -989,14 +994,78 @@ function renderMovesetComparison(result,parent){
  const d=node('details','',parent);node('summary','技構成の比較を見る',d);
  for(const p of info.profiles)node('p',(p.retained?'採用｜':'参考｜')+moveLabel(p.candidate)+'｜平均 '+p.mean_rating.toFixed(1)+(p.unique_win_count?'｜この構成だけで勝てる対面条件 '+p.unique_win_count:'') ,d,'note');
 }
-function renderBatchResults(){
- if(!(batchState?.compare_moves??batchState?.auto_moves)){batchState.results.forEach((r,i)=>render(r,i>0));return;}
- const completed=[];
- for(const group of [...new Set(batchState.jobs.map(j=>j.moveset_group))]){
-  const jobs=batchState.jobs.filter(j=>j.moveset_group===group),results=batchState.results.filter(r=>r.moveset_group===group);
-  if(results.length===jobs.length)completed.push(combineMovesets(results,batchState.move_threshold));
+function isGourgeist(sid){return /^gourgeist_(small|average|large|super)$/.test(sid);}
+function curateGourgeist(results,pending=false){
+ const group=results.filter(r=>isGourgeist(r.candidate?.species)&&r.selection);
+ if(!group.length)return results;
+ const seen=new Map();
+ let order=0;
+ const axis=group[0].selection.size_comparison?.axis;
+ const focus=group[0].selection.size_comparison?.focus;
+ const comparable=Boolean(axis&&focus?.length&&focus.length%6===0&&group.every(r=>
+  r.selection.size_comparison?.axis===axis&&r.selection.size_comparison.focus===focus&&
+  r.meta_sha256===group[0].meta_sha256&&r.calculation_version===group[0].calculation_version&&
+  r.selection.recommendations.every(row=>(row.size_row||r.selection.size_comparison.rows?.[row.ivs])?.outcomes?.length===focus.length)));
+ function compare(a,b){return b.wins-a.wins||b.mean-a.mean||a.order-b.order;}
+ const weight=i=>i<focus.length/3?2:1; // s0 and s1 are the first two of six shields.
+ for(const result of group)for(const row of result.selection.recommendations){
+  const data=row.size_row||result.selection.size_comparison?.rows?.[row.ivs];
+  const wins=comparable?Array.from(data.outcomes).reduce((n,v,i)=>n+(v==='2'?weight(i):0),0):
+   (row.win_conditions??0)/(result.selection.mode_count||1);
+  const item={result,row,data,wins,mean:data?.mean??row.moveset_mean??
+   result.selection.moveset_summary?.iv_mean_ratings?.[row.ivs]??0,order:order++};
+  const key=JSON.stringify([result.candidate.species,result.pokemon_status||null,row.ivs]);
+  if(!seen.has(key)||compare(item,seen.get(key))<0)seen.set(key,item);
  }
- completed.forEach((r,i)=>render(r,i>0));
+ const remaining=[...seen.values()],kept=new Map();
+ const covered=comparable?new Uint8Array(focus.length):null;
+ const gains=item=>{
+  let priority=0,other=0;
+  if(covered)for(let i=0;i<covered.length;i++){
+   const delta=Number(item.data.outcomes[i])-covered[i];
+   if(delta>0){other+=delta;if(focus[i]==='1')priority+=delta;}
+  }
+  return [priority,other];
+ };
+ while(remaining.length&&kept.size<4){
+  const choices=remaining.map(item=>({item,gain:kept.size?gains(item):[0,0]}));
+  choices.sort((a,b)=>b.gain[0]-a.gain[0]||b.gain[1]-a.gain[1]||compare(a.item,b.item));
+  const {item,gain}=choices[0];
+  remaining.splice(remaining.indexOf(item),1);
+  const rank=kept.size+1;
+  kept.set(item.row,{...item.row,rank,grade:rank===1&&seen.size>1?'Sランク':'Aランク',
+   role:rank===1?'全サイズの総合本命':gain[1]?'保存候補にない勝ち・引き分けを補完':'全サイズから選んだ保存候補',
+   equivalent_candidates:[],comparison_peer:null,comparison_differences:[],comparison_difference_count:0});
+  if(covered)for(let i=0;i<covered.length;i++)covered[i]=Math.max(covered[i],Number(item.data.outcomes[i]));
+ }
+ return results.map(result=>{
+  if(!group.includes(result))return result;
+  const selection=result.selection,recommendations=selection.recommendations.flatMap(row=>kept.has(row)?[kept.get(row)]:[]).sort((a,b)=>a.rank-b.rank);
+  const additional=[...(selection.additional_candidates||[])];
+  const reference='パンプジン全サイズの保存枠を優先したため、今回の保存対象外です。';
+  for(const row of selection.recommendations){
+   if(!kept.has(row))additional.push({ivs:row.ivs,reason:reference,equivalent_candidates:row.equivalent_candidates||[]});
+   else for(const alternative of row.equivalent_candidates||[])additional.push({ivs:alternative.ivs,reason:'保存対象と同じ性能の代替候補です。'});
+  }
+  const covered_candidates=(selection.covered_candidates||[]).filter(row=>{
+   if(recommendations.some(r=>r.ivs===row.covered_by))return true;
+   additional.push({ivs:row.ivs,reason:reference,equivalent_candidates:row.equivalent_candidates||[]});return false;
+  });
+  return {...result,gourgeist_group:{pending},selection:{...selection,recommendations,additional_candidates:additional,covered_candidates}};
+ });
+}
+function renderBatchResults(){
+ const state=batchState;
+ let completed=state.results;
+ if(state.compare_moves??state.auto_moves){
+  completed=[];
+  for(const group of [...new Set(state.jobs.map(j=>j.moveset_group))]){
+   const jobs=state.jobs.filter(j=>j.moveset_group===group),results=state.results.filter(r=>r.moveset_group===group);
+   if(results.length===jobs.length)completed.push(combineMovesets(results,state.move_threshold));
+  }
+ }
+ const pending=state.jobs.slice(state.index).some(job=>isGourgeist(job.candidate.species));
+ curateGourgeist(completed,pending).forEach((r,i)=>render(r,i>0));
 }
 
 async function executeBatch(){
@@ -1118,7 +1187,7 @@ el('resume').onclick=async()=>{
  calculating=true;stopRequested=false;stopPromise=null;stopError=null;setBusy(true);
  try{
   if(batchState){await executeBatch();}
-  else{render(await finish(await api('result',{run_ref:runRef,wait_seconds:2})));runRef=null;sessionStorage.removeItem('pvpoke-app-run');el('resume').hidden=true;message('計算と結果の確認が完了しました。');}
+  else{const result=await finish(await api('result',{run_ref:runRef,wait_seconds:2}));render(curateGourgeist([result])[0]);runRef=null;sessionStorage.removeItem('pvpoke-app-run');el('resume').hidden=true;message('計算と結果の確認が完了しました。');}
  }catch(e){handleCalculationError(e);}finally{calculating=false;setBusy(false);}
 };
 el('disconnect').onclick=async()=>{try{await api('logout');}catch(e){message('ログアウトできませんでした。再試行してください。',true);return;}credential='';catalog={};metaState=null;selectedMetaId=null;clearMetaExport();nameEntries=[];opponentLabels.clear();displayedResults=[];nicknameBindings=[];presets=[];lastResult=null;setImportedJobs(null);batchState=null;el('results').replaceChildren();el('workspace').hidden=true;el('selectionSettingsOpen').hidden=true;el('selectionSettings').hidden=true;el('login').hidden=false;resetMetaUpload();message('接続を解除しました。このブラウザのログイン情報も削除しました。');};

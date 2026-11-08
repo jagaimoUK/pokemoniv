@@ -13,6 +13,7 @@ from zipfile import ZipFile
 
 from pvpoke_selection_matrix import MODES, SHIELDS, SelectionMatrix, load_selection_matrix
 from pvpoke_go_search import search_string
+from pvpoke_app_sizes import pumpkin_form
 from pvpoke_candidate_comparison import rating_dominators, rival_summaries
 from pvpoke_classic_curator import curate_for_box
 
@@ -240,7 +241,7 @@ def recommend(matrices: dict[str, SelectionMatrix], candidate: dict,
                                   for i in range(len(cells))),
         "rating_count": len(ivs) * len(cells),
     }
-    return {"format": "app-recommendations-v1", "complete": True, "policy": asdict(rules),
+    result = {"format": "app-recommendations-v1", "complete": True, "policy": asdict(rules),
             "moveset_summary": profile,
             "explanation_version": "pairwise-v1",
             "grade_source": "project rule-based provisional candidates", "candidate": candidate,
@@ -255,6 +256,24 @@ def recommend(matrices: dict[str, SelectionMatrix], candidate: dict,
             "dominated_by": {iv: by for iv, by in dominated.items() if by},
             "excluded": matrices["default"].manifest.get("excluded"),
             "counts_estimated_from_rating": True}
+    if candidate["species"].startswith("gourgeist_") and pumpkin_form(candidate["species"]):
+        # Default opponent IVs are the common axis even in a mixed simple/detailed batch.
+        common = cells[:len(matrices["default"].opponents) * len(SHIELDS)]
+        result["size_comparison"] = {
+            "axis": hashlib.sha256(json.dumps(common, ensure_ascii=False).encode()).hexdigest(),
+            "focus": "".join("1" if any(term in opponent.casefold() for term in focus_terms) else "0"
+                             for _, _, _, opponent in common),
+            "rows": {
+                iv: {
+                    "outcomes": "".join("2" if value > 500 else "1" if value == 500 else "0"
+                                        for value in vectors[iv][:len(common)]),
+                    "mean": sum(vectors[iv][:len(common)]) / len(common),
+                }
+                for row in recommendations
+                for iv in (row["ivs"], *(item["ivs"] for item in row["equivalent_candidates"]))
+            },
+        }
+    return result
 
 
 def recommendations_from_zip(archive: ZipFile, candidate: dict, english_name: str,

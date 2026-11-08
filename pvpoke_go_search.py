@@ -70,7 +70,7 @@ def gender_go_name(name: str, species_id: str | None = None) -> tuple[str, str]:
     sid = (species_id or "").casefold()
     sex = re.search(r"(?:_|-)(female|male)(?:_|-|$)", sid)
     suffix = re.search(r"(?:\s*[(（]\s*(female|male|オス|メス)\s*[)）]|(?:\s+|_)(female|male)|\s*([♀♂]))$", text, re.I)
-    gender = sex.group(1) if sex else None
+    gender = sex.group(1) if sex else ("male" if sid == "oinkologne" else None)
     if suffix:
         token = next(x for x in suffix.groups() if x).casefold()
         gender = gender or ("female" if token in ("female", "メス", "♀") else "male")

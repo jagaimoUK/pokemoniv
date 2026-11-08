@@ -32,6 +32,10 @@ def sample_catalog():
             'default_moves': {'fast': 'ROLLOUT', 'charged1': 'POWER_GEM',
                               'charged2': 'ACROBATICS'},
         }
+    for sid, name in [('oinkologne', 'Oinkologne'), ('oinkologne_female', 'Oinkologne (Female)')]:
+        raw[sid] = {'dex': 916}
+        payload[sid] = {'name': name, 'fastMoves': ['TAKE_DOWN'],
+                        'chargedMoves': ['BODY_SLAM', 'TRAILBLAZE']}
     enrich_catalog(payload, raw)
     return {'species': payload}
 
@@ -55,6 +59,18 @@ class IvTextContractTests(unittest.TestCase):
                         self.assertEqual([j['candidate']['species'] for j in result['jobs']],
                                          case['species_ids'].split('|'))
                         self.assertTrue(all(j['ivs'] == ivs for j in result['jobs']))
+
+    def test_oinkologne_reader_source_cp_and_gender_are_preserved(self):
+        parsed = parse_import(
+            '# パフュートン(メス)\n0,11,12 CP451 | パフュートン(メス)\n'
+            '# パフュートン（オス）\n0,11,12 CP452 | パフュートン（オス）',
+            self.catalog)
+        self.assertEqual([j['candidate']['species'] for j in parsed['jobs']],
+                         ['oinkologne_female', 'oinkologne'])
+        self.assertEqual([j['source_records'][0]['search_string'] for j in parsed['jobs']], [
+            'Oinkologne&female&0attack&3defense&3hp&cp451',
+            'Oinkologne&male&0attack&3defense&3hp&cp452',
+        ])
 
     def test_all_shadow_spellings_are_bound_to_the_exact_form(self):
         for sid, entry in self.catalog['species'].items():
