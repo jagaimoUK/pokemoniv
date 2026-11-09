@@ -20,21 +20,33 @@ assert(smart.every(j=>j.candidate.fast!=='WEAK'&&![j.candidate.charged1,j.candid
 assert(smart.some(j=>[j.candidate.charged1,j.candidate.charged2].includes('FIRE')),'Preserve strong alternate coverage');
 assert(smart.some(j=>[j.candidate.charged1,j.candidate.charged2].includes('BUFF')),'Consider stat-changing role');
 assert(smart.every(j=>j.moveset_plan.omitted===63-smart.length));
-// UI registration, persistence and reversed charge deduplication.
-els.species.value='test';els.fast.value='WEAK';els.charged1.value='MAIN';els.charged2.value='WEAK_C';ctx.document.getElementById('addMoveset').onclick();
-assert(storage.size===1);assert.equal(ctx.readSavedMovesets().test.length,1);
-els.charged1.value='WEAK_C';els.charged2.value='MAIN';ctx.document.getElementById('addMoveset').onclick();
-assert.equal(ctx.readSavedMovesets().test.length,1);
-els.fast.value='ALT';els.charged1.value='ICE';els.charged2.value='FIRE';ctx.document.getElementById('addMoveset').onclick();
+// Existing registrations load from the same key. Reversed charged moves re-enable the same entry.
+const key='pvpoke-app-movesets-v1';
+const status=element(),old={species:'test',fast:'WEAK',charged1:'MAIN',charged2:'WEAK_C',enabled:false};
+storage.set(key,JSON.stringify({test:[old]}));
+vm.runInContext('savedMovesets=readSavedMovesets()',ctx);
+assert.equal(ctx.registerMoveset({...old,charged1:'WEAK_C',charged2:'MAIN'},status),true);
+assert.deepEqual(ctx.readSavedMovesets().test,[{...old,enabled:true}]);
+assert.equal(ctx.registerMoveset({...old,fast:'ALT',charged1:'ICE',charged2:'FIRE'},status),true);
 assert.equal(ctx.readSavedMovesets().test.length,2);
 const manual=ctx.planMovesets([base],'manual');assert.equal(manual.length,2);
 assert(ctx.planMovesets([base],'smart').some(j=>j.candidate.fast==='WEAK'),'Explicit registrations bypass heuristic strength cutoff');
+const staleInput={...base,candidate:{...base.candidate,fast:'REMOVED'}};
+assert.equal(ctx.planMovesets([staleInput],'manual').length,2,'Unused fallback moves cannot block valid registrations');
+assert.throws(()=>ctx.planMovesets([staleInput],'smart'),/技を確認/);
 vm.runInContext('savedMovesets.test[0].enabled=false',ctx);assert.equal(ctx.planMovesets([base],'manual').length,1);
-// Targeted editing for a multi-species import, keeping each source CP separate.
 ctx.other={...base,name:'別種',candidate:{...base.candidate,species:'other'},source_records:[{ivs:'0/15/15',cp:500,species:'other'}]};
-vm.runInContext('setImportedJobs([base,other])',ctx);assert.equal(els.movesetTargetRow.hidden,false);assert(!els.fast.disabled);
-els.movesetTarget.value='other';els.fast.value='ALT';els.charged1.value='MAIN';els.charged2.value='FIRE';els.addMoveset.onclick();
+vm.runInContext('setImportedJobs([base,other])',ctx);
+assert.equal(els.inputMoves.hidden,true);
+assert.match(els.queuePreview.textContent,/登録技：ALT \/ ICE \/ FIRE/);
+assert.equal(ctx.registerMoveset({...ctx.other.candidate,fast:'ALT',charged2:'FIRE'},status),true);
 assert.equal(ctx.readSavedMovesets().other.length,1);assert.equal(ctx.readSavedMovesets().test.length,2);
+assert.match(els.queuePreview.textContent,/登録技：ALT \/ MAIN \/ FIRE/);
+const save=ctx.localStorage.setItem;ctx.localStorage.setItem=()=>{throw Error('storage full');};
+assert.equal(ctx.registerMoveset({...ctx.other.candidate,charged2:'CHEAP'},status),false);
+assert.match(status.textContent,/設定は変更されていません/);
+assert.equal(ctx.planMovesets([ctx.other],'manual').length,1);
+ctx.localStorage.setItem=save;
 const mixed=vm.runInContext("planMovesets([base,other],'manual')",ctx);assert.equal(mixed.length,2);assert.equal(mixed[1].source_records[0].cp,500);
 const same=ctx.planMovesets([base,{...base,candidate:{...base.candidate,charged2:'FIRE'}}],'all');assert.equal(same.length,63,'Same-source inputs deduplicate profiles');
 const different=ctx.planMovesets([base,{...base,ivs:'2,13,14'}],'manual');assert.equal(new Set(different.map(j=>j.moveset_group)).size,2,'Different input IVs never merge');
@@ -43,4 +55,4 @@ vm.runInContext('moveCatalog={};savedMovesets={}',ctx);const missing=ctx.planMov
 vm.runInContext("savedMovesets={test:[{species:'test',fast:'REMOVED',charged1:'MAIN',charged2:'ICE'}]}",ctx);assert.throws(()=>ctx.planMovesets([base],'smart'),/登録構成/);
 assert(html.indexOf('id="results"')<html.indexOf('id="metaManager"'));assert.equal((html.match(/id="results"/g)||[]).length,1);
 assert(html.includes('value="smart"')&&html.includes('value="all"'));
-console.log(`Smart planning: ${all.length} → ${smart.length} fixture profiles; coverage/effects, explicit override, persistent multi-species UI and source isolation: OK`);
+console.log(`Smart planning: ${all.length} → ${smart.length} fixture profiles; coverage/effects, explicit override, persistent species settings and source isolation: OK`);

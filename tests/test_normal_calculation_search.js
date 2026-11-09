@@ -10,7 +10,6 @@ const els={},storage=new Map();
 function element(){return {value:'',hidden:false,children:[],append(x){this.children.push(x)},replaceChildren(){this.children=[]}};}
 const app={URLSearchParams,location:{hash:''},document:{getElementById:id=>els[id]??=element(),createElement:element},sessionStorage:{getItem:()=>null},localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},fetch:async()=>({status:401})};
 vm.createContext(app);vm.runInContext(source.split('<script>')[1].split('</script>')[0],app);
-vm.runInContext("catalog={mew:{name:'Mew',fastMoves:['FAST'],chargedMoves:['A','B']}};el('species').value='mew';el('movesetTarget').value='mew';el('fast').value='FAST';el('charged1').value='A';el('charged2').value='B';el('evaluation').value='gpt';el('addMoveset').onclick()",app);
-assert.equal(els.evaluation.value,'app');assert.equal(els.run.textContent,'計算して結果を表示');
-assert(vm.runInContext("registeredMovesets('mew').length",app)>0);
-console.log('XXL individuals retained; registering moves restores normal calculation: OK');
+vm.runInContext("active=true;el('evaluation').value='gpt';startSelection()",app);
+assert.equal(els.evaluation.value,'app');
+console.log('XXL individuals retained; selection uses app evaluation: OK');
