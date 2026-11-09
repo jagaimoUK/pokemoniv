@@ -16,14 +16,19 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 .meta-toolbar,.meta-quick,.meta-settings{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.meta-toolbar button,.meta-settings button{flex:0 1 auto;min-height:44px;padding:9px 12px;font-size:13px;border-radius:12px;max-width:100%}.meta-toolbar{margin-bottom:8px}.meta-settings{margin-top:12px}.meta-settings button[aria-pressed=true],.meta-settings .is-set{border-color:#83bba5;background:#233d35;color:#caeedb}.meta-presets button:focus-visible{outline:3px solid #b9e6cf;outline-offset:3px}.meta-presets button:not(:disabled):active{filter:brightness(1.18)}
 .meta-chooser{margin-top:10px;padding:14px;border:1px solid #41586b;border-radius:16px;background:#142130}.meta-hint{font-size:12px;line-height:1.5;margin:0 0 9px;color:#afc0d6}.meta-quick{align-items:flex-start}.meta-chip{display:inline-flex;align-items:center;justify-content:flex-start;gap:7px;flex:0 1 auto;max-width:100%;min-height:44px;padding:9px 11px;border:1px solid #526979;border-radius:13px;background:#1b2d3d;color:#e8eef9;text-align:left;font-size:13px;line-height:1.5}.meta-chip[aria-pressed=true]{border-color:#91cbb0;background:#29483c;color:#e4f8eb}.meta-chip-mark{flex:none;width:15px;color:#b1c5d4;text-align:center}.meta-chip[aria-pressed=true] .meta-chip-mark{color:#c5f2d8}.meta-chip-name{min-width:0;overflow-wrap:anywhere}.meta-chip .meta-tag{font-size:10px;padding:1px 6px;flex:none}.meta-all-row{display:flex;align-items:center;gap:8px}.meta-all-row select{min-width:0;flex:1;font-size:13px}.meta-all-row button{flex:none;width:44px;min-height:44px;padding:8px;border-radius:12px;font-size:21px}.meta-help{margin:8px 0;font-size:12px}.meta-help summary{color:#afc0d6}.meta-presets .note:empty{display:none}.meta-presets .note{line-height:1.6}
 .meta-edit-row{position:relative;border:1px solid #486252;border-radius:16px;padding:14px 60px 14px 14px;margin:10px 0;background:#192e2b}.meta-edit-heading{font-weight:650;margin-bottom:8px}.meta-edit-remove{position:absolute;right:8px;top:8px;width:44px;padding:6px;border-radius:50%;min-height:44px}.meta-edit-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.meta-edit-fields label{margin:0;font-size:12px}.meta-edit-fields input{margin-top:4px;min-width:0;font-size:14px}.meta-edit-error{color:#ffb6b6;font-size:12px;margin:6px 0 0}@media(max-width:420px){.meta-edit-fields{grid-template-columns:1fr}.meta-edit-row{padding-right:55px}}
-.page-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.page-heading h1{font-size:clamp(22px,5vw,30px)}.settings-button{flex:none;min-width:72px}.selection-settings{position:fixed;inset:6vh 12px;z-index:60;max-width:720px;width:calc(100% - 24px);color:inherit;margin:auto;overflow:auto;box-shadow:0 0 0 100vmax #0009}.selection-settings .actions{position:sticky;bottom:0;background:#1a2637;padding:10px 0}.species-mode-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-top:1px solid #33465d}.species-mode-row label{margin:0;flex:1}.species-mode-row input{width:24px;height:24px;flex:none}.species-mode-state{font-size:13px;color:#afc0d6;flex:none}
+.page-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.page-heading h1{font-size:clamp(22px,5vw,30px)}.settings-button{flex:none;min-width:72px}.selection-settings{position:fixed;inset:6vh 12px;z-index:60;max-width:720px;width:calc(100% - 24px);color:inherit;margin:auto;overflow:auto;box-shadow:0 0 0 100vmax #0009}.selection-settings .actions{position:sticky;bottom:0;background:#1a2637;padding:10px 0}.species-mode-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-top:1px solid #33465d}.species-mode-name{flex:1;min-width:0;min-height:44px;padding:6px 0;background:transparent;color:#a4cdff;text-align:left;overflow-wrap:anywhere}.species-mode-name::before{content:"";display:inline-block;margin:0 8px 1px 3px;width:6px;height:6px;border:solid currentColor;border-width:0 2px 2px 0;transform:rotate(-45deg)}.species-mode-name[aria-expanded="true"]::before{transform:rotate(45deg)}.species-mode-row input{width:24px;height:24px;flex:none}.species-mode-state{font-size:13px;color:#afc0d6;flex:none}
+.species-movesets{padding:0 0 12px 12px;border-left:2px solid #41586b}
+.species-moveset-row{display:flex;gap:8px;align-items:center;justify-content:space-between;margin:8px 0}
+.species-moveset-row label{margin:0;overflow-wrap:anywhere}.species-moveset-row button{flex:none;padding:8px 10px}
+.species-moveset-add{width:100%;text-align:left;margin-top:8px}.species-moveset-form .row{align-items:end}
+.species-moveset-form .form-buttons{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 </style></head><body><nav class="quick-nav" aria-label="ページ内の移動"><a href="/app/party" aria-label="パーティ作成">6/3<br>構築</a><a href="#pageTop" aria-label="ページ上部に戻る">↑<br>上へ</a></nav><main id="pageTop">
 <header><div class="eyebrow">PVP IV SELECTION</div><div class="page-heading"><h1>役割から選ぶ、個体値厳選</h1><button id="selectionSettingsOpen" class="secondary settings-button" type="button" aria-controls="selectionSettings" aria-expanded="false" hidden>⚙ 設定</button></div><p>対戦計算からおすすめ・理由・検索式まで。アプリの自動推薦と、これまでのGPT評価を使い分けられます。</p></header>
 <section class="card" id="login"><h2>アプリに接続</h2><p class="note">初回だけ接続キー、または有効なアクセストークンを入力してください。APIキー自体は端末へ保存しません。</p><label for="credential">接続キー</label><input id="credential" type="password" autocomplete="off"><label class="checkline" for="remember"><input id="remember" type="checkbox" checked>このブラウザのログインを30日間維持する</label><p class="note">共有端末ではチェックを外してください。短期アクセストークンは元の期限まで有効です。ログアウトでこのブラウザのセッションを失効できます。</p><div class="actions"><button id="connect">接続する</button></div></section>
 <p class="note"><a href="/app/migration" style="color:#a4cdff">ブラウザ保存データのバックアップ・復元</a></p>
 <div id="message" class="status" role="status" aria-live="polite" hidden></div>
 <dialog id="selectionSettings" class="card selection-settings" role="dialog" aria-modal="true" aria-labelledby="selectionSettingsTitle" hidden>
-<h2 id="selectionSettingsTitle">ポケモンごとの厳選設定</h2><p class="note">未設定は通常厳選（6条件）です。トグルをONにしたポケモンだけ詳細厳選（24条件）にします。姿・シャドウごとに、このブラウザへ保存します。実行中の計算には変更を反映しません。</p>
+<h2 id="selectionSettingsTitle">ポケモンごとの厳選設定</h2><p class="note">未設定は通常厳選（6条件）です。トグルをONにしたポケモンだけ詳細厳選（24条件）にします。ポケモン名をタップすると、計算に使う技構成を確認・追加できます。厳選モードと技構成は姿・シャドウごとに、このブラウザへ保存します。</p>
 <label for="selectionModeFilter">日本語・英語で検索</label><input id="selectionModeFilter" type="search" autocomplete="off" placeholder="例：サニーゴ / Corsola">
 <p id="selectionModeStatus" class="note" aria-live="polite"></p><div id="selectionModeRows"></div><button id="selectionModeMore" class="secondary" type="button" hidden>さらに50件を表示</button>
 <div class="actions"><button id="selectionSettingsClose" type="button">閉じる</button></div></dialog>
@@ -73,12 +78,8 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <label for="moveStrategy">自動比較の範囲</label><select id="moveStrategy"><option value="smart">推奨：有力で役割の違う構成に絞る（自動選択は最大6構成）</option><option value="all">全組み合わせを比較（時間がかかります）</option></select>
 <p class="note">推奨では威力・エネルギー効率から有力候補を選び、タイプ・発動の速さ・能力変化の違いを優先します。登録した構成と入力で指定した構成は省きません。選外の構成の勝敗は未計算です。</p>
 <label for="moveThreshold">残す平均Ratingの下限（500付近の目安）</label><input id="moveThreshold" type="number" min="0" max="1000" value="450" step="1">
-<p class="note">全構成が下限未満でも最高平均の構成は表示します。自動比較OFFではチェックした登録構成をすべて計算し、登録がなければ下の技を使います。個体ごとのコピー名には採用技の略号を付けます。</p>
-<div id="movesetTargetRow" hidden><label for="movesetTarget">技を設定するポケモン</label><select id="movesetTarget"></select></div>
-<div class="row"><div><label for="fast">通常技</label><select id="fast"></select></div><div><label for="charged1">ゲージ技1</label><select id="charged1"></select></div><div><label for="charged2">ゲージ技2</label><select id="charged2"></select></div></div>
-<div class="actions"><button id="addMoveset" class="secondary" type="button">この組み合わせを登録</button></div>
-<div id="savedMovesets" aria-label="登録した技の組み合わせ"></div><p id="movesetNotice" class="note" aria-live="polite"></p>
-<p class="note">登録構成はポケモンごとに、このブラウザへ保存します。チェックで計算対象を選べます。</p>
+<p class="note">全構成が下限未満でも最高平均の構成は表示します。自動比較OFFでは、右上の「設定」で計算対象にした構成をすべて使います。計算対象の登録がない場合は、今回の入力で指定した技を使います。個体ごとのコピー名には採用技の略号を付けます。</p>
+<div class="row" id="inputMoves"><div><label for="fast">通常技</label><select id="fast"></select></div><div><label for="charged1">ゲージ技1</label><select id="charged1"></select></div><div><label for="charged2">ゲージ技2</label><select id="charged2"></select></div></div>
 <p id="movePlanSummary" class="note" aria-live="polite"></p>
 </details>
 <details><summary>自動推薦の基準を調整</summary><label for="lead">勝ち方向で採用するRating差（既定20）</label><input id="lead" type="number" min="1" max="1000" step="1" value="20"><p class="note">500の境界を越える役割は差にかかわらず確認します。負けたままのRating差は自動推薦にしません。</p></details>
@@ -122,21 +123,46 @@ function setSpeciesSelectionMode(id,detailed){
  if(detailed)selectionModes[id]='detailed';else delete selectionModes[id];
  let saved=true;try{localStorage.setItem(SELECTION_MODE_STORAGE,JSON.stringify(selectionModes));}catch{saved=false;}
  el('selectionModeStatus').textContent=saved?'設定を保存しました。次の計算から適用します。':'保存できませんでした。現在の画面では使えますが、再読込すると失われます。';
- if(importedJobs)el('queuePreview').textContent=queuePreviewText(importedJobs);
+ refreshQueuePreview();
  return saved;
 }
-function queuePreviewText(jobs){return jobs.map((j,i)=>(i+1)+'. '+j.name+'：'+j.candidate_count+'個体 ｜ '+selectionModeLabel(j.candidate.species)+'\n   '+[j.candidate.fast,j.candidate.charged1,j.candidate.charged2].join(' / ')+'\n'+(j.warnings||[]).join('\n')).join('\n\n');}
+function queuePreviewText(jobs){
+ return jobs.map((job,i)=>{
+  const sid=job.candidate.species,registered=enabledMovesets(sid),auto=el('autoMoves').checked;
+  const profiles=auto?[job.candidate,...registered]:(registered.length?registered:[job.candidate]);
+  const labels=[...new Set(profiles.map(moveLabel))];
+  const heading=(i+1)+'. '+job.name+'：'+job.candidate_count+'個体 ｜ '+selectionModeLabel(sid);
+  const source=auto?'指定技（自動比較の候補を追加）':registered.length?'登録技':'入力の技';
+  return [heading,'   '+source+'：'+labels.join(' ｜ '),...(job.warnings||[])].join('\n');
+ }).join('\n\n');
+}
+function refreshQueuePreview(){if(importedJobs)el('queuePreview').textContent=queuePreviewText(importedJobs);}
+function settingsSpeciesName(id){
+ const pokemon=catalog[id],name=pokemon.name_ja||pokemon.name||id;
+ return id==='oinkologne'&&catalog.oinkologne_female&&!catalog.oinkologne_male?name+'（'+(pokemon.name_ja?'オス':'Male')+'）':name;
+}
 function renderSelectionModes(){
- const query=String(el('selectionModeFilter').value||'').normalize('NFKC').toLowerCase().trim();
- const ids=Object.keys(catalog).filter(id=>[id,catalog[id].name,catalog[id].name_ja].some(v=>String(v||'').normalize('NFKC').toLowerCase().includes(query)))
-  .sort((a,b)=>(catalog[a].name_ja||catalog[a].name||a).localeCompare(catalog[b].name_ja||catalog[b].name||b,'ja'));
+ const normalize=value=>String(value||'').normalize('NFKC').toLowerCase().trim();
+ const query=normalize(el('selectionModeFilter').value);
+ const ids=Object.keys(catalog).filter(id=>[id,settingsSpeciesName(id),catalog[id].name,...(catalog[id].aliases||[])].some(v=>normalize(v).includes(query)))
+  .sort((a,b)=>settingsSpeciesName(a).localeCompare(settingsSpeciesName(b),'ja'));
  const rows=el('selectionModeRows');rows.replaceChildren();
+ if(!ids.length)node('p','一致するポケモンはありません。',rows,'note');
  for(const id of ids.slice(0,selectionModeLimit)){
-  const row=node('div','',rows,'species-mode-row'),label=node('label',(catalog[id].name_ja||catalog[id].name||id)+' ('+(catalog[id].name||id)+')',row);
+  const item=node('div','',rows),row=node('div','',item,'species-mode-row');
+  const name=settingsSpeciesName(id),title=node('button',name,row,'species-mode-name');
+  title.type='button';title.setAttribute?.('aria-expanded','false');title.setAttribute?.('aria-controls','species-movesets-'+id);
   const state=node('span',selectionModeLabel(id),row,'species-mode-state'),toggle=document.createElement('input');
-  toggle.type='checkbox';toggle.id='species-mode-'+id;label.htmlFor=toggle.id;toggle.checked=speciesSelectionMode(id)==='detailed';toggle.disabled=active;
-  toggle.setAttribute?.('role','switch');toggle.setAttribute?.('aria-label',(catalog[id].name_ja||catalog[id].name||id)+'の詳細厳選');
+  toggle.type='checkbox';toggle.id='species-mode-'+id;toggle.checked=speciesSelectionMode(id)==='detailed';toggle.disabled=active;
+  toggle.setAttribute?.('role','switch');toggle.setAttribute?.('aria-label',name+'の詳細厳選');
   toggle.onchange=()=>{if(active){toggle.checked=speciesSelectionMode(id)==='detailed';return;}setSpeciesSelectionMode(id,toggle.checked);state.textContent=selectionModeLabel(id);};row.append(toggle);
+  const panel=node('div','',item,'species-movesets');panel.id='species-movesets-'+id;panel.hidden=true;
+  title.onclick=()=>{
+   panel.hidden=!panel.hidden;
+   title.setAttribute?.('aria-expanded',String(!panel.hidden));
+   if(!panel.hidden)renderSpeciesMovesets(id,panel);
+   else panel.replaceChildren();
+  };
  }
  el('selectionModeMore').hidden=ids.length<=selectionModeLimit;
 }
@@ -193,15 +219,25 @@ async function loadLowScores(){
 }
 el('lowSearchRun').onclick=()=>loadLowScores();
 el('lowExcludeFavorites').onchange=()=>loadLowScores();
-function option(select,values,selected){select.replaceChildren();for(const v of values){const o=document.createElement('option');o.value=v;o.textContent=v;select.append(o);}if(values.includes(selected))select.value=selected;}
-function moves(row={},sid=el('species').value){const p=catalog[sid]||{};option(el('fast'),p.fastMoves||[],row.fast);option(el('charged1'),p.chargedMoves||[],row.charged1);option(el('charged2'),p.chargedMoves||[],row.charged2);if(el('charged1').value===el('charged2').value){const alt=(p.chargedMoves||[]).find(x=>x!==el('charged1').value);if(alt)el('charged2').value=alt;}renderSavedMovesets(sid);}
+function option(select,values,selected,label=v=>v){select.replaceChildren();for(const v of values){const o=document.createElement('option');o.value=v;o.textContent=label(v);select.append(o);}if(values.includes(selected))select.value=selected;}
+function fillMoveFields(sid,row,[fast,charged1,charged2],label){
+ const p=catalog[sid]||{},charges=p.chargedMoves||[];
+ option(fast,p.fastMoves||[],row.fast,label);
+ option(charged1,charges,row.charged1,label);
+ option(charged2,charges,row.charged2,label);
+ if(charged1.value===charged2.value){
+  const alternative=charges.find(move=>move!==charged1.value);
+  if(alternative)charged2.value=alternative;
+ }
+}
+function moves(row={},sid=el('species').value){fillMoveFields(sid,row,['fast','charged1','charged2'].map(el));}
 function presetKey(p){return p.key||[p.species,p.fast,p.charged1,p.charged2].join('|');}
 function currentCandidate(){return {species:el('species').value.trim(),fast:el('fast').value,charged1:el('charged1').value,charged2:el('charged2').value};}
 function setCandidate(p){inputPokemonStatus=null;el('species').value=p.species;el('allSpecies').value=p.species;moves(p);const found=presets.find(x=>['species','fast','charged1','charged2'].every(k=>x[k]===p[k]));el('preset').value=found?presetKey(found):'';}
 function setPreset(){const p=presets.find(x=>presetKey(x)===el('preset').value);if(p)setCandidate(p);}
 function resolveTypedSpecies(){const raw=el('species').value.normalize('NFKC').trim().toLowerCase();if(['gourgeist','pumpkaboo','パンプジン','バケッチャ'].includes(raw)){message('このポケモンはサイズごとに能力が異なります。こだましゅ/XS、ちゅうだましゅ/通常、おおだましゅ/XL、ギガだましゅ/XXLを指定してください。',true);return;}const found=Object.entries(catalog).filter(([sid,p])=>[sid,p.name,p.name_ja,...(p.aliases||[])].some(x=>x&&String(x).normalize('NFKC').trim().toLowerCase()===raw));if(found.length===1)el('species').value=found[0][0];else if(found.length>1)message('複数のフォルムが一致しました。サイズやフォルムを指定してください。',true);}
 
-function setBusy(value){active=value;for(const id of ['bulkNormal','bulkShadow','bulkPurified','bulkStatusUndo'])el(id).disabled=value;for(const id of ['run','resume','disconnect','importInput','singleForm','forceRecalculate','autoMoves','moveStrategy','moveThreshold','movesetTarget','addMoveset','fast','charged1','charged2'])el(id).disabled=value;for(const id of ['preset','allSpecies','species','ivs'])el(id).disabled=value||!!importedJobs;el('metaFile').disabled=value;el('metaApply').disabled=value||!metaPending||metaWorking;el('run').textContent=value?'計算を確認中…':'計算して結果を表示';el('cancelRun').hidden=!(value&&calculating);el('cancelRun').disabled=!(value&&calculating)||stopRequested;renderSavedMovesets(editingMovesetSpecies());syncMetaControls();if(!value&&readerImportPending&&!readerImportInFlight)Promise.resolve().then(autoImportReader);}
+function setBusy(value){active=value;for(const id of ['bulkNormal','bulkShadow','bulkPurified','bulkStatusUndo'])el(id).disabled=value;for(const id of ['run','resume','disconnect','importInput','singleForm','forceRecalculate','autoMoves','moveStrategy','moveThreshold','fast','charged1','charged2'])el(id).disabled=value;for(const id of ['preset','allSpecies','species','ivs'])el(id).disabled=value||!!importedJobs;el('metaFile').disabled=value;el('metaApply').disabled=value||!metaPending||metaWorking;el('run').textContent=value?'計算を確認中…':'計算して結果を表示';el('cancelRun').hidden=!(value&&calculating);el('cancelRun').disabled=!(value&&calculating)||stopRequested;if(!el('selectionSettings').hidden)renderSelectionModes();syncMetaControls();if(!value&&readerImportPending&&!readerImportInFlight)Promise.resolve().then(autoImportReader);}
 function node(tag,text,parent,cls=''){const n=document.createElement(tag);n.textContent=text;if(cls)n.className=cls;parent.append(n);return n;}
 async function copy(text,button){try{await navigator.clipboard.writeText(text);button.textContent='コピーしました';}catch{const root=el('message');message('コピーできませんでした。下の欄から選択してコピーしてください。',true);const area=node('textarea',text,root);area.value=text;area.readOnly=true;area.focus();area.select();}}
 // Result labels are resolved against the active catalog, including form names.
@@ -809,7 +845,7 @@ el('bulkStatusUndo').onclick=()=>{
 };
 
 function cacheBatch(){try{sessionStorage.setItem('pvpoke-app-batch',JSON.stringify(batchState));}catch{message('再開情報を保存できませんでした。計算が終わるまで画面を開いておいてください。',true);}}
-function setImportedJobs(jobs){importedSingle=jobs?.length===1?jobs[0]:null;importedJobs=jobs&&jobs.length>1?jobs:null;el('queuePanel').hidden=!importedJobs;for(const id of ['preset','allSpecies','species','ivs'])el(id).disabled=!!importedJobs;if(importedJobs)el('queuePreview').textContent=queuePreviewText(jobs);refreshMovesetTarget();}
+function setImportedJobs(jobs){importedSingle=jobs?.length===1?jobs[0]:null;importedJobs=jobs&&jobs.length>1?jobs:null;el('queuePanel').hidden=!importedJobs;for(const id of ['preset','allSpecies','species','ivs'])el(id).disabled=!!importedJobs;el('inputMoves').hidden=!!importedJobs;refreshQueuePreview();}
 async function stopActiveRun(){
  if(!runRef)return;
  if(!stopPromise){
@@ -848,33 +884,70 @@ function readSavedMovesets(){try{const data=JSON.parse(localStorage.getItem(MOVE
 function movesetKey(c){return [c.species,c.fast,...[c.charged1,c.charged2].sort()].join('|');}
 function validMoveset(c){const p=catalog[c?.species];return !!p&&p.fastMoves.includes(c.fast)&&c.charged1!==c.charged2&&[c.charged1,c.charged2].every(x=>p.chargedMoves.includes(x));}
 function registeredMovesets(sid){return Array.isArray(savedMovesets[sid])?savedMovesets[sid].filter(c=>c&&c.species===sid):[];}
-function persistMovesets(){try{localStorage.setItem(MOVESET_STORAGE,JSON.stringify(savedMovesets));return true;}catch{el('movesetNotice').textContent='このブラウザへ保存できませんでした。現在の画面では使えますが、再読込すると失われます。';return false;}}
-function editingMovesetSpecies(){return importedJobs?el('movesetTarget').value:el('species').value.trim();}
-function refreshMovesetTarget(){
- const ids=importedJobs?[...new Set(importedJobs.map(j=>j.candidate.species))]:[el('species').value.trim()];
- const previous=el('movesetTarget').value;option(el('movesetTarget'),ids,ids.includes(previous)?previous:ids[0]);
- // Explicitly set the value as well for lightweight DOM clients.
- el('movesetTarget').value=ids.includes(previous)?previous:ids[0];el('movesetTargetRow').hidden=!importedJobs;
- if(importedJobs){const sid=editingMovesetSpecies(),job=importedJobs.find(j=>j.candidate.species===sid);moves(job?.candidate||{},sid);}else renderSavedMovesets(ids[0]);
+function enabledMovesets(sid){return registeredMovesets(sid).filter(c=>c.enabled!==false);}
+function saveSpeciesMovesets(sid,rows,status){
+ const next={...savedMovesets,[sid]:rows};
+ try{localStorage.setItem(MOVESET_STORAGE,JSON.stringify(next));}
+ catch{status.textContent='このブラウザへ保存できませんでした。設定は変更されていません。';return false;}
+ savedMovesets=next;refreshQueuePreview();return true;
 }
-function renderSavedMovesets(sid){
- const root=el('savedMovesets');root.replaceChildren();
- const rows=registeredMovesets(sid);if(!rows.length){node('p','登録した組み合わせはありません。',root,'note');return;}
- node('p',(catalog[sid]?.name_ja||sid)+'：登録 '+rows.length+'構成',root,'note');
- for(const c of rows){
-  const row=node('div','',root),label=node('label','',row,'checkline'),check=document.createElement('input');check.type='checkbox';check.checked=c.enabled!==false;check.disabled=active;label.append(check);label.append(document.createTextNode?document.createTextNode(moveLabel(c)):Object.assign(document.createElement('span'),{textContent:moveLabel(c)}));
-  check.onchange=()=>{c.enabled=check.checked;persistMovesets();};
-  if(!validMoveset(c))node('p','現在の技一覧にない組み合わせです。削除して登録し直してください。',row,'note');
-  const remove=node('button','削除',row,'secondary');remove.type='button';remove.disabled=active;remove.onclick=()=>{savedMovesets[sid]=registeredMovesets(sid).filter(x=>movesetKey(x)!==movesetKey(c));persistMovesets();renderSavedMovesets(sid);};
+function registerMoveset(candidate,status){
+ if(!validMoveset(candidate)){status.textContent='通常技と、異なるゲージ技2個を選んでください。';return false;}
+ const sid=candidate.species,rows=registeredMovesets(sid),index=rows.findIndex(c=>movesetKey(c)===movesetKey(candidate));
+ if(index<0)rows.push({...candidate,enabled:true});
+ else rows[index]={...rows[index],enabled:true};
+ return saveSpeciesMovesets(sid,rows,status);
+}
+function renderSpeciesMovesets(sid,panel,notice=''){
+ panel.replaceChildren();
+ const status=node('p',notice,panel,'note');status.setAttribute?.('role','status');
+ const rows=registeredMovesets(sid);
+ node('p',rows.length?'チェックした技構成を次の厳選に使います。':'登録した技構成はありません。',panel,'note');
+ for(const candidate of rows){
+  const row=node('div','',panel,'species-moveset-row'),label=node('label','',row,'checkline');
+  const check=document.createElement('input');check.type='checkbox';check.checked=candidate.enabled!==false;check.disabled=active;label.append(check);
+  node('span',moveLabel(candidate),label);
+  check.onchange=()=>{
+   if(active){check.checked=candidate.enabled!==false;return;}
+   const current=registeredMovesets(sid),enabled=check.checked;
+   const updated=current.map(c=>movesetKey(c)===movesetKey(candidate)?{...c,enabled}:c);
+   if(saveSpeciesMovesets(sid,updated,status))status.textContent=enabled?'次の計算で使う構成にしました。':'登録構成から計算対象を外しました。';
+   else check.checked=current.find(c=>movesetKey(c)===movesetKey(candidate))?.enabled!==false;
+  };
+  const remove=node('button','削除',row,'secondary');remove.type='button';remove.disabled=active;
+  remove.setAttribute?.('aria-label',moveLabel(candidate)+'を削除');
+  remove.onclick=()=>{
+   if(!active&&saveSpeciesMovesets(sid,registeredMovesets(sid).filter(c=>movesetKey(c)!==movesetKey(candidate)),status)){
+    renderSpeciesMovesets(sid,panel,'技構成を削除しました。').focus?.();
+   }
+  };
+  if(!validMoveset(candidate))node('p','現在の技一覧にない組み合わせです。削除して登録し直してください。',panel,'note');
  }
+ const add=node('button','＋ 技構成を追加',panel,'secondary species-moveset-add');add.type='button';add.disabled=active;
+ add.onclick=()=>{
+  if(active)return;
+  add.hidden=true;
+  const form=node('div','',panel,'species-moveset-form'),fields=node('div','',form,'row');
+  const selects=['通常技','ゲージ技1','ゲージ技2'].map((name,index)=>{
+   const field=node('div','',fields),label=node('label',name,field),select=node('select','',field);
+   select.id='species-move-'+sid+'-'+index;label.htmlFor=select.id;return select;
+  });
+  fillMoveFields(sid,catalog[sid].default_moves||{},selects,id=>moveCatalog[id]?.name||id);
+  const actions=node('div','',form,'form-buttons');
+  const save=node('button','登録',actions),cancel=node('button','キャンセル',actions,'secondary');
+  save.type=cancel.type='button';
+  save.onclick=()=>{
+   const [fast,charged1,charged2]=selects.map(select=>select.value);
+   if(!active&&registerMoveset({species:sid,fast,charged1,charged2},status)){
+    renderSpeciesMovesets(sid,panel,'技構成を登録しました。次の計算から適用します。').focus?.();
+   }
+  };
+  cancel.onclick=()=>{form.remove();add.hidden=false;add.focus?.();};
+  selects[0].focus?.();
+ };
+ return add;
 }
-el('movesetTarget').onchange=()=>{const sid=editingMovesetSpecies(),job=importedJobs?.find(j=>j.candidate.species===sid);moves(job?.candidate||catalog[sid]?.default_moves||{},sid);};
-el('addMoveset').onclick=()=>{
- if(active)return;el('evaluation').value='app';el('run').textContent='計算して結果を表示';const sid=editingMovesetSpecies(),c={species:sid,fast:el('fast').value,charged1:el('charged1').value,charged2:el('charged2').value,enabled:true};
- if(!validMoveset(c)){el('movesetNotice').textContent='通常技と、異なるゲージ技2個を選んでください。';return;}
- const rows=registeredMovesets(sid),old=rows.find(x=>movesetKey(x)===movesetKey(c));if(old)old.enabled=true;else rows.push(c);savedMovesets[sid]=rows;
- el('movesetNotice').textContent=old?'登録済みの構成を計算対象にしました。':'技の組み合わせを登録しました。';persistMovesets();renderSavedMovesets(sid);
-};
+el('autoMoves').onchange=refreshQueuePreview;
 function allMoveProfiles(sid){
  const p=catalog[sid],fast=[...new Set(p?.fastMoves||[])].sort(),charged=[...new Set(p?.chargedMoves||[])].sort(),profiles=[];
  for(const f of fast)for(let i=0;i<charged.length;i++)for(let j=i+1;j<charged.length;j++)profiles.push({species:sid,fast:f,charged1:charged[i],charged2:charged[j]});return profiles;
@@ -911,9 +984,9 @@ function planMovesets(jobs,mode='smart'){
  const groups=new Map(),planned=[];
  for(const job of jobs){const key=JSON.stringify([job.candidate.species,job.ivs,job.source_sections||[],job.source_records||[],job.pokemon_status||null]);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(job);}
  for(const members of groups.values()){
-  const job=members[0],sid=job.candidate.species,group=planned.length,pool=allMoveProfiles(sid),registered=registeredMovesets(sid).filter(c=>c.enabled!==false);
+  const job=members[0],sid=job.candidate.species,group=planned.length,pool=allMoveProfiles(sid),registered=enabledMovesets(sid);
   if(registered.some(c=>!validMoveset(c)))throw Error(job.name+'：現在の技一覧にない登録構成があります。削除して登録し直してください。');
-  const explicit=members.map(j=>j.candidate);if(explicit.some(c=>!validMoveset(c)))throw Error(job.name+'の技を確認してください。');
+  const explicit=members.map(j=>j.candidate);if((mode!=='manual'||!registered.length)&&explicit.some(c=>!validMoveset(c)))throw Error(job.name+'の技を確認してください。');
   let picked,incomplete=false;
   if(mode==='all')picked=pool;
   else if(mode==='manual')picked=registered.length?registered:explicit;
