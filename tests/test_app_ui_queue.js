@@ -104,7 +104,7 @@ vm.runInContext("catalog={swadloon:{name:'Swadloon',name_ja:'クルマユ',nickn
  context.sizeResults=sizeIds.map((sid,i)=>{
   const r=staged(sid,'0/11/12',540,'Other','s1',i);
   r.selection.mode_count=i%2?4:1;
-  r.selection.size_comparison={axis:'common',focus:'001000',rows:{}};
+  r.selection.size_comparison={axis:'common',focus:'001000',opponents:['Other'],rows:{}};
   const seed=r.selection.recommendations[0];
   r.selection.recommendations=['0/11/12','1/12/13'].map((iv,j)=>{
    const n=i*2+j;
@@ -121,27 +121,56 @@ vm.runInContext("catalog={swadloon:{name:'Swadloon',name_ja:'クルマユ',nickn
  vm.runInContext(`batchState={jobs:sizeResults,results:sizeResults,index:sizeResults.length};renderBatchResults()`,context);
  const group=vm.runInContext('displayedResults',context);
  const savedSizes=Array.from(group.flatMap(r=>r.selection.recommendations.map(row=>[row.rank,r.candidate.species,row.ivs])));
- assert.equal(savedSizes.length,4);
- assert.deepEqual(Array.from(savedSizes.sort((a,b)=>a[0]-b[0]),a=>Array.from(a)),[
+ assert.deepEqual(Array.from(savedSizes,a=>Array.from(a)),[
   [1,'gourgeist_small','0/11/12'],[2,'gourgeist_average','0/11/12'],
-  [3,'gourgeist_average','1/12/13'],[4,'gourgeist_large','0/11/12'],
+  [3,'gourgeist_average','1/12/13'],[4,'gourgeist_large','0/11/12'],[5,'gourgeist_large','1/12/13'],
  ]);
  assert.equal(group[0].selection.recommendations[0].equivalent_candidates.length,0);
- assert(group[0].selection.additional_candidates.some(row=>row.ivs==='0/12/12'));
  const sizeExport=JSON.parse(vm.runInContext('overlayExport(displayedResults)',context));
- assert.equal(sizeExport.items.length,4);
+ assert.equal(sizeExport.items.length,5);
  assert(sizeExport.items.some(row=>row.search.includes('&xs&')&&row.cp===400));
  assert(!sizeExport.items.some(row=>row.cp===500));
- await els.allCopyActions.children[0].onclick();
- assert.equal(copied.at(-1).split('\n').length,8);
- assert(flat(els.results).some(x=>x.textContent.includes('全サイズ合計で最大4体')));
+ const groupButtons=flat(els.results).filter(x=>x.textContent==='検索式とニックネームをすべてコピー');
+ assert.equal(groupButtons.length,1);
+ await groupButtons[0].onclick();
+ assert.equal(copied.at(-1).split('\n').length,10);
+ assert.equal(flat(els.results).filter(x=>x.textContent==='パンプジン｜全サイズまとめ').length,1);
+ assert.equal(els.allCopyActions.hidden,true,'Only one family-wide set of actions');
  assert.equal(context.sizeResults.reduce((n,r)=>n+r.selection.recommendations.length,0),8,'Saved raw results remain intact');
  vm.runInContext(`batchState={jobs:sizeResults,results:sizeResults.slice(0,2),index:2};renderBatchResults()`,context);
- assert(flat(els.results).some(x=>x.textContent.includes('暫定結果')));
+ assert(flat(els.results).some(x=>x.textContent.includes('完了後にまとめて保存候補')));
+ assert.equal(vm.runInContext('displayedResults.length',context),0);
+ assert.equal(flat(els.results).filter(x=>x.textContent==='検索式とニックネームをすべてコピー').length,0);
  const legacy=vm.runInContext(`curateGourgeist(sizeResults.map(r=>({...r,selection:{...r.selection,size_comparison:null}})))`,context);
- assert.equal(legacy.reduce((n,r)=>n+r.selection.recommendations.length,0),4);
- console.log('Gourgeist across all sizes, priority matchup, partial resume, and exact four-copy cap: OK');
+ assert.equal(legacy.selected.length,4);
+
+ // Four local candidates per size, two movesets, and a specialist outside both local shortlists.
+ const dense=[];
+ for(const [i,source] of context.sizeResults.entries())for(const m of [0,1]){
+  const r={...source,candidate:{...source.candidate,fast:m?'ALT':'FAST'},moveset_group:i};
+  const selection=r.selection={...source.selection,recommendations:[],candidate_ivs:[],
+   size_comparison:{axis:'dense',focus:'0'.repeat(16)+'1'+'0'.repeat(7),opponents:['Other','Quagsire','Feraligatr','Swadloon'],rows:{}}};
+  for(let n=0;n<=4;n++){
+   const iv=n+'/14/15',search='Gourgeist&'+sizeTerms[i]+'&'+n+'attack&3defense&4hp';
+   const cell=n===4?(m?16+i:i):i*4+n;
+   selection.candidate_ivs.push(iv);
+   selection.size_comparison.rows[iv]={outcomes:'0'.repeat(cell)+'2'+'0'.repeat(23-cell),mean:610-n*10-m,search_string:search};
+   if(n<4)selection.recommendations.push({...source.selection.recommendations[0],ivs:iv,search_string:search});
+  }
+  dense.push(r);
+ }
+ context.dense=dense;
+ vm.runInContext(`batchState={jobs:dense,results:dense,index:dense.length,compare_moves:true};renderBatchResults()`,context);
+ const capped=JSON.parse(vm.runInContext('overlayExport(displayedResults)',context)).items;
+ assert.equal(capped.length,8);
+ assert.equal(new Set(capped.map(item=>[item.species,item.ivs].join('/'))).size,8);
+ assert.equal(capped[1].ivs,'4/14/15','Focus win outside both size-local shortlists survives');
+ assert.equal(vm.runInContext('displayedResults[1].candidate.fast',context),'ALT');
+ assert(flat(els.results).some(x=>x.textContent.includes('保存候補外の個体（12）')));
+ const redundant=vm.runInContext(`curateGourgeist(dense.map(r=>({...r,selection:{...r.selection,
+  size_comparison:{...r.selection.size_comparison,rows:Object.fromEntries(
+   Object.entries(r.selection.size_comparison.rows).map(([iv,data])=>[iv,{...data,outcomes:'2'+'0'.repeat(23)}]))}}})))`,context);
+ assert.equal(redundant.selected.length,1,'Do not fill a fixed quota for equivalent roles');
+ console.log('Gourgeist: one family shortlist, no interim copies, useful extra roles, no filler, exact eight-copy ceiling: OK');
 
 })();
-
-
