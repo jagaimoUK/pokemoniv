@@ -40,11 +40,25 @@ class AppSelectionTests(unittest.TestCase):
         detailed_result = recommend(detailed, {**CANDIDATE, 'species': 'gourgeist_super'},
                                     'Gourgeist (Super)', ['Quagsire'])
         summary = normal_result['size_comparison']
-        self.assertEqual(summary, detailed_result['size_comparison'])
+        other = detailed_result['size_comparison']
+        self.assertEqual((summary['axis'], summary['focus']), (other['axis'], other['focus']))
         self.assertEqual(summary['focus'], '010' * 6)
         self.assertEqual(summary['rows'][a]['outcomes'], '210' * 6)
-        self.assertEqual(summary['rows'][a], summary['rows'][b])
+        self.assertEqual(summary['rows'][a]['outcomes'], summary['rows'][b]['outcomes'])
+        self.assertEqual(summary['rows'][a]['mean'], other['rows'][a]['mean'])
+        self.assertIn('&xs', summary['rows'][a]['search_string'])
+        self.assertIn('&xxl', other['rows'][a]['search_string'])
         self.assertNotIn('size_comparison', recommend({'default': data}, CANDIDATE, 'Quagsire'))
+
+    def test_gourgeist_keeps_viable_roles_beyond_the_local_save_limit(self):
+        rows = {f'{i}/15/15': [600 if i == j else 300 for j in range(6)] for i in range(6)}
+        rows['15/15/15'] = [100] * 6
+        data = matrix(rows, ['Opponent ' + str(i) for i in range(6)])
+        result = recommend({'default': data}, {**CANDIDATE, 'species': 'gourgeist_average'}, 'Gourgeist')
+        self.assertEqual(len(result['recommendations']), 4)
+        self.assertEqual(set(result['size_comparison']['rows']), set(rows) - {'15/15/15'})
+        self.assertTrue(all('&!xxs&!xs&!xl&!xxl' in row['search_string']
+                            for row in result['size_comparison']['rows'].values()))
 
     def test_loss_only_rating_lead_is_reviewed_not_recommended(self):
         data = matrix({'0/11/12': [480, 450], '3/13/8': [450, 480]})

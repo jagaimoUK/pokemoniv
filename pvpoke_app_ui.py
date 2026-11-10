@@ -281,6 +281,7 @@ function nicknameMembers(result,row,ivs){
  if(!sections.length)return members;
  for(const other of displayedResults){
   if(other===result||other.candidate?.species===result.candidate.species||
+   (isGourgeist(result.candidate.species)&&isGourgeist(other.candidate?.species))||
    !(other.source_sections||[]).some(x=>sections.includes(x)))continue;
   const match=(other.selection?.recommendations||[]).find(r=>
    r.ivs===ivs||(r.equivalent_candidates||[]).some(x=>x.ivs===ivs));
@@ -446,10 +447,29 @@ function renderNickname(result,row,parent,ivs=row.ivs){
  nicknameBindings.push({result,row,ivs,label,code,button,note});
  button.onclick=()=>{const nick=nicknameFor(result,row,ivs);if(nick)copy(nick.text,button);};
 }
-function updateAllCopy(){const box=el('allCopyActions');const available=displayedResults.filter(r=>r.selection?.recommendations?.length);box.hidden=available.length<2;}
+function updateAllCopy(){
+ const available=displayedResults.filter(r=>r.selection?.recommendations?.length);
+ const ordinary=available.filter(r=>!r.gourgeist_group).length;
+ el('allCopyActions').hidden=ordinary+Number(ordinary<available.length)<2;
+}
+function renderCopyActions(parent,results,all=false){
+ const actions=node('div','',parent,'actions');
+ const copyPairs=node('button',all?'全種類の検索式とニックネームをコピー':'検索式とニックネームをすべてコピー',actions);
+ copyPairs.onclick=()=>copyRecommendations(results,copyPairs);
+ const overlayCopy=node('button','オーバーレイ用にコピー',actions,'secondary');
+ overlayCopy.onclick=()=>copyOverlay(results,overlayCopy);
+ const share=node('button','Androidへ送る',actions,'secondary');
+ share.onclick=()=>shareRecommendations(results,share);
+ return actions;
+}
+function resetResults(){
+ const root=el('results');
+ root.replaceChildren();displayedResults=[];nicknameBindings=[];
+ const actions=renderCopyActions(root,displayedResults,true);actions.id='allCopyActions';actions.hidden=true;
+}
 function render(result,append=false){
  lastResult=result;const root=el('results');
- if(!append){root.replaceChildren();displayedResults=[];nicknameBindings=[];const all=node('div','',root,'actions');all.id='allCopyActions';all.hidden=true;const b=node('button','全種類の検索式とニックネームをコピー',all);b.onclick=()=>copyRecommendations(displayedResults,b);const overlayCopy=node('button','オーバーレイ用にコピー',all,'secondary');overlayCopy.onclick=()=>copyOverlay(displayedResults,overlayCopy);const share=node('button','Androidへ送る',all,'secondary');share.onclick=()=>shareRecommendations(displayedResults,share);}
+ if(!append)resetResults();
  displayedResults.push(result);updateAllCopy();root.hidden=false;
  const panel=node('div','',root),sid=result.candidate.species;
  node('h2',result.display_name||catalog[sid]?.name_ja||result.selection?.english_name||sid,panel);
@@ -459,8 +479,6 @@ function render(result,append=false){
  if(!selection){node('h2','GPT評価用の比較情報',panel);node('p','今回の比較情報をコピーしてGPTに評価を依頼できます。',panel);const b=node('button','比較情報をコピー',panel);b.onclick=()=>copy('以下のPvPoke実測比較を、個体値厳選の基準で評価してください。おすすめ個体と英語検索式を示してください。\n'+JSON.stringify(result),b);return;}
  if(result.moveset_comparison)renderMovesetComparison(result,panel);
  node('h2','おすすめ個体',panel);
- if(result.gourgeist_group)node('p','パンプジンは全サイズ合計で最大4体。順位はサイズをまたいだ順位です。'+
-  (result.gourgeist_group.pending?'未完了のサイズがあるため、現在は暫定結果です。':''),panel,'note');
  node('p','検索式ではXXLの実際の身長を比較できないため、通常の検索式からXXLを除外します。XXLは手動で比較し、最大の個体を残してください。サイズがフォルムそのものを表す場合は例外です。',panel,'note');
  if(selection.input_notices)selection.input_notices.forEach(n=>node('p',n,panel,'note'));
  if(selection.minior_experimental)node('p','メテノの戦術比較（試験版）：流星で即撃ち／コアまで温存／状況判断を同じ条件で比較。表示Ratingは各対面で最良の戦術を選んだ上限値です。実機のCP・レベル調整が未検証のため、この結果だけで個体を博士に送らないでください。',panel,'note');
@@ -468,13 +486,25 @@ function render(result,append=false){
  if(selection.policy?.version&&selection.policy.version!=='box-first-v3'){
   node('p','保存済みの結果は以前の推薦基準です。最新のS本命・少数厳選を使うには、同じ入力を再計算してください。',panel,'note');
  }
- if(selection.recommendations.length){const actions=node('div','',panel,'actions');const b=node('button','検索式とニックネームをすべてコピー',actions);b.onclick=()=>copyRecommendations([result],b);const overlayCopy=node('button','オーバーレイ用にコピー',actions,'secondary');overlayCopy.onclick=()=>copyOverlay([result],overlayCopy);const share=node('button','Androidへ送る',actions,'secondary');share.onclick=()=>shareRecommendations([result],share);node('p','検索式→改行→ニックネームの順で、同じ性能の代替個体も含めてコピーします。Androidへの送信は共有先で「厳選コピーリスト」を選んでください。Android Chromeではインストール済みの読み取りアプリを直接開きます。その他は共有メニューを使います。個体値の見出しを引き継ぐ場合は「Androidへ送る」か「オーバーレイ用にコピー」を使ってください。',panel,'note');}
+ if(selection.recommendations.length){renderCopyActions(panel,[result]);node('p','検索式→改行→ニックネームの順で、同じ性能の代替個体も含めてコピーします。Androidへの送信は共有先で「厳選コピーリスト」を選んでください。Android Chromeではインストール済みの読み取りアプリを直接開きます。その他は共有メニューを使います。個体値の見出しを引き継ぐ場合は「Androidへ送る」か「オーバーレイ用にコピー」を使ってください。',panel,'note');}
  if(selection.excluded&&(!Array.isArray(selection.excluded)||selection.excluded.length))node('p','計算対象から除外された対面があります：'+JSON.stringify(selection.excluded),panel);
  const searchCounts=new Map();for(const r of selection.recommendations)for(const item of [r,...(r.equivalent_candidates||[])]){for(const source of individualSearches(result,item)){const v=searchCounts.get(source.search)||new Set();v.add(item.ivs);searchCounts.set(source.search,v);}}if([...searchCounts.values()].some(x=>x.size>1))node('p','注意：同じ検索式に異なる個体値が含まれます。検索式は範囲指定なので、名前を付ける前に各個体の攻撃・防御・HPを確認してください。',panel,'note');
  if(selection.unmatched_focus.length)node('p','一致しなかった重要相手：'+selection.unmatched_focus.map(x=>opponentLabel(x).name).join('、'),panel);
  if(!selection.recommendations.length)node('p','自動推薦の根拠が十分な個体はありません。下の保留個体を確認してください。',panel);
- for(const row of selection.recommendations){
+ for(const row of selection.recommendations)renderRecommendation(row,panel,result);
+ if(selection.covered_candidates?.length){const d=node('details','',panel);node('summary','役割が重複する個体（'+selection.covered_candidates.length+'）',d);for(const row of selection.covered_candidates){node('p',row.ivs+' → '+row.covered_by+'で全条件をカバー',d);if(row.equivalent_candidates?.length)node('p','同じ性能：'+row.equivalent_candidates.map(x=>x.ivs).join(', '),d);}}
+ if(selection.additional_candidates?.length){const d=node('details','',panel);node('summary','参考：今回は保存を見送る候補（'+selection.additional_candidates.length+'）',d);node('p','細かな勝敗差も計算していますが、ボックス整理を優先して一括コピーには含めません。',d,'note');for(const row of selection.additional_candidates){node('p',row.ivs+'：'+row.reason+(row.new_viable_conditions?'（追加の互角以上 '+row.new_viable_conditions+'条件）':''),d);if(row.equivalent_candidates?.length)node('p','同じ性能：'+row.equivalent_candidates.map(x=>x.ivs).join(', '),d);}}
+ if(selection.review_candidates.length){const d=node('details','',panel);node('summary','保留：'+selection.review_candidates.length+'個体',d);for(const row of selection.review_candidates){node('p',row.ivs+'：'+row.reason,d);if(row.equivalent_candidates.length)node('p','同じ性能：'+row.equivalent_candidates.map(x=>x.ivs).join(', '),d);}}
+ const rejected=Object.entries(selection.dominated_by);if(rejected.length){const d=node('details','',panel);node('summary','全条件で他候補以下の個体（'+rejected.length+'）',d);for(const [iv,rivals] of rejected)node('p',iv+' → '+rivals.join(', '),d);}
+ refreshNicknames();
+}
+function renderRecommendation(row,panel,result){
   const card=node('article','',panel,'recommendation');node('h2',row.rank+'位｜'+row.ivs+'｜'+row.grade,card);node('div',row.role,card,'badge');
+  if(result.gourgeist_group)node('p',result.display_name||catalog[result.candidate.species]?.name_ja||result.candidate.species,card,'note');
+  if(row.gourgeist_gains?.length){
+   const list=node('ul','',card,'matchup-summary');
+   for(const g of row.gourgeist_gains)node('li',opponentLabel(g.opponent).name+'：'+g.outcome+'（'+conditionLabel(g)+'）',list);
+  }
   if(row.chosen_moves)node('p','採用技：'+moveLabel(row.chosen_moves)+' / 平均Rating '+row.moveset_mean.toFixed(1),card,'note');
   if(row.minior_strategy){
    const m=row.minior_strategy,parts=[];
@@ -509,14 +539,10 @@ function render(result,append=false){
   renderSearch(row,card,result);
   renderNickname(result,row,card);
   if(row.equivalent_candidates.length){const d=node('details','',card);node('summary','全条件で同じ性能の代替個体',d);for(const e of row.equivalent_candidates){node('p',e.ivs,d);renderSearch(e,d,result);renderNickname(result,row,d,e.ivs);}}
-  const details=node('details','',card);node('summary','推薦根拠をすべて見る（'+row.evidence_count+'条件）',details);node('pre',row.evidence.map(evidenceText).join('\n'),details);
-  if(row.tradeoff){const e=row.tradeoff;node('p','苦手になる対面：'+opponentLabel(e.opponent).name+'・'+conditionLabel(e)+' は '+outcome(e)+'（Rating '+e.rating+' / '+e.best_iv+' は '+e.best_rating+'）。',details,'note');}
- }
- if(selection.covered_candidates?.length){const d=node('details','',panel);node('summary','役割が重複する個体（'+selection.covered_candidates.length+'）',d);for(const row of selection.covered_candidates){node('p',row.ivs+' → '+row.covered_by+'で全条件をカバー',d);if(row.equivalent_candidates?.length)node('p','同じ性能：'+row.equivalent_candidates.map(x=>x.ivs).join(', '),d);}}
- if(selection.additional_candidates?.length){const d=node('details','',panel);node('summary','参考：今回は保存を見送る候補（'+selection.additional_candidates.length+'）',d);node('p','細かな勝敗差も計算していますが、ボックス整理を優先して一括コピーには含めません。',d,'note');for(const row of selection.additional_candidates){node('p',row.ivs+'：'+row.reason+(row.new_viable_conditions?'（追加の互角以上 '+row.new_viable_conditions+'条件）':''),d);if(row.equivalent_candidates?.length)node('p','同じ性能：'+row.equivalent_candidates.map(x=>x.ivs).join(', '),d);}}
- if(selection.review_candidates.length){const d=node('details','',panel);node('summary','保留：'+selection.review_candidates.length+'個体',d);for(const row of selection.review_candidates){node('p',row.ivs+'：'+row.reason,d);if(row.equivalent_candidates.length)node('p','同じ性能：'+row.equivalent_candidates.map(x=>x.ivs).join(', '),d);}}
- const rejected=Object.entries(selection.dominated_by);if(rejected.length){const d=node('details','',panel);node('summary','全条件で他候補以下の個体（'+rejected.length+'）',d);for(const [iv,rivals] of rejected)node('p',iv+' → '+rivals.join(', '),d);}
- refreshNicknames();
+  if(row.evidence.length||row.tradeoff){
+   const details=node('details','',card);node('summary','推薦根拠をすべて見る（'+row.evidence_count+'条件）',details);node('pre',row.evidence.map(evidenceText).join('\n'),details);
+   if(row.tradeoff){const e=row.tradeoff;node('p','苦手になる対面：'+opponentLabel(e.opponent).name+'・'+conditionLabel(e)+' は '+outcome(e)+'（Rating '+e.rating+' / '+e.best_iv+' は '+e.best_rating+'）。',details,'note');}
+  }
 }
 function metaNotice(text,error=false){el('metaNotice').textContent=text;el('metaNotice').style.color=error?'#ffb6b6':'';}
 function resetMetaUpload(){metaPending=null;el('metaApply').disabled=true;el('metaPreview').hidden=true;el('metaPreview').textContent='';el('metaFile').value='';el('metaText').value='';}
@@ -1067,65 +1093,125 @@ function renderMovesetComparison(result,parent){
  const d=node('details','',parent);node('summary','技構成の比較を見る',d);
  for(const p of info.profiles)node('p',(p.retained?'採用｜':'参考｜')+moveLabel(p.candidate)+'｜平均 '+p.mean_rating.toFixed(1)+(p.unique_win_count?'｜この構成だけで勝てる対面条件 '+p.unique_win_count:'') ,d,'note');
 }
+const GOURGEIST_LIMIT=8;
 function isGourgeist(sid){return /^gourgeist_(small|average|large|super)$/.test(sid);}
-function curateGourgeist(results,pending=false){
- const group=results.filter(r=>isGourgeist(r.candidate?.species)&&r.selection);
- if(!group.length)return results;
- const seen=new Map();
- let order=0;
- const axis=group[0].selection.size_comparison?.axis;
- const focus=group[0].selection.size_comparison?.focus;
- const comparable=Boolean(axis&&focus?.length&&focus.length%6===0&&group.every(r=>
-  r.selection.size_comparison?.axis===axis&&r.selection.size_comparison.focus===focus&&
-  r.meta_sha256===group[0].meta_sha256&&r.calculation_version===group[0].calculation_version&&
-  r.selection.recommendations.every(row=>(row.size_row||r.selection.size_comparison.rows?.[row.ivs])?.outcomes?.length===focus.length)));
- function compare(a,b){return b.wins-a.wins||b.mean-a.mean||a.order-b.order;}
- const weight=i=>i<focus.length/3?2:1; // s0 and s1 are the first two of six shields.
- for(const result of group)for(const row of result.selection.recommendations){
-  const data=row.size_row||result.selection.size_comparison?.rows?.[row.ivs];
-  const wins=comparable?Array.from(data.outcomes).reduce((n,v,i)=>n+(v==='2'?weight(i):0),0):
-   (row.win_conditions??0)/(result.selection.mode_count||1);
-  const item={result,row,data,wins,mean:data?.mean??row.moveset_mean??
-   result.selection.moveset_summary?.iv_mean_ratings?.[row.ivs]??0,order:order++};
-  const key=JSON.stringify([result.candidate.species,result.pokemon_status||null,row.ivs]);
-  if(!seen.has(key)||compare(item,seen.get(key))<0)seen.set(key,item);
- }
- const remaining=[...seen.values()],kept=new Map();
- const covered=comparable?new Uint8Array(focus.length):null;
- const gains=item=>{
-  let priority=0,other=0;
-  if(covered)for(let i=0;i<covered.length;i++){
-   const delta=Number(item.data.outcomes[i])-covered[i];
-   if(delta>0){other+=delta;if(focus[i]==='1')priority+=delta;}
+function gourgeistKey(result,ivs){return JSON.stringify([result.candidate.species,result.pokemon_status||null,ivs]);}
+function curateGourgeist(group){
+ const first=group[0],axis=first?.selection.size_comparison;
+ const focus=axis?.focus||'';
+ const comparable=Boolean(axis?.axis&&focus.length&&focus.length%6===0&&group.every(r=>
+  r.selection.size_comparison?.axis===axis.axis&&r.selection.size_comparison.focus===focus&&
+  r.meta_sha256===first.meta_sha256&&r.calculation_version===first.calculation_version));
+ const options=[];
+ for(const result of group){
+  const selection=result.selection;
+  const local=new Map(selection.recommendations.map(row=>[row.ivs,row]));
+  // Older resumable batches have comparison rows only for local recommendations.
+  const metrics=selection.size_comparison?.rows||{};
+  const ivs=comparable?Object.keys(metrics):[...local.keys()];
+  for(const iv of ivs){
+   const prior=local.get(iv),data=metrics[iv],search=data?.search_string||prior?.search_string;
+   if(!search||(comparable&&data?.outcomes?.length!==focus.length))continue;
+   const mean=data?.mean??prior?.moveset_mean??selection.moveset_summary?.iv_mean_ratings?.[iv]??0;
+   const wins=comparable?[...data.outcomes].reduce((n,v,i)=>n+(v==='2'?(i<focus.length/3?2:1):0),0):
+    (prior?.win_conditions??0)/(selection.mode_count||1);
+   options.push({result,iv,prior,data,search,mean,wins,key:gourgeistKey(result,iv)});
   }
-  return [priority,other];
- };
- while(remaining.length&&kept.size<4){
-  const choices=remaining.map(item=>({item,gain:kept.size?gains(item):[0,0]}));
-  choices.sort((a,b)=>b.gain[0]-a.gain[0]||b.gain[1]-a.gain[1]||compare(a.item,b.item));
-  const {item,gain}=choices[0];
-  remaining.splice(remaining.indexOf(item),1);
-  const rank=kept.size+1;
-  kept.set(item.row,{...item.row,rank,grade:rank===1&&seen.size>1?'Sランク':'Aランク',
-   role:rank===1?'全サイズの総合本命':gain[1]?'保存候補にない勝ち・引き分けを補完':'全サイズから選んだ保存候補',
-   equivalent_candidates:[],comparison_peer:null,comparison_differences:[],comparison_difference_count:0});
-  if(covered)for(let i=0;i<covered.length;i++)covered[i]=Math.max(covered[i],Number(item.data.outcomes[i]));
  }
- return results.map(result=>{
-  if(!group.includes(result))return result;
-  const selection=result.selection,recommendations=selection.recommendations.flatMap(row=>kept.has(row)?[kept.get(row)]:[]).sort((a,b)=>a.rank-b.rank);
-  const additional=[...(selection.additional_candidates||[])];
-  const reference='パンプジン全サイズの保存枠を優先したため、今回の保存対象外です。';
-  for(const row of selection.recommendations){
-   if(!kept.has(row))additional.push({ivs:row.ivs,reason:reference,equivalent_candidates:row.equivalent_candidates||[]});
-   else for(const alternative of row.equivalent_candidates||[])additional.push({ivs:alternative.ivs,reason:'保存対象と同じ性能の代替候補です。'});
+ const covered=new Uint8Array(comparable?focus.length:0);
+ const keys=new Set(),selected=[];
+ function gain(item){
+  let priority=0,wins=0,draws=0;
+  for(let i=0;i<covered.length;i++){
+   const value=Number(item.data.outcomes[i]);
+   if(value<=covered[i])continue;
+   if(focus[i]==='1')priority+=value-covered[i];
+   if(value===2)wins++;else draws++;
   }
-  const covered_candidates=(selection.covered_candidates||[]).filter(row=>{
-   if(recommendations.some(r=>r.ivs===row.covered_by))return true;
-   additional.push({ivs:row.ivs,reason:reference,equivalent_candidates:row.equivalent_candidates||[]});return false;
-  });
-  return {...result,gourgeist_group:{pending},selection:{...selection,recommendations,additional_candidates:additional,covered_candidates}};
- });
+  return {priority,wins,draws};
+ }
+ while(selected.length<(comparable?GOURGEIST_LIMIT:4)){
+  let best=null,bestGain=null,bestScore=null;
+  for(const item of options){
+   if(keys.has(item.key))continue;
+   const added=selected.length&&comparable?gain(item):{priority:0,wins:0,draws:0};
+   if(selected.length&&comparable&&!added.priority&&!added.wins&&(!added.draws||selected.length>=4))continue;
+   const score=[added.priority,added.wins,added.draws,item.wins,item.mean];
+   if(bestScore){
+    const different=score.findIndex((value,i)=>value!==bestScore[i]);
+    if(different===-1||score[different]<bestScore[different])continue;
+   }
+   best=item;bestGain=added;bestScore=score;
+  }
+  if(!best)break;
+  keys.add(best.key);
+  const rank=selected.length+1;
+  const opponents=axis?.opponents||[];
+  const improvements=[];
+  if(rank>1&&comparable&&opponents.length&&opponents.length*6===covered.length){
+   for(let i=0;i<covered.length;i++)if(Number(best.data.outcomes[i])>covered[i])improvements.push(i);
+  }
+  const gains=improvements.sort((a,b)=>Number(focus[b])-Number(focus[a])||
+   Number(best.data.outcomes[b])-Number(best.data.outcomes[a])).slice(0,3).map(i=>({
+    opponent:opponents[i%opponents.length],mode:'default',
+    shield:['s0','s1','s2','i0y1','i0y2','i1y2'][Math.floor(i/opponents.length)],
+    outcome:best.data.outcomes[i]==='2'?'勝ち':'引き分け',
+   }));
+  const evidence=best.prior?.evidence||[];
+  const row={...best.prior,ivs:best.iv,search_string:best.search,rank,grade:rank===1?'Sランク':'Aランク',
+   role:rank===1?'全サイズの総合本命':comparable?'追加の勝ち '+bestGain.wins+'条件・引き分け '+bestGain.draws+'条件':'全サイズから選んだ保存候補',
+   equivalent_candidates:[],chosen_moves:best.result.candidate,moveset_mean:best.mean,gourgeist_gains:gains,
+   comparison_peer:null,comparison_differences:[],comparison_difference_count:0,evidence,
+   evidence_count:evidence.length,tradeoff:null};
+  selected.push({result:best.result,row});
+  if(comparable)for(let i=0;i<covered.length;i++)covered[i]=Math.max(covered[i],Number(best.data.outcomes[i]));
+ }
+ return {selected,keys,comparable};
+}
+function renderGourgeist(group,pending,root){
+ const panel=node('section','',root);
+ node('h2','パンプジン｜全サイズまとめ',panel);
+ if(pending){
+  node('p','全サイズ・技構成の計算を待っています。完了後にまとめて保存候補を表示します。',panel,'note');
+  return;
+ }
+ const {selected,keys,comparable}=curateGourgeist(group);
+ node('p',selected.length+'体を保存候補に選びました。計算したサイズ・技構成を共通条件で比較し、最大'+GOURGEIST_LIMIT+'体に絞ります。',panel,'note');
+ if(!comparable||group.some(r=>!r.selection.size_comparison?.opponents))
+  node('p','比較用の候補データが揃っていない保存済み結果です。全候補を比較するには再計算してください。',panel,'note');
+ const keep=selected.map(({result,row})=>({...result,gourgeist_group:true,selection:{...result.selection,recommendations:[row]}}));
+ displayedResults.push(...keep);
+ if(keep.length){
+  renderCopyActions(panel,keep);
+  if(keep.some(r=>!individualSearches(r,r.selection.recommendations[0])[0]?.cp))
+   node('p','読み取り時のCPがない検索式は、GO上で複数の個体に一致することがあります。',panel,'note');
+ }else node('p','保存候補に該当する個体はありません。',panel,'note');
+ for(const result of keep)renderRecommendation(result.selection.recommendations[0],panel,result);
+ const remaining=new Map();
+ for(const result of group){
+  const s=result.selection,sid=result.candidate.species;
+  for(const iv of s.candidate_ivs||[...s.recommendations,...(s.additional_candidates||[]),...(s.review_candidates||[])].flatMap(row=>[row.ivs,...(row.equivalent_candidates||[]).map(e=>e.ivs)])){
+   const key=gourgeistKey(result,iv);
+   if(!keys.has(key))remaining.set(key,{iv,label:result.display_name||catalog[sid]?.name_ja||sid});
+  }
+ }
+ if(remaining.size){
+  const details=node('details','',panel);
+  node('summary','参考：保存候補外の個体（'+remaining.size+'）',details);
+  const bySize=new Map();
+  for(const {iv,label} of remaining.values()){
+   if(!bySize.has(label))bySize.set(label,[]);
+   bySize.get(label).push(iv);
+  }
+  for(const [label,ivs] of bySize)node('p',label+'：'+ivs.join('、'),details,'note');
+ }
+}
+function renderSelectionResults(results,pending=false){
+ if(!results.length&&!pending)return;
+ resetResults();const root=el('results'),group=results.filter(r=>isGourgeist(r.candidate?.species)&&r.selection);
+ for(const result of results)if(!group.includes(result))render(result,true);
+ if(group.length||pending)renderGourgeist(group,pending,root);
+ root.hidden=false;updateAllCopy();refreshNicknames();
 }
 function renderBatchResults(){
  const state=batchState;
@@ -1134,11 +1220,12 @@ function renderBatchResults(){
   completed=[];
   for(const group of [...new Set(state.jobs.map(j=>j.moveset_group))]){
    const jobs=state.jobs.filter(j=>j.moveset_group===group),results=state.results.filter(r=>r.moveset_group===group);
-   if(results.length===jobs.length)completed.push(combineMovesets(results,state.move_threshold));
+   if(jobs.some(j=>isGourgeist(j.candidate.species)))completed.push(...results);
+   else if(results.length&&results.length===jobs.length)completed.push(combineMovesets(results,state.move_threshold));
   }
  }
  const pending=state.jobs.slice(state.index).some(job=>isGourgeist(job.candidate.species));
- curateGourgeist(completed,pending).forEach((r,i)=>render(r,i>0));
+ renderSelectionResults(completed,pending);
 }
 
 async function executeBatch(){
@@ -1260,7 +1347,7 @@ el('resume').onclick=async()=>{
  calculating=true;stopRequested=false;stopPromise=null;stopError=null;setBusy(true);
  try{
   if(batchState){await executeBatch();}
-  else{const result=await finish(await api('result',{run_ref:runRef,wait_seconds:2}));render(curateGourgeist([result])[0]);runRef=null;sessionStorage.removeItem('pvpoke-app-run');el('resume').hidden=true;message('計算と結果の確認が完了しました。');}
+  else{const result=await finish(await api('result',{run_ref:runRef,wait_seconds:2}));renderSelectionResults([result]);runRef=null;sessionStorage.removeItem('pvpoke-app-run');el('resume').hidden=true;message('計算と結果の確認が完了しました。');}
  }catch(e){handleCalculationError(e);}finally{calculating=false;setBusy(false);}
 };
 el('disconnect').onclick=async()=>{try{await api('logout');}catch(e){message('ログアウトできませんでした。再試行してください。',true);return;}credential='';catalog={};metaState=null;selectedMetaId=null;clearMetaExport();nameEntries=[];opponentLabels.clear();displayedResults=[];nicknameBindings=[];presets=[];lastResult=null;setImportedJobs(null);batchState=null;el('results').replaceChildren();el('workspace').hidden=true;el('selectionSettingsOpen').hidden=true;el('selectionSettings').hidden=true;el('login').hidden=false;resetMetaUpload();message('接続を解除しました。このブラウザのログイン情報も削除しました。');};
@@ -1274,11 +1361,15 @@ function configureReaderAutomation(params){
  if(batchState&&(!readerAutomation||readerAutomation.digest!==digest))throw Error('別の計算が残っています。既存の計算を完了または中止してください');
  readerAutomation={nonce,digest};sessionStorage.setItem('pokemoniv-reader-automation',JSON.stringify(readerAutomation));
 }
-function readerDiscardQueries(results){
+function discardSearchKey(query){return query.split('&').filter(t=>!['favorite','!favorite'].includes(t.trim().toLowerCase())).join('&');}
+function readerDiscardQueries(results,keep=[]){
+ // A search sent as a keep candidate must never also be sent for cleanup.
+ const protectedSearches=new Set(keep.map(item=>discardSearchKey(item.search)));
  // Fail closed: every applicable evolution/moveset must explicitly dominate the IV.
  const sources=new Map();
  for(const r of results)for(const source of r.source_records||[]){
-  const q=xxlProtectedSearch(statusSearch(source.search_string,r.pokemon_status)).split('&').filter(t=>!['favorite','!favorite'].includes(t.trim().toLowerCase())).join('&');
+  const q=discardSearchKey(xxlProtectedSearch(statusSearch(source.search_string,r.pokemon_status)));
+  if(protectedSearches.has(q))continue;
   if(q.split('&').some(t=>t.trim().toLowerCase()==='!xxl'))continue; // Ambiguous size-dependent forms require review; never widen their identity.
   if(!q||/[;,|\n\r]/.test(q)||!/(?:^|&)cp[0-9]+(?:&|$)/i.test(q))continue;
   if(!sources.has(q))sources.set(q,[]);sources.get(q).push({r,iv:source.ivs});
@@ -1293,7 +1384,7 @@ function readerDiscardQueries(results){
 function returnReaderAutomation(results){
  if(!readerAutomation)return;
  const keep=displayedResults.some(r=>r.selection?.recommendations?.length)?JSON.parse(overlayExport(displayedResults)):{format:'pokemoniv-overlay-v2',items:[]};
- const result={format:'pokemoniv-automation-v1',...readerAutomation,keep,discard:readerDiscardQueries(results)};
+ const result={format:'pokemoniv-automation-v1',...readerAutomation,keep,discard:readerDiscardQueries(results,keep.items)};
  const bytes=new TextEncoder().encode(JSON.stringify(result));
  if(bytes.length>18000){message('計算完了。結果が大きいため自動で返せません。Androidへ送るボタンから分割して適用してください。',true);return;}
  let binary='';for(const b of bytes)binary+=String.fromCharCode(b);

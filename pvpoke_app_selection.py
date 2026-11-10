@@ -259,18 +259,23 @@ def recommend(matrices: dict[str, SelectionMatrix], candidate: dict,
     if candidate["species"].startswith("gourgeist_") and pumpkin_form(candidate["species"]):
         # Default opponent IVs are the common axis even in a mixed simple/detailed batch.
         common = cells[:len(matrices["default"].opponents) * len(SHIELDS)]
+        # Keep the viable pool before the local four-slot cap. A specialist
+        # omitted within a size may add a matchup to the combined shortlist.
+        common_length = len(common)
         result["size_comparison"] = {
             "axis": hashlib.sha256(json.dumps(common, ensure_ascii=False).encode()).hexdigest(),
             "focus": "".join("1" if any(term in opponent.casefold() for term in focus_terms) else "0"
                              for _, _, _, opponent in common),
+            "opponents": matrices["default"].opponents,
             "rows": {
                 iv: {
                     "outcomes": "".join("2" if value > 500 else "1" if value == 500 else "0"
-                                        for value in vectors[iv][:len(common)]),
-                    "mean": sum(vectors[iv][:len(common)]) / len(common),
+                                        for value in vectors[iv][:common_length]),
+                    "mean": sum(vectors[iv][:common_length]) / common_length,
+                    "search_string": search_string(english_name, iv, shadow, candidate["species"]),
                 }
-                for row in recommendations
-                for iv in (row["ivs"], *(item["ivs"] for item in row["equivalent_candidates"]))
+                for iv in ivs
+                if not dominated[iv] and any(value >= 500 for value in vectors[iv][:common_length])
             },
         }
     return result

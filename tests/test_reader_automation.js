@@ -25,3 +25,5 @@ console.log('Correlated return payload, manual return fallback and stale-session
 const keptFavorite=result();keptFavorite.source_records[0].search_string+='&favorite';keptFavorite.selection.recommendations=[{ivs:'0/15/15'}];
 assert.equal(c.readerDiscardQueries([result(),keptFavorite]).length,0,'favorite filters must be removed BEFORE classifying colliding source identities');
 console.log('Favorite-filter canonical collision protection: PASS');
+
+assert.equal(c.readerDiscardQueries([result()],[{search:result().source_records[0].search_string+'&favorite'}]).length,0);
