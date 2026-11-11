@@ -179,6 +179,45 @@ class LocalBattleAPITests(ServerFixture):
             self.assertNotIn('rating', data)
         self.assertFalse(web.BATTLE_RUNNING)
 
+    def test_authenticated_gateway_reaches_real_local_battle_store(self):
+        # No gateway mock: this exercises both HTTP servers and the fixed local path.
+        upstream = 'http://127.0.0.1:%d' % self.server.server_address[1]
+        with patch.object(gateway.backend, 'BASE', upstream), patch.object(
+                gateway, 'RATE_BUDGET', RateBudget()):
+            gate = ThreadingHTTPServer(('127.0.0.1', 0), gateway.Handler)
+            worker = threading.Thread(target=gate.serve_forever, daemon=True)
+            worker.start()
+            try:
+                spec = battle_spec()
+                code, first = post(gate, '/app-api/battles/simulate', spec,
+                                   token='Bearer ' + gateway.API_KEY, origin=gateway.APP_ORIGIN)
+                self.assertEqual(code, 200, first)
+                code, second = post(gate, '/app-api/battles/simulate', spec,
+                                    token='Bearer ' + gateway.API_KEY, origin=gateway.APP_ORIGIN)
+                self.assertEqual(code, 200, second)
+                self.assertEqual(second, first)
+                self.assertEqual(first['schema'], 'battle-result-v1')
+            finally:
+                gate.shutdown()
+                gate.server_close()
+                worker.join()
+        self.assertFalse(web.BATTLE_RUNNING)
+
+    def test_store_unavailable_and_sandbox_are_not_successes(self):
+        with patch.object(web.BattleStore, 'from_volume', side_effect=OSError('private path')), patch.object(
+                web, 'DirectMatrixClient') as node:
+            code, result = self.request()
+            self.assertEqual(code, 503)
+            self.assertNotIn('private path', json.dumps(result))
+            node.assert_not_called()
+        spec = battle_spec()
+        spec['mode'] = 'sandbox'
+        code, result = self.request(spec)
+        self.assertEqual(code, 422)
+        self.assertEqual(result['status'], 'unsupported')
+        self.assertNotIn('rating', result)
+        self.assertFalse(web.BATTLE_RUNNING)
+
     def test_completed_http_battle_is_durable_and_reused(self):
         created = []
         def make_service(client, *, store):
