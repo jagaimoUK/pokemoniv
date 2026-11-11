@@ -1,7 +1,7 @@
 """Opt-in persistent storage for complete standard battle results."""
 from __future__ import annotations
 
-from contextlib import closing
+from contextlib import closing, contextmanager
 import hashlib
 import json
 import os
@@ -93,6 +93,28 @@ class BattleStore:
             raise BattleStoreError('Invalid stored battle result') from exc
         return result
 
+    @contextmanager
+    def _reader(self):
+        with closing(sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True, timeout=0.25)) as db, db:
+            db.execute('BEGIN')
+            if self._version(db) != (APPLICATION_ID, SCHEMA_VERSION):
+                raise BattleStoreError('Unrecognized battle database version')
+            yield db
+
+    @contextmanager
+    def _writer(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(self.path, timeout=0.25)) as db, db:
+            pages = self.max_bytes // db.execute('PRAGMA page_size').fetchone()[0]
+            if pages < 2:
+                raise BattleStoreError('Battle database size limit is too small')
+            db.execute(f'PRAGMA max_page_count = {pages}')
+            db.execute('BEGIN IMMEDIATE')
+            self._migrate(db)
+            yield db
+            if db.execute('PRAGMA page_count').fetchone()[0] > pages:
+                raise BattleStoreError('Battle database exceeds the size limit')
+
     def get(self, key, spec, versions, *, completeness=COMPLETENESS):
         """Return a validated summary, or None when this owner has no matching row."""
         if completeness != COMPLETENESS:
@@ -101,9 +123,7 @@ class BattleStore:
             self.path.stat()
         except FileNotFoundError:
             return None
-        with closing(sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True, timeout=0.25)) as db:
-            if self._version(db) != (APPLICATION_ID, SCHEMA_VERSION):
-                raise BattleStoreError('Unrecognized battle database version')
+        with self._reader() as db:
             row = self._row(db, key)
             return None if row is None else self._decode(row, key, spec, versions)
 
@@ -113,15 +133,7 @@ class BattleStore:
         payload = _canonical_json(result)
         if len(payload) > MAX_RESULT_BYTES:
             raise BattleStoreError('Battle result exceeds the row size limit')
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(sqlite3.connect(self.path, timeout=0.25)) as db, db:
-            page_size = db.execute('PRAGMA page_size').fetchone()[0]
-            pages = self.max_bytes // page_size
-            if pages < 2:
-                raise BattleStoreError('Battle database size limit is too small')
-            db.execute(f'PRAGMA max_page_count = {pages}')
-            db.execute('BEGIN IMMEDIATE')
-            self._migrate(db)
+        with self._writer() as db:
             row = self._row(db, key)
             if row is not None:
                 previous = self._decode(row, key, spec, versions)
@@ -129,8 +141,6 @@ class BattleStore:
                 if {**previous, 'compute_wall_ms': 0} != {**result, 'compute_wall_ms': 0}:
                     raise BattleStoreError('Conflicting result for the same battle key')
                 return
-            if db.execute('PRAGMA page_count').fetchone()[0] > pages:
-                raise BattleStoreError('Battle database exceeds the size limit')
             db.execute(
                 '''INSERT INTO battle_results
                    (owner_scope, battle_key, completeness, result_json, result_sha256, saved_at)

@@ -177,7 +177,7 @@ class LocalBattleAPITests(ServerFixture):
             service.return_value.simulate.return_value = {'status': 'partial', 'rating': 50}
             code, data = self.request()
             self.assertEqual(code, 422)
-            self.assertNotIn('rating', data)
+            self.assertEqual(data, {'error': 'Battle was not completed'})
         self.assertFalse(web.BATTLE_RUNNING)
 
     def test_authenticated_gateway_reaches_real_local_battle_store(self):
@@ -261,6 +261,7 @@ class LocalBattleAPITests(ServerFixture):
             self.assertEqual(self.request()[1], first)
             self.assertEqual(created[-1].cache_stats['hits'], 1)
         # Each HTTP request deliberately closes its Node process; SQLite is durable.
+        self.assertTrue(all(service.client.proc is None for service in created))
         from pvpoke_battle_store import BattleStore
         db = BattleStore.from_volume()
         self.assertTrue(db.path.is_file())
