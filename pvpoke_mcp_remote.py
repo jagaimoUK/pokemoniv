@@ -634,7 +634,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path in ('/app-api/visual-backup-token', '/app-api/visual-backup-connections', '/app-api/visual-backup-revoke') and not (strong_auth or cookie_ok):
             return self.unauthorized()
-        if self.path in ('/app-api/run', '/app-api/party/start', '/app-api/battles/simulate') and not self.rate_allowed('compute-owner', 12, 60):
+        compute_route = (self.path in ('/app-api/run', '/app-api/party/start') or
+                         (self.path == '/app-api/battles/simulate' and
+                          os.environ.get('PVP_BATTLE_API_ENABLED') == '1'))
+        if compute_route and not self.rate_allowed('compute-owner', 12, 60):
             return
         if self.path in ('/app-api/session', '/app-api/visual-backup-token') and not self.rate_allowed('issue-owner', 12, 60):
             return
