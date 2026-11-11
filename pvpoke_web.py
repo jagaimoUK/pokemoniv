@@ -671,6 +671,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self.respond(503, {'error': 'Battle game data is not ready'})
                     BATTLE_RUNNING = True
                 client = None
+                result = {'status': 'failed'}
                 try:
                     # Inputs and DB path are server-owned. No request field can
                     # select another user's results, executable or data file.
@@ -679,25 +680,30 @@ class Handler(BaseHTTPRequestHandler):
                         gamemaster=engine.DATA / 'gamemaster.json',
                         log_dir=WORK / 'battle_logs', timeout_seconds=30)
                     result = BattleService(client, store=store).simulate(payload)
-                    status = result.get('status')
-                    if status == 'complete':
-                        return self.respond(200, result)
-                    code = 400 if status == 'invalid' else 422 if status in ('unsupported', 'partial') else 503
-                    return self.respond(code, {
-                        'schema': 'battle-result-v1', 'status': status or 'failed',
-                        'error': {'message': 'Battle was not completed'}})
                 except Exception as exc:
                     # Do not expose database locations, subprocess stderr or secrets.
                     import logging
                     logging.error('Battle API unavailable: %s', type(exc).__name__)
-                    return self.respond(503, {'error': 'Battle service unavailable'})
                 finally:
                     try:
                         if client is not None:
                             client.close()
+                    except Exception as exc:
+                        import logging
+                        logging.error('Battle worker cleanup failed: %s', type(exc).__name__)
+                        result = {'status': 'failed'}
                     finally:
                         with LOCK:
                             BATTLE_RUNNING = False
+                # A response is not visible until worker cleanup and flag
+                # release finish. Back-to-back calls must not be rejected.
+                status = result.get('status')
+                if status == 'complete':
+                    return self.respond(200, result)
+                code = 400 if status == 'invalid' else 422 if status in ('unsupported', 'partial') else 503
+                return self.respond(code, {
+                    'schema': 'battle-result-v1', 'status': status or 'failed',
+                    'error': {'message': 'Battle was not completed'}})
             if path == '/api/cancel':
                 with LOCK:
                     if not STATUS['batch24']:
