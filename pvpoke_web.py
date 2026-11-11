@@ -130,7 +130,7 @@ def load_catalog():
                                 'name_ja': move_ja.get(m['moveId'], {}).get('ja')}
                                       for m in gm.get('moves', []) if m.get('moveId')},
                             'presets': presets, 'timestamp': gm.get('timestamp')})
-        meta_variants.start(WORK, LOCK, STATUS)
+        meta_variants.start(WORK, LOCK, STATUS, battle_busy=lambda: BATTLE_RUNNING)
     except Exception as exc:
         with LOCK:
             CATALOG.update({'ready': False, 'error': str(exc)})
@@ -700,7 +700,10 @@ class Handler(BaseHTTPRequestHandler):
                 status = result.get('status')
                 if status == 'complete':
                     return self.respond(200, result)
-                code = 400 if status == 'invalid' else 422 if status in ('unsupported', 'partial') else 503
+                if status == 'partial':
+                    # The HTTP failure envelope must not claim to be a partial result.
+                    return self.respond(422, {'error': 'Battle was not completed'})
+                code = 400 if status == 'invalid' else 422 if status == 'unsupported' else 503
                 return self.respond(code, {
                     'schema': 'battle-result-v1', 'status': status or 'failed',
                     'error': {'message': 'Battle was not completed'}})

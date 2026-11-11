@@ -41,11 +41,11 @@ def directory(work):
     return archives.archive_dir(work) / 'meta_variant_jobs'
 
 
-def start(work, lock, status):
+def start(work, lock, status, *, battle_busy=lambda: False):
     global _runtime
     if _runtime is not None or not (engine.DATA / 'gamemaster.json').is_file():
         return
-    _runtime = (Path(work), lock, status)
+    _runtime = (Path(work), lock, status, battle_busy)
     directory(work).mkdir(parents=True, exist_ok=True)
     for path in directory(work).glob('*.json'):
         try:
@@ -163,7 +163,7 @@ def shortlist(rows, pokemon, moves):
     return manual + selected
 
 
-def evaluate(job, client, species, cpms, lock, runtime_status, checkpoint):
+def evaluate(job, client, species, cpms, lock, runtime_status, checkpoint, *, battle_busy=lambda: False):
     rows = trusted_rows(job['source_csv'])
     target_groups = {}
     for r in rows:
@@ -196,7 +196,7 @@ def evaluate(job, client, species, cpms, lock, runtime_status, checkpoint):
         # Match the regular server's lock. Never overlap a user's calculation.
         while True:
             with lock:
-                if runtime_status['state'] != 'running':
+                if runtime_status['state'] != 'running' and not battle_busy():
                     matrices = [client.simulate(candidates, opponents, shields) for shields in SHIELDS]
                     break
             threading.Event().wait(1)
@@ -235,7 +235,7 @@ def apply(work, job, rows):
 
 
 def worker():
-    work, lock, runtime_status = _runtime
+    work, lock, runtime_status, battle_busy = _runtime
     while True:
         path = _queue.get()
         job = None
@@ -247,11 +247,11 @@ def worker():
             _, cpms, species = engine.game_data()
             client = DirectMatrixClient(gamemaster=gm_file, log_dir=directory(work))
             try:
-                rows, evidence, count = evaluate(job, client, species, cpms, lock, runtime_status, lambda j: save(path, j))
+                rows, evidence, count = evaluate(job, client, species, cpms, lock, runtime_status, lambda j: save(path, j), battle_busy=battle_busy)
             finally:
                 client.close()
             with lock:
-                while runtime_status['state'] == 'running':
+                while runtime_status['state'] == 'running' or battle_busy():
                     lock.release(); threading.Event().wait(1); lock.acquire()
                 applied = apply(work, job, rows)
                 job.update(state='complete' if applied else 'obsolete', added=count, evidence=evidence)

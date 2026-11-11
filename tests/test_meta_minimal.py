@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pvpoke_meta_variants as variants
 from pvpoke_direct_backend import DirectMatrixClient
@@ -35,6 +35,26 @@ class MinimalMetaTests(unittest.TestCase):
                 result=variants.schedule(work,'custom:x')
                 self.assertEqual(result['state'],'queued')
                 self.assertEqual(json.loads(path.read_text())['evaluated'],obj['evaluated'])
+
+    def test_variant_calculation_waits_for_common_battle_reservation(self):
+        row = tuple(ROWS[0][k] for k in engine.HEADER[:4])
+        client = Mock()
+        wait = Mock()
+        wait.wait.side_effect = lambda _: client.simulate.assert_not_called()
+        battle_busy = Mock(side_effect=[True, False])
+        with patch.object(variants, 'trusted_rows', return_value=[row]), patch.object(
+            variants, 'prepared_rows', return_value=[ROWS[0]]), patch.object(
+            variants, 'shortlist', return_value=[row]), patch.object(
+            variants, 'choose_variants', return_value=[]), patch.object(
+            variants.threading, 'Event', return_value=wait), tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            (work / 'gamemaster.json').write_text(json.dumps(GM))
+            with patch.object(engine, 'DATA', work):
+                variants.evaluate({'source_csv': 'fixture'}, client, SPECIES, CPMS,
+                                  threading.Lock(), {'state': 'idle'}, lambda _: None,
+                                  battle_busy=battle_busy)
+        wait.wait.assert_called_once()
+        self.assertEqual(client.simulate.call_count, len(variants.SHIELDS))
 
     def test_real_engine_preserves_input_and_limits_work(self):
         before=copy.deepcopy(ROWS)
