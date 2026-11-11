@@ -179,7 +179,7 @@ class DirectMatrixClient:
 
     def strategy(self, action: str, payload: dict, *, include_engine_sources: bool = False) -> dict:
         """Explicit detail protocol; never infer resources from a Rating."""
-        if action not in ("detail", "switch_branch", "switch_prefix"):
+        if action not in ("detail", "switch_branch", "switch_prefix", "engine_identity"):
             raise DirectMatrixError("Unknown strategy action")
         if self.proc is None or self.proc.poll() is not None:
             raise DirectMatrixError("PvPoke Node process is not running")
