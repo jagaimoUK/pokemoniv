@@ -27,6 +27,8 @@ from pvpoke_party_ui import HTML as PARTY_HTML
 from pvpoke_missing_comparison import APP_PATH as MISSING_APP_PATH, API_PATH as MISSING_API_PATH
 from pvpoke_missing_comparison import PAGE_PATH as MISSING_PAGE_PATH, MAX_REQUEST_BYTES as MAX_MISSING_REQUEST_BYTES
 from pvpoke_missing_comparison import enabled as missing_enabled
+from pvpoke_sandbox_workspace import APP_PATH as SANDBOX_APP_PATH, API_PATH as SANDBOX_API_PATH
+from pvpoke_sandbox_workspace import PAGE_PATH as SANDBOX_PAGE_PATH, enabled as sandbox_enabled
 from pvpoke_app_access import AppAccess, BrowserLogin
 from pvpoke_app_input import parse_import
 from pvpoke_score_search import search_low_scores
@@ -380,6 +382,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(404, {'error': 'Not found'})
             from pvpoke_missing_ui import HTML as missing_html
             page = missing_html
+        elif self.path == SANDBOX_PAGE_PATH:
+            if not sandbox_enabled():
+                return self.respond(404, {'error': 'Not found'})
+            from pvpoke_sandbox_ui import HTML as sandbox_html
+            page = sandbox_html.replace(
+                '<!--MISSING_ANALYSIS_NAV-->', '<a href="/app/missing">不足分析</a>' if missing_enabled() else '')
         elif self.path == '/app/migration':
             page = browser_migration.page()
         elif self.path == '/flashcards':
@@ -387,7 +395,10 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == '/app/party':
             page = PARTY_HTML
         else:
-            page = APP_HTML.replace('<!--MISSING_ANALYSIS_NAV-->', '<a href="/app/missing">不足分析</a>' if missing_enabled() else '')
+            tools = ('<a href="/app/missing">不足分析</a>' if missing_enabled() else '')
+            if sandbox_enabled():
+                tools += '<a href="/app/sandbox">Sandbox</a>'
+            page = APP_HTML.replace('<!--MISSING_ANALYSIS_NAV-->', tools)
         data = page.encode('utf-8')
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
@@ -404,7 +415,7 @@ class Handler(BaseHTTPRequestHandler):
                              '/app-api/meta-preview', '/app-api/meta-apply', '/app-api/meta-presets', '/app-api/meta-preset-save', '/app-api/meta-preset-export', '/app-api/low-score', '/app-api/visual-backup-token', '/app-api/flashcards',
                              '/app-api/party/list', '/app-api/party/get', '/app-api/party/save',
                              '/app-api/party/start', '/app-api/party/status', '/app-api/party/cancel',
-                             '/app-api/party/meta-weights', '/app-api/battles/simulate', MISSING_APP_PATH):
+                             '/app-api/party/meta-weights', '/app-api/battles/simulate', MISSING_APP_PATH, SANDBOX_APP_PATH):
             return self.respond(404, {'error': 'Not found'})
         origin = self.headers.get('Origin')
         if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'):
@@ -413,26 +424,31 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(415, {'error': 'Content-Type must be application/json'})
         try:
             size = int(self.headers.get('Content-Length', '0'))
-            limit = {'/app-api/battles/simulate': MAX_BATTLE_REQUEST_BYTES,
-                     MISSING_APP_PATH: MAX_MISSING_REQUEST_BYTES}.get(self.path, MAX_APP_REQUEST_BYTES)
+            workspace = self.path in (MISSING_APP_PATH, SANDBOX_APP_PATH)
+            battle = self.path in ('/app-api/battles/simulate', SANDBOX_APP_PATH)
+            limit = {MISSING_APP_PATH: MAX_MISSING_REQUEST_BYTES}.get(
+                self.path, MAX_BATTLE_REQUEST_BYTES if battle else MAX_APP_REQUEST_BYTES)
             if not 0 < size <= limit:
                 return self.respond(413, {'error': 'Invalid body size'})
             raw = self.read_body(size)
             args = (json.loads(raw, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
-                    if self.path in ('/app-api/battles/simulate', MISSING_APP_PATH) else json.loads(raw))
+                    if workspace or battle else json.loads(raw))
             if not isinstance(args, dict):
                 raise ValueError('入力はJSONオブジェクトで指定してください')
-            if self.path == MISSING_APP_PATH:
-                if not missing_enabled():
-                    return self.respond(503, {'error': 'Missing analysis is disabled'})
+            if workspace:
+                sandbox = self.path == SANDBOX_APP_PATH
+                if not (sandbox_enabled() if sandbox else missing_enabled()):
+                    return self.respond(503, {'error': 'Analysis workspace is disabled'})
+                if sandbox and args.get('action') in ('simulate', 'standard') and not self.rate_allowed('compute-owner', 12, 60):
+                    return
+                endpoint = SANDBOX_API_PATH if sandbox else MISSING_API_PATH
                 try:
-                    result = backend._request(MISSING_API_PATH, args,
-                                              headers={'X-PvPoke-Token': backend._token()}, timeout=65)
+                    result = backend._request(endpoint, args, headers={'X-PvPoke-Token': backend._token()}, timeout=65)
                 except backend.BridgeError as exc:
                     for status in (400, 409, 413, 422, 503):
                         if f'HTTP {status}:' in str(exc):
-                            return self.respond(status, {'error': 'Missing analysis request rejected or unavailable'})
-                    return self.respond(503, {'error': 'Missing analysis service unavailable'})
+                            return self.respond(status, {'error': 'Analysis workspace request rejected or unavailable'})
+                    return self.respond(503, {'error': 'Analysis workspace unavailable'})
                 return self.respond(200, result)
             if self.path == '/app-api/battles/simulate':
                 if os.environ.get('PVP_BATTLE_API_ENABLED') != '1':
@@ -527,6 +543,8 @@ class Handler(BaseHTTPRequestHandler):
                 result['meta_verified_against_project'] = False
                 result['meta_verification_source'] = 'server snapshot; Project file unavailable in browser'
             self.respond(200, result)
+        except RecursionError:
+            self.respond(400, {'error': 'Request JSON is too deeply nested'})
         except (ValueError, TypeError, KeyError, backend.BridgeError) as exc:
             self.respond(400, {'error': str(exc)})
         except Exception:
@@ -592,7 +610,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        if self.path in ('/flashcards', '/app/party', '/app/migration', MISSING_PAGE_PATH):
+        if self.path in ('/flashcards', '/app/party', '/app/migration', MISSING_PAGE_PATH, SANDBOX_PAGE_PATH):
             return self.app_page()
         # This one read-only route contains only global, fixed PvP rankings
         # transformed into GO search terms. Do not expose private app APIs,

@@ -16,6 +16,7 @@ import io
 import json
 import os
 import signal
+import sqlite3
 from pathlib import Path
 import secrets
 import shutil
@@ -42,6 +43,8 @@ from pvpoke_missing_analysis import AnalysisUnavailable
 from pvpoke_missing_comparison import API_PATH as MISSING_API_PATH, MAX_REQUEST_BYTES as MAX_MISSING_REQUEST_BYTES
 from pvpoke_missing_comparison import app_operation as missing_operation, enabled as missing_enabled
 from pvpoke_ownership import OwnershipConflict, OwnershipUnavailable
+from pvpoke_sandbox_workspace import API_PATH as SANDBOX_API_PATH, TacticConflict, TacticUnavailable
+from pvpoke_sandbox_workspace import app_operation as sandbox_operation, enabled as sandbox_enabled, list_operation as list_tactics
 from pvpoke_direct_backend import DirectMatrixClient
 from pvpoke_app_input import app_presets
 from pvpoke_app_catalog import enrich_catalog
@@ -642,7 +645,7 @@ class Handler(BaseHTTPRequestHandler):
         if path not in ('/api/prepare','/api/run','/api/prepare24','/api/run24','/api/cancel','/api/meta/sync','/api/meta/preview','/api/meta/presets',
                         '/api/party/list','/api/party/get','/api/party/save',
                         '/api/party/start','/api/party/status','/api/party/cancel','/api/party/meta-weights',
-                         '/api/battles/simulate', MISSING_API_PATH):
+                         '/api/battles/simulate', MISSING_API_PATH, SANDBOX_API_PATH):
             return self.respond(404, {'error': '見つかりません'})
         # Only same-origin JS with the random session token can start a job.
         origin = self.headers.get('Origin','')
@@ -652,13 +655,15 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(403, {'error':'この画面を再読み込みしてください'})
         content_type = self.headers.get('Content-Type', '')
         if ('application/json' not in content_type or
-                path == MISSING_API_PATH and content_type.split(';')[0].strip().lower() != 'application/json'):
+                path in (MISSING_API_PATH, SANDBOX_API_PATH) and
+                content_type.split(';')[0].strip().lower() != 'application/json'):
             return self.respond(415, {'error':'JSONで送信してください'})
-        common_battle = path in ('/api/battles/simulate', MISSING_API_PATH)
+        workspace_route = path in (MISSING_API_PATH, SANDBOX_API_PATH)
+        common_battle = workspace_route or path == '/api/battles/simulate'
         try:
             n = int(self.headers.get('Content-Length','0'))
-            limit = {'/api/battles/simulate': MAX_BATTLE_REQUEST_BYTES,
-                     MISSING_API_PATH: MAX_MISSING_REQUEST_BYTES}.get(path, MAX_APP_REQUEST_BYTES)
+            limit = {MISSING_API_PATH: MAX_MISSING_REQUEST_BYTES}.get(
+                path, MAX_BATTLE_REQUEST_BYTES if common_battle else MAX_APP_REQUEST_BYTES)
             if n < 2 or n > limit:
                 raise ValueError('入力が大きすぎるか空です')
             raw = self.rfile.read(n)
@@ -667,9 +672,17 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(payload, dict):
                 raise ValueError('入力はJSONオブジェクトで指定してください')
             if common_battle:
-                allowed = missing_enabled() if path == MISSING_API_PATH else os.environ.get('PVP_BATTLE_API_ENABLED') == '1'
+                enabled = {MISSING_API_PATH: missing_enabled, SANDBOX_API_PATH: sandbox_enabled}.get(path)
+                allowed = enabled() if enabled else os.environ.get('PVP_BATTLE_API_ENABLED') == '1'
                 if not allowed:
                     return self.respond(503, {'error': 'Battle API is disabled'})
+                if path == SANDBOX_API_PATH and payload.get('action') == 'list':
+                    try:
+                        return self.respond(200, list_tactics(BattleStore.from_volume(), payload))
+                    except (TacticUnavailable, BattleStoreError, OSError, sqlite3.Error):
+                        return self.respond(503, {'error': 'Could not list saved tactics'})
+                    except ValueError:
+                        return self.respond(400, {'error': 'Invalid tactic list request'})
                 # Reserve the existing shared compute slot, then release LOCK
                 # before the potentially slow Node/SQLite work.
                 with LOCK:
@@ -681,7 +694,7 @@ class Handler(BaseHTTPRequestHandler):
                     BATTLE_RUNNING = True
                 client = None
                 result = {'status': 'failed'}
-                missing_status = 503
+                workspace_status = 503
                 try:
                     # Inputs and DB path are server-owned. No request field can
                     # select another user's results, executable or data file.
@@ -690,17 +703,18 @@ class Handler(BaseHTTPRequestHandler):
                         gamemaster=engine.DATA / 'gamemaster.json',
                         log_dir=WORK / 'battle_logs', timeout_seconds=30)
                     service = BattleService(client, store=store)
-                    if path == MISSING_API_PATH:
-                        result = missing_operation(service, payload)
-                        missing_status = 200
+                    if workspace_route:
+                        operation = missing_operation if path == MISSING_API_PATH else sandbox_operation
+                        result = operation(service, payload)
+                        workspace_status = 200
                     else:
                         result = service.simulate(payload)
-                except OwnershipConflict:
-                    missing_status = 409
-                except (AnalysisUnavailable, OwnershipUnavailable, BattleStoreError):
-                    missing_status = 503
+                except (OwnershipConflict, TacticConflict):
+                    workspace_status = 409
+                except (AnalysisUnavailable, OwnershipUnavailable, TacticUnavailable, BattleStoreError):
+                    workspace_status = 503
                 except (ValueError, KeyError, TypeError, RecursionError):
-                    missing_status = 400
+                    workspace_status = 400
                 except Exception as exc:
                     # Do not expose database locations, subprocess stderr or secrets.
                     import logging
@@ -713,13 +727,13 @@ class Handler(BaseHTTPRequestHandler):
                         import logging
                         logging.error('Battle worker cleanup failed: %s', type(exc).__name__)
                         result = {'status': 'failed'}
-                        missing_status = 503
+                        workspace_status = 503
                     finally:
                         with LOCK:
                             BATTLE_RUNNING = False
-                if path == MISSING_API_PATH:
-                    return self.respond(missing_status, result if missing_status == 200 else {
-                        'error': 'Missing analysis request rejected or unavailable'})
+                if workspace_route:
+                    return self.respond(workspace_status, result if workspace_status == 200 else {
+                        'error': 'Analysis workspace request rejected or unavailable'})
                 # A response is not visible until worker cleanup and flag
                 # release finish. Back-to-back calls must not be rejected.
                 status = result.get('status')
@@ -881,6 +895,8 @@ class Handler(BaseHTTPRequestHandler):
                     threading.Thread(target=background_run, args=(cleaned['shields'],),
                                      daemon=True).start()
             self.respond(200, {'ok':True,'preview':preview})
+        except RecursionError:
+            self.respond(400, {'error': 'Request JSON is too deeply nested'})
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             self.respond(400, {'error': str(exc)})
         except Exception as exc:
