@@ -258,7 +258,9 @@ async function main() {
     try {
       const req=JSON.parse(line);
       let result;
-      if (["detail","switch_branch","switch_prefix"].includes(req.action)) {
+      if (req.action === "engine_identity") {
+        result = {status:"calculated", engine_sources:loadedSources};
+      } else if (["detail","switch_branch","switch_prefix"].includes(req.action)) {
         loadMaster(req.gamemaster_path);
         const runner = strategyRunner();
         result = req.action === "detail" ? runner.run(req.battle) :

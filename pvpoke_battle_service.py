@@ -9,12 +9,17 @@ import hashlib
 import json
 import math
 import re
+import sqlite3
 import time
+from typing import TYPE_CHECKING
 from pathlib import Path
 
 from pvpoke_batch_v2 import CP_CAP, MAX_LEVEL, optimize
 from pvpoke_calculation_version import content_hash
 from pvpoke_direct_backend import DirectMatrixClient, DirectMatrixError
+
+if TYPE_CHECKING:
+    from pvpoke_battle_store import BattleStore
 
 SPEC_SCHEMA = 'battle-spec-v1'
 RESULT_SCHEMA = 'battle-result-v1'
@@ -30,9 +35,12 @@ class UnsupportedBattle(ValueError):
     """The request describes a condition this adapter cannot execute."""
 
 
+def _canonical_json(value):
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+
+
 def _json_hash(value):
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'),
-                                     allow_nan=False).encode()).hexdigest()
+    return hashlib.sha256(_canonical_json(value)).hexdigest()
 
 
 def _unique_object(pairs):
@@ -108,6 +116,56 @@ def _resolved_move(event, index):
     }
 
 
+
+def _battle_metrics(result, *, events_field, elapsed_field):
+    damage = []
+    for item in _items(result['damage'], 'damage', 2, 2):
+        _object(item, 'damage totals', ('fast', 'charged'))
+        damage.append({key: _integer(item[key], 'damage total', 0, 10000)
+                       for key in ('fast', 'charged')})
+    events = _items(result[events_field], 'resolved moves', 0, 2000)
+    return {
+        'rating': _integer(result['rating'], 'rating', 0, 1000),
+        'terminal': [_terminal_state(state) for state in _items(result['terminal'], 'terminal', 2, 2)],
+        'shields_used': [_integer(value, 'shields used', 0, 2)
+                         for value in _items(result['shields_used'], 'shields used', 2, 2)],
+        'damage': damage,
+        'executed_moves': [_resolved_move(event, index) for index, event in enumerate(events)],
+        'turns': _integer(result['turns'], 'turns', 0, 10000),
+        'simulation_elapsed_ms': _integer(result[elapsed_field], 'elapsed time', 0, 1000000),
+    }
+
+
+def validate_complete_result(result, key, spec, versions):
+    """Validate a stored v1 summary against a server-normalized spec and active versions."""
+    _object(result, 'battle result', (
+        'schema', 'status', 'battle_key', 'spec', 'versions', 'outcome', 'rating',
+        'terminal', 'shields_used', 'damage', 'executed_moves', 'action_results',
+        'turns', 'simulation_elapsed_ms', 'compute_wall_ms',
+    ))
+    _object(versions, 'battle versions', ('engine', 'game_data'))
+    for version in versions.values():
+        _identifier(version, 'battle version', r'[a-f0-9]{64}')
+    if (result['schema'] != RESULT_SCHEMA or result['status'] != 'complete'
+            or result['outcome'] not in ('self_win', 'opponent_win', 'simultaneous_ko')
+            or result['action_results'] != [] or spec['mode'] != 'standard'
+            or spec['calculation_version'] != _json_hash([versions['engine'], versions['game_data']])
+            or result['battle_key'] != key or key != _json_hash(spec)
+            or result['versions'] != versions or _canonical_json(result['spec']) != _canonical_json(spec)):
+        raise ValueError('Result does not match the complete battle summary')
+    metrics = _battle_metrics(result, events_field='executed_moves', elapsed_field='simulation_elapsed_ms')
+    if metrics['terminal'] != result['terminal']:
+        raise ValueError('Unexpected terminal state fields')
+    timing = result['compute_wall_ms']
+    if type(timing) not in (int, float) or not 0 <= timing < math.inf:
+        raise ValueError('Invalid battle compute time')
+
+
+def _file_signature(path):
+    stat = path.stat()
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
 def _validate_script(actions, decisions):
     ids, slots, charged = set(), set(), {}
     for action in _items(actions, 'actions', 0, 1000):
@@ -140,28 +198,34 @@ def _validate_script(actions, decisions):
 class BattleService:
     """Translate a validated spec and run one battle using an existing client."""
 
-    def __init__(self, client: DirectMatrixClient):
+    def __init__(self, client: DirectMatrixClient, *, store: BattleStore | None = None):
         self.client = client
+        self.store = store
+        self.cache_stats = dict(hits=0, engine_calls=0, storage_errors=0, read_seconds=0.0, write_seconds=0.0)
+        self._verified_process = None
+        self._data_path = client.gamemaster
+        source = client.source / 'src'
+        engine_paths = {
+            path.relative_to(source).as_posix(): path for path in (source / 'js').rglob('*.js')
+        }
+        for name in ('pvpoke_node_matrix.js', 'pvpoke_battle_policy.js', 'pvpoke_minior_strategy.js'):
+            engine_paths[f'adapter/{name}'] = ROOT / name
+        python_paths = [ROOT / name for name in ('pvpoke_direct_backend.py', 'pvpoke_batch_v2.py', Path(__file__).name)]
+        self._input_signatures = {
+            path: _file_signature(path) for path in [self._data_path, *engine_paths.values(), *python_paths]
+        } if store is not None else {}
         raw = client.gamemaster.read_bytes()
         self.data_version = hashlib.sha256(raw).hexdigest()
         self.species = {row['speciesId']: row for row in json.loads(raw)['pokemon']}
-        source = client.source / 'src'
         pokemon_source = (source / 'js/pokemon/Pokemon.js').read_bytes()
         match = re.search(rb'\bvar\s+cpms\s*=\s*\[([^\]]+)\]', pokemon_source)
         if not match:
             raise ValueError('PvPoke CPM table is missing')
         self.cpms = [float(value) for value in match[1].split(b',')]
-        self.source_hashes = {
-            path.relative_to(source).as_posix(): content_hash(path)
-            for path in (source / 'js').rglob('*.js')
-        }
+        self.source_hashes = {name: content_hash(path) for name, path in engine_paths.items()}
         self.source_hashes['js/pokemon/Pokemon.js'] = hashlib.sha256(pokemon_source).hexdigest()
-        for name in ('pvpoke_node_matrix.js', 'pvpoke_battle_policy.js', 'pvpoke_minior_strategy.js'):
-            self.source_hashes[f'adapter/{name}'] = content_hash(ROOT / name)
-        self.engine_version = _json_hash([
-            self.source_hashes,
-            [content_hash(ROOT / name) for name in ('pvpoke_direct_backend.py', 'pvpoke_batch_v2.py', Path(__file__).name)],
-        ])
+        self.engine_version = _json_hash([self.source_hashes, [content_hash(path) for path in python_paths]])
+        self.versions = {'engine': self.engine_version, 'game_data': self.data_version}
         self.calculation_version = _json_hash([self.engine_version, self.data_version])
 
     def _combatant(self, value):
@@ -273,36 +337,75 @@ class BattleService:
         except ValueError as exc:
             return self._error('invalid', str(exc))
 
+        key = _json_hash(spec)
+        try:
+            self._check_inputs()
+        except (DirectMatrixError, OSError):
+            return self._error('failed', 'The active battle inputs have changed')
+        if self.store is not None:
+            started = time.perf_counter()
+            try:
+                cached = self.store.get(key, spec, self.versions)
+            except (sqlite3.Error, OSError, ValueError):
+                self.cache_stats['storage_errors'] += 1
+                cached = None
+            finally:
+                self.cache_stats['read_seconds'] += time.perf_counter() - started
+            if cached is not None:
+                try:
+                    if self._verified_process is None or self._verified_process is not self.client.proc:
+                        identity = self.client.strategy('engine_identity', {})
+                        self._verify_engine(identity.get('engine_sources'))
+                    self._check_inputs()
+                except (DirectMatrixError, OSError):
+                    return self._error('failed', 'The cached result does not match the active engine inputs')
+                self.cache_stats['hits'] += 1
+                return cached
+
+        self.cache_stats['engine_calls'] += 1
+        result = self._calculate(key, spec, payload)
+        if self.store is not None and result['status'] == 'complete':
+            started = time.perf_counter()
+            try:
+                self.store.put(key, spec, self.versions, result)
+            except (sqlite3.Error, OSError, ValueError):
+                self.cache_stats['storage_errors'] += 1
+            finally:
+                self.cache_stats['write_seconds'] += time.perf_counter() - started
+        return result
+
+    def _check_inputs(self):
+        if self.store is not None and (
+            self.client.gamemaster != self._data_path or any(
+                _file_signature(path) != signature for path, signature in self._input_signatures.items()
+            )
+        ):
+            raise DirectMatrixError('Battle inputs changed after initialization')
+
+    def _verify_engine(self, loaded):
+        if (
+            type(loaded) is not dict or not loaded
+            or (self.store is not None and loaded.keys() != self.source_hashes.keys())
+            or any(self.source_hashes.get(name) != digest for name, digest in loaded.items())
+        ):
+            raise DirectMatrixError('Loaded engine source version mismatch')
+        self._verified_process = self.client.proc
+
+    def _calculate(self, key, spec, payload):
         started = time.perf_counter()
         try:
             result = self.client.strategy('detail', payload, include_engine_sources=True)
             if result['status'] != 'calculated' or result['gamemaster_hash'] != self.data_version:
                 raise DirectMatrixError('Detail result or data version mismatch')
-            loaded = result['engine_sources']
-            if type(loaded) is not dict or not loaded or any(
-                self.source_hashes.get(name) != digest for name, digest in loaded.items()
-            ):
-                raise DirectMatrixError('Loaded engine source version mismatch')
+            self._verify_engine(result['engine_sources'])
+            self._check_inputs()
             outcome = OUTCOMES[result['outcome']]
-            terminal = [_terminal_state(state) for state in _items(result['terminal'], 'terminal', 2, 2)]
-            shields_used = [_integer(value, 'shields used', 0, 2)
-                            for value in _items(result['shields_used'], 'shields used', 2, 2)]
-            damage = []
-            for item in _items(result['damage'], 'damage', 2, 2):
-                _object(item, 'damage totals', ('fast', 'charged'))
-                damage.append({key: _integer(item[key], 'damage total', 0, 10000)
-                               for key in ('fast', 'charged')})
-            executed_moves = [_resolved_move(event, index)
-                              for index, event in enumerate(_items(result['events'], 'resolved moves', 0, 2000))]
             return {
                 'schema': RESULT_SCHEMA, 'status': 'partial' if outcome in ('timeout', 'boundary') else 'complete',
-                'battle_key': _json_hash(spec), 'spec': spec,
-                'versions': {'engine': self.engine_version, 'game_data': self.data_version},
-                'outcome': outcome, 'rating': _integer(result['rating'], 'rating', 0, 1000), 'terminal': terminal,
-                'shields_used': shields_used, 'damage': damage,
-                'executed_moves': executed_moves, 'action_results': [],
-                'turns': _integer(result['turns'], 'turns', 0, 10000),
-                'simulation_elapsed_ms': _integer(result['elapsed_ms'], 'elapsed time', 0, 1000000),
+                'battle_key': key, 'spec': spec,
+                'versions': dict(self.versions),
+                'outcome': outcome, 'action_results': [],
+                **_battle_metrics(result, events_field='events', elapsed_field='elapsed_ms'),
                 'compute_wall_ms': (time.perf_counter() - started) * 1000,
             }
         except (DirectMatrixError, OSError, KeyError, TypeError, ValueError):
