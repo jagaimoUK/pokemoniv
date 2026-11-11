@@ -30,6 +30,16 @@ ctx.combined=combined;
 const nick=vm.runInContext('nicknameFor(combined,combined.selection.recommendations[0])',ctx);
 assert(nick.text.endsWith('ScTPSw')&&nick.text.length<=12,nick.text);
 assert(nick.description.includes('THUNDER_PUNCH')&&nick.description.includes('SWIFT'));
+// Consecutive move abbreviations can form a blocked word on their own.
+const blockedMoves={...combined.selection.recommendations[0],evidence:[],
+ chosen_moves:{species:'ursaluna_shadow',fast:'AIR_SLASH',charged1:'SLUDGE_BOMB',charged2:'SWIFT'}};
+ctx.blockedMoves=blockedMoves;
+assert.equal(vm.runInContext('moveAliases(blockedMoves.chosen_moves).AIR_SLASH',ctx),'AS');
+assert.equal(vm.runInContext('moveAliases(blockedMoves.chosen_moves).SLUDGE_BOMB',ctx),'SB');
+const safeMoveNick=vm.runInContext('nicknameFor(combined,blockedMoves)',ctx);
+assert(safeMoveNick.description.includes('代替ニックネーム'));
+assert(vm.runInContext('validNickname('+JSON.stringify(safeMoveNick.text)+')',ctx));
+
 ctx.low=[result('HIGH_HORSEPOWER',400,'100'),result('SWIFT',390,'010')];
 assert(vm.runInContext('combineMovesets(low,450).moveset_comparison.profiles.every(p=>p.retained)',ctx),'Keep a unique actual win even below threshold');
 ctx.low=[result('HIGH_HORSEPOWER',400,'000'),result('SWIFT',390,'000')];
