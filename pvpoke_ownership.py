@@ -219,7 +219,8 @@ class Ownership:
                       VALUES (?, ?, ?, ?, ?, ?, ?)''',
                    (self.owner, event['event_id'], event['kind'], target, request_hash, *_pack(event)))
 
-    def confirm(self, event_id, instance_id, *, expected_revision, state, observation=None):
+    def confirm(self, event_id, instance_id, *, expected_revision, state, observation=None,
+                register_if_missing=False):
         """Apply one explicit manual confirmation, optionally updating current observed details."""
         _id(event_id)
         _id(instance_id)
@@ -227,13 +228,24 @@ class Ownership:
         if state not in STATES:
             raise ValueError('Invalid ownership state')
         fields = None if observation is None else self._observation(observation)
-        request_hash = _json_hash(['instance', self.actor, instance_id, expected_revision, state, fields])
+        identity = ['instance', self.actor, instance_id, expected_revision, state, fields]
+        if register_if_missing:
+            if expected_revision != 0 or fields is None or state != 'confirmed_owned':
+                raise ValueError('A new instance requires an explicit owned observation')
+            identity.append('register')
+        request_hash = _json_hash(identity)
         with self.store._writer() as db:
             self._ensure_tables(db)
             replay = self._replay(db, event_id, request_hash)
             if replay is not None:
                 return replay
             previous = self._instance(db, instance_id)
+            if register_if_missing and previous is None:
+                previous = {'instance_id': instance_id, **fields, 'state': 'unknown', 'revision': 0}
+                db.execute('INSERT INTO owned_instances_v1 VALUES (?, ?, ?, ?, ?, ?)',
+                           (self.owner, instance_id, fields['species_id'], _iv_index(fields['ivs']), *_pack(previous)))
+            elif register_if_missing:
+                raise OwnershipConflict('Instance ID already exists')
             if previous is None or previous['revision'] != expected_revision:
                 raise OwnershipConflict('Instance missing or revision changed')
             now = _now()
