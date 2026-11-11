@@ -106,6 +106,7 @@ class MissingAnalysis:
                 has_inventory = inventory._exists(db)
                 ledger_revision = inventory._revision(db) if has_inventory else 0
                 matches_by_build = {}
+                max_hp_by_build = {}
                 for key, spec in plan['specs'].items():
                     combatant = spec['combatants'][0]
                     build = build_id(combatant)
@@ -113,9 +114,17 @@ class MissingAnalysis:
                             'state': 'unknown', 'facts': None, 'ownership': 'unknown',
                             'inventory_matches': [], 'recommendation': 'unreviewed',
                             'gap_state': 'evidence_pending'}
+                    if normalizer is not None and versions == current:
+                        if build not in max_hp_by_build:
+                            full = {**combatant, 'initial': {**combatant['initial'], 'hp': 'full'}}
+                            normalized, row = normalizer._combatant(full)
+                            max_hp_by_build[build] = (normalized['initial']['hp'], row['cp'])
+                        max_hp, cp = max_hp_by_build[build]
+                        cell['starts_at_full_hp'] = combatant['initial']['hp'] == max_hp
+                    else:
+                        cp = None
                     if has_inventory and versions == current:
                         if build not in matches_by_build:
-                            cp = normalizer._combatant(combatant)[1]['cp'] if normalizer is not None else None
                             matches_by_build[build] = inventory._matches(db, combatant, cp)
                         cell['inventory_matches'] = matches_by_build[build]
                         if any(match['state'] == 'confirmed_owned' and match['build_match'] == 'exact'
@@ -136,6 +145,11 @@ class MissingAnalysis:
                                 cell['facts'] = {field: result[field] for field in (
                                     'outcome', 'rating', 'terminal', 'shields_used', 'damage', 'turns',
                                 )}
+                                cell['facts']['charged_moves_resolved'] = [
+                                    sum(event['actor'] == side and event['kind'] == 'charged'
+                                        for event in result['executed_moves'])
+                                    for side in (0, 1)
+                                ]
                                 completed += 1
                                 if cell['ownership'] == 'unknown':
                                     cell['gap_state'] = 'ownership_confirmation_needed'
