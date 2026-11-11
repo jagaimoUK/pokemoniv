@@ -155,10 +155,10 @@ class LocalBattleAPITests(ServerFixture):
         finally:
             with web.LOCK:
                 web.BATTLE_RUNNING = False
+        self.assertEqual(self.request({'schema': 'battle-spec-v1', 'owner_id': 'other'})[0], 400)
         with patch.object(web, 'DirectMatrixClient') as node, patch.object(
                 web, 'BattleStore') as store:
-            self.assertEqual(self.request({'schema': 'battle-spec-v1', 'owner_id': 'other'})[0], 400)
-            # Malformed JSON is rejected before Node startup.
+            # Duplicate JSON keys are rejected before Node startup.
             self.assertEqual(post(self.server, self.path, b'{"schema":0,"schema":1}')[0], 400)
             node.assert_not_called()
             store.assert_not_called()
