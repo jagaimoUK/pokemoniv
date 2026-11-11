@@ -177,7 +177,7 @@ class DirectMatrixClient:
         except (ValueError, OSError, BrokenPipeError) as exc:
             raise DirectMatrixError(f"PvPoke Node protocol failed: {exc}") from exc
 
-    def strategy(self, action: str, payload: dict) -> dict:
+    def strategy(self, action: str, payload: dict, *, include_engine_sources: bool = False) -> dict:
         """Explicit detail protocol; never infer resources from a Rating."""
         if action not in ("detail", "switch_branch", "switch_prefix"):
             raise DirectMatrixError("Unknown strategy action")
@@ -185,6 +185,8 @@ class DirectMatrixClient:
             raise DirectMatrixError("PvPoke Node process is not running")
         request = {"action": action, "gamemaster_path": str(self.gamemaster),
                    "battle" if action == "detail" else "branch": payload}
+        if include_engine_sources:
+            request["include_engine_sources"] = True
         try:
             self.proc.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
             self.proc.stdin.flush()
