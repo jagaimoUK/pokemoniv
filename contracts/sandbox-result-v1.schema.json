@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Scripted Sandbox result v1",
+  "description": "A separate trace envelope for native PvPoke Sandbox. The start phase records the actual start turn. Resolve records damage and states before effects; effects records the state after the engine completes the move. Wait has only a start phase.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status"],
+  "properties": {
+    "schema": {"const": "sandbox-result-v1"},
+    "status": {"enum": ["complete", "partial", "invalid", "unsupported", "failed", "cancelled"]},
+    "error": {"type": "object", "additionalProperties": false, "required": ["message"],
+              "properties": {"message": {"type": "string", "minLength": 1}}},
+    "summary": {"$ref": "battle-result-v1.schema.json"},
+    "information_model": {"const": "fixed_script", "description": "No verification of what a player could observe when selecting the script."},
+    "effects_model": {"const": "pvpoke_native_deterministic", "description": "Native guaranteed effects apply. Non-guaranteed effects are not forced."},
+    "initial": {"$ref": "#/$defs/states"},
+    "trace": {"type": "array", "maxItems": 3000, "items": {"$ref": "#/$defs/traceEvent"}},
+    "shield_results": {
+      "type": "array", "maxItems": 1000,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["action_id", "defender", "requested", "used"],
+        "properties": {
+          "action_id": {"$ref": "battle-spec-v1.schema.json#/$defs/actionId"},
+          "defender": {"$ref": "battle-spec-v1.schema.json#/$defs/side"},
+          "requested": {"type": "boolean"},
+          "used": {"type": ["boolean", "null"]},
+          "reason": {"enum": ["no_shields", "unshieldable", "action_not_resolved"]}
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"enum": ["complete", "partial"]}}},
+      "then": {"required": ["summary", "initial", "trace", "shield_results", "information_model", "effects_model"],
+               "not": {"required": ["error"]}},
+      "else": {"required": ["error"], "propertyNames": {"enum": ["schema", "status", "error"]}}
+    },
+    {
+      "if": {"properties": {"status": {"const": "complete"}}},
+      "then": {"properties": {"summary": {"properties": {"status": {"const": "complete"}}}}}
+    },
+    {
+      "if": {"properties": {"status": {"const": "partial"}}},
+      "then": {"properties": {"summary": {"properties": {"status": {"const": "partial"}}}}}
+    }
+  ],
+  "$defs": {
+    "states": {"type": "array", "minItems": 2, "maxItems": 2,
+               "items": {"$ref": "battle-result-v1.schema.json#/properties/terminal/items"}},
+    "traceEvent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sequence", "turn", "phase", "actor", "kind", "before", "after"],
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 0},
+        "turn": {"type": "integer", "minimum": 1, "maximum": 500},
+        "phase": {"enum": ["start", "resolve", "effects"]},
+        "actor": {"$ref": "battle-spec-v1.schema.json#/$defs/side"},
+        "kind": {"enum": ["fast", "charged", "wait"]},
+        "move_id": {"$ref": "battle-spec-v1.schema.json#/$defs/moveId"},
+        "action_id": {"$ref": "battle-spec-v1.schema.json#/$defs/actionId"},
+        "actual_damage": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "before": {"$ref": "#/$defs/states"},
+        "after": {"$ref": "#/$defs/states"}
+      },
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "wait"}}},
+         "then": {"properties": {"phase": {"const": "start"}}, "not": {"required": ["move_id"]}},
+         "else": {"required": ["move_id"]}},
+        {"if": {"properties": {"phase": {"const": "resolve"}}},
+         "then": {"required": ["actual_damage"]},
+         "else": {"not": {"required": ["actual_damage"]}}}
+      ]
+    }
+  }
+}
