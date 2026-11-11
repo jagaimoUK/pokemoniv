@@ -20,6 +20,7 @@ os.environ.setdefault('PVP_API_KEY', 'test-' + 'x' * 32)
 import pvpoke_mcp_remote as gateway
 import pvpoke_web as web
 from pvpoke_battle_service import BattleService
+from pvpoke_http_security import RateBudget
 from test_battle_service import FIXTURES, battle_spec
 
 
@@ -28,6 +29,8 @@ def post(server, path, body, *, token=None, origin=None, content_type='applicati
     headers = {'Content-Type': content_type}
     if token is not None:
         headers['Authorization'] = token
+    if path == '/api/battles/simulate':
+        headers['X-PvPoke-Token'] = web.TOKEN
     if origin is not None:
         headers['Origin'] = origin
     connection.request('POST', path, body if isinstance(body, bytes) else json.dumps(body).encode(),
@@ -55,6 +58,12 @@ class ServerFixture(unittest.TestCase):
 class BattleGatewayTests(ServerFixture):
     handler = gateway.Handler
     path = '/app-api/battles/simulate'
+
+    def setUp(self):
+        budget = patch.object(gateway, 'RATE_BUDGET', RateBudget())
+        budget.start()
+        self.addCleanup(budget.stop)
+        super().setUp()
 
     def request(self, spec=None, *, auth=True, **kwargs):
         return post(self.server, self.path, spec if spec is not None else battle_spec(),
