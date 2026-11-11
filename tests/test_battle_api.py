@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import statistics
+import sqlite3
 import tempfile
 import threading
 import time
@@ -228,6 +229,7 @@ class LocalBattleAPITests(ServerFixture):
             began = time.perf_counter()
             first_code, first = self.request()
             new_ms = (time.perf_counter()-began) * 1000
+            new_times = [new_ms]
             self.assertEqual(first_code, 200, first)
             self.assertEqual(first['status'], 'complete')
             self.assertEqual(created[-1].cache_stats['engine_calls'], 1)
@@ -242,21 +244,49 @@ class LocalBattleAPITests(ServerFixture):
                 self.assertEqual(created[-1].cache_stats['hits'], 1)
             changed = copy.deepcopy(battle_spec())
             changed['combatants'][0]['initial']['energy'] = 80
+            began = time.perf_counter()
             code, second = self.request(changed)
+            new_times.append((time.perf_counter()-began)*1000)
             self.assertEqual(code, 200, second)
             self.assertNotEqual(second['battle_key'], first['battle_key'])
             self.assertEqual(created[-1].cache_stats['engine_calls'], 1)
+            for energy in (1, 2, 3, 4):
+                another = copy.deepcopy(battle_spec())
+                another['combatants'][0]['initial']['energy'] = energy
+                began = time.perf_counter()
+                code, result = self.request(another)
+                new_times.append((time.perf_counter()-began)*1000)
+                self.assertEqual(code, 200, result)
+                self.assertEqual(created[-1].cache_stats['engine_calls'], 1)
             self.assertEqual(self.request()[1], first)
             self.assertEqual(created[-1].cache_stats['hits'], 1)
         # Each HTTP request deliberately closes its Node process; SQLite is durable.
         from pvpoke_battle_store import BattleStore
         db = BattleStore.from_volume()
         self.assertTrue(db.path.is_file())
-        self.assertEqual(len(list(db.path.parent.glob('battle_analysis.sqlite3'))), 1)
+        with sqlite3.connect(db.path) as connection:
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM battle_results').fetchone()[0], 6)
         self.assertFalse(web.BATTLE_RUNNING)
-        s = sorted(reused)
-        print('BATTLE_API_BENCH first_ms=%.2f reuse_median_ms=%.2f reuse_p95_ms=%.2f '
-              'samples=5 new_calls=2 cache_hits=6' % (new_ms, statistics.median(s), s[-1]))
+        try:
+            import resource
+            python_peak_mb = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 2)
+        except ImportError:
+            python_peak_mb = None
+        node_peaks = [sample.get('peak_rss_mb', 0) for service in created
+                      for sample in service.client.memory_samples]
+        sqlite_reads = [1000*service.cache_stats['read_seconds'] for service in created]
+        new_sorted, reuse_sorted = sorted(new_times), sorted(reused)
+        print('BATTLE_API_BENCH new_median_ms=%.2f new_p95_ms=%.2f '
+              'reuse_median_ms=%.2f reuse_p95_ms=%.2f '
+              'sqlite_read_median_ms=%.3f python_peak_mb=%s node_peak_mb=%s '
+              'new_samples=%d reuse_samples=%d new_calls=%d cache_hits=%d' % (
+                statistics.median(new_sorted), new_sorted[-1],
+                statistics.median(reuse_sorted), reuse_sorted[-1],
+                statistics.median(sqlite_reads), python_peak_mb,
+                max(node_peaks) if node_peaks else 'unavailable',
+                len(new_times), len(reused),
+                sum(service.cache_stats['engine_calls'] for service in created),
+                sum(service.cache_stats['hits'] for service in created)))
 
 
 if __name__ == '__main__':
