@@ -243,7 +243,7 @@ async function copy(text,button){try{await navigator.clipboard.writeText(text);b
 // Result labels are resolved against the active catalog, including form names.
 let nameEntries=[],displayedResults=[],opponentLabels=new Map(),nicknameBindings=[];
 function prepareLabels(){opponentLabels.clear();nameEntries=Object.entries(catalog).map(([sid,p])=>({sid,...p})).sort((a,b)=>(b.name||'').length-(a.name||'').length);}
-function opponentLabel(value){const text=String(value||'');if(opponentLabels.has(text))return opponentLabels.get(text);const found=nameEntries.find(p=>p.name&&(text===p.name||text.startsWith(p.name+' ')));const label=found?{name:found.name_ja||found.name,code:found.nickname_code||null,detail:text.slice(found.name.length)}:{name:text,code:null,detail:''};opponentLabels.set(text,label);return label;}
+function opponentLabel(value){const text=String(value||'');if(opponentLabels.has(text))return opponentLabels.get(text);const found=nameEntries.find(p=>p.name&&(text===p.name||text.startsWith(p.name+' ')));const label=found?{name:found.name_ja||found.name,code:found.nickname_code||null,sid:found.sid,detail:text.slice(found.name.length)}:{name:text,code:null,detail:''};opponentLabels.set(text,label);return label;}
 function shieldCode(shield){return {s0:'00',s1:'11',s2:'22',i0y1:'01',i0y2:'02',i1y2:'12'}[shield]||'';}
 function conditionLabel(e){const code=shieldCode(e.shield);const mode={default:'標準IV',rank1:'SCP1位IV',attack:'攻撃重視IV',defense:'防御重視IV'}[e.mode]||e.mode;return mode+'・'+(code?'自分シールド'+code[0]+' / 相手'+code[1]:e.shield);}
 function outcome(e){return e.rating>500?'勝ち':e.rating===500?'引き分け':'負け';}
@@ -266,9 +266,9 @@ function summaryEvidence(row){
 const blockedNickname=/(anal|ass|bitch|cunt|dick|fuck|nazi|porn|sex|shit|slut)/i;
 function validNickname(t){return t.length<=12&&/^[A-Za-z0-9><=]+$/.test(t)&&!blockedNickname.test(t.replace(/[^A-Za-z]/g,''));}
 function codeChoices(sid,width){
- const seed=String(catalog[sid]?.nickname_code||'').replace(/[^A-Za-z0-9]/g,'');
- const name=sid.split('_')[0].replace(/[^A-Za-z]/g,'');
- if(!seed||!name)return [];
+ const name=String(sid||'').split('_')[0].replace(/[^A-Za-z]/g,'');
+ const seed=String(catalog[sid]?.nickname_code||'').replace(/[^A-Za-z0-9]/g,'')||name;
+ if(!seed||width<1)return [];
  const opts=[seed.slice(0,width),name.slice(0,width),
   seed[0]+seed.slice(1).slice(-Math.max(0,width-1)),
   name[0]+name.slice(1).slice(-Math.max(0,width-1)),
@@ -290,49 +290,73 @@ function nicknameMembers(result,row,ivs){
  members.sort((a,b)=>displayedResults.indexOf(a.result)-displayedResults.indexOf(b.result));
  return members;
 }
+function nicknameGrade(row){
+ const grade=String(row.grade||'')[0];
+ return grade==='S'||grade==='A'?grade:'';
+}
+function nicknameSpecies(sid){return catalog[sid]?.name_ja||catalog[sid]?.name||sid;}
+function fallbackNickname(member,ivs){
+ if(!/^(?:[0-9]|1[0-5])\/(?:[0-9]|1[0-5])\/(?:[0-9]|1[0-5])$/.test(ivs||''))return null;
+ const ivCode=ivs.split('/').map(value=>Number(value).toString(16).toUpperCase()).join('');
+ const grade=nicknameGrade(member.row);
+ for(const code of [...codeChoices(member.sid,4),...codeChoices(member.sid,3),'IV']){
+  const text=grade+code+ivCode;
+  if(validNickname(text))return {text,description:'代替ニックネーム / '+nicknameSpecies(member.sid)+' / 個体値 '+ivs};
+ }
+ return null;
+}
 function nicknameFor(result,row,ivs=row.ivs){
  const members=nicknameMembers(result,row,ivs);
- if(members.some(m=>m.row.chosen_moves))return movesetNickname(members);
+ const withMoves=members.find(member=>member.row.chosen_moves);
+ if(withMoves){
+  const nick=movesetNickname(withMoves,members);
+  if(nick)return nick;
+ }
  // Only documented PvPoke evidence is compared; unseen battles are not inferred.
  const matches=members.flatMap(member=>(member.row.evidence||[])
-  .filter(e=>Number.isFinite(e.rating)&&opponentLabel(e.opponent).code&&shieldCode(e.shield))
+  .filter(e=>Number.isFinite(e.rating)&&opponentLabel(e.opponent).sid&&shieldCode(e.shield))
   .map(e=>({member,e,opponent:opponentLabel(e.opponent)})))
   .sort((a,b)=>(b.e.rating>500)-(a.e.rating>500)||b.e.rating-a.e.rating||
-    Number(String(b.member.row.grade||'').startsWith('S'))-Number(String(a.member.row.grade||'').startsWith('S')));
+    Number(nicknameGrade(b.member.row)==='S')-Number(nicknameGrade(a.member.row)==='S'));
  const best=matches[0];
- if(!best||members.length>3)return null;
- const grade=String(best.member.row.grade||'?').startsWith('S')?'S':String(best.member.row.grade||'?').startsWith('A')?'A':'?';
- const sign=best.e.rating>500?'>':best.e.rating===500?'=':'<', suffix=sign+best.opponent.code+shieldCode(best.e.shield);
- // Two stages: 3 letters for the best-Rating stage, 2 for the other.
- // Three stages: 2 per stage, grade omitted to retain opponent and shields.
- const labelBudget=12-grade.length-suffix.length;
- const primaryWidth=Math.min(3,labelBudget-2);
- const widths=members.length===1?[4]:members.length===2?
-  members.map(m=>m===best.member?primaryWidth:2):[2,2,2];
- if(members.length===2&&primaryWidth<2)return null;
- const candidates=members.map((m,i)=>codeChoices(m.sid,members.length===1?
-  Math.min(4,String(catalog[m.sid]?.nickname_code||'').length):widths[i]));
- if(candidates.some(x=>!x.length))return null;
- const prefix=members.length===3?'':grade;
- function select(i,codes){
-  if(i===members.length){
-   if(new Set(codes.map(x=>x.toLowerCase())).size!==codes.length)return null;
-   const text=prefix+codes.join('')+suffix;
-   return validNickname(text)?{text,codes}:null;
+ if(best&&members.length<=3){
+  const grade=nicknameGrade(best.member.row);
+  const prefix=members.length===3?'':grade;
+  const sign=best.e.rating>500?'>':best.e.rating===500?'=':'<';
+  const opponentCodes=new Set([best.opponent.code,...[3,2,1].map(width=>best.opponent.code?.slice(0,width))]);
+  for(const width of [4,3,2,1])for(const code of codeChoices(best.opponent.sid,width))opponentCodes.add(code);
+  for(const opponentCode of opponentCodes){
+   if(!opponentCode)continue;
+   const suffix=sign+opponentCode+shieldCode(best.e.shield);
+   const labelBudget=12-prefix.length-suffix.length;
+   // Keep two characters per secondary stage; use a shorter opponent code when needed.
+   if(labelBudget<members.length*2)continue;
+   const widths=members.length===1?[Math.min(4,labelBudget,String(catalog[members[0].sid]?.nickname_code||'').length||4)]:
+    members.length===2?members.map(m=>m===best.member?Math.min(3,labelBudget-2):2):[2,2,2];
+   const candidates=members.map((m,i)=>codeChoices(m.sid,widths[i]));
+   function select(i,codes){
+    if(i===members.length){
+     if(new Set(codes.map(x=>x.toLowerCase())).size!==codes.length)return null;
+     const text=prefix+codes.join('')+suffix;
+     return validNickname(text)?{text,codes}:null;
+    }
+    for(const code of candidates[i]){
+     const picked=select(i+1,[...codes,code]);
+     if(picked)return picked;
+    }
+    return null;
+   }
+   const picked=select(0,[]);
+   if(picked){
+    const stages=members.map((m,i)=>picked.codes[i]+'＝'+nicknameSpecies(m.sid));
+    return {text:picked.text,description:(grade?grade+'＝優先候補評価 / ':'')+stages.join(' / ')+
+     ' / '+sign+'＝'+outcome(best.e)+' / '+opponentCode+'＝'+best.opponent.name+
+     ' / '+conditionLabel(best.e)+' / Rating '+best.e.rating+
+     (members.length>1?'（同じ個体値・同じ入力区間の'+members.length+'種類を比較）':'')};
+   }
   }
-  for(const code of candidates[i]){
-   const picked=select(i+1,[...codes,code]);
-   if(picked)return picked;
-  }
-  return null;
  }
- const picked=select(0,[]);
- if(!picked)return null;
- const stages=members.map((m,i)=>picked.codes[i]+'＝'+(catalog[m.sid]?.name_ja||catalog[m.sid]?.name||m.sid));
- return {text:picked.text,description:grade+'＝優先候補評価 / '+stages.join(' / ')+
-  ' / '+sign+'＝'+outcome(best.e)+' / '+best.opponent.code+'＝'+best.opponent.name+
-  ' / '+conditionLabel(best.e)+' / Rating '+best.e.rating+
-  (members.length>1?'（同じ個体値・同じ入力区間の'+members.length+'種類を比較）':'')};
+ return fallbackNickname(withMoves||best?.member||members[0],ivs);
 }
 // Source records describe the physical Pokemon before powering up/evolving.
 // Repair old saved selection results too, without changing the source CP or IV.
@@ -382,7 +406,7 @@ function recommendationExport(result){
  return (result.selection?.recommendations||[]).flatMap(row=>
   [row,...(row.equivalent_candidates||[])].flatMap(iv=>{
    const nick=nicknameFor(result,row,iv.ivs);
-   if(!nick)throw Error('ニックネームを安全に生成できません。種名・略号を確認してください。');
+   if(!nick)throw Error('ニックネームの生成に必要な個体値を確認できません。結果を再取得してください。');
    if(!iv.search_string)throw Error('検索式を確認できない個体があります。結果を再取得してください。');
    return individualSearches(result,iv).map(source=>{
     if(!source.search)throw Error('検索式が欠けています。再度取り込んでください。');
@@ -436,7 +460,7 @@ function refreshNicknames(){
   item.code.textContent=nick?nick.text:'';
   item.button.disabled=!nick;
   item.button.textContent='ニックネームをコピー';
-  item.note.textContent=nick?nick.description:'安全な12文字以内の略号を生成できません。個体値と略号を確認してください。';
+  item.note.textContent=nick?nick.description:'代替ニックネームの生成に必要な個体値を確認できません。結果を再取得してください。';
  }
 }
 function renderNickname(result,row,parent,ivs=row.ivs){
@@ -1045,14 +1069,16 @@ function moveAliases(c){
  }
  moveAliasCache.set(cacheKey,codes);return codes;
 }
-function movesetNickname(members){
+function movesetNickname(primary,members){
  // One physical IV shared by evolutions keeps the first target's adopted build.
- const primary=members.find(m=>m.row.chosen_moves),c=primary.row.chosen_moves,aliases=moveAliases(c);
- const ids=[c.fast,c.charged1,c.charged2],suffix=ids.map(id=>aliases[id]).join('');
- const grade=String(primary.row.grade||'').startsWith('S')?'S':'A';
+ const c=primary.row.chosen_moves;
+ const ids=[c.fast,c.charged1,c.charged2];
+ if(ids.some(id=>typeof id!=='string'||!id)||!Number.isFinite(primary.row.moveset_mean))return null;
+ const aliases=moveAliases(c),suffix=ids.map(id=>aliases[id]).join('');
+ const grade=nicknameGrade(primary.row);
  for(const width of [4,3,2])for(const code of codeChoices(primary.sid,width)){
   const text=grade+code+suffix;
-  if(validNickname(text))return {text,description:grade+'＝候補評価 / '+code+'＝'+(catalog[primary.sid]?.name_ja||primary.sid)+' / '+ids.map(id=>aliases[id]+'＝'+(moveCatalog[id]?.name||id)).join(' / ')+' / 個体別平均Rating '+primary.row.moveset_mean.toFixed(1)+(members.length>1?' / 共通個体：'+members.map(m=>catalog[m.sid]?.name_ja||m.sid).join('、')+'（技略号は最初の進化先）':'')};
+  if(validNickname(text))return {text,description:(grade?grade+'＝候補評価 / ':'')+code+'＝'+nicknameSpecies(primary.sid)+' / '+ids.map(id=>aliases[id]+'＝'+(moveCatalog[id]?.name||id)).join(' / ')+' / 個体別平均Rating '+primary.row.moveset_mean.toFixed(1)+(members.length>1?' / 共通個体：'+members.map(m=>catalog[m.sid]?.name_ja||m.sid).join('、')+'（技略号は最初の進化先）':'')};
  }
  return null;
 }

@@ -62,6 +62,30 @@ function flatten(e){return [e,...e.children.flatMap(flatten)];}
  assert(branches.items.every(x=>x.ivs&&x.nickname&&x.search));
  assert.equal(branches.items[0].search,branches.items[3].search,'Source searches stay exact across target stages');
  assert.equal(branches.items[0].nickname,branches.items[3].nickname,'Shared multi-stage nickname stays identical');
+ // A third stage and a four-letter opponent exceed the original 12-character layout.
+ const third={...first,candidate:{species:'swampert'}};
+ first.selection.recommendations[0].evidence=[{opponent:'Quagsire',rating:650,mode:'default',shield:'s1'}];
+ context.third=third;
+ vm.runInContext("catalog.swampert={name:'Swampert',nickname_code:'Swa'};prepareLabels();displayedResults=[first,evolved,third]",context);
+ const threeStage=JSON.parse(vm.runInContext('overlayExport(displayedResults)',context));
+ const sharedNick=threeStage.items.filter(item=>item.ivs==='0/11/12').map(item=>item.nickname);
+ assert.equal(new Set(sharedNick).size,1);
+ assert(sharedNick[0].length<=12&&sharedNick[0].endsWith('>Qua11'));
+ // Old results may have no usable matchup or catalog abbreviation.
+ const fallback=result([{...row('0/11/12','Quagsire&0attack&3defense&3hp'),evidence:[]},
+  {...row('1/11/12','Quagsire&1attack&3defense&3hp'),evidence:[]}]);
+ context.fallback=fallback;
+ vm.runInContext("delete catalog.quagsire.nickname_code;prepareLabels();render(fallback)",context);
+ const fallbackItems=JSON.parse(vm.runInContext('overlayExport([fallback])',context)).items;
+ assert.equal(fallbackItems.length,2);
+ assert.notEqual(fallbackItems[0].nickname,fallbackItems[1].nickname);
+ assert(fallbackItems.every(item=>vm.runInContext('validNickname('+JSON.stringify(item.nickname)+')',context)));
+ const fallbackCopy=flatten(elements.results).find(e=>e.textContent==='ニックネームをコピー');
+ await fallbackCopy.onclick();
+ assert.equal(copied.at(-1),fallbackItems[0].nickname);
+ assert.equal(vm.runInContext('recommendationExport(fallback)',context),
+  fallbackItems.map(item=>item.search+'\n'+item.nickname).join('\n'));
+
  console.log('Android Web Share: exact pairs, multi-result, duplicate, fallback, cancel, error: PASS');
 })().catch(e=>{console.error(e);process.exitCode=1});
 
