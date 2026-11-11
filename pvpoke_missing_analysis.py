@@ -1,7 +1,7 @@
 """Internal plans and read-only evidence for missing-IV analysis.
 
 Plans pin exact normalized matchups and versions. BattleStore remains the
-source of facts. No ownership, recommendation, or role judgement is inferred.
+source of facts. Ownership is checked against separate explicit inventory records.
 """
 import json
 import re
@@ -10,6 +10,7 @@ import time
 
 from pvpoke_battle_service import _canonical_json, _json_hash
 from pvpoke_battle_store import BattleStore, BattleStoreError, COMPLETENESS
+from pvpoke_ownership import Ownership, build_id
 
 MAX_MATCHUPS = 128
 MAX_PLAN_BYTES = 512 * 1024
@@ -73,11 +74,13 @@ class MissingAnalysis:
             raise AnalysisUnavailable('Could not store analysis plan') from exc
         return analysis_id
 
-    def evidence(self, analysis_id, *, active_versions):
+    def evidence(self, analysis_id, *, active_versions, normalizer=None):
         """Return coverage and per-matchup facts from a single SQLite snapshot."""
         if type(analysis_id) is not str or not re.fullmatch(r'[0-9a-f]{64}', analysis_id):
             raise ValueError('Invalid analysis ID')
         current = _versions(active_versions)
+        if normalizer is not None and normalizer.versions != current:
+            raise ValueError('Inventory build verification requires the active calculation version')
         try:
             if not self.store.path.exists():
                 return None
@@ -99,9 +102,25 @@ class MissingAnalysis:
                 versions = _versions(plan['versions'])
                 cells = []
                 completed = 0
+                inventory = Ownership(self.store)
+                has_inventory = inventory._exists(db)
+                ledger_revision = inventory._revision(db) if has_inventory else 0
+                matches_by_build = {}
                 for key, spec in plan['specs'].items():
-                    cell = {'battle_key': key, 'spec': spec, 'state': 'unknown', 'facts': None,
-                            'ownership': 'unknown', 'recommendation': 'unreviewed'}
+                    combatant = spec['combatants'][0]
+                    build = build_id(combatant)
+                    cell = {'battle_key': key, 'build_id': build, 'spec': spec,
+                            'state': 'unknown', 'facts': None, 'ownership': 'unknown',
+                            'inventory_matches': [], 'recommendation': 'unreviewed',
+                            'gap_state': 'evidence_pending'}
+                    if has_inventory and versions == current:
+                        if build not in matches_by_build:
+                            cp = normalizer._combatant(combatant)[1]['cp'] if normalizer is not None else None
+                            matches_by_build[build] = inventory._matches(db, combatant, cp)
+                        cell['inventory_matches'] = matches_by_build[build]
+                        if any(match['state'] == 'confirmed_owned' and match['build_match'] == 'exact'
+                               for match in cell['inventory_matches']):
+                            cell['ownership'] = 'confirmed_owned'
                     if versions != current:
                         cell['state'] = 'stale'
                     else:
@@ -118,10 +137,13 @@ class MissingAnalysis:
                                     'outcome', 'rating', 'terminal', 'shields_used', 'damage', 'turns',
                                 )}
                                 completed += 1
+                                if cell['ownership'] == 'unknown':
+                                    cell['gap_state'] = 'ownership_confirmation_needed'
                     cells.append(cell)
         except (sqlite3.Error, OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
             raise AnalysisUnavailable('Could not read analysis evidence') from exc
         state = ('stale' if versions != current else 'complete' if completed == len(cells)
                  else 'partial' if completed else 'unknown')
         return {'analysis_id': analysis_id, 'versions': versions, 'state': state,
-                'coverage': {'requested': len(cells), 'completed': completed}, 'cells': cells}
+                'coverage': {'requested': len(cells), 'completed': completed},
+                'ledger_revision': ledger_revision, 'cells': cells}
