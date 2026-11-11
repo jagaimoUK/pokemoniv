@@ -165,10 +165,11 @@ class RoleEvaluation:
         role = _definition(definition)
         versions = _versions(active_versions)
         evidence = self.analysis.evidence(analysis_id, active_versions=versions, normalizer=normalizer)
-        if evidence is None:
-            return None
+        return None if evidence is None else self._evaluate(evidence, role, versions)
+
+    def _evaluate(self, evidence, role, versions):
         source = {
-            'analysis_id': analysis_id, 'active_versions': versions, 'plan_versions': evidence['versions'],
+            'analysis_id': evidence['analysis_id'], 'active_versions': versions, 'plan_versions': evidence['versions'],
             'ledger_revision': evidence['ledger_revision'], 'definition': role,
             'evidence_state': evidence['state'],
             'evidence_digest': _json_hash(evidence['cells']),

@@ -37,7 +37,11 @@ import pvpoke_flashcards as flashcards
 import pvpoke_meta_variants as meta_variants
 from pvpoke_party_backend import PartyBuilder
 from pvpoke_battle_service import BattleService, MAX_REQUEST_BYTES as MAX_BATTLE_REQUEST_BYTES, _unique_object, _reject_constant
-from pvpoke_battle_store import BattleStore
+from pvpoke_battle_store import BattleStore, BattleStoreError
+from pvpoke_missing_analysis import AnalysisUnavailable
+from pvpoke_missing_comparison import API_PATH as MISSING_API_PATH, MAX_REQUEST_BYTES as MAX_MISSING_REQUEST_BYTES
+from pvpoke_missing_comparison import app_operation as missing_operation, enabled as missing_enabled
+from pvpoke_ownership import OwnershipConflict, OwnershipUnavailable
 from pvpoke_direct_backend import DirectMatrixClient
 from pvpoke_app_input import app_presets
 from pvpoke_app_catalog import enrich_catalog
@@ -638,7 +642,7 @@ class Handler(BaseHTTPRequestHandler):
         if path not in ('/api/prepare','/api/run','/api/prepare24','/api/run24','/api/cancel','/api/meta/sync','/api/meta/preview','/api/meta/presets',
                         '/api/party/list','/api/party/get','/api/party/save',
                         '/api/party/start','/api/party/status','/api/party/cancel','/api/party/meta-weights',
-                         '/api/battles/simulate'):
+                         '/api/battles/simulate', MISSING_API_PATH):
             return self.respond(404, {'error': '見つかりません'})
         # Only same-origin JS with the random session token can start a job.
         origin = self.headers.get('Origin','')
@@ -646,20 +650,25 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(403, {'error':'ローカル画面以外からは操作できません'})
         if self.headers.get('X-PvPoke-Token') != TOKEN:
             return self.respond(403, {'error':'この画面を再読み込みしてください'})
-        if 'application/json' not in self.headers.get('Content-Type',''):
+        content_type = self.headers.get('Content-Type', '')
+        if ('application/json' not in content_type or
+                path == MISSING_API_PATH and content_type.split(';')[0].strip().lower() != 'application/json'):
             return self.respond(415, {'error':'JSONで送信してください'})
+        common_battle = path in ('/api/battles/simulate', MISSING_API_PATH)
         try:
             n = int(self.headers.get('Content-Length','0'))
-            limit = MAX_BATTLE_REQUEST_BYTES if path == '/api/battles/simulate' else MAX_APP_REQUEST_BYTES
+            limit = {'/api/battles/simulate': MAX_BATTLE_REQUEST_BYTES,
+                     MISSING_API_PATH: MAX_MISSING_REQUEST_BYTES}.get(path, MAX_APP_REQUEST_BYTES)
             if n < 2 or n > limit:
                 raise ValueError('入力が大きすぎるか空です')
             raw = self.rfile.read(n)
             payload = (json.loads(raw, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
-                       if path == '/api/battles/simulate' else json.loads(raw))
+                       if common_battle else json.loads(raw))
             if not isinstance(payload, dict):
                 raise ValueError('入力はJSONオブジェクトで指定してください')
-            if path == '/api/battles/simulate':
-                if os.environ.get('PVP_BATTLE_API_ENABLED') != '1':
+            if common_battle:
+                allowed = missing_enabled() if path == MISSING_API_PATH else os.environ.get('PVP_BATTLE_API_ENABLED') == '1'
+                if not allowed:
                     return self.respond(503, {'error': 'Battle API is disabled'})
                 # Reserve the existing shared compute slot, then release LOCK
                 # before the potentially slow Node/SQLite work.
@@ -672,6 +681,7 @@ class Handler(BaseHTTPRequestHandler):
                     BATTLE_RUNNING = True
                 client = None
                 result = {'status': 'failed'}
+                missing_status = 503
                 try:
                     # Inputs and DB path are server-owned. No request field can
                     # select another user's results, executable or data file.
@@ -679,7 +689,18 @@ class Handler(BaseHTTPRequestHandler):
                     client = DirectMatrixClient(
                         gamemaster=engine.DATA / 'gamemaster.json',
                         log_dir=WORK / 'battle_logs', timeout_seconds=30)
-                    result = BattleService(client, store=store).simulate(payload)
+                    service = BattleService(client, store=store)
+                    if path == MISSING_API_PATH:
+                        result = missing_operation(service, payload)
+                        missing_status = 200
+                    else:
+                        result = service.simulate(payload)
+                except OwnershipConflict:
+                    missing_status = 409
+                except (AnalysisUnavailable, OwnershipUnavailable, BattleStoreError):
+                    missing_status = 503
+                except (ValueError, KeyError, TypeError, RecursionError):
+                    missing_status = 400
                 except Exception as exc:
                     # Do not expose database locations, subprocess stderr or secrets.
                     import logging
@@ -692,9 +713,13 @@ class Handler(BaseHTTPRequestHandler):
                         import logging
                         logging.error('Battle worker cleanup failed: %s', type(exc).__name__)
                         result = {'status': 'failed'}
+                        missing_status = 503
                     finally:
                         with LOCK:
                             BATTLE_RUNNING = False
+                if path == MISSING_API_PATH:
+                    return self.respond(missing_status, result if missing_status == 200 else {
+                        'error': 'Missing analysis request rejected or unavailable'})
                 # A response is not visible until worker cleanup and flag
                 # release finish. Back-to-back calls must not be rejected.
                 status = result.get('status')
