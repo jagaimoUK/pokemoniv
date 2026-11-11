@@ -30,6 +30,16 @@ def _versions(value):
     return dict(value)
 
 
+
+def battle_facts(result):
+    facts = {field: result[field] for field in ('outcome', 'rating', 'terminal', 'shields_used', 'damage', 'turns')}
+    facts['charged_moves_resolved'] = [
+        sum(event['actor'] == side and event['kind'] == 'charged' for event in result['executed_moves'])
+        for side in (0, 1)
+    ]
+    return facts
+
+
 class MissingAnalysis:
     """An internal reader bound to the server-owned BattleStore scope."""
 
@@ -142,14 +152,7 @@ class MissingAnalysis:
                             else:
                                 cell['state'] = 'complete'
                                 cell['completeness'] = COMPLETENESS
-                                cell['facts'] = {field: result[field] for field in (
-                                    'outcome', 'rating', 'terminal', 'shields_used', 'damage', 'turns',
-                                )}
-                                cell['facts']['charged_moves_resolved'] = [
-                                    sum(event['actor'] == side and event['kind'] == 'charged'
-                                        for event in result['executed_moves'])
-                                    for side in (0, 1)
-                                ]
+                                cell['facts'] = battle_facts(result)
                                 completed += 1
                                 if cell['ownership'] == 'unknown':
                                     cell['gap_state'] = 'ownership_confirmation_needed'
