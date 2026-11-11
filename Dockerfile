@@ -19,6 +19,7 @@ RUN python -c "from pathlib import Path; from pvpoke_data_snapshot import instal
 COPY pvpoke_node_matrix.js /app/pvpoke_node_matrix.js
 COPY pvpoke_minior_strategy.js /app/pvpoke_minior_strategy.js
 COPY pvpoke_battle_policy.js /app/pvpoke_battle_policy.js
+COPY pvpoke_iv_boundaries.js /app/pvpoke_iv_boundaries.js
 RUN node -e "if(require('./pvpoke_battle_policy.js').SCHEMA !== 'strategy-detail-v1') process.exit(1)"
 COPY flashcards.html flashcards_core.js flashcards_ui.js /app/
 COPY pvpoke_party_strategy_ui.js pvpoke_party_input.js /app/
