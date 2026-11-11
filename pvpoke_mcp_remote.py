@@ -8,6 +8,7 @@ import hashlib
 import re
 import sqlite3
 from pvpoke_input_limits import MAX_APP_REQUEST_BYTES
+from pvpoke_battle_service import MAX_REQUEST_BYTES as MAX_BATTLE_REQUEST_BYTES, _unique_object, _reject_constant
 import base64
 import threading
 import logging
@@ -387,7 +388,7 @@ class Handler(BaseHTTPRequestHandler):
                              '/app-api/meta-preview', '/app-api/meta-apply', '/app-api/meta-presets', '/app-api/meta-preset-save', '/app-api/meta-preset-export', '/app-api/low-score', '/app-api/visual-backup-token', '/app-api/flashcards',
                              '/app-api/party/list', '/app-api/party/get', '/app-api/party/save',
                              '/app-api/party/start', '/app-api/party/status', '/app-api/party/cancel',
-                             '/app-api/party/meta-weights'):
+                             '/app-api/party/meta-weights', '/app-api/battles/simulate'):
             return self.respond(404, {'error': 'Not found'})
         origin = self.headers.get('Origin')
         if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'):
@@ -396,11 +397,31 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(415, {'error': 'Content-Type must be application/json'})
         try:
             size = int(self.headers.get('Content-Length', '0'))
-            if not 0 < size <= MAX_APP_REQUEST_BYTES:
+            limit = MAX_BATTLE_REQUEST_BYTES if self.path == '/app-api/battles/simulate' else MAX_APP_REQUEST_BYTES
+            if not 0 < size <= limit:
                 return self.respond(413, {'error': 'Invalid body size'})
-            args = json.loads(self.read_body(size))
+            raw = self.read_body(size)
+            args = (json.loads(raw, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
+                    if self.path == '/app-api/battles/simulate' else json.loads(raw))
             if not isinstance(args, dict):
                 raise ValueError('入力はJSONオブジェクトで指定してください')
+            if self.path == '/app-api/battles/simulate':
+                if os.environ.get('PVP_BATTLE_API_ENABLED') != '1':
+                    return self.respond(503, {'error': 'Battle API is disabled'})
+                try:
+                    result = backend._request('/api/battles/simulate', args,
+                                              headers={'X-PvPoke-Token': backend._token()},
+                                              timeout=65)
+                except backend.BridgeError as exc:
+                    # Internal paths, exception details and tracebacks stay private.
+                    error = str(exc)
+                    for status in (400, 409, 413, 422, 503):
+                        if f'HTTP {status}:' in error:
+                            return self.respond(status, {'error': 'Battle request rejected or unavailable'})
+                    return self.respond(503, {'error': 'Battle service unavailable'})
+                if type(result) is not dict or result.get('status') != 'complete':
+                    return self.respond(503, {'error': 'Battle result incomplete'})
+                return self.respond(200, result)
             if self.path.startswith('/app-api/party/'):
                 try:
                     result = backend._request('/api/party/' + self.path.rsplit('/', 1)[-1], args,
@@ -613,7 +634,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path in ('/app-api/visual-backup-token', '/app-api/visual-backup-connections', '/app-api/visual-backup-revoke') and not (strong_auth or cookie_ok):
             return self.unauthorized()
-        if self.path in ('/app-api/run', '/app-api/party/start') and not self.rate_allowed('compute-owner', 12, 60):
+        compute_route = (self.path in ('/app-api/run', '/app-api/party/start') or
+                         (self.path == '/app-api/battles/simulate' and
+                          os.environ.get('PVP_BATTLE_API_ENABLED') == '1'))
+        if compute_route and not self.rate_allowed('compute-owner', 12, 60):
             return
         if self.path in ('/app-api/session', '/app-api/visual-backup-token') and not self.rate_allowed('issue-owner', 12, 60):
             return

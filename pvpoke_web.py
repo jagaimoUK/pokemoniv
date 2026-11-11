@@ -36,6 +36,9 @@ import pvpoke_meta_presets as meta_presets
 import pvpoke_flashcards as flashcards
 import pvpoke_meta_variants as meta_variants
 from pvpoke_party_backend import PartyBuilder
+from pvpoke_battle_service import BattleService, MAX_REQUEST_BYTES as MAX_BATTLE_REQUEST_BYTES, _unique_object, _reject_constant
+from pvpoke_battle_store import BattleStore
+from pvpoke_direct_backend import DirectMatrixClient
 from pvpoke_app_input import app_presets
 from pvpoke_app_catalog import enrich_catalog
 from pvpoke_flashcards import public_catalog
@@ -68,6 +71,7 @@ PRESETS = [
 # Status data is process-local; output ZIP survives server restarts.
 TOKEN = secrets.token_urlsafe(32)
 LOCK = threading.RLock()
+BATTLE_RUNNING = False  # Shares LOCK with standard selection and party job admission.
 ACTIVE_PROCESS = None
 CANCEL_REQUESTED = False
 STATUS = {
@@ -629,11 +633,12 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(404, {'error': '見つかりません'})
 
     def do_POST(self):
-        global CANCEL_REQUESTED
+        global CANCEL_REQUESTED, BATTLE_RUNNING
         path = urlparse(self.path).path
         if path not in ('/api/prepare','/api/run','/api/prepare24','/api/run24','/api/cancel','/api/meta/sync','/api/meta/preview','/api/meta/presets',
                         '/api/party/list','/api/party/get','/api/party/save',
-                        '/api/party/start','/api/party/status','/api/party/cancel','/api/party/meta-weights'):
+                        '/api/party/start','/api/party/status','/api/party/cancel','/api/party/meta-weights',
+                         '/api/battles/simulate'):
             return self.respond(404, {'error': '見つかりません'})
         # Only same-origin JS with the random session token can start a job.
         origin = self.headers.get('Origin','')
@@ -645,11 +650,60 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(415, {'error':'JSONで送信してください'})
         try:
             n = int(self.headers.get('Content-Length','0'))
-            if n < 2 or n > MAX_APP_REQUEST_BYTES:
+            limit = MAX_BATTLE_REQUEST_BYTES if path == '/api/battles/simulate' else MAX_APP_REQUEST_BYTES
+            if n < 2 or n > limit:
                 raise ValueError('入力が大きすぎるか空です')
-            payload = json.loads(self.rfile.read(n))
+            raw = self.rfile.read(n)
+            payload = (json.loads(raw, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
+                       if path == '/api/battles/simulate' else json.loads(raw))
             if not isinstance(payload, dict):
                 raise ValueError('入力はJSONオブジェクトで指定してください')
+            if path == '/api/battles/simulate':
+                if os.environ.get('PVP_BATTLE_API_ENABLED') != '1':
+                    return self.respond(503, {'error': 'Battle API is disabled'})
+                # Reserve the existing shared compute slot, then release LOCK
+                # before the potentially slow Node/SQLite work.
+                with LOCK:
+                    if (BATTLE_RUNNING or STATUS['state'] in ('running', 'cancelling')
+                            or PARTY.running):
+                        return self.respond(409, {'error': 'Another battle calculation is running'})
+                    if not CATALOG.get('ready'):
+                        return self.respond(503, {'error': 'Battle game data is not ready'})
+                    BATTLE_RUNNING = True
+                client = None
+                result = {'status': 'failed'}
+                try:
+                    # Inputs and DB path are server-owned. No request field can
+                    # select another user's results, executable or data file.
+                    store = BattleStore.from_volume()
+                    client = DirectMatrixClient(
+                        gamemaster=engine.DATA / 'gamemaster.json',
+                        log_dir=WORK / 'battle_logs', timeout_seconds=30)
+                    result = BattleService(client, store=store).simulate(payload)
+                except Exception as exc:
+                    # Do not expose database locations, subprocess stderr or secrets.
+                    import logging
+                    logging.error('Battle API unavailable: %s', type(exc).__name__)
+                finally:
+                    try:
+                        if client is not None:
+                            client.close()
+                    except Exception as exc:
+                        import logging
+                        logging.error('Battle worker cleanup failed: %s', type(exc).__name__)
+                        result = {'status': 'failed'}
+                    finally:
+                        with LOCK:
+                            BATTLE_RUNNING = False
+                # A response is not visible until worker cleanup and flag
+                # release finish. Back-to-back calls must not be rejected.
+                status = result.get('status')
+                if status == 'complete':
+                    return self.respond(200, result)
+                code = 400 if status == 'invalid' else 422 if status in ('unsupported', 'partial') else 503
+                return self.respond(code, {
+                    'schema': 'battle-result-v1', 'status': status or 'failed',
+                    'error': {'message': 'Battle was not completed'}})
             if path == '/api/cancel':
                 with LOCK:
                     if not STATUS['batch24']:
@@ -682,6 +736,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.respond(200, PARTY.cancel(payload.get('job_id')))
                 if action == 'start':
                     with LOCK:
+                        if BATTLE_RUNNING:
+                            return self.respond(409, {'error': 'Another battle calculation is running'})
                         if not CATALOG.get('ready'):
                             raise ValueError('ゲームデータを読み込み中です')
                         _, cpms, full_species = engine.game_data()
@@ -693,7 +749,7 @@ class Handler(BaseHTTPRequestHandler):
                             return self.respond(409, {'error': str(exc)})
                     return self.respond(200, response)
             with LOCK:
-                if STATUS['state'] in ('running', 'cancelling') or PARTY.running:
+                if STATUS['state'] in ('running', 'cancelling') or PARTY.running or BATTLE_RUNNING:
                     return self.respond(409, {'error':'計算中は入力を変更できません'})
                 if path == '/api/meta/presets':
                     if not CATALOG['ready']:
