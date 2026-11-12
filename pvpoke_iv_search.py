@@ -15,7 +15,7 @@ from pvpoke_battle_store import BattleStoreError
 from pvpoke_calculation_version import content_hash
 from pvpoke_child_env import child_environment
 from pvpoke_direct_backend import DirectMatrixError
-from pvpoke_iv_modes import _cp, _levels, select_opponent_ivs
+from pvpoke_iv_modes import _cp, _levels, select_opponent_ivs, species_iv_floor
 from pvpoke_missing_analysis import AnalysisUnavailable, battle_facts
 from pvpoke_role_evaluation import _definition, _meets, condition_id
 
@@ -179,8 +179,9 @@ class IVSearch:
             templates.append(spec)
             conditions.append({'opponent': payload['opponent'],
                                'buffs': [side['buffs'] for side in payload['initial']]})
-        # Purified Pokémon have at least two points in each IV.
-        floors = [max(n, 2) for n in iv_floors] if 'RETURN' in fixed[1]['charged'] else list(iv_floors)
+        # Use the same catalogue/moveset eligibility as existing IV selection.
+        floor = species_iv_floor(self.service.species[fixed[0]], fixed[1]['charged'])
+        floors = [max(n, floor) for n in iv_floors]
         source = {'schema': SCHEMA, 'versions': dict(self.service.versions), 'profiler': profiler,
                   'templates': templates, 'floors': floors}
         search_id = _json_hash(source)
@@ -237,9 +238,8 @@ class IVSearch:
             **opponent, 'initial': {**opponent['initial'], 'hp': 'full'}})
         if full['initial']['hp'] != opponent['initial']['hp']:
             raise ValueError('Opponent boundary preview requires full opponent HP')
-        # Use the same purified minimum IV rule as existing self-IV search.
-        floors = [max(n, 2) for n in iv_floors] if (
-            'RETURN' in opponent['moves']['charged']) else list(iv_floors)
+        floor = species_iv_floor(self.service.species[opponent['species_id']], opponent['moves']['charged'])
+        floors = [max(n, floor) for n in iv_floors]
         flipped = {**spec, 'combatants': [opponent, own]}
         rows, stats = _pool(self.service, flipped, floors)
         if not rows:

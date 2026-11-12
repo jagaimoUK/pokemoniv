@@ -105,6 +105,22 @@ class GatewaySecurityTests(unittest.TestCase):
             self.assertIn('error', json.loads(data))
 
 
+    def test_unexpected_app_and_public_cleanup_errors_do_not_log_private_details(self):
+        marker = 'SYNTHETIC_PRIVATE_EXCEPTION_PAYLOAD'
+        cases = (
+            ('/app-api/meta-status', remote.backend, 'meta_status', False),
+            ('/reader-api/v1/cleanup', remote, 'cached_reader_cleanup', True),
+        )
+        for path, target, method, public in cases:
+            with self.subTest(path=path), patch.object(
+                    target, method, side_effect=RuntimeError(marker)), self.assertLogs(level='ERROR') as logs:
+                status, _, body = self.request(
+                    path, auth=None if public else 'Bearer ' + remote.API_KEY, get=public)
+                self.assertEqual(status, 503 if public else 500)
+                self.assertNotIn(marker.encode(), body)
+            self.assertNotIn(marker, '\n'.join(logs.output))
+            self.assertTrue(all(record.exc_info is None for record in logs.records))
+
 
     def test_all_authenticated_json_routes_reject_duplicate_and_nonfinite_fields(self):
         """Ambiguous payloads never reach app, backup or MCP dispatch."""

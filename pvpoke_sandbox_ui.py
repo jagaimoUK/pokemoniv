@@ -121,6 +121,7 @@ th{color:var(--text-muted);font-weight:600}
 <section class="panel stack">
 <h2>通常対戦と比較</h2>
 <p class="muted">同じ個体・技・開始状態で、PvPokeが技とシールドを選ぶ通常対戦と比べます。</p>
+<p class="muted">確率で発動する能力変化は、通常対戦ではPvPokeの累積ルールで適用され、Sandboxでは発動しません。結果の差には、この処理の違いも含まれます。</p>
 <div class="row"><button id="standard" type="button" data-request>通常対戦を計算</button></div>
 <div id="comparison"></div>
 </section>

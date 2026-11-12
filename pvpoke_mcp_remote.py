@@ -569,8 +569,9 @@ class Handler(BaseHTTPRequestHandler):
         except (TypeError, KeyError):
             # These may originate from internal code or data structures.
             self.respond(400, {'error': '入力形式が正しくありません'})
-        except Exception:
-            logging.exception('App request failed')
+        except Exception as exc:
+            # Exception messages/tracebacks may contain upstream secrets or data.
+            logging.error('App request failed: %s', type(exc).__name__)
             self.respond(500, {'error': 'アプリの処理に失敗しました'})
 
     def visual_backup_request(self):
@@ -643,8 +644,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, cached_reader_cleanup())
             except ValueError as exc:
                 return self.respond(503, {'error': str(exc)})
-            except Exception:
-                logging.exception('Reader cleanup response unavailable')
+            except Exception as exc:
+                logging.error('Reader cleanup response unavailable: %s', type(exc).__name__)
                 return self.respond(503, {'error': '検索式を生成できませんでした'})
         if self.path == '/reader-backup':
             data=BACKUP_HTML.encode('utf-8')

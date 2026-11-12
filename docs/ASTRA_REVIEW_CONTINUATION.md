@@ -1,3 +1,33 @@
+## 2026-11-13 JST 独立レビュー再開記録
+
+この節を追加したコミットが再開点。親コミットは `6fce372882e4162c40ad09b2145fbfaae4bbbee7`。PR #112 の `fix/tactic-review-recovery-20261112` は、PR #111 の `bbc0619f830704da3c626b5682c3c4b58cf211b8` 上の Draft。開始時の CI は #111 が 5/5、#112 が 11/11 成功。作業ツリーに残っていた前回の修正4ファイルと検証2ファイルを引き継いだ。元要求仕様、セキュリティ資料、固定された vendor PvPoke を基準に判断した。Claude のレビュー成果は使用していない。
+
+前回の Astra engine / Astra data による調査と合成テストを再利用。今回は GPT-6.1 Sol が再現、実装確認、回帰、測定、統合、GitHub 操作を担当。Astra High は1体だけ起動し、CMP・同時KO・未実行の技やシールド・確率効果の差が、実戦評価に誤って反映されないかを限定レビューした。Astra はこの再開工程でコード編集、テスト実行、CI操作を行っていない。使用枠の残量は取得不可。
+
+| 問題 | 重大度・担当 | 再現と原因 | 修正・確認 |
+|---|---|---|---|
+| ASTRA-01 例外ログへの詳細記録 | P1、Sol | `pvpoke_mcp_remote.py` の `Handler.app_request` と `do_GET` の Reader cleanup で、予期しない例外の本文・スタックが `logging.exception` で記録される。合成マーカーが修正前ログに残ることを再現。実データの漏えいは確認していない。 | 固定の処理名と例外クラスだけを記録。HTTP 500/503 は維持。`tests/test_security_regressions.py` で両経路の本文・ログを検証。 |
+| ASTRA-02 IV下限の不整合 | P1、前回 Astra data が発見、Sol が再検証 | `IVSearch.start` と `opponent_boundaries` が RETURN と指定下限だけを参照。交換不可の合成種族で自分側 4096 件（期待216件）、相手側の指定 `[0,14,15]` がそのまま通る（期待 `[10,14,15]`）。 | `pvpoke_iv_modes.py` の既存ルールを `species_iv_floor` へ抽出し、`pvpoke_iv_search.py` の両経路で各軸の指定下限と大きい方を採用。既存の RETURN の優先順位を維持。`tests/test_astra_iv_eligibility.py` で216件・相手側12件・シャドウ伝説・旧探索の stale と保持を確認。既存の計算キャッシュはソース識別子の変更により再計算が必要になる場合がある。 |
+| ASTRA-03 確率効果モデルの表示 | P2、前回 Astra engine の比較を Sol が再現し、今回 Astra が判定 | `Battle.js` の通常対戦では確率効果の累積判定が働く。`pvpoke_sandbox_runner.js` は `buffs: false` で、確率効果の発動を指定しない。合成ケースで相手終端HP 35 と 74 に分かれた。 | `pvpoke_sandbox_ui.py` の比較欄に説明を追加。固定した engine の挙動を維持。`tests/test_astra_independent_engine_20261112.cjs` に合成反例を保存。同攻撃値CMPの実機挙動は別途確認。 |
+
+この範囲でP0とP3の新規不具合は確認されなかった。Astra の限定判定では、`pvpoke_tactic_evidence.py` が双方の指定技とシールド判断を解決イベントで照合し、未履行なら `meets=None`。同時KOは自分の勝利に変換されず、固定台本の結果は `counterfactual_only`、`live_reproducibility=not_verified`、`practical_role_covered=False`。実戦で観測できる履歴だけを使う適応戦術の妥当性は未確認。
+
+| 要求領域 | 今回の確認 | 残る範囲 |
+|---|---|---|
+| 共通対戦計算・Sandbox | 標準324条件の既存値と一致。直接構成した native Sandbox と200合成ケースでイベント、ターン、終端状態、ゲージ収支を照合。1〜5ターン技の必要エネルギーと1不足の境界を追加。既存テストのCMP、同時KO、シールド消費、能力変化も成功。 | 実機の同値CMP、行動認識タイミング、確率分布は未確認。 |
+| 戦術探索・証拠統合 | 同じ観測条件に対する非公開IV・ゲージ・技の変化を既存テストで確認。固定台本から通常評価を書き換える経路を限定レビュー。 | 同じ観測履歴に対する適応行動の実戦での再現性は未確認。 |
+| 不足個体・重要IV | テスト範囲で未計算は保留、保有は明示情報のみ、必要条件は同一個体・技構成で評価。種族をまたいだ部分勝ちの合算を拒否。探索中断、再開、既存証拠の再利用を確認。 | 4096静的候補の全対面をネイティブ計算する検証と、全入手経路の例外確認は未実施。 |
+| 認証・保存 | 合成データによる匿名拒否、Origin、所有者スコープ、子プロセス環境、SQLite失敗時ロールバック、バックアップ・復元の回帰。 | サービスは単一所有者構成。実データ環境での複数ユーザー分離、本番入口、電源断、OS依存パッケージの到達性は未確認。 |
+| 既存機能とUI | 通常厳選、メタ、技構成、パーティ、履歴・設定の既存回帰を実行。 | Chromium はローカルのソケット作成制限で停止。Docker・Nginxなしのため、本コミットのイメージ・物理 ENOSPC・ブラウザは CI で確認する。Motorola edge 50 実機は未確認。 |
+
+Sol のローカル結果は Python 588件中580成功、8スキップ（Nginxと専用 ENOSPC 環境）。JS 29ファイルと Python/Node/シェルの構文検査は成功。隔離した親コミットのツリーで3件の回帰が修正前に失敗することも確認。親コミットの [Security and regression](https://github.com/jagaimoUK/pokemoniv/actions/runs/43240571644) は Docker、Nginx、実 ENOSPC、モバイル Chromium、依存関係監査まで成功。本コミットは別途 CI の SHA を照合する。
+
+合成データの測定では、4096 IV の静的境界計算は 0.344 秒。32件の対戦計算は1件あたり p50 2.10 ms、p95 2.78 ms。戦術プラン作成は p50 7.82 ms、p95 10.04 ms、進捗読取は p50 1.76 ms、p95 2.09 ms（各21試行、対戦実行0件）。対戦APIの小標本で Python/Node のピークRSSは約37 MiBずつ。修正前後の性能差や本番負荷、実機応答の保証には使わない。
+
+公開判定は保留。次の実行では PR #112 のこのコミットに対応する CI を確認し、イメージ監査・匿名レスポンス・実 ENOSPC・モバイルの各ステップを確認する。再現コマンドは `python -m unittest discover -s tests -p 'test*.py'` と `node tests/test_astra_independent_engine_20261112.cjs`。残る実機・容量・観測ベース戦術を未検証のまま公開しない。コミットを1回にまとめ、CIの手動再実行、本番反映、マージ、接続PvPoke MCPの利用はゼロ。
+
+---
+
 ## Current authoritative checkpoint (2026-11-12, supersedes historical pending statements below)
 
 **Scope:** Draft PR #112 stacked on Draft PR #111, head
