@@ -222,6 +222,56 @@ class BattleStoreTests(unittest.TestCase):
             self.assertEqual([row[0] for row in db.execute(
                 'SELECT name FROM owner_events ORDER BY name')], ['first', 'second'])
 
+    def test_disk_reserve_headroom_and_postwrite_rollback(self):
+        """A cache transaction must not commit after consuming disk reserve.
+
+        The disk readings are controlled failures, not real filesystem ENOSPC.
+        Run under both normal rollback-journal and externally enabled WAL.
+        """
+        from types import SimpleNamespace
+        from pvpoke_battle_store import (
+            NONCRITICAL_DISK_RESERVE_BYTES, NONCRITICAL_WRITE_HEADROOM_BYTES,
+        )
+
+        for journal_mode in ('delete', 'wal'):
+            with self.subTest(journal_mode=journal_mode):
+                store = BattleStore(self.root / f'guard-{journal_mode}.sqlite3')
+                with store._writer(critical=True) as db:
+                    db.execute('CREATE TABLE records (event TEXT PRIMARY KEY)')
+                    db.execute('INSERT INTO records VALUES (?)', ('existing',))
+                with closing(sqlite3.connect(store.path)) as external:
+                    actual, = external.execute(f'PRAGMA journal_mode={journal_mode}').fetchone()
+                    self.assertEqual(actual, journal_mode)
+
+                too_close = SimpleNamespace(
+                    free=NONCRITICAL_DISK_RESERVE_BYTES + NONCRITICAL_WRITE_HEADROOM_BYTES)
+                with patch('pvpoke_battle_store.shutil.disk_usage', return_value=too_close):
+                    with self.assertRaisesRegex(BattleStoreError, 'disk space'):
+                        with store._writer() as db:
+                            db.execute('INSERT INTO records VALUES (?)', ('preflight',))
+
+                values = [
+                    SimpleNamespace(free=NONCRITICAL_DISK_RESERVE_BYTES +
+                                    NONCRITICAL_WRITE_HEADROOM_BYTES + 4096),
+                    SimpleNamespace(free=NONCRITICAL_DISK_RESERVE_BYTES - 1),
+                ]
+                with patch('pvpoke_battle_store.shutil.disk_usage', side_effect=values) as disk:
+                    with self.assertRaisesRegex(BattleStoreError, 'rolled back'):
+                        with store._writer() as db:
+                            db.execute('INSERT INTO records VALUES (?)', ('uncommitted',))
+                    self.assertEqual(disk.call_count, 2)
+
+                # Critical owner-authored writes may use the reserved space.
+                with patch('pvpoke_battle_store.shutil.disk_usage',
+                           return_value=SimpleNamespace(free=0)):
+                    with store._writer(critical=True) as db:
+                        db.execute('INSERT INTO records VALUES (?)', ('critical',))
+                with store._reader() as db:
+                    self.assertEqual(
+                        [row[0] for row in db.execute('SELECT event FROM records ORDER BY event')],
+                        ['critical', 'existing'])
+                    self.assertEqual(db.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+
     def test_external_wal_growth_pauses_only_disposable_writes_and_recovers(self):
         """Real WAL file growth in a disposable local SQLite; NOT disk ENOSPC."""
         isolated = BattleStore(self.root / 'wal-growth.sqlite3', max_bytes=128 * 1024)

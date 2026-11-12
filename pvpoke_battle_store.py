@@ -20,6 +20,9 @@ MAX_DB_BYTES = 32 * 1024 * 1024
 # Keep headroom for explicit ownership and other user-authored records.
 RESERVED_DB_PAGE_FRACTION = 8
 NONCRITICAL_DISK_RESERVE_BYTES = 8 * 1024 * 1024
+# Leave additional space for SQLite journals/WAL and bounded cache payloads.
+# This is headroom, not a promise against concurrent external volume writers.
+NONCRITICAL_WRITE_HEADROOM_BYTES = 2 * 1024 * 1024
 MAX_RESULT_BYTES = 512 * 1024
 COMPLETENESS = 'standard-summary-v1'
 SINGLE_OWNER = 'local-owner'
@@ -118,7 +121,8 @@ class BattleStore:
             raise ValueError('Invalid battle writer priority')
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not critical:
-            if shutil.disk_usage(self.path.parent).free <= NONCRITICAL_DISK_RESERVE_BYTES:
+            if (shutil.disk_usage(self.path.parent).free <=
+                    NONCRITICAL_DISK_RESERVE_BYTES + NONCRITICAL_WRITE_HEADROOM_BYTES):
                 raise BattleStoreError('Noncritical battle writes paused to protect disk space')
             # An externally enabled WAL can exceed the main DB page quota even
             # while its page_count is tiny. Stop expendable cache writes, never
@@ -142,6 +146,11 @@ class BattleStore:
             db.execute('BEGIN IMMEDIATE')
             self._migrate(db)
             yield db
+            # In WAL mode, pages written during the transaction can consume
+            # free disk while the main DB remains small. If the reserve was
+            # consumed, abort this transaction rather than commit it.
+            if not critical and shutil.disk_usage(self.path.parent).free <= NONCRITICAL_DISK_RESERVE_BYTES:
+                raise BattleStoreError('Noncritical battle write rolled back to protect disk space')
             if db.execute('PRAGMA page_count').fetchone()[0] > pages:
                 raise BattleStoreError('Battle database exceeds its write quota')
 
