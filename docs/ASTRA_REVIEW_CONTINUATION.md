@@ -198,3 +198,31 @@ Sources and current limits: the original Japanese request document defines these
 - Paired source repair in \`pvpoke_sandbox.py\`: fail closed on empty complete trace; ensure each event begins at the previous event's \`after\`, start does not mutate state, final state matches terminal; for each resolve, ensure target HP and HP decrement match the native event's applied damage. No replay, no data eviction, no vendor/standard engine changes.
 - Exact post-fix CI is **pending**; neither 515 tests nor green workflows should be claimed for this new head until verified. Full cryptographic authenticity of a deliberately rehashed and *internally consistent* forged transcript remains unestablished. Hidden opponent information and live policy correctness remain unverified.
 - Current stage: P1 remediation committed, verify exact CI next. Work-local uncommitted files still inaccessible; GitHub direct updates only. No production changes and no ChatGPT PvPoke MCP access.
+
+
+---
+
+## GPT-6 independent continuation, stage III: falsification before repair (2026-11-12 JST)
+
+**Starting PR state (verified):** #112 open Draft, stacked on Draft #111; HEAD \`c4f9d3c87adc0184ce7800dcbee6b8eb5ff563d7\`; earlier 515 Python and 5/5 workflows passed. Previous Work-local unsaved modifications cannot be inspected. No deploy, merge, credential or production data operation. ChatGPT PvPoke MCP prohibited and not used.
+
+### Native and checkpoint contracts under test
+- \`pvpoke_sandbox_runner.js\` always emits \`effects\` for each \`resolve\` via wrapped \`battle.useMove\`, **even if** the effect is a no-op. A trace with the effects event deleted and sequences repaired is not a native complete record, despite valid digest, HP continuity and aggregate damage.
+- \`TacticSearch._progress\` displays \`fully_executed_scripts\` as verified evidence. A rehashed checkpoint with \`opponent_response_executed=True\` must not be allowed to promote a charged move that was explicitly rejected as \`insufficient_energy\`, even if the separate role-advisory route revalidates native Sandbox.
+- Both test cases use temporary owner-scoped SQLite; neither calls the ChatGPT MCP.
+- Fair-information counterexamples to test next: same visible history but hidden opponent charged move, IV, energy and shield response. Native scripts may vary under hidden states, but **practical evidence must remain unavailable**; no automatic promotion into roles.
+
+### Stage III status
+| Area | Status | Evidence | Next |
+|---|---|---|---|
+| Latest code/PR/CI | 完了 | Source SHA and Draft stack verified; last head 5/5 and 515 tests | Recheck new head |
+| Information fairness | 作業中 | Theoretical-only output and UI restriction confirmed from source | Independent hidden-state fixtures |
+| Native replay / trace | 作業中 | No-op \`effects\` native contract; red test committed | Confirm red, patch only if actual failure |
+| Tactical checkpoint | 作業中 | Rehashed unexecuted opponent action fixture | Confirm red, correct verified counts |
+| Storage | 作業中 | No explicit WAL journal_mode configuration in BattleStore; 1/8 pages + 8MiB reserve | Confirm actual mode on isolated DB; injected disk/transaction failures |
+| IV / alternatives | 作業中 | 4096 bitset and one-build intersection inspected | Adversarial multi-condition + unrelated species |
+| Security | 作業中 | Last Trivy HIGH 103 | Source/package reachability triage and auth tests |
+| Performance | 未着手 | Previous generic benchmark (not paired) | Same-environment baseline |
+| Final verdict | D | No release until critical unknowns resolved | Preserve Draft |
+
+**Stage III files committed in RED checkpoint:** \`tests/test_sandbox.py\`, \`tests/test_tactic_search.py\`, this document. CI red failure must be inspected before source repair. Do not classify hypotheses as proven.

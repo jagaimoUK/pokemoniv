@@ -255,6 +255,34 @@ class SandboxTests(unittest.TestCase):
                     self.assertEqual(sandbox.simulate(spec)['status'], 'failed')
                     native.assert_not_called()
 
+    def test_rehashed_missing_noop_effects_phase_is_not_native_evidence(self):
+        """Even a no-op native effects phase is a required part of the trace."""
+        import json
+        from pvpoke_battle_service import _canonical_json, _json_hash
+        from pvpoke_battle_store import BattleStoreError
+
+        native = self.sandbox.simulate(scripted_spec())
+        self.assertEqual(native['status'], 'complete', native.get('error'))
+        key, spec = native['summary']['battle_key'], native['summary']['spec']
+        with closing(sqlite3.connect(self.store.path)) as db, db:
+            saved = json.loads(db.execute(
+                'SELECT body FROM sandbox_results_v1').fetchone()[0])
+            missing = next((i for i, step in enumerate(saved['trace'])
+                            if step['phase'] == 'effects' and
+                            step['before'] == step['after']), None)
+            self.assertIsNotNone(missing, 'Native fixture needs a no-op effects step')
+            saved['trace'].pop(missing)
+            for i, step in enumerate(saved['trace']):
+                step['sequence'] = i
+            payload = _canonical_json(saved)
+            db.execute('UPDATE sandbox_results_v1 SET body=?,digest=?',
+                       (payload, _json_hash(saved)))
+        with patch('pvpoke_sandbox.subprocess.run',
+                   side_effect=AssertionError('No engine on corrupt cache')) as native_process:
+            with self.assertRaises(BattleStoreError):
+                self.sandbox._get(key, spec)
+            native_process.assert_not_called()
+
     def test_wait_only_timeout_is_partial_and_not_saved(self):
         spec = scripted_spec(energy=0)
         spec['actions'] = [

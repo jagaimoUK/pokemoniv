@@ -241,6 +241,35 @@ class TacticSearchTests(unittest.TestCase):
             node.assert_not_called()
         self.assertEqual(hashlib.sha256(self.store.path.read_bytes()).digest(), digest)
 
+    def test_rehashed_checkpoint_cannot_claim_unexecuted_opponent_response(self):
+        """A script's SHA256 can be recomputed, but its native proof cannot be forged."""
+        import json
+        from pvpoke_battle_service import _canonical_json, _json_hash
+
+        seed = self.seed()
+        seed['combatants'][1]['initial']['energy'] = 0
+        seed['actions'] = [{
+            'id': 'opponent_unfunded', 'actor': 1, 'turn': 1,
+            'kind': 'charged',
+            'move_id': seed['combatants'][1]['moves']['charged'][1],
+        }]
+        identity = self.search.start(seed)
+        original = self.search.step(identity, budget=1)
+        self.assertEqual(original['results'][0]['status'], 'complete')
+        self.assertFalse(original['results'][0]['opponent_response_executed'])
+        with closing(sqlite3.connect(self.store.path)) as db, db:
+            cell = json.loads(db.execute(
+                'SELECT body FROM tactic_search_cells_v1 WHERE cell_index=0').fetchone()[0])
+            cell['opponent_response_executed'] = True
+            payload = _canonical_json(cell)
+            db.execute('UPDATE tactic_search_cells_v1 SET body=?,digest=? WHERE cell_index=0',
+                       (payload, _json_hash(cell)))
+        with patch('pvpoke_sandbox.subprocess.run',
+                   side_effect=AssertionError('Checkpoint reads must not re-run battles')) as runner:
+            with self.assertRaises(TacticSearchError):
+                self.search.step(identity, budget=0)
+            runner.assert_not_called()
+
     def test_new_version_blocks_resume(self):
         identity = self.search.start(self.seed())
         with patch.object(self.search, '_version', return_value='new-version'):
