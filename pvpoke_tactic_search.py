@@ -164,10 +164,12 @@ def _candidates(sandbox, spec):
 
         if (alternate is not None and (1, alternate) not in busy and alt_id not in active and
                 alt_id not in used_ids):
-            variations.append(('alternate_charged', shared + [{
-                'id': alt_id, 'actor': 1, 'turn': alternate, 'kind': 'charged',
-                'move_id': spec['combatants'][1]['moves']['charged'][1],
-            }], original))
+            altered = shared + [{'id': alt_id, 'actor': 1, 'turn': alternate, 'kind': 'charged',
+                                 'move_id': spec['combatants'][1]['moves']['charged'][1]}]
+            variations.append(('alternate_charged', altered, original))
+            if spec['combatants'][0]['initial']['shields'] > 0:
+                variations.append(('alternate_charged_self_shield', altered, original + [
+                    {'action_id': alt_id, 'defender': 0, 'use_shield': True}]))
 
         for response, actions, decisions in variations:
             raw = {**spec, 'actions': sorted(actions, key=lambda a: (a['turn'], a['actor'])),
@@ -277,7 +279,8 @@ class TacticSearch:
         count = len(plan['candidates'])
         completed = sum(cell['status'] == 'complete' for cell in cells)
         valid = sum(cell['status'] == 'complete' and cell['all_self_executed'] and
-                    cell['opponent_response_executed'] for cell in cells)
+                    cell['opponent_response_executed'] and
+                    cell.get('all_requested_shields_honored', False) for cell in cells)
         exhausted = len(cells) == count
         state = ('blocked' if blocked else 'complete' if exhausted and completed == count
                  else 'partial' if cells else 'unknown')
@@ -335,6 +338,8 @@ class TacticSearch:
                         'all_self_executed': all(actions.get(a) == 'executed' for a in required_self),
                         'opponent_response_executed': alternate is None or
                         actions.get(alternate) == 'executed',
+                        'all_requested_shields_honored': all(
+                            row['used'] is row['requested'] for row in result['shield_results']),
                         'evidence_class': 'theoretical_script_only',
                         'simulator_cached': cached is not None}
                 body = _canonical_json(cell)

@@ -64,6 +64,9 @@ class TacticEvidenceTests(unittest.TestCase):
         self.assertEqual(advisory['evidence_order'], 1)
         self.assertLessEqual(advisory['theoretical_supported_conditions'],
                              advisory['tested_conditions'])
+        self.assertTrue(all('all_requested_shields_honored' in path
+                            for condition in data['builds'][0]['conditions']
+                            for path in condition['paths']))
         self.assertEqual(data['builds'][0]['conditions'][0]['standard']['status'], 'unknown')
         self.assertEqual(data['builds'][0]['conditions'][0]['tested_scripts'], 2)
         self.assertTrue(data['builds'][0]['conditions'][0]['paths'])

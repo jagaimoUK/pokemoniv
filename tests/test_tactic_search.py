@@ -102,6 +102,29 @@ class TacticSearchTests(unittest.TestCase):
         self.assertEqual([by_id[action_id] for action_id in double['self_actions']],
                          ['executed', 'executed'])
 
+    def test_requested_shield_that_cannot_be_used_is_not_validated(self):
+        seed = self.seed()
+        seed['combatants'][0]['initial']['energy'] = 100
+        seed['actions'] = [{'id': 'early', 'actor': 0, 'turn': 1,
+                            'kind': 'charged', 'move_id': seed['combatants'][0]['moves']['charged'][0]}]
+        seed['shield_decisions'] = [{'action_id': 'early', 'defender': 1, 'use_shield': True}]
+        identity = self.search.start(seed)
+        result = self.search.step(identity, budget=1)
+        self.assertEqual(result['coverage']['attempted_scripts'], 1)
+        self.assertFalse(result['results'][0]['all_requested_shields_honored'])
+        self.assertEqual(result['coverage']['fully_executed_scripts'], 0)
+
+    def test_opponent_alternative_can_request_our_shield_but_never_prove_reproducibility(self):
+        seed = self.seed()
+        seed['combatants'][0]['initial']['shields'] = 1
+        plan, _, _ = self.search._load(self.search.start(seed))
+        variants = [c for c in plan['candidates'] if
+                    c['response'] == 'alternate_charged_self_shield']
+        self.assertTrue(variants)
+        self.assertTrue(all(any(d['defender'] == 0 and d['use_shield']
+                                for d in candidate['spec']['shield_decisions']) for candidate in variants))
+        self.assertTrue(all(c['spec']['mode'] == 'sandbox' for c in variants))
+
     def test_budgets_owner_isolation_checkpoint_and_restored_cache(self):
         identity = self.search.start(self.seed())
         first = self.search.step(identity, budget=2)

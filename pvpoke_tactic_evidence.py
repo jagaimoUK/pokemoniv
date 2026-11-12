@@ -108,9 +108,12 @@ def compare_tactics(service, evaluation_id, search_ids):
             opponent_executed = actual is not None and (
                 candidate['opponent_alternate_id'] is None or
                 actions.get(candidate['opponent_alternate_id']) == 'executed')
+            shields_honored = actual is not None and all(
+                row['used'] is row['requested'] for row in actual['shield_results'])
             if actual is not None and (self_executed != cell['all_self_executed'] or
-                    opponent_executed != cell['opponent_response_executed']):
-                raise TacticEvidenceUnavailable('Tactic action coverage is inconsistent')
+                    opponent_executed != cell['opponent_response_executed'] or
+                    shields_honored != cell['all_requested_shields_honored']):
+                raise TacticEvidenceUnavailable('Tactic action or shield coverage is inconsistent')
 
             for slot, standard_cell in paired:
                 distinct = (build, slot, key)
@@ -118,7 +121,7 @@ def compare_tactics(service, evaluation_id, search_ids):
                     continue
                 seen.add(distinct)
                 checked[build, slot] += 1
-                eligible_result = actual is not None and self_executed and opponent_executed
+                eligible_result = actual is not None and self_executed and opponent_executed and shields_honored
                 meets = _meets(requirements[slot], battle_facts(actual['summary'])) if eligible_result else None
                 if meets:
                     matches[build, slot] += 1
@@ -130,7 +133,9 @@ def compare_tactics(service, evaluation_id, search_ids):
                     'result_status': cell['status'],
                     'outcome': actual['summary']['outcome'] if actual is not None else None,
                     'meets': meets,
-                    'all_requested_actions_executed': eligible_result,
+                    'all_requested_actions_executed': bool(actual is not None and
+                                                           self_executed and opponent_executed),
+                    'all_requested_shields_honored': bool(shields_honored),
                     'classification': 'opponent_response_dependent'
                         if candidate['response'] != 'original' else 'specific_fixed_script',
                     'reproducibility': 'not_verified',
