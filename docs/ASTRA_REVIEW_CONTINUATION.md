@@ -43,3 +43,61 @@ Updated: 2026-11-12 JST. This is a **checkpoint, not a final review sign-off**.
 5. Leave branch/PR Draft, and write a user-visible handoff with concrete commit SHA and residual risk.
 
 GitHub edits in this session were made through the connector; no local git checkout was available. Git status of the old Work container therefore remains **unknown**, not clean.
+
+
+---
+
+## GPT-6 independent review checkpoint (2026-11-12 JST, stage 1)
+
+This section supplements earlier handoffs. It does **not** endorse their conclusions. Source of truth: original missing-analysis/Sandbox requirements and pinned in-repository PvPoke battle engine. Previous review summaries are only hypotheses.
+
+### GitHub verified initial state
+- PR #112: **open Draft**, base \`feature/tactic-search-role-advisory-20261112\` (PR #111), head branch \`fix/tactic-review-recovery-20261112\`.
+- Start HEAD: \`3d793b9d2a63599ef2d25b4f6a99ec5eeabe7521\` (unchanged from supplied previous checkpoint).
+- 14 files changed in PR #112. Its exact start HEAD has 5/5 successful workflow runs: IV contract, recommendation, 24-mode, meta/image, security/regression. The reported 510 Python tests are not yet independently reconstructed locally.
+- No local Git checkout exists in this execution environment; uncommitted Work-local edits cannot be inspected or recovered. The connector tracks committed branch changes only.
+- Production untouched. The ChatGPT PvPoke MCP was not used.
+
+### Spec-first falsification matrix (expectations before accepting code fixes)
+
+| Independent condition | Counterexample / expected rejection or uncertainty |
+|---|---|
+| Charge energy 0–100 | At 0 or one point below cost, charge never resolves; exact cost permits firing if otherwise legal; energy never exceeds 100 |
+| Fast move duration 1–5 turns | A charge scheduled during unresolved fast-move cooldown cannot count as executed; damage lands at engine-defined turn, not request turn |
+| Repeated and mixed charged moves | Each move must be independently paid for and resolved; actor, action ID and equipped move ID must match actual native events |
+| CMP and simultaneous actions | Native priority and KO order decide legality; a started but non-resolved action cannot satisfy a role; simultaneous KO must retain both terminal HP=0 |
+| Shields 0–2 | No shield usable after depletion; requested and actual shield events, defender, and shield totals must agree |
+| Buffs and debuffs | Effects apply only when native engine resolves them; initial stages, timeline transitions and terminal stages must agree |
+| Opponent response | Requested original and generated alternate scripts must independently resolve; missing response means counterfactual evidence unsupported |
+| Fair information set | Two histories with the same *observations* must lead to the same selected action despite different hidden enemy IV, charge move, energy or shield intent; otherwise label as theoretical |
+| Saved proof consistency | Recompute digest after mutating one inner trace/terminal field: load must still reject impossible state transition, not just malformed JSON |
+| Required role and IV | Only one exact legal build covering *all* required matchups is eligible; separate IV wins must not be unioned; incomplete IV search is unknown |
+| Inventory independence | Calculation, candidate retention, confirmation and unknown ownership are separate states; absence of an ownership record is not proof of unowned |
+| Disk capacity | Disposable writes must not starve crucial records; test tiny quotas, WAL/disk exhaustion, failed transaction rollback, restart and recovery, without production data |
+| Default calculation | Standard mode golden results must remain identical, including hand-specified move sets and meta presets |
+
+Sources and current limits: the original Japanese request document defines these expected behaviors. The pinned PvPoke \`Battle.js\` uses 500ms turns and cooldown, and \`ActionLogic.js\` reasons from energy and priority, but individual oracle outcomes still require native runner fixtures. The matrix is not a claim that the code passes.
+
+### Progress states
+
+| Stage | State | Completed | Remaining |
+|---|---|---|---|
+| Latest source / Git / CI | 完了 | PR refs, 14 changed paths, 5 current successful workflows verified | Compare individual workflow job evidence as needed; local Work state unavailable |
+| Spec-driven battle review | 作業中 | Independent falsification matrix and vendor code entry points identified | Native test fixtures, red/green tests for new failures |
+| Live reproducibility | 未着手 | Observable-history equivalence specified | Run two-hidden-state tests and check UI labels |
+| Missing roles / IV | 未着手 | Per-exact-build invariant specified | Audit code and coverage |
+| Security / storage | 作業中 | Owner/digest/disk risk conditions specified | Mutation fuzz cases, capacity and WAL audit |
+| Repairs | 未着手 | None from this independent pass | Demonstrate failures before targeted fixes |
+| Regression / build | 未着手 | Initial pre-review CI 5/5 confirmed | Exact post-fix workflows, tests and image |
+| GitHub checkpoint | 完了 | This checkpoint, Draft PR maintained | Save subsequent findings, remediation and final SHA |
+
+### Checkpoint metadata
+- Current stage: spec-first battle and stored-proof review.
+- Confirmed defects **in this pass**: none yet; hypotheses must not be called confirmed.
+- Previous fixes: maintained untouched; no endorsement.
+- Unfixed / unverified: full policy fairness, end-to-end native timeline, storage exhaustion and recovery, Trivy HIGH=103 (historical report), 4096-IV coverage.
+- Changed paths in this pass: documentation checkpoint only.
+- Initial HEAD: \`3d793b9d2a63599ef2d25b4f6a99ec5eeabe7521\`; branch \`fix/tactic-review-recovery-20261112\`. A new documentation commit will advance HEAD.
+- Uncommitted changes: unknown outside GitHub; connector edits commit directly.
+- Tests: 5/5 existing Actions passed at initial HEAD. No new local tests executed. Do not conflate with the prior 510-test count.
+- Next operation: inspect cached-state validation against native trace shape, add a precise red regression test, only then patch the defect and verify CI.
