@@ -155,12 +155,41 @@ def _explore(service, payload):
             'qualifying': examples, 'can_calculate': _can_calculate()}
 
 
+def _opponent_boundaries(service, payload):
+    """Restrict static opponent profiling to one saved, same-owner matchup."""
+    _object(payload, 'opponent IV boundaries', (
+        'action', 'evaluation_id', 'build_id', 'battle_key'), ('iv_floors',))
+    if not _can_calculate():
+        raise AnalysisUnavailable('Opponent IV profiling is disabled')
+    build = _hash(payload['build_id'])
+    battle_key = _hash(payload['battle_key'])
+    history = RoleEvaluation(service.store).history(payload['evaluation_id'])
+    if (history is None or history['active_versions'] != service.versions
+            or history['plan_versions'] != service.versions):
+        raise ValueError('Saved role evaluation is unavailable for the active game data')
+    evidence = MissingAnalysis(service.store).evidence(
+        history['analysis_id'], active_versions=service.versions, normalizer=service)
+    if evidence is None or evidence['versions'] != service.versions:
+        raise ValueError('Saved matchup evidence is unavailable')
+    candidate = next((cell for cell in evidence['cells']
+                      if cell['build_id'] == build and cell['battle_key'] == battle_key
+                      and cell.get('starts_at_full_hp') and
+                      condition_id(cell['spec'], full_hp=True)
+                      in history['definition']['requirements']), None)
+    if candidate is None:
+        raise ValueError('Opponent boundary matchup is not part of this saved role')
+    return IVSearch(service).opponent_boundaries(
+        candidate['spec'], iv_floors=payload.get('iv_floors', (0, 0, 0)))
+
+
 def app_operation(service, payload):
     action = payload.get('action')
     if action == 'evaluate':
         return _comparison(service, payload)
     if action == 'explore':
         return _explore(service, payload)
+    if action == 'opponent_boundaries':
+        return _opponent_boundaries(service, payload)
     if action == 'tactic_evidence':
         _object(payload, 'tactic evidence', ('action', 'evaluation_id', 'search_ids'))
         if not sandbox_enabled() or not search_enabled():

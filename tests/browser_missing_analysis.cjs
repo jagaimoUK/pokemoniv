@@ -47,11 +47,12 @@ async function checkWidth(browser, width) {
         const candidate = payload.candidates[0];
         const opponent = payload.scenarios[0].opponent;
         const condition = {opponent, shields: [1, 1], state: 'unknown', meets: null,
+                           battle_key: 'c'.repeat(64),
                            spec: {combatants: [{initial: {energy: 0}}, opponent]}};
         const reference = {build_id: 'b'.repeat(64), species_id: candidate.species_id};
         return route.fulfill({json: {
           state: 'evidence_pending', evaluation_id: 'e'.repeat(64), reference,
-          role: {role_id: 'lead', priority: 1}, can_calculate: false,
+          role: {role_id: 'lead', priority: 1}, can_calculate: width > 320,
           candidates: [{...candidate, ...reference, status: 'pending', party_substitution: 'pending',
                         conditions: [condition], owned_instances: []}],
         }});
@@ -74,6 +75,18 @@ async function checkWidth(browser, width) {
                                      qualifying_count: 1, not_fully_tested_iv_count: 4095,
                                      qualifying: [{attack: 0, defense: 15, hp: 15}]}});
       }
+      if (payload.action === 'opponent_boundaries') {
+        assert.equal(payload.evaluation_id,'e'.repeat(64));
+        assert.equal(payload.build_id,'b'.repeat(64));
+        assert.equal(payload.battle_key,'c'.repeat(64));
+        return route.fulfill({json:{
+          raw_iv_count:4096, profiled_iv_count:4096, distinct_static_profile_count:17,
+          native_battles_run:0, battle_outcomes_verified:false,
+          boundary_counts:{hp:4,cmp:2,breakpoint:6,bulkpoint:3,
+            charged_1:2,charged_2:1,incoming_charged_1:2,incoming_charged_2:2},
+          representatives:[{attack:0,defense:15,hp:15}]
+        }});
+      }
       throw Error('Unexpected request ' + path);
     });
     await page.goto('http://127.0.0.1:9876/app/missing');
@@ -86,8 +99,14 @@ async function checkWidth(browser, width) {
     await page.getByRole('button', {name: '探索範囲を確認'}).click();
     await page.getByText('達成を確認したIV　0/15/15', {exact: true}).waitFor();
     await page.getByText(/全条件の検証が未完了 4095通り/).waitFor();
-    assert.equal(await page.getByRole('button', {name: '1対面を追加検証'}).count(), 0);
+    assert.equal(await page.getByRole('button', {name: '1対面を追加検証'}).count(),
+      width > 320 ? 1 : 0);
     assert.equal(await page.getByRole('button', {name: 'この対面だけ計算'}).count(), 0);
+    if (width > 320) {
+      await page.getByRole('button', {name:'相手IV境界を確認'}).click();
+      await page.getByText(/静的境界のみ（勝敗未検証）/).waitFor();
+      await page.getByText(/代表例（最大32件・勝敗未検証）：0\/15\/15/).waitFor();
+    }
     await page.locator('#tactic-evidence-read').click();
     await page.getByText(/理論上の戦術であり、観測情報に基づく実戦再現性は未検証です/).waitFor();
     await page.getByText(/以下は保存済み戦術だけの参考順です/).waitFor();
@@ -95,7 +114,7 @@ async function checkWidth(browser, width) {
     await page.getByText(/代替の実用性：未検証/).waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
     assert.deepEqual(errors, []);
-    assert.equal(requests.length, 4);
+    assert.equal(requests.length, width > 320 ? 5 : 4);
   } finally {
     await page.close();
   }

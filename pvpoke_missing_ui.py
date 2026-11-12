@@ -351,6 +351,34 @@ function renderInventory(parent,candidate,request){
  }
  registerInventory(box,candidate,request);
 }
+function renderOpponentBoundaries(panel,result){
+ if(!result.can_calculate)return;
+ const candidate=result.candidates.find(row=>row.build_id===result.reference.build_id);
+ const conditions=(candidate?.conditions||[]).filter(row=>row.battle_key);
+ if(!conditions.length)return;
+ const area=node('div',null,panel,'stack');
+ node('p','相手の攻撃・防御・HP個体値について、CMPと技ダメージの静的な境界を探します。対戦勝敗・実戦での役割は未検証です。',area,'muted');
+ const selector=node('select',null,area);selector.setAttribute('aria-label','相手IV境界を調べる対面');
+ for(const [i,row] of conditions.entries()){
+  const choice=node('option','対面'+(i+1)+'：'+name(row.opponent.species_id),selector);
+  choice.value=row.battle_key;
+ }
+ const report=node('p',null,area,'break');
+ const preview=node('p',null,area,'break');
+ const labels={hp:'HP',cmp:'CMP',breakpoint:'通常技与ダメージ',bulkpoint:'通常技被ダメージ',
+  charged_1:'ゲージ1与ダメージ',charged_2:'ゲージ2与ダメージ',
+  incoming_charged_1:'ゲージ1被ダメージ',incoming_charged_2:'ゲージ2被ダメージ'};
+ button(area,'相手IV境界を確認',()=>perform(async()=>{
+  const data=await api('missing-analysis',{action:'opponent_boundaries',
+   evaluation_id:result.evaluation_id,build_id:candidate.build_id,battle_key:selector.value});
+  report.textContent='静的境界のみ（勝敗未検証）：相手IV '+data.profiled_iv_count+' / '+data.raw_iv_count+
+   '通りを評価 ／ 静的プロファイル '+data.distinct_static_profile_count+
+   '種類 ／ '+Object.entries(data.boundary_counts).map(([kind,n])=>(labels[kind]||kind)+n+'件').join('・');
+  preview.textContent='代表例（最大32件・勝敗未検証）：'+data.representatives.map(
+   row=>row.attack+'/'+row.defense+'/'+row.hp).join('、');
+  announce('相手IVの静的な境界候補を表示しました。対戦勝敗は未検証です。');
+ }), 'quiet');
+}
 function renderExploration(parent,result){
  const panel=detail(parent,'重要IVを探索');
  const info=node('p','保存済みの対戦を照合し、役割の全条件を満たす個体値を確認します。',panel,'muted');
@@ -364,6 +392,7 @@ function renderExploration(parent,result){
  }
  button(actions,'探索範囲を確認',()=>perform(()=>read(0)),'quiet');
  if(result.can_calculate)button(actions,'1対面を追加検証',()=>perform(()=>read(1)),'quiet');
+ renderOpponentBoundaries(panel,result);
 }
 function renderResult(result,request,revision){
  const tree=$('result-tree');tree.replaceChildren();

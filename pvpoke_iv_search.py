@@ -214,6 +214,80 @@ class IVSearch:
             raise AnalysisUnavailable('Could not save IV search') from exc
         return search_id
 
+    def opponent_boundaries(self, request, *, iv_floors=(0, 0, 0)):
+        """Profile opponent-side IV thresholds, not battle wins or role coverage.
+
+        The already pinned PvPoke static profiler expects the varying Pokémon
+        on its candidate (left) side. Swap sides only for this disposable
+        static calculation; do not reverse or persist standard battle results.
+        """
+        if (type(iv_floors) not in (list, tuple) or len(iv_floors) != 3 or
+                any(type(value) is not int or not 0 <= value <= 15 for value in iv_floors)):
+            raise ValueError('Invalid opponent IV floors')
+        version = self._check_inputs()
+        spec, payload = self.service._prepare(request)
+        if spec['mode'] != 'standard':
+            raise ValueError('Opponent boundary preview requires a standard battle')
+        own, opponent = spec['combatants']
+        full, _ = self.service._combatant({
+            **opponent, 'initial': {**opponent['initial'], 'hp': 'full'}})
+        if full['initial']['hp'] != opponent['initial']['hp']:
+            raise ValueError('Opponent boundary preview requires full opponent HP')
+        # Use the same purified minimum IV rule as existing self-IV search.
+        floors = [max(n, 2) for n in iv_floors] if (
+            'RETURN' in opponent['moves']['charged']) else list(iv_floors)
+        flipped = {**spec, 'combatants': [opponent, own]}
+        rows, stats = _pool(self.service, flipped, floors)
+        if not rows:
+            raise ValueError('No opponent IVs satisfy the specified rules')
+        # Static profile orientation is opponent -> original self. Restore
+        # the corresponding native initial stat stages in this orientation.
+        conditions = [{
+            'opponent': payload['self'],
+            'buffs': [payload['initial'][1]['buffs'], payload['initial'][0]['buffs']],
+        }]
+        profiles = _profiles(self.service, rows, conditions)
+        original = opponent['ivs']
+        original_index = (original['attack'] << 8) | (
+            original['defense'] << 4) | original['hp']
+        order, boundary_rows = _prioritize(profiles, stats, 1, original_index)
+        if self._check_inputs() != version:
+            raise AnalysisUnavailable('Opponent IV profiler inputs changed during calculation')
+        boundaries = boundary_rows[0]
+        examples, seen = [], set()
+        for index in order:
+            signature = profiles[index]
+            if signature in seen:
+                continue
+            seen.add(signature)
+            row = rows[index]
+            examples.append({
+                'attack': row['atk'], 'defense': row['def'], 'hp': row['hp'],
+                'level': row['level'], 'cp': row['cp'],
+                'static_profile': list(signature[0]),
+            })
+            if len(examples) == 32:
+                break
+        return {
+            'source_battle_key': _json_hash(spec),
+            'source_opponent_species_id': opponent['species_id'],
+            'versions': dict(self.service.versions),
+            'raw_iv_count': RAW_IV_COUNT,
+            'iv_floors': floors,
+            'eligible_iv_count': len(rows),
+            'profiled_iv_count': len(profiles),
+            'distinct_static_profile_count': len(set(profiles.values())),
+            'boundary_ivs': boundaries,
+            'boundary_counts': {
+                name: int.from_bytes(bytes.fromhex(bits), 'little').bit_count()
+                for name, bits in boundaries.items()
+            },
+            'representatives': examples,
+            'native_battles_run': 0,
+            'battle_outcomes_verified': False,
+            'evidence_class': 'static_boundaries_only',
+        }
+
     def _load(self, search_id):
         if type(search_id) is not str or not re.fullmatch(r'[a-f0-9]{64}', search_id):
             raise ValueError('Invalid IV search ID')
