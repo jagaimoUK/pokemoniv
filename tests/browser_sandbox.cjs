@@ -58,7 +58,12 @@ async function checkWidth(browser, width) {
   let failNext = false;
   page.on('pageerror', error => errors.push(error.message));
   try {
-    await page.addInitScript(({key, spec}) => sessionStorage.setItem(key, JSON.stringify(spec)), {key: importKey, spec: initialSpec});
+    await page.addInitScript(({key, spec}) => {
+      sessionStorage.setItem(key, JSON.stringify(spec));
+      sessionStorage.setItem('pokemoniv:tactic-evidence-link-v1', JSON.stringify({
+        evaluation_id:'e'.repeat(64), build_id:'b'.repeat(64), search_ids:[]
+      }));
+    }, {key: importKey, spec: initialSpec});
     await page.route(origin + '/**', async route => {
       const request = route.request();
       const url = new URL(request.url());
@@ -208,6 +213,9 @@ async function checkWidth(browser, width) {
     await page.locator('#tactic-search-panel summary').click();
     await page.locator('#search-start').click();
     await page.locator('#search-status').filter({hasText: /候補 4件/}).waitFor();
+    assert.equal(await page.locator('#search-to-missing').isVisible(),true);
+    assert.deepEqual(await page.evaluate(() => JSON.parse(sessionStorage.getItem(
+      'pokemoniv:tactic-evidence-link-v1')).search_ids), ['f'.repeat(64)]);
     await page.locator('#search-step').click();
     await page.locator('#search-status').filter({hasText: /検証 1件/}).waitFor();
     await page.locator('#search-results').getByText(/相手が別のゲージ技を指定/).waitFor();

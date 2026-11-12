@@ -131,6 +131,7 @@ th{color:var(--text-muted);font-weight:600}
 <div class="row"><button id="search-start" type="button" data-request>現在の条件で候補を作成</button><button id="search-step" type="button" data-request disabled>最大4件を検証</button></div>
 <p id="search-status" class="notice" role="status" aria-live="polite">候補を作成していません。</p>
 <div id="search-results" class="stack tight" aria-label="直近の探索結果"></div>
+<a id="search-to-missing" href="/app/missing" hidden>不足分析へ戻って戦術証拠を照合</a>
 </details>
 </section>
 <section class="panel stack">
@@ -160,6 +161,7 @@ const reasons={
  no_shields:'残りシールドなし',unshieldable:'シールドを使えない技',action_not_resolved:'技が解決しなかった'
 };
 const importKey='pokemoniv:sandbox-input-v1';
+const tacticLinkKey='pokemoniv:tactic-evidence-link-v1';
 const defaultRules={league:'great',cp_cap:1500,max_level:50,cup_id:'all'};
 const clone=value=>JSON.parse(JSON.stringify(value));
 const normalize=value=>String(value).normalize('NFKC').trim().toLowerCase();
@@ -765,6 +767,14 @@ async function beginTacticSearch(spec){
  if(!/^[a-f0-9]{64}$/.test(data.search_id))throw Error('探索IDを読み取れませんでした。');
  tacticSearchId=data.search_id;tacticSearchKey=key;
  showTacticProgress(data);
+ try{
+  const old=JSON.parse(sessionStorage.getItem(tacticLinkKey)||'null');
+  if(/^[a-f0-9]{64}$/.test(old?.evaluation_id)&&Array.isArray(old.search_ids)){
+   const search_ids=[...new Set([...old.search_ids,data.search_id])].slice(-6);
+   sessionStorage.setItem(tacticLinkKey,JSON.stringify({...old,search_ids}));
+   $('search-to-missing').hidden=false;
+  }
+ }catch{}
  announce('候補ができました。必要な件数だけ検証してください。');
 }
 async function advanceTacticSearch(){

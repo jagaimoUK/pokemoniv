@@ -31,6 +31,8 @@ async function checkWidth(browser, width) {
   const requests = [];
   page.on('pageerror', error => errors.push(error.message));
   try {
+    await page.addInitScript(() => sessionStorage.setItem('pokemoniv:tactic-evidence-link-v1',
+      JSON.stringify({evaluation_id:'e'.repeat(64),build_id:'b'.repeat(64),search_ids:['f'.repeat(64)]})));
     await page.route('http://127.0.0.1:9876/**', async route => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
@@ -54,6 +56,15 @@ async function checkWidth(browser, width) {
                         conditions: [condition], owned_instances: []}],
         }});
       }
+      if (payload.action === 'tactic_evidence') {
+        assert.equal(payload.evaluation_id,'e'.repeat(64));
+        assert.deepEqual(payload.search_ids,['f'.repeat(64)]);
+        return route.fulfill({json:{schema:'missing-tactic-evidence-v1',standard_state:'evidence_pending',
+          searched_count:1,new_battles:0,builds:[{build_id:'b'.repeat(64),
+          theoretical_all_conditions:false,conditions:[{standard:{meets:null},tested_scripts:1,
+          matching_scripts:0,truncated:false,paths:[{strategy:'original',
+          opponent_response:'alternate_charged',meets:null}]}]}]}});
+      }
       if (payload.action === 'explore') {
         assert.equal(payload.budget, 0);
         return route.fulfill({json: {completed_iv_count: 1, eligible_iv_count: 4096,
@@ -72,9 +83,11 @@ async function checkWidth(browser, width) {
     await page.getByText('達成したIV　0/15/15', {exact: true}).waitFor();
     assert.equal(await page.getByRole('button', {name: '1対面を追加検証'}).count(), 0);
     assert.equal(await page.getByRole('button', {name: 'この対面だけ計算'}).count(), 0);
+    await page.locator('#tactic-evidence-read').click();
+    await page.getByText(/理論上の戦術であり、観測情報に基づく実戦再現性は未検証です/).waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
     assert.deepEqual(errors, []);
-    assert.equal(requests.length, 3);
+    assert.equal(requests.length, 4);
   } finally {
     await page.close();
   }
