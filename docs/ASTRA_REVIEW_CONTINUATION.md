@@ -14,7 +14,7 @@ Updated: 2026-11-12 JST. This is a **checkpoint, not a final review sign-off**.
 | Stage | State | Evidence and changes | What remains |
 |---|---|---|---|
 | 0. Recover Work changes | Blocked | GitHub and Project/Library checked; Work-local edits unavailable | Recover original Work patch only if separately accessible. Do not overwrite these changes blindly |
-| 1. Opponent action execution | Implemented, CI pending | Track all native opponent action IDs (including seeded actions and alternate+self-shield case); check execution in search and evidence; new failing-case tests | Verify tests/CI, examine non-observable opponent behavior |
+| 1. Opponent action execution | Implemented, CI pending | Track all native opponent action IDs (including seeded actions and alternate+self-shield case); require actual resolved charged-move events as well as action-start statuses; new failing-case tests | Verify tests/CI, examine non-observable opponent behavior |
 | 2. Saved Sandbox integrity | Implemented, CI pending | Revalidate cached results on read: action status/trace, terminal vs outcome, initial values, shield and damage totals, event consistency, JSON canonical encoding; rehashed invalid-record tests | Verify native trace compatibility, test more adversarial synthetic cases |
 | 3. Capacity separation | Implemented, CI pending | Reserve 1/8 SQLite page quota and 8 MiB disk free for user-authored records; prioritize ownership events, role evaluations, analysis definitions, saved tactics. No eviction, no schema migration | Verify small-database saturation, free-space simulation, real storage capacity and external disk consumers |
 | 4. Remaining independent review | Not started in this chat | Previous Work reported some boundary tests, no portable artifacts | Complete legal timings, hidden-information fairness, other algorithms independently |
@@ -22,7 +22,7 @@ Updated: 2026-11-12 JST. This is a **checkpoint, not a final review sign-off**.
 | 6. Saved changes | In progress | Source changes committed on a child branch; no production changes | Create Draft PR; report final head and CI |
 
 ## Changed modules
-- `pvpoke_tactic_search.py` and `pvpoke_tactic_evidence.py`: all requested opponent actions must be executed; previously just the new alternate was checked, and some variants were missed.
+- `pvpoke_tactic_search.py` and `pvpoke_tactic_evidence.py`: all requested opponent actions must be executed and charged moves must have matching native resolution events (action ID, actor, move). Previously just the new alternate was checked, and some variants were missed.
 - `pvpoke_sandbox.py`: cached data must be semantically valid even when the checksum has been recalculated. No automatic re-simulation on invalid saved data.
 - `pvpoke_battle_store.py`: two-tier writer with quota headroom and physical-disk guard; critical writes use reserve.
 - `pvpoke_ownership.py`, `pvpoke_missing_analysis.py`, `pvpoke_role_evaluation.py`, `pvpoke_sandbox_workspace.py`: important writes use the critical quota.

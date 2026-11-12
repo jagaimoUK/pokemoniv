@@ -13,7 +13,7 @@ from pvpoke_battle_store import BattleStoreError
 from pvpoke_missing_analysis import MissingAnalysis, battle_facts
 from pvpoke_ownership import build_id
 from pvpoke_role_evaluation import RoleEvaluation, _hash, _meets, condition_id
-from pvpoke_tactic_search import TacticSearch, TacticSearchError
+from pvpoke_tactic_search import TacticSearch, TacticSearchError, _requested_actions_completed
 
 SCHEMA = 'missing-tactic-evidence-v1'
 MAX_SEARCHES = 6
@@ -101,12 +101,10 @@ def compare_tactics(service, evaluation_id, search_ids):
                     actual['summary']['battle_key'] != cell['battle_key'] or
                     actual['summary']['outcome'] != cell['outcome']):
                 raise TacticEvidenceUnavailable('Completed tactic fact is no longer verifiable')
-            actions = {row['action_id']: row['status']
-                       for row in actual['summary']['action_results']} if actual is not None else {}
-            self_executed = actual is not None and all(
-                actions.get(action_id) == 'executed' for action_id in candidate['self_actions'])
-            opponent_executed = actual is not None and all(
-                actions.get(action_id) == 'executed' for action_id in candidate['opponent_actions'])
+            self_executed = actual is not None and _requested_actions_completed(
+                candidate['spec'], actual['summary'], candidate['self_actions'])
+            opponent_executed = actual is not None and _requested_actions_completed(
+                candidate['spec'], actual['summary'], candidate['opponent_actions'])
             shields_honored = actual is not None and all(
                 row['used'] is row['requested'] for row in actual['shield_results'])
             if actual is not None and (self_executed != cell['all_self_executed'] or

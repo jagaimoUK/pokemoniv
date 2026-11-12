@@ -191,6 +191,25 @@ def _candidates(sandbox, spec):
                 return candidates
     return candidates
 
+def _requested_actions_completed(spec, summary, action_ids):
+    """Verify native action starts and resolved charged moves match the script.
+
+    A 'started' charged action alone is not proof the selected move landed.
+    Resolved events must agree on the action ID, actor and move ID.
+    """
+    actions = {action['id']: action for action in spec['actions']}
+    statuses = {row['action_id']: row['status'] for row in summary['action_results']}
+    resolved = {(row['action_id'], row['actor'], row['move_id'])
+                for row in summary['executed_moves']
+                if row['kind'] == 'charged' and 'action_id' in row}
+    return all(
+        aid in actions and statuses.get(aid) == 'executed' and
+        (actions[aid]['kind'] != 'charged' or
+         (aid, actions[aid]['actor'], actions[aid]['move_id']) in resolved)
+        for aid in action_ids
+    )
+
+
 class TacticSearch:
     """Checkpoint each candidate separately; a restarted process reuses saved Sandbox cells."""
 
@@ -334,15 +353,15 @@ class TacticSearch:
                     blocked = 'sandbox_' + result['status']
                     break
                 summary = result['summary']
-                actions = {a['action_id']: a['status'] for a in summary['action_results']}
                 required_self = candidate['self_actions']
                 required_opponent = candidate['opponent_actions']
                 cell = {'index': index, 'candidate_key': key, 'battle_key': summary['battle_key'],
                         'strategy': candidate['strategy'], 'response': candidate['response'],
                         'status': result['status'], 'outcome': summary['outcome'],
-                        'all_self_executed': all(actions.get(a) == 'executed' for a in required_self),
-                        'opponent_response_executed': all(
-                            actions.get(aid) == 'executed' for aid in required_opponent),
+                        'all_self_executed': _requested_actions_completed(
+                            spec, summary, required_self),
+                        'opponent_response_executed': _requested_actions_completed(
+                            spec, summary, required_opponent),
                         'all_requested_shields_honored': all(
                             row['used'] is row['requested'] for row in result['shield_results']),
                         'evidence_class': 'theoretical_script_only',

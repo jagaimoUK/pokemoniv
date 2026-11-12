@@ -11,7 +11,7 @@ from unittest.mock import patch
 from pvpoke_battle_service import BattleService
 from pvpoke_battle_store import BattleStore
 from pvpoke_direct_backend import DirectMatrixClient
-from pvpoke_tactic_search import TacticSearch, TacticSearchError, MAX_CANDIDATES
+from pvpoke_tactic_search import TacticSearch, TacticSearchError, MAX_CANDIDATES, _requested_actions_completed
 from test_sandbox import FIXTURES, scripted_spec
 from tools import cloud_migration_backup as backup
 
@@ -124,6 +124,27 @@ class TacticSearchTests(unittest.TestCase):
         self.assertTrue(all(any(d['defender'] == 0 and d['use_shield']
                                 for d in candidate['spec']['shield_decisions']) for candidate in variants))
         self.assertTrue(all(c['spec']['mode'] == 'sandbox' for c in variants))
+
+    def test_charged_action_start_without_matching_move_resolution_is_not_success(self):
+        actions = [{'id': 'self_throw', 'actor': 0, 'turn': 1, 'kind': 'charged',
+                    'move_id': 'AQUA_TAIL'},
+                   {'id': 'opponent_throw', 'actor': 1, 'turn': 1, 'kind': 'charged',
+                    'move_id': 'ICE_BEAM'}]
+        spec = {'actions': actions}
+        summary = {'action_results': [
+            {'action_id': 'self_throw', 'status': 'executed'},
+            {'action_id': 'opponent_throw', 'status': 'executed'}],
+            'executed_moves': []}
+        for aid in ('self_throw', 'opponent_throw'):
+            self.assertFalse(_requested_actions_completed(spec, summary, [aid]))
+        summary['executed_moves'] = [
+            {'action_id': action['id'], 'actor': action['actor'], 'kind': 'charged',
+             'move_id': action['move_id']} for action in actions]
+        for aid in ('self_throw', 'opponent_throw'):
+            self.assertTrue(_requested_actions_completed(spec, summary, [aid]))
+        summary['executed_moves'][1]['move_id'] = 'WRONG_MOVE'
+        self.assertFalse(_requested_actions_completed(spec, summary, ['opponent_throw']))
+        self.assertTrue(_requested_actions_completed(spec, summary, ['self_throw']))
 
     def test_existing_opponent_charged_request_must_execute(self):
         seed = self.seed()
