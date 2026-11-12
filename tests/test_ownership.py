@@ -133,6 +133,7 @@ sys.exit(22)
                                     species_ids=self.inventory.species_ids)
                 owner.register('subject', self.observed)
                 before = owner.get('subject')
+                before_revision = owner.revision()
                 with closing(sqlite3.connect(store.path)) as db, db:
                     actual, = db.execute(f'PRAGMA journal_mode={journal_mode}').fetchone()
                     self.assertEqual(actual, journal_mode)
@@ -150,7 +151,7 @@ sys.exit(22)
                     text=True, capture_output=True, timeout=15)
                 self.assertEqual(child.returncode, 21, child.stderr or child.stdout)
                 self.assertEqual(owner.get('subject'), before)
-                self.assertEqual(owner.revision(), 0)
+                self.assertEqual(owner.revision(), before_revision)
                 self.assertEqual(owner.history('subject'), [])
                 self.assertIsNone(foreign.get('subject'))
                 with closing(sqlite3.connect(store.path)) as db, db:
@@ -161,7 +162,7 @@ sys.exit(22)
                 confirmed = owner.confirm('kernel-limited-event', 'subject',
                                           expected_revision=0, state='confirmed_owned')
                 self.assertEqual(confirmed['new_state'], 'confirmed_owned')
-                self.assertEqual(owner.revision(), 1)
+                self.assertEqual(owner.revision(), before_revision + 1)
                 self.assertEqual(len(owner.history('subject')), 1)
                 self.assertEqual(owner.confirm('kernel-limited-event', 'subject',
                                                expected_revision=0,

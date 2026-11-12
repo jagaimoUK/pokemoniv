@@ -55,3 +55,15 @@ have been reproduced.
   separate blockers. PR stays Draft; no merge, deploy or real data modification.
 
 Tests must pass CI on the exact resulting commit before claiming success.
+
+## Test correction after first CI run
+
+On the first CI run, two subtests of the OS file-limit case failed because
+the new fixture incorrectly assumed the *ledger* revision was 0 after
+`Ownership.register`. Registration correctly increments the owner-wide ledger
+to 1 while the individual instance revision remains 0. The initial child
+write refusal and unchanged instance were consistent with the test setup.
+The assertion now captures `before_revision` immediately after registration,
+asserts it is unchanged after the failed confirmation, and verifies a +1
+increment only after a successful retry. This is a **test fixture correction**,
+not a product data modification. Confirm green CI on the new exact HEAD.
