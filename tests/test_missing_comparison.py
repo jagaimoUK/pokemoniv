@@ -193,6 +193,29 @@ class MissingLocalTests(server.ServerFixture):
         self.assertEqual(batch['not_fully_tested_iv_count'], 4087)
         self.assertEqual(self.compare({**batch_request, 'budget': 33})[0], 400)
 
+    def test_exploration_distinguishes_failed_attempt_from_saved_nonqualification(self):
+        status, compared = self.compare(case(threshold=10000))
+        self.assertEqual(status, 200)
+        request = {'action': 'explore', 'evaluation_id': compared['evaluation_id'],
+                   'build_id': compared['reference']['build_id'], 'budget': 1}
+        _, before = self.compare(request)
+        self.assertEqual(before['completed_iv_count'], 1)
+        with patch.object(server.web.BattleService, 'simulate', return_value={
+                'status': 'failed', 'error': {'message': 'private fixture detail'}}):
+            status, interrupted = self.compare(request)
+        self.assertEqual(status, 200)
+        self.assertTrue(interrupted['retry_needed'])
+        self.assertEqual(interrupted['completed_iv_count'], 1)
+        self.assertEqual(interrupted['fully_tested_nonqualifying_iv_count'], 1)
+        self.assertEqual(interrupted['not_fully_tested_iv_count'], 4095)
+        self.assertNotIn('private fixture detail', json.dumps(interrupted))
+
+        _, resumed = self.compare(request)
+        self.assertFalse(resumed['retry_needed'])
+        self.assertEqual(resumed['completed_iv_count'], 2)
+        self.assertEqual(resumed['fully_tested_nonqualifying_iv_count'], 2)
+        self.assertEqual(resumed['new_battles'], 1)
+
     def test_cross_species_partial_evidence_cannot_be_combined_into_one_role(self):
         """Two builds each clearing a different matchup are not substitutable."""
         payload = case()

@@ -144,14 +144,18 @@ def _explore(service, payload):
         index = lsb.bit_length() - 1
         examples.append({'attack': index >> 8, 'defense': (index >> 4) & 15, 'hp': index & 15})
         bits ^= lsb
+    completed = coverage['all_completed_iv_count']
     return {'state': step['state'], 'new_battles': step['new_battles'],
+            'retry_needed': any(status != 'complete' and attempts > 0
+                                for status, attempts in step['attempt_outcomes'].items()),
             'eligible_iv_count': coverage['eligible_iv_count'], 'qualifying_count': count,
-            'completed_iv_count': coverage['all_completed_iv_count'],
+            'completed_iv_count': completed,
+            'fully_tested_nonqualifying_iv_count': completed - count,
             # Every IV lacking at least one required matchup is still not fully
             # tested. This can include known failures; it is *not* a count of
             # possible wins and must never be merged into qualifying_count.
             'not_fully_tested_iv_count': (
-                coverage['eligible_iv_count'] - coverage['all_completed_iv_count']),
+                coverage['eligible_iv_count'] - completed),
             'qualifying': examples, 'can_calculate': _can_calculate()}
 
 
