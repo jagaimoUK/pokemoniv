@@ -162,6 +162,44 @@ class IVSearchTests(unittest.TestCase):
             with self.subTest(floors=floors), self.assertRaises(ValueError):
                 self.search.opponent_boundaries(spec, iv_floors=floors)
 
+    def test_full_iv_space_bounded_native_batch_and_restart_preserve_unknown(self):
+        """Execute only 32 out of 4096, measure it, and resume without replay."""
+        import math
+        from statistics import median
+        from time import perf_counter
+
+        search_id = self.search.start([battle_spec()])
+        actual = self.service.simulate
+        call_ms = []
+
+        def measured(request):
+            started = perf_counter()
+            result = actual(request)
+            call_ms.append((perf_counter() - started) * 1000)
+            return result
+
+        with patch.object(self.service, 'simulate', side_effect=measured):
+            partial = self.search.step(search_id, budget=32)
+        self.assertEqual(partial['new_battles'], 32)
+        self.assertEqual(len(call_ms), 32)
+        self.assertEqual(partial['coverage']['eligible_iv_count'], 4096)
+        self.assertEqual(partial['state'], 'partial')
+        self.assertLessEqual(partial['coverage']['all_completed_iv_count'], 32)
+        self.assertGreater(partial['coverage']['all_completed_iv_count'], 0)
+        # The remaining IVs have NOT been ruled out or declared eligible winners.
+        self.assertIsNone(partial['coverage']['qualifying_ivs'])
+        self.assertEqual(self.store.path.exists(), True)
+        reopened = IVSearch(self.service_for(self.store))
+        with patch.object(reopened.service, 'simulate',
+                          side_effect=AssertionError('Reopened read must not recalculate')):
+            verified = reopened.step(search_id, budget=0)
+        self.assertEqual(verified['coverage'], partial['coverage'])
+        self.assertEqual(verified['new_battles'], 0)
+        ordered = sorted(call_ms)
+        print(f'IV_NATIVE_BATCH32_MS p50={median(ordered):.2f} '
+              f'p95={ordered[math.ceil(len(ordered)*0.95)-1]:.2f} '
+              f'samples={len(ordered)} verified={partial["coverage"]["all_completed_iv_count"]}')
+
     def test_input_scope_and_corrupt_checkpoint_fail_closed(self):
         first = battle_spec()
         with self.assertRaises(ValueError):

@@ -311,6 +311,35 @@ class TacticSearchTests(unittest.TestCase):
                 self.assertEqual(progress['live_reproducibility'], 'not_verified')
             native.assert_not_called()
 
+    def test_tactic_planning_p50_p95_are_measured_without_native_battles(self):
+        """Capture planning/read latency in CI; do not pretend this is HTTP p95."""
+        import math
+        from statistics import median
+        from time import perf_counter
+
+        seed = self.seed()
+        starts, reads = [], []
+        with patch('pvpoke_sandbox.subprocess.run') as native:
+            search_id = self.search.start(seed)
+            for _ in range(21):
+                begin = perf_counter()
+                self.assertEqual(self.search.start(copy.deepcopy(seed)), search_id)
+                starts.append((perf_counter() - begin) * 1000)
+                begin = perf_counter()
+                state = self.search.step(search_id, budget=0)
+                reads.append((perf_counter() - begin) * 1000)
+                self.assertEqual(state['coverage']['attempted_scripts'], 0)
+                self.assertEqual(state['live_reproducibility'], 'not_verified')
+            native.assert_not_called()
+        def metric(series):
+            series = sorted(series)
+            return (median(series), series[math.ceil(len(series)*0.95)-1])
+        s50, s95 = metric(starts)
+        r50, r95 = metric(reads)
+        print(f'TACTIC_PLANNER_METHOD_MS samples=21 start_p50={s50:.2f} '
+              f'start_p95={s95:.2f} read_p50={r50:.2f} read_p95={r95:.2f} '
+              'native_battles=0')
+
     def test_no_unsupported_claim_of_live_reproducibility(self):
         identity = self.search.start(self.seed())
         result = self.search.step(identity, budget=1)
