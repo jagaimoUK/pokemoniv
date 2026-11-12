@@ -125,6 +125,40 @@ class SandboxTests(unittest.TestCase):
             child.assert_not_called()
         self.assertEqual(hashlib.sha256(self.store.path.read_bytes()).digest(), before)
 
+    def test_rehashed_inconsistent_sandbox_records_are_rejected_without_recalculation(self):
+        import json
+        from pvpoke_battle_service import _canonical_json, _json_hash
+        cases = (
+            lambda value: value['summary'].update(outcome='opponent_win'),
+            lambda value: value['summary']['terminal'][0].update(hp=0),
+            lambda value: value['summary']['action_results'][0].update(status='rejected', reason='test'),
+            lambda value: value['summary']['shields_used'].__setitem__(1, 2),
+            lambda value: value['trace'].pop(),
+        )
+        for corrupt in cases:
+            with self.subTest(corrupt=corrupt):
+                case_root = self.root / ('case-' + str(cases.index(corrupt)))
+                case_store = BattleStore(case_root / 'analysis.sqlite3')
+                self.standard.store = case_store
+                sandbox = SandboxService(self.standard)
+                result = sandbox.simulate(scripted_spec())
+                self.assertEqual(result['status'], 'complete', result.get('error'))
+                key, spec = result['summary']['battle_key'], result['summary']['spec']
+                with closing(sqlite3.connect(case_store.path)) as db, db:
+                    row = db.execute('SELECT body FROM sandbox_results_v1').fetchone()[0]
+                    stored = json.loads(row)
+                    corrupt(stored)
+                    body = _canonical_json(stored)
+                    db.execute('UPDATE sandbox_results_v1 SET body=?,digest=?',
+                               (body, _json_hash(stored)))
+                with patch('pvpoke_sandbox.subprocess.run',
+                           side_effect=AssertionError('engine must not start')) as native:
+                    with self.assertRaises(ValueError):
+                        sandbox._get(key, spec)
+                    failed = sandbox.simulate(spec)
+                    self.assertEqual(failed['status'], 'failed')
+                    native.assert_not_called()
+
     def test_wait_only_timeout_is_partial_and_not_saved(self):
         spec = scripted_spec(energy=0)
         spec['actions'] = [

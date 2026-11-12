@@ -1,5 +1,6 @@
 """Native scripted battles with a separate, owner-scoped trace cache."""
 import json
+import math
 import re
 import sqlite3
 import subprocess
@@ -131,6 +132,77 @@ def _trace(events, actions, actual, turns):
     return events
 
 
+def _validate_cached_sandbox(value, key, spec, versions):
+    """Revalidate persisted results as untrusted structured evidence.
+
+    A matching checksum detects accidental byte corruption, not internally
+    inconsistent or deliberately rehashed battle facts.
+    """
+    _object(value, 'saved Sandbox result',
+            ('schema', 'status', 'summary', 'trace', 'initial', 'shield_results',
+             'information_model', 'effects_model'))
+    summary = _object(value['summary'], 'saved Sandbox summary',
+                      ('schema', 'status', 'battle_key', 'spec', 'versions', 'outcome',
+                       'rating', 'terminal', 'shields_used', 'damage',
+                       'executed_moves', 'action_results', 'turns',
+                       'simulation_elapsed_ms', 'compute_wall_ms'))
+    if (value['schema'] != SCHEMA or value['status'] != 'complete'
+            or summary['schema'] != RESULT_SCHEMA or summary['status'] != 'complete'
+            or summary['battle_key'] != key or key != _json_hash(spec)
+            or summary['spec'] != spec or summary['versions'] != versions
+            or summary['outcome'] not in OUTCOMES[:3]
+            or value['information_model'] != 'fixed_script'
+            or value['effects_model'] != 'pvpoke_native_deterministic'):
+        raise ValueError('Stored Sandbox metadata is inconsistent')
+    initial = _states(value['initial'])
+    terminal = _states(summary['terminal'])
+    for actual, requested in zip(initial, (side['initial'] for side in spec['combatants'])):
+        if (actual['hp'], actual['energy_points'], actual['shields'], actual['buffs']) != (
+                requested['hp'], requested['energy'], requested['shields'], requested['stages']):
+            raise ValueError('Stored Sandbox initial conditions differ')
+    hp = [side['hp'] for side in terminal]
+    outcome = ('simultaneous_ko' if hp == [0, 0] else 'self_win' if hp[1] == 0 else
+               'opponent_win' if hp[0] == 0 else 'timeout')
+    if outcome != summary['outcome']:
+        raise ValueError('Stored Sandbox outcome differs from HP')
+    turns = _integer(summary['turns'], 'saved Sandbox turns', 1, MAX_TURN)
+    timing = summary['compute_wall_ms']
+    if type(timing) not in (int, float) or not math.isfinite(timing) or timing < 0:
+        raise ValueError('Invalid Sandbox compute time')
+    actions = {row['id']: row for row in spec['actions']}
+    actual = _action_results(summary['action_results'], actions, turns)
+    events = _items(summary['executed_moves'], 'saved Sandbox resolved moves', 0, 2000)
+    unsigned_events = []
+    for event in events:
+        _object(event, 'saved resolved move',
+                ('index', 'turn', 'actor', 'kind', 'move_id', 'damage',
+                 'shielded', 'target_hp'), ('action_id',))
+        _validate_action_link(event, actions, actual)
+        unsigned_events.append({field: val for field, val in event.items()
+                                if field != 'action_id'})
+    normalized = _battle_metrics({**summary, 'executed_moves': unsigned_events},
+                                 events_field='executed_moves', elapsed_field='simulation_elapsed_ms')
+    for field, result in normalized.items():
+        if field != 'executed_moves' and summary[field] != result:
+            raise ValueError('Stored Sandbox metrics differ')
+    if [before['shields'] - after['shields'] for before, after in zip(initial, terminal)] != summary['shields_used']:
+        raise ValueError('Stored Sandbox shield totals differ')
+    observed_damage = [{kind: sum(event['damage'] for event in events
+                                  if event['actor'] == actor and event['kind'] == kind)
+                        for kind in ('fast', 'charged')} for actor in (0, 1)]
+    if summary['damage'] != observed_damage:
+        raise ValueError('Stored Sandbox damage totals differ')
+    _shield_results(value['shield_results'], spec['shield_decisions'], events)
+    trace = _trace(value['trace'], actions, actual, turns)
+    resolved = [entry for entry in trace if entry['phase'] == 'resolve']
+    if len(resolved) != len(events):
+        raise ValueError('Saved Sandbox trace is missing resolved moves')
+    for step, event in zip(resolved, events):
+        if any(step.get(field) != event.get(field) for field in (
+                'turn', 'actor', 'kind', 'move_id', 'action_id')) or step['actual_damage'] != event['damage']:
+            raise ValueError('Stored Sandbox trace disagrees with resolved move')
+
+
 class SandboxService:
     """Run a fixed vendor engine with no standard shield or action hooks."""
 
@@ -247,11 +319,14 @@ class SandboxService:
         body, digest = row
         if type(body) is not bytes or len(body) > MAX_TRACE_BYTES:
             raise BattleStoreError('Invalid stored Sandbox trace')
-        value = json.loads(body)
-        summary = value['summary']
-        if (_json_hash(value) != digest or value['schema'] != SCHEMA or value['status'] != 'complete'
-                or summary['battle_key'] != key or summary['spec'] != spec or summary['versions'] != self.versions):
-            raise BattleStoreError('Sandbox trace checksum or scope mismatch')
+        try:
+            value = json.loads(body, object_pairs_hook=_unique_object,
+                               parse_constant=_reject_constant)
+            if _canonical_json(value) != body or _json_hash(value) != digest:
+                raise ValueError('Stored Sandbox checksum or encoding mismatch')
+            _validate_cached_sandbox(value, key, spec, self.versions)
+        except (ValueError, KeyError, TypeError, RecursionError, OverflowError) as exc:
+            raise BattleStoreError('Stored Sandbox result is invalid') from exc
         return value
 
     def _get(self, key, spec):

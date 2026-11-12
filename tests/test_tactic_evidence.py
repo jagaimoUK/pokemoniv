@@ -102,6 +102,34 @@ class TacticEvidenceTests(unittest.TestCase):
             with self.assertRaises((ValueError, sqlite3.Error)):
                 compare_tactics(self.service, self.evaluation['evaluation_id'], [self.search_id])
 
+    def test_unexecuted_opponent_seed_action_cannot_support_role(self):
+        seed = self.script.copy()
+        seed['combatants'] = [dict(side) for side in self.script['combatants']]
+        seed['combatants'][1] = {**seed['combatants'][1], 'initial': {
+            **seed['combatants'][1]['initial'], 'energy': 0}}
+        seed['actions'] = [{'id': 'unfunded_opponent', 'actor': 1, 'turn': 1,
+                            'kind': 'charged', 'move_id': seed['combatants'][1]['moves']['charged'][1]}]
+        baseline = {key: seed[key] for key in ('schema', 'rules', 'combatants')}
+        baseline['mode'] = 'standard'
+        analysis_id = MissingAnalysis(self.store).save_plan(self.service, [baseline])
+        normalized, _ = self.service._prepare(baseline)
+        role = {'role_id': 'unfunded_opponent', 'revision': 1, 'priority': 4,
+                'meta_snapshot': 'a' * 64, 'requirements': {
+                    condition_id(normalized): {'minimum': {'fast_damage': 0}}}}
+        evaluation = RoleEvaluation(self.store).evaluate(
+            analysis_id, role, active_versions=self.service.versions, normalizer=self.service)
+        search = TacticSearch(self.service)
+        identity = search.start(seed)
+        search.step(identity, budget=1)
+        with patch('pvpoke_sandbox.subprocess.run', side_effect=AssertionError('no new battle')):
+            result = compare_tactics(self.service, evaluation['evaluation_id'], [identity])
+        item = result['builds'][0]['conditions'][0]
+        self.assertEqual(item['tested_scripts'], 1)
+        self.assertEqual(item['matching_scripts'], 0)
+        self.assertFalse(item['paths'][0]['all_requested_actions_executed'])
+        self.assertIsNone(item['paths'][0]['meets'])
+        self.assertEqual(result['status'], 'counterfactual_only')
+
     def test_one_saved_matchup_does_not_fill_a_second_required_matchup(self):
         second = {**self.standard_spec, 'combatants': [dict(c) for c in self.standard_spec['combatants']]}
         second['combatants'][1] = {**second['combatants'][1], 'initial': {

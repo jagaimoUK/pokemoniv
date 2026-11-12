@@ -181,7 +181,12 @@ def _candidates(sandbox, spec):
             seen.add(fingerprint)
             candidates.append({'strategy': strategy, 'response': response, 'spec': normalized,
                                'self_actions': [a['id'] for a in mine],
-                               'opponent_alternate_id': alt_id if response == 'alternate_charged' else None})
+                               # Existing opponent actions must execute too, not only a newly
+                               # generated alternate. A scripted response is not optional evidence.
+                               'opponent_actions': [a['id'] for a in normalized['actions']
+                                                    if a['actor'] == 1],
+                               'opponent_alternate_id': alt_id if response in (
+                                   'alternate_charged', 'alternate_charged_self_shield') else None})
             if len(candidates) == MAX_CANDIDATES:
                 return candidates
     return candidates
@@ -331,13 +336,13 @@ class TacticSearch:
                 summary = result['summary']
                 actions = {a['action_id']: a['status'] for a in summary['action_results']}
                 required_self = candidate['self_actions']
-                alternate = candidate['opponent_alternate_id']
+                required_opponent = candidate['opponent_actions']
                 cell = {'index': index, 'candidate_key': key, 'battle_key': summary['battle_key'],
                         'strategy': candidate['strategy'], 'response': candidate['response'],
                         'status': result['status'], 'outcome': summary['outcome'],
                         'all_self_executed': all(actions.get(a) == 'executed' for a in required_self),
-                        'opponent_response_executed': alternate is None or
-                        actions.get(alternate) == 'executed',
+                        'opponent_response_executed': all(
+                            actions.get(aid) == 'executed' for aid in required_opponent),
                         'all_requested_shields_honored': all(
                             row['used'] is row['requested'] for row in result['shield_results']),
                         'evidence_class': 'theoretical_script_only',

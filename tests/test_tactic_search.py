@@ -125,6 +125,36 @@ class TacticSearchTests(unittest.TestCase):
                                 for d in candidate['spec']['shield_decisions']) for candidate in variants))
         self.assertTrue(all(c['spec']['mode'] == 'sandbox' for c in variants))
 
+    def test_existing_opponent_charged_request_must_execute(self):
+        seed = self.seed()
+        seed['combatants'][1]['initial']['energy'] = 0
+        opponent_move = seed['combatants'][1]['moves']['charged'][1]
+        seed['actions'] = [{'id': 'opponent_early', 'actor': 1, 'turn': 1,
+                            'kind': 'charged', 'move_id': opponent_move}]
+        identity = self.search.start(seed)
+        plan, _, _ = self.search._load(identity)
+        first = plan['candidates'][0]
+        self.assertEqual(first['response'], 'original')
+        self.assertEqual(first['opponent_actions'], ['opponent_early'])
+        report = self.search.step(identity, budget=1)
+        self.assertEqual(report['coverage']['attempted_scripts'], 1)
+        cell = report['results'][0]
+        self.assertFalse(cell['opponent_response_executed'])
+        self.assertEqual(report['coverage']['fully_executed_scripts'], 0)
+        native = self.search.sandbox._get(cell['candidate_key'], first['spec'])
+        self.assertIsNotNone(native)
+        actions = {a['action_id']: a['status'] for a in native['summary']['action_results']}
+        self.assertEqual(actions['opponent_early'], 'rejected')
+
+    def test_alternate_self_shield_variant_tracks_requested_opponent_action(self):
+        seed = self.seed()
+        seed['combatants'][0]['initial']['shields'] = 1
+        plan, _, _ = self.search._load(self.search.start(seed))
+        alternative = next(c for c in plan['candidates']
+                           if c['response'] == 'alternate_charged_self_shield')
+        self.assertIn('search_opponent_alternate', alternative['opponent_actions'])
+        self.assertEqual(alternative['opponent_alternate_id'], 'search_opponent_alternate')
+
     def test_budgets_owner_isolation_checkpoint_and_restored_cache(self):
         identity = self.search.start(self.seed())
         first = self.search.step(identity, budget=2)
