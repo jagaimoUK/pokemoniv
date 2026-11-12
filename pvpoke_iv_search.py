@@ -5,6 +5,7 @@ import re
 import sqlite3
 import subprocess
 import threading
+from time import perf_counter
 from bisect import bisect_right
 from collections import Counter
 from pathlib import Path
@@ -22,6 +23,9 @@ SCHEMA = 'important-iv-search-v1'
 RAW_IV_COUNT = 4096
 MAX_CONDITIONS = 6
 MAX_STEP_BATTLES = 32
+# A hard bound on the *batch*, except one in-flight native call can itself
+# consume its own process timeout. Planning/static profiling run separately.
+MAX_STEP_WALL_SECONDS = 10.0
 CLOSE_RATING_MARGIN = 25
 MAX_PLAN_BYTES = 96 * 1024
 IV_KEYS = ('attack', 'defense', 'hp')
@@ -413,21 +417,41 @@ class IVSearch:
             if source['versions'] != self.service.versions or source['profiler'] != self._check_inputs():
                 return {'search_id': search_id, 'state': 'stale', 'coverage': None, 'new_battles': 0}
             requirements = definition['requirements'] if definition else {}
+            deadline = perf_counter() + MAX_STEP_WALL_SECONDS if budget else None
             coverage, tasks, next_offset = self._scan(plan, offset, budget, requirements)
             before = self.service.cache_stats['engine_calls']
             outcomes = Counter()
             if tasks:
-                for _, spec in tasks:
+                attempted = 0
+                for position, spec in tasks:
+                    # Do not start more native calls after the batch deadline.
+                    # Always allow one attempt, so progress remains possible
+                    # when the source scan itself is slow.
+                    if attempted and perf_counter() >= deadline:
+                        next_offset = position
+                        break
                     errors = self.service.cache_stats['storage_errors']
                     result = self.service.simulate(spec)
                     if self.service.cache_stats['storage_errors'] != errors:
                         raise AnalysisUnavailable('Could not persist IV battle evidence')
+                    attempted += 1
                     outcomes[result['status']] += 1
+                    if result['status'] != 'complete':
+                        # An unavailable/partial battle is NOT saved evidence.
+                        # Retry this exact candidate on the next step rather
+                        # than silently moving the persistent cursor past it.
+                        next_offset = position
+                        break
                 try:
                     with self.store._writer() as db:
-                        db.execute('''UPDATE important_iv_searches_v1 SET next_offset=?
+                        changed = db.execute('''UPDATE important_iv_searches_v1 SET next_offset=?
                             WHERE owner_scope=? AND search_id=? AND next_offset=?''',
                             (next_offset, self.store.owner_scope, search_id, offset))
+                        if changed.rowcount != 1:
+                            # Another worker advanced this checkpoint. Do not
+                            # report success using a stale cursor or overwrite
+                            # its progress; already committed results are safe.
+                            raise BattleStoreError('IV search checkpoint was changed concurrently')
                 except (sqlite3.Error, OSError, BattleStoreError) as exc:
                     raise AnalysisUnavailable('Could not save IV search checkpoint') from exc
                 coverage, _, _ = self._scan(plan, offset, 0, requirements)

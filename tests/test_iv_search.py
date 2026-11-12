@@ -200,6 +200,124 @@ class IVSearchTests(unittest.TestCase):
               f'p95={ordered[math.ceil(len(ordered)*0.95)-1]:.2f} '
               f'samples={len(ordered)} verified={partial["coverage"]["all_completed_iv_count"]}')
 
+    def test_six_conditions_resume_and_bounded_budget_preserve_unknown(self):
+        specs = [battle_spec(shields=shields) for shields in
+                 ((0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2))]
+        search_id = self.search.start(specs, iv_floors=(15, 15, 14))
+        initial = self.search.step(search_id, budget=0)
+        self.assertEqual(initial['state'], 'unknown')
+        self.assertEqual(initial['coverage']['eligible_iv_count'], 2)
+        self.assertEqual(len(initial['coverage']['conditions']), 6)
+        self.assertEqual(self.service.cache_stats['engine_calls'], 0)
+        partial = self.search.step(search_id, budget=5)
+        self.assertEqual(partial['new_battles'], 5)
+        self.assertEqual(sum(c['completed_count']
+                             for c in partial['coverage']['conditions']), 5)
+        self.assertIsNone(partial['coverage']['qualifying_ivs'])
+        restarted = IVSearch(self.service_for(self.store))
+        with patch.object(restarted.service, 'simulate',
+                          side_effect=AssertionError('A read must not simulate')):
+            self.assertEqual(restarted.step(search_id, budget=0)['coverage'],
+                             partial['coverage'])
+        final = restarted.step(search_id, budget=7)
+        self.assertEqual(final['state'], 'complete')
+        self.assertEqual(final['new_battles'], 7)
+        self.assertEqual(final['coverage']['all_completed_iv_count'], 2)
+        self.assertEqual(sum(c['completed_count']
+                             for c in final['coverage']['conditions']), 12)
+
+    def test_failed_battle_stops_batch_and_retries_same_iv_on_next_step(self):
+        search_id = self.search.start([battle_spec()], iv_floors=(15, 15, 13))
+        plan, _ = self.search._load(search_id)
+        expected_failed = plan['order'][1]
+        real = self.service.simulate
+        called = []
+
+        def flakey(request):
+            called.append(request)
+            if len(called) == 2:
+                return {'schema': 'battle-result-v1', 'status': 'failed',
+                        'error': {'message': 'Synthetic backend failure'}}
+            return real(request)
+
+        with patch.object(self.service, 'simulate', side_effect=flakey):
+            partial = self.search.step(search_id, budget=3)
+        self.assertEqual(len(called), 2)
+        self.assertEqual(partial['attempt_outcomes'], {'complete': 1, 'failed': 1})
+        self.assertEqual(partial['new_battles'], 1)
+        self.assertEqual(partial['coverage']['all_completed_iv_count'], 1)
+        self.assertEqual(partial['state'], 'partial')
+        self.assertEqual(self.search._load(search_id)[1], 1)
+        restarted = IVSearch(self.service_for(self.store))
+        resumed = []
+        actual = restarted.service.simulate
+
+        def recorded(request):
+            resumed.append(request)
+            return actual(request)
+
+        with patch.object(restarted.service, 'simulate', side_effect=recorded):
+            step = restarted.step(search_id, budget=1)
+        self.assertEqual(len(resumed), 1)
+        self.assertEqual(resumed[0]['combatants'][0]['ivs'],
+                         {'attack': expected_failed >> 8,
+                          'defense': (expected_failed >> 4) & 15,
+                          'hp': expected_failed & 15})
+        self.assertEqual(step['coverage']['all_completed_iv_count'], 2)
+        self.assertEqual(restarted.step(search_id, budget=1)['state'], 'complete')
+
+    def test_partial_native_success_survives_interrupted_batch(self):
+        search_id = self.search.start([battle_spec()], iv_floors=(15, 15, 14))
+        real = self.service.simulate
+        calls = []
+
+        def interrupted(request):
+            calls.append(request)
+            if len(calls) == 2:
+                raise RuntimeError('Synthetic interruption after first committed battle')
+            return real(request)
+
+        with patch.object(self.service, 'simulate', side_effect=interrupted):
+            with self.assertRaisesRegex(RuntimeError, 'Synthetic interruption'):
+                self.search.step(search_id, budget=2)
+        self.assertEqual(self.search._load(search_id)[1], 0)
+        restarted = IVSearch(self.service_for(self.store))
+        observed = restarted.step(search_id, budget=0)
+        self.assertEqual(observed['coverage']['all_completed_iv_count'], 1)
+        completion = restarted.step(search_id, budget=1)
+        self.assertEqual(completion['new_battles'], 1)
+        self.assertEqual(completion['state'], 'complete')
+
+    def test_exhausted_batch_clock_persists_exact_next_candidate(self):
+        search_id = self.search.start([battle_spec()], iv_floors=(15, 15, 13))
+        with patch('pvpoke_iv_search.perf_counter', side_effect=[0.0, 11.0]):
+            partial = self.search.step(search_id, budget=3)
+        self.assertEqual(partial['new_battles'], 1)
+        self.assertEqual(partial['coverage']['all_completed_iv_count'], 1)
+        self.assertEqual(self.search._load(search_id)[1], 1)
+        restarted = IVSearch(self.service_for(self.store))
+        self.assertEqual(restarted.step(search_id, budget=2)['state'], 'complete')
+
+    def test_external_checkpoint_change_is_detected_without_record_loss(self):
+        search_id = self.search.start([battle_spec()], iv_floors=(15, 15, 14))
+        actual = self.service.simulate
+
+        def external_writer(request):
+            result = actual(request)
+            with closing(sqlite3.connect(self.store.path)) as db, db:
+                db.execute('''UPDATE important_iv_searches_v1 SET next_offset=1
+                              WHERE owner_scope=? AND search_id=?''',
+                           (self.store.owner_scope, search_id))
+            return result
+
+        with patch.object(self.service, 'simulate', side_effect=external_writer):
+            with self.assertRaisesRegex(AnalysisUnavailable, 'checkpoint'):
+                self.search.step(search_id, budget=1)
+        reopened = IVSearch(self.service_for(self.store))
+        self.assertEqual(reopened.step(search_id, budget=0)[
+            'coverage']['all_completed_iv_count'], 1)
+        self.assertEqual(reopened.step(search_id, budget=1)['state'], 'complete')
+
     def test_input_scope_and_corrupt_checkpoint_fail_closed(self):
         first = battle_spec()
         with self.assertRaises(ValueError):
