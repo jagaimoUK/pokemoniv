@@ -124,6 +124,15 @@ th{color:var(--text-muted);font-weight:600}
 <div class="row"><button id="standard" type="button" data-request>通常対戦を計算</button></div>
 <div id="comparison"></div>
 </section>
+<section id="tactic-search-panel" class="panel stack" data-tactic-search="0" hidden>
+<details class="stack tight">
+<summary>戦術自動探索（候補・計算数に上限あり）</summary>
+<p class="muted">現在の個体・技・開始状態から最大64通りの戦術を候補にします。相手のシールド判断や別のゲージ技への変更も含みます。理論上のシミュレーションであり、実戦で必ず再現できる勝ち方ではありません。</p>
+<div class="row"><button id="search-start" type="button" data-request>現在の条件で候補を作成</button><button id="search-step" type="button" data-request disabled>最大4件を検証</button></div>
+<p id="search-status" class="notice" role="status" aria-live="polite">候補を作成していません。</p>
+<div id="search-results" class="stack tight" aria-label="直近の探索結果"></div>
+</details>
+</section>
 <section class="panel stack">
 <h2>戦術の保存と復元</h2>
 <form id="save-form" class="stack tight"><label>戦術名<input id="tactic-name" maxlength="64" required autocomplete="off"></label><p id="save-status" class="muted"></p><div class="row"><button id="save" type="submit" class="primary" data-request>戦術を保存</button></div></form>
@@ -161,6 +170,7 @@ const newDraft=()=>({tacticId:newId(),historicalRevision:null,rules:clone(defaul
  combatants:[newCombatant(),newCombatant()],actions:[],shield_decisions:[]});
 let credential='',catalog=Object.create(null),moves=Object.create(null),aliases=new Map();
 let draft=newDraft(),turn=1,actor=0,busy=false,scripted=null,standard=null;
+let tacticSearchId='',tacticSearchKey='';
 let setupEditors=[];
 const undo=[],redo=[],saved=new Map();
 const name=id=>catalog[id]?.name_ja||catalog[id]?.name||id;
@@ -217,6 +227,7 @@ function refreshButtons(){
  $('undo').disabled=busy||!undo.length;
  $('redo').disabled=busy||!redo.length;
  $('remove-action').disabled=busy||!action;
+ $('search-step').disabled=busy||!tacticSearchId||tacticSearchKey!==scriptKey();
  $('previous-turn').disabled=turn===1;
  $('next-turn').disabled=turn===500;
  $('previous-action').disabled=!neighborAction(-1);
@@ -723,6 +734,48 @@ function render(){
  refreshButtons();
 }
 
+function showTacticProgress(data){
+ const coverage=data.coverage;
+ if(!data.search_id||!coverage||data.live_reproducibility!=='not_verified')
+  throw Error('探索結果の形式を確認できませんでした。');
+ $('search-status').textContent='候補 '+coverage.planned_scripts+'件 · 検証 '+coverage.attempted_scripts+
+  '件 · 完全な計算 '+coverage.complete_scripts+'件 · 指定どおり実行 '+coverage.fully_executed_scripts+
+  '件 · 残り '+coverage.remaining_scripts+'件'+
+  (data.state==='blocked'?' · 検証停止':data.state==='stale'?' · 計算条件が古くなりました':'');
+ $('search-status').dataset.tone=data.state==='blocked'||data.state==='stale'?'warning':'';
+ const list=$('search-results');list.replaceChildren();
+ const titles={original:'元の戦術',shield_no:'相手はシールドを使わない',shield_yes:'相手はシールドを使う',
+  alternate_charged:'相手が別のゲージ技を指定'};
+ for(const item of data.results.slice(-8)){
+  const line=node('p',null,list,'inset');
+  const label=Object.hasOwn(titles,item.response)?titles[item.response]:item.response;
+  line.textContent=(item.index+1)+'件目 · '+item.strategy+' · '+label+' · '+
+   (item.status==='complete'?(outcomes[item.outcome]||item.outcome):'未完了')+
+   (item.all_self_executed&&item.opponent_response_executed?' · 指定動作を確認':' · 指定動作が未実行');
+ }
+ if(coverage.attempted_scripts>8)node('p','直近8件を表示しています。',list,'muted');
+ if(data.state==='blocked')announce('探索を安全に停止しました。'+data.incomplete_reason,'warning');
+ else if(data.state==='stale')announce('探索開始時と計算バージョンが異なります。候補を作り直してください。','warning');
+ refreshButtons();
+}
+async function beginTacticSearch(spec){
+ announce('戦術候補を作成しています。この操作では対戦計算しません。');
+ const key=scriptKey();
+ const data=await api('sandbox',{action:'search_start',spec});
+ if(!/^[a-f0-9]{64}$/.test(data.search_id))throw Error('探索IDを読み取れませんでした。');
+ tacticSearchId=data.search_id;tacticSearchKey=key;
+ showTacticProgress(data);
+ announce('候補ができました。必要な件数だけ検証してください。');
+}
+async function advanceTacticSearch(){
+ if(!tacticSearchId||tacticSearchKey!==scriptKey())
+  throw Error('対戦条件が変わっています。候補を作り直してください。');
+ announce('候補を最大4件検証しています。途中結果は保存します。');
+ const data=await api('sandbox',{action:'search_step',search_id:tacticSearchId,budget:4});
+ showTacticProgress(data);
+ if(data.state!=='blocked'&&data.state!=='stale')
+  announce('探索記録を更新しました。理論上の戦術であり、実戦再現性は未検証です。','warning');
+}
 async function saveTactic(spec){
  const name=$('tactic-name').value.trim();
  if(!name||[...name].length>64)throw Error('戦術名は1〜64文字で入力してください。');
@@ -798,6 +851,7 @@ async function connect(manual){
  $('credential').value='';
  $('connection').hidden=true;
  $('workspace').hidden=false;
+ $('tactic-search-panel').hidden=$('tactic-search-panel').dataset.tacticSearch!=='1';
  let imported=false,importError=false;
  try{imported=importSpec();}
  catch{importError=true;}
@@ -823,6 +877,8 @@ $('action-form').addEventListener('submit',editAction);
 $('remove-action').addEventListener('click',removeAction);
 $('simulate').addEventListener('click',()=>withSpec('sandbox',simulate));
 $('standard').addEventListener('click',()=>withSpec('standard',simulateStandard));
+$('search-start').addEventListener('click',()=>withSpec('sandbox',beginTacticSearch));
+$('search-step').addEventListener('click',()=>perform(advanceTacticSearch));
 $('undo').addEventListener('click',()=>changeHistory(undo,redo));
 $('redo').addEventListener('click',()=>changeHistory(redo,undo));
 $('tactic-name').addEventListener('input',renderSave);
