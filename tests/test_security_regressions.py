@@ -18,7 +18,7 @@ os.environ.setdefault('PVP_API_KEY', 'test-' + 'x' * 32)
 import pvpoke_mcp_remote as remote
 from pvpoke_app_access import BrowserLogin
 from pvpoke_auth_store import CredentialStore
-from pvpoke_child_env import child_environment
+from pvpoke_child_env import child_environment, iv_worker_environment
 from pvpoke_http_security import BoundedHTTPServer, RateBudget
 from visual_backup import BackupTokens
 
@@ -332,6 +332,46 @@ class EngineSecurityTests(unittest.TestCase):
         self.assertNotIn('PVP_API_KEY', env)
         self.assertNotIn('AWS_SECRET_ACCESS_KEY', env)
         self.assertNotIn('VISUAL_BACKUP_S3_SECRET_ACCESS_KEY', env)
+
+
+    def test_iv_worker_environment_drops_server_secrets_and_keeps_runtime_settings(self):
+        import pvpoke_web as local
+        fake = {
+            'PVP_API_KEY': 'FAKE_PRIVATE_ROOT_KEY_NOT_REAL',
+            'AUTH0_CLIENT_SECRET': 'FAKE_PRIVATE_OAUTH_SECRET_NOT_REAL',
+            'VISUAL_BACKUP_S3_SECRET_ACCESS_KEY': 'FAKE_PRIVATE_S3_KEY_NOT_REAL',
+            'AWS_SECRET_ACCESS_KEY': 'FAKE_PRIVATE_AWS_KEY_NOT_REAL',
+            'PVP_MCP_URL': 'https://private-gateway.invalid/mcp',
+            'PVP_ENGINE': 'direct',
+            'PVP_ARCHIVE_DIR': '/tmp/test-only-archives',
+            'RAILWAY_VOLUME_MOUNT_PATH': '/tmp/test-only-volume',
+            'PVP_CAND_CHUNK': '5',
+            'PVP_RESULT_CACHE': '0',
+            'PVP_CACHE_EPOCH': 'test-cache-epoch',
+            'PVP_FORCE_RECALCULATE': '0',
+        }
+        with patch.dict(os.environ, fake):
+            for force, expected in ((False, '0'), (True, '1')):
+                with self.subTest(force=force):
+                    env = iv_worker_environment(force=force)
+                    self.assertEqual(env['PVP_FORCE_RECALCULATE'], expected)
+                    self.assertEqual(env['PVP_ENGINE'], 'direct')
+                    self.assertEqual(env['PVP_ARCHIVE_DIR'], '/tmp/test-only-archives')
+                    self.assertEqual(env['RAILWAY_VOLUME_MOUNT_PATH'],
+                                     '/tmp/test-only-volume')
+                    self.assertEqual(env['PVP_RESULT_CACHE'], '0')
+                    self.assertEqual(env['PVP_CAND_CHUNK'], '5')
+                    self.assertEqual(env['PVP_CACHE_EPOCH'], 'test-cache-epoch')
+                    for name in ('PVP_API_KEY', 'AUTH0_CLIENT_SECRET',
+                                 'VISUAL_BACKUP_S3_SECRET_ACCESS_KEY',
+                                 'AWS_SECRET_ACCESS_KEY', 'PVP_MCP_URL'):
+                        self.assertNotIn(name, env)
+                    # Exercise the exact Popen call site, not only the helper.
+                    with patch.object(local, 'CANCEL_REQUESTED', False), patch.object(
+                            local.subprocess, 'Popen', side_effect=OSError(
+                                'fake child start failure')) as started:
+                        local.background_run('all', force=force)
+                    self.assertEqual(started.call_args.kwargs['env'], env)
 
     def test_browser_disabled_before_connecting_to_existing_debugger(self):
         import pvpoke_batch_v2 as engine

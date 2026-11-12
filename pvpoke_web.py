@@ -49,6 +49,7 @@ from pvpoke_tactic_search import TacticSearchError
 from pvpoke_tactic_evidence import TacticEvidenceUnavailable
 from pvpoke_sandbox_workspace import app_operation as sandbox_operation, enabled as sandbox_enabled, list_operation as list_tactics
 from pvpoke_direct_backend import DirectMatrixClient
+from pvpoke_child_env import iv_worker_environment
 from pvpoke_app_input import app_presets
 from pvpoke_app_catalog import enrich_catalog
 from pvpoke_flashcards import public_catalog
@@ -383,7 +384,7 @@ def background_run(shields, batch24=False, batch_mode='simple', meta_file=None, 
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              text=True, bufsize=1, cwd=str(HOME),
                              start_new_session=(os.name == 'posix'),
-                             env={**os.environ, **({"PVP_FORCE_RECALCULATE":"1"} if force else {})})
+                             env=iv_worker_environment(force=force))
         with LOCK:
             ACTIVE_PROCESS = process
             stop_now = CANCEL_REQUESTED
