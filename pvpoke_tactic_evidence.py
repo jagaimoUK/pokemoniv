@@ -36,7 +36,10 @@ def _information_assumptions(candidate):
     assumptions = ['fixed_timed_self_actions']
     if any(action['actor'] == 1 for action in actions):
         assumptions.append('prespecified_opponent_actions')
-    if candidate['response'] in ('alternate_charged', 'alternate_charged_self_shield'):
+    # Even an "original" seed may prescribe an exact enemy charged move.
+    # The current move name cannot be observed at shield-commitment time.
+    if any(action['actor'] == 1 and action['kind'] == 'charged'
+           for action in actions):
         assumptions.append('unrevealed_opponent_charged_move_assumed')
     if any(choice['defender'] == 1 for choice in decisions):
         assumptions.append('assumed_opponent_shield_choice')

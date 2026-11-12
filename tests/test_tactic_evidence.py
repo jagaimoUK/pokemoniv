@@ -112,6 +112,11 @@ class TacticEvidenceTests(unittest.TestCase):
         self.assertIn('unrevealed_opponent_charged_move_assumed', assumptions)
         self.assertIn('own_shield_before_opponent_move_reveal', assumptions)
         self.assertIn('assumed_opponent_shield_choice', assumptions)
+        # Seeded opponent charged moves have the same information issue even
+        # when the response is "original", not just newly generated variants.
+        script['response'] = 'original'
+        self.assertIn('unrevealed_opponent_charged_move_assumed',
+                      _information_assumptions(script))
 
     def test_wrong_owner_and_unrelated_matchup_are_rejected(self):
         other = BattleService(self.client, store=BattleStore(self.store.path, owner_scope='other'))
