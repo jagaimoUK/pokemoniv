@@ -1,3 +1,35 @@
+## Current authoritative checkpoint (2026-11-12, supersedes historical pending statements below)
+
+**Scope:** Draft PR #112 stacked on Draft PR #111, head
+`af1516cc73f3ba901ccc8ac92e0c73f2e3fa573c` **before this documentation-only update**.
+GitHub Actions on that exact source SHA: **11 / 11 success**, including:
+Python **583 tests (1 skipped)**, JS regression, image build, Chromium
+CSP/mobile initialization, dependency/secret checks, and Docker-based
+**real filesystem ENOSPC test on an isolated 2 MiB tmpfs in DELETE and WAL modes**.
+The real-Nginx-to-gateway HTTP authentication regression also ran in the
+production Docker image. Synthetic data only; no production DB or credentials.
+
+That confirms the stated **specific tests**, not live railway ingress,
+production load, a power-loss crash, external-writer capacity, exhaustive
+vulnerability reachability, complete 4096-IV × matchup native results, or
+observation-conditioned real-match strategy. Fixed scripts remain
+counterfactual, not practical role coverage.
+
+The last image scan reported **103 HIGH entries, 25 unique CVEs, 0 scanner-
+reported fixable HIGH/CRITICAL**. Not security clearance and not 103
+separately proven exploitable bugs. Independent Astra code review has **not
+been performed or signed off**. Release assessment D; PRs stay Draft
+and unmerged; no production deployment.
+
+**Historical note:** The chronological material below records earlier
+RED/green investigations and at-the-time pending statements, for audit
+traceability. Where those statements say 'CI pending', 'real ENOSPC
+not run', 'Docker proxy not verified' or list earlier head SHAs, use
+this checkpoint and `docs/ASTRA_INDEPENDENT_REVIEW_BRIEF_20261112.md`
+instead. Do not erase evidence of previous failures.
+
+---
+
 # Astra review continuation: recover, repair, and verify
 
 Updated: 2026-11-12 JST. This is a **checkpoint, not a final review sign-off**.
