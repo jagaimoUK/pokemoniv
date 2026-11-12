@@ -191,6 +191,8 @@ class NativeObservedMultiTurnTests(unittest.TestCase):
             event for event in data["native_move_events"]
             if event["kind"] == "charged" and event["turn"] == 1]
         self.assertEqual({event["actor"] for event in own_and_enemy_charges}, {0, 1})
+        self.assertGreaterEqual(
+            data["native_cmp_audit"]["simultaneous_charge_turns_checked"], 1)
         self.assertTrue(all(event["move_id"] for event in own_and_enemy_charges))
         self.assertEqual(data["self_fast_move_turns"], 2)
         self.assertTrue(any(row["action"]["kind"] == "fast"
@@ -231,6 +233,35 @@ class NativeObservedMultiTurnTests(unittest.TestCase):
                 if index > 0:
                     self.assertGreater(row["turn"],
                                        data["own_proposals"][index - 1]["turn"])
+    def test_three_turn_fast_move_resolves_with_native_cooldown(self):
+        # Swap the fixture roles: Azumarill's Bubble lasts three 500ms turns.
+        # A future adapter must not treat a fast-move tap as damage already
+        # resolved on the same turn.
+        req = self.request(energy=0, enemy_energy=0, shields=(1, 1),
+                           shield_rule="never")
+        req["self"], req["opponent"] = req["opponent"], req["self"]
+        req["initial"].reverse()
+        req["shields"].reverse()
+        req["policy"]["own_charged_moves"] = [
+            {"move_id": "ICE_BEAM", "energy_cost": 55},
+            {"move_id": "PLAY_ROUGH", "energy_cost": 60},
+        ]
+        result = self.native(req)
+        self.assertEqual(result["self_fast_move_turns"], 3)
+        self.assertEqual(result["live_reproducibility"], "not_verified")
+        fasts = [row for row in result["own_proposals"]
+                 if row["action"]["kind"] == "fast"
+                 and row["native_process"] is not None
+                 and row["native_process"]["valid"]]
+        self.assertGreaterEqual(len(fasts), 2)
+        self.assertGreaterEqual(fasts[1]["turn"] - fasts[0]["turn"], 3)
+        self.assertEqual(fasts[0]["native_resolution"]["move_id"], "BUBBLE")
+        self.assertGreaterEqual(fasts[0]["native_resolution"]["turn"],
+                                fasts[0]["turn"] + 2)
+        for row in result["own_proposals"]:
+            self.assertEqual(propose(row["visible"], req["policy"])["action"],
+                             row["action"])
+
 
 if __name__ == "__main__":
     unittest.main()

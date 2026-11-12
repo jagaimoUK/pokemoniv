@@ -105,6 +105,7 @@ function runObserved(input) {
   const decisions = [];
   const shieldPrompts = [];
   let ownFastTurns = null;
+  let nativeCmpAttack = null; // Test-only oracle; NEVER passed to proposeSelf.
   let installed = false;
   const source = input.policy;
 
@@ -228,7 +229,12 @@ function runObserved(input) {
         };
         installed = true;
       }
-      if (ownFastTurns === null) ownFastTurns = own.fastMove.turns;
+      if (ownFastTurns === null) {
+        ownFastTurns = own.fastMove.turns;
+        // Both stats are used privately by upstream CMP. Keep them outside
+        // all public snapshots and all own-policy action decisions.
+        nativeCmpAttack = [own.stats.atk, opponent.stats.atk];
+      }
       const nativeMoves = own.chargedMoves.slice(0, 2);
       for (let i = 0; i < 2; i++) {
         if (nativeMoves[i]?.moveId !== source.own_charged_moves[i].move_id ||
@@ -302,6 +308,23 @@ function runObserved(input) {
       native_resolved_same_turn: Boolean(resolution && resolution.turn === decision.turn)
     };
   });
+  const cmpTurns = new Map();
+  for (const event of detail.events) {
+    if (event.kind !== "charged") continue;
+    if (!cmpTurns.has(event.turn)) cmpTurns.set(event.turn, []);
+    cmpTurns.get(event.turn).push(event.actor);
+  }
+  let cmpChecked = 0;
+  for (const actors of cmpTurns.values()) {
+    if (!actors.includes(0) || !actors.includes(1)) continue;
+    cmpChecked++;
+    const expectedFirst = nativeCmpAttack[0] > nativeCmpAttack[1] ? 0 :
+      nativeCmpAttack[1] > nativeCmpAttack[0] ? 1 : null;
+    if (expectedFirst !== null && actors[0] !== expectedFirst) {
+      throw Error("Native simultaneous charge priority contradicts upstream CMP stats");
+    }
+  }
+
   const actualSelfShields = detail.events.filter(
     event => event.actor === 1 && event.kind === "charged" && event.shielded).length;
   if (actualSelfShields !== shieldPrompts.filter(item => item.action.use_shield).length ||
@@ -315,6 +338,8 @@ function runObserved(input) {
     own_proposals: verified, self_shield_audit: shieldAudits,
     self_shield_prompts: shieldPrompts,
     self_fast_move_turns: ownFastTurns,
+    native_cmp_audit: {simultaneous_charge_turns_checked: cmpChecked,
+                       compared_using_private_native_stats_only: true},
     opponent_attack_rule: input.opponent_attack_rule,
     observed_opponent_event_count: observed.length,
     native_move_events: detail.events.map(e => ({

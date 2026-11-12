@@ -85,3 +85,18 @@ boundaries require additional independent tests. Stable battle outcomes still
 do NOT imply robust player policy. This remains a private CI fixture, not
 an API, recommendation, role promotion or deployment. Results must be checked
 at the final commit SHA; no claims based solely on test author intent.
+
+## Additional native oracle and three-turn fast regression
+
+A test-only CMP oracle captures the pinned engine's actual battle attack
+statistics, **never passes them into the visible-input policy**, and checks
+the logged order when both charge events resolve on one turn. It returns
+only the number of checked simultaneous-charge turns, not opponent private
+attack stats. The move order is an observed native result, not a guarantee
+of live PvP tie behavior or a statement about equal-stat randomized CMP.
+
+A swapped legal Azumarill / Quagsire fixture checks the 3-turn Bubble's
+native cooldown and at-least-two-turn difference between proposal and
+damage resolution. Two-turn Mud Shot is already exercised. The 1-, 4-, and
+5-turn fast-move cases remain untested; random tie CMP and KO-before-charge
+also need targeted adversarial evidence. All changes are still harness-only.
