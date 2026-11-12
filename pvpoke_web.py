@@ -902,7 +902,11 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             self.respond(400, {'error': str(exc)})
         except Exception as exc:
-            self.respond(500, {'error': '内部エラー: '+str(exc)})
+            # Even a loopback-only endpoint can be called through an internal
+            # bridge. Do not echo filesystem paths or dependency exceptions.
+            import logging
+            logging.error('Local request failed: %s', type(exc).__name__)
+            self.respond(500, {'error': '内部処理に失敗しました'})
 
 
 def main():

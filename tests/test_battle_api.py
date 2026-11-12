@@ -151,6 +151,24 @@ class LocalBattleAPITests(ServerFixture):
     def request(self, spec=None):
         return post(self.server, self.path, battle_spec() if spec is None else spec)
 
+
+    def test_unexpected_loopback_failure_does_not_return_private_details(self):
+        """Unexpected 500 responses reveal no internal filesystem details."""
+        marker = 'TEST_PRIVATE_DB_PATH_TOKEN_NOT_REAL'
+        with patch.object(web, 'prepare_payload', side_effect=RuntimeError(marker)):
+            connection = http.client.HTTPConnection(*self.server.server_address, timeout=5)
+            try:
+                connection.request('POST', '/api/prepare', b'{}',
+                                   {'Content-Type': 'application/json',
+                                    'X-PvPoke-Token': web.TOKEN})
+                response = connection.getresponse()
+                data = response.read()
+                self.assertEqual(response.status, 500)
+                self.assertNotIn(marker.encode(), data)
+                self.assertIn('error', json.loads(data))
+            finally:
+                connection.close()
+
     def test_opt_in_invalid_unsupported_and_busy(self):
         with patch.dict(os.environ, {'PVP_BATTLE_API_ENABLED': ''}), patch.object(
                 web, 'DirectMatrixClient') as node:

@@ -560,8 +560,12 @@ class Handler(BaseHTTPRequestHandler):
             message = ('入力内容または保存状態を確認してください' if upstream
                        else '内部計算サービスに接続できません。再試行してください')
             self.respond(status, {'error': message})
-        except (ValueError, TypeError, KeyError) as exc:
+        except ValueError as exc:
+            # Existing explicit input validation remains useful to the user.
             self.respond(400, {'error': str(exc)})
+        except (TypeError, KeyError):
+            # These may originate from internal code or data structures.
+            self.respond(400, {'error': '入力形式が正しくありません'})
         except Exception:
             logging.exception('App request failed')
             self.respond(500, {'error': 'アプリの処理に失敗しました'})
@@ -759,17 +763,25 @@ class Handler(BaseHTTPRequestHandler):
                     output = call_tool(name, params.get('arguments') or {})
                     result = {'content':[{'type':'text','text':json.dumps(output,ensure_ascii=False,separators=(',',':'))}],
                               'isError':False}
-                except Exception as e:
-                    result = {'content':[{'type':'text','text':f'{type(e).__name__}: {e}'}],
+                except ValueError as exc:
+                    # User-input validation stays actionable without exposing
+                    # unexpected infrastructure exceptions.
+                    result = {'content':[{'type':'text','text':str(exc)}],
+                              'isError':True}
+                except Exception as exc:
+                    logging.warning('MCP tool request failed: %s', type(exc).__name__)
+                    result = {'content':[{'type':'text',
+                                          'text':'処理に失敗しました。入力と接続状況を確認してください'}],
                               'isError':True}
             else:
                 self.respond(200, {'jsonrpc':'2.0','id':id_,
                                    'error':{'code':-32601,'message':'Method not found'}})
                 return
             self.respond(200, {'jsonrpc':'2.0','id':id_,'result':result})
-        except Exception as e:
+        except Exception as exc:
+            logging.warning('MCP request rejected: %s', type(exc).__name__)
             self.respond(400, {'jsonrpc':'2.0','id':None,
-                               'error':{'code':-32700,'message':f'Parse error: {str(e)[:200]}'}})
+                               'error':{'code':-32700,'message':'Invalid JSON-RPC request'}})
 
 if __name__ == '__main__':
     print(f'Local MCP test server: http://{HOST}:{PORT}/mcp', flush=True)

@@ -104,6 +104,71 @@ class GatewaySecurityTests(unittest.TestCase):
             self.assertNotIn(b'127.0.0.1', data)
             self.assertIn('error', json.loads(data))
 
+
+    def test_mcp_unexpected_errors_and_protocol_rejections_hide_details(self):
+        """Authenticated tools must not return backend paths in error text."""
+        secret = 'TEST_PRIVATE_BACKEND_PATH_TOKEN_NOT_REAL'
+        headers = {'Content-Type': 'application/json',
+                   'Authorization': 'Bearer ' + remote.API_KEY}
+        payload = {'jsonrpc': '2.0', 'id': 7, 'method': 'tools/call',
+                   'params': {'name': remote.TOOLS[0]['name'], 'arguments': {}}}
+
+        for failure in (RuntimeError(secret), remote.backend.BridgeError(secret),
+                        KeyError(secret)):
+            with self.subTest(error=type(failure).__name__), patch.object(
+                    remote, 'call_tool', side_effect=failure):
+                status, _, body = self.request('/mcp', auth=headers['Authorization'],
+                                                payload=payload)
+                self.assertEqual(status, 200)
+                self.assertTrue(json.loads(body)['result']['isError'])
+                self.assertNotIn(secret.encode(), body)
+
+        with patch.object(remote, 'call_tool', side_effect=ValueError(
+                'invalid candidate inputs')):
+            status, _, body = self.request('/mcp', auth=headers['Authorization'],
+                                            payload=payload)
+            self.assertEqual(status, 200)
+            self.assertIn(b'invalid candidate inputs', body)
+
+        with patch.object(remote.Handler, 'read_body', side_effect=RuntimeError(secret)):
+            status, _, body = self.request('/mcp', auth=headers['Authorization'],
+                                            payload=payload)
+            self.assertEqual(status, 400)
+            self.assertNotIn(secret.encode(), body)
+            self.assertEqual(json.loads(body)['error']['code'], -32700)
+
+    def test_app_unexpected_key_errors_do_not_echo_private_fields(self):
+        secret = 'TEST_PRIVATE_FIELD_TOKEN_NOT_REAL'
+        with patch.object(remote.backend, 'meta_status', side_effect=KeyError(secret)):
+            status, _, body = self.request('/app-api/meta-status',
+                                            auth='Bearer ' + remote.API_KEY)
+            self.assertEqual(status, 400)
+            self.assertNotIn(secret.encode(), body)
+
+    def test_unauthed_public_shells_and_private_operations_under_feature_flags(self):
+        """Public pages have no root credential, and APIs reject before dispatch."""
+        flags = {'PVP_SANDBOX_ENABLED': '1',
+                 'PVP_MISSING_ANALYSIS_ENABLED': '1',
+                 'PVP_TACTIC_SEARCH_ENABLED': '1'}
+        with patch.dict(os.environ, flags), patch.object(
+                remote.backend, '_request', side_effect=AssertionError(
+                    'anonymous access reached a private backend')) as backend:
+            for path in ('/app', '/app/party', '/app/missing', '/app/sandbox',
+                         '/app/migration'):
+                with self.subTest(page=path):
+                    status, _, body = self.request(path, get=True)
+                    self.assertEqual(status, 200)
+                    self.assertNotIn(remote.API_KEY.encode(), body)
+            for path in ('/app-api/catalog', '/app-api/party/list',
+                         '/app-api/missing-analysis', '/app-api/sandbox',
+                         '/app-api/battles/simulate', '/app-api/meta-presets',
+                         '/app-api/visual-backup-connections'):
+                with self.subTest(api=path):
+                    status, _, body = self.request(path)
+                    self.assertEqual(status, 401)
+                    self.assertNotIn(remote.API_KEY.encode(), body)
+            backend.assert_not_called()
+
     def test_backup_store_failure_returns_503(self):
         token = remote.BACKUP_TOKENS.issue()
         with patch.object(self.store, 'active', side_effect=OSError('private-file-details')):
