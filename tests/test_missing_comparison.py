@@ -128,6 +128,57 @@ class MissingLocalTests(server.ServerFixture):
         foreign = BattleStore(self.root / 'volume' / 'battle_analysis.sqlite3', owner_scope='foreign')
         self.assertIsNone(Ownership(foreign).get('fixture'))
 
+    def test_unplayed_iv_space_is_explicitly_unverified_not_a_proven_zero(self):
+        """At 0/4096, zero confirmed successes must not mean no eligible IV wins."""
+        from pvpoke_missing_ui import HTML
+
+        status, compared = self.compare(case())
+        self.assertEqual(status, 200)
+        self.assertEqual(compared['state'], 'evidence_pending')
+        status, explored = self.compare({
+            'action': 'explore',
+            'evaluation_id': compared['evaluation_id'],
+            'build_id': compared['reference']['build_id'],
+            'budget': 0,
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(explored['state'], 'unknown')
+        self.assertEqual(explored['eligible_iv_count'], 4096)
+        self.assertEqual(explored['completed_iv_count'], 0)
+        self.assertEqual(explored['qualifying_count'], 0)
+        # A zero is only the number of *proven* matches, never a proof of
+        # absence. The API must explicitly carry the unverified remainder.
+        self.assertEqual(explored['not_fully_tested_iv_count'], 4096)
+        self.assertIn('全条件の検証が未完了', HTML)
+        self.assertIn('達成確認済み', HTML)
+
+    def test_cross_species_partial_evidence_cannot_be_combined_into_one_role(self):
+        """Two builds each clearing a different matchup are not substitutable."""
+        payload = case()
+        alternate = battle_spec(left=0, right=3)['combatants'][1]
+        payload['scenarios'].append({
+            'opponent': {k: v for k, v in alternate.items() if k != 'initial'},
+            'shields': [1, 1],
+            'energy': 0,
+            'requirement': {'minimum': {'fast_damage': 0}},
+        })
+        status, planned = self.compare(payload)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(planned['candidates']), 2)
+        for index, candidate in enumerate(planned['candidates']):
+            spec = candidate['conditions'][index]['spec']
+            status, battle = server.post(self.server, '/api/battles/simulate', spec)
+            self.assertEqual(status, 200)
+            self.assertEqual(battle['status'], 'complete')
+        status, report = self.compare(payload)
+        self.assertEqual(status, 200)
+        self.assertEqual(report['state'], 'evidence_pending')
+        self.assertEqual([candidate['status'] for candidate in report['candidates']],
+                         ['pending', 'pending'])
+        self.assertEqual(report['candidates'][1]['comparison'], 'cross_species')
+        self.assertTrue(all(candidate['party_substitution'] == 'pending'
+                            for candidate in report['candidates']))
+
     def test_nonneutral_setup_produces_conditional_role_alternative(self):
         payload = case(energy=20)
         code, initial = self.compare(payload)
