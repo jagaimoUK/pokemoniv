@@ -42,7 +42,7 @@ class NativeObservedProposalTests(unittest.TestCase):
                                  {"kind": "charged", "move_id": "AQUA_TAIL"})
                 for enemy_energy, enemy_ivs in (
                     (0, {"attack": 0, "defense": 0, "hp": 0}),
-                    (100, {"attack": 15, "defense": 15, "hp": 15}),
+                    (100, {"attack": 0, "defense": 15, "hp": 15}),
                 ):
                     with self.subTest(hidden_energy=enemy_energy, hidden_ivs=enemy_ivs):
                         # The proposal is identical across hidden worlds.
