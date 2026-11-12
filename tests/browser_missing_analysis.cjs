@@ -61,7 +61,10 @@ async function checkWidth(browser, width) {
         assert.deepEqual(payload.search_ids,['f'.repeat(64)]);
         return route.fulfill({json:{schema:'missing-tactic-evidence-v1',standard_state:'evidence_pending',
           searched_count:1,new_battles:0,builds:[{build_id:'b'.repeat(64),
-          theoretical_all_conditions:false,conditions:[{standard:{meets:null},tested_scripts:1,
+          theoretical_all_conditions:false,advisory:{evidence_order:1,role_priority:3,
+          required_conditions:1,tested_conditions:1,theoretical_supported_conditions:0,
+          unfavorable_shield_conditions:0,only_observed_complete_build:false},
+          conditions:[{standard:{meets:null},tested_scripts:1,
           matching_scripts:0,truncated:false,paths:[{strategy:'original',
           opponent_response:'alternate_charged',meets:null}]}]}]}});
       }
@@ -85,6 +88,9 @@ async function checkWidth(browser, width) {
     assert.equal(await page.getByRole('button', {name: 'この対面だけ計算'}).count(), 0);
     await page.locator('#tactic-evidence-read').click();
     await page.getByText(/理論上の戦術であり、観測情報に基づく実戦再現性は未検証です/).waitFor();
+    await page.getByText(/以下は保存済み戦術だけの参考順です/).waitFor();
+    await page.locator('#tactic-evidence-results details.candidate').first().evaluate(el => {el.open = true});
+    await page.getByText(/代替の実用性：未検証/).waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
     assert.deepEqual(errors, []);
     assert.equal(requests.length, 4);

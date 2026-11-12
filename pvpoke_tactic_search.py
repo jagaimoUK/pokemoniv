@@ -41,24 +41,45 @@ def _move_data(sandbox):
     return {item['moveId']: item for item in json.loads(raw)['moves']}
 
 
-def _first_possible_turn(spec, moves):
-    """Lower-bound candidate for alternative charged, assuming uninterrupted fast moves.
+def _first_possible_turn(spec, moves, *, actor=1, charged_slot=1):
+    """Earliest *energy-only lower bound*, not a guaranteed executable turn.
 
-    Native Sandbox decides whether the requested turn is actually executable.
-    This is not certified as the earliest legal turn in a contested battle.
+    A native battle may delay or prevent the move through cooldown, KO, CMP or
+    opponent actions. Every suggested turn is validated by the native runner.
     """
-    opponent = spec['combatants'][1]
-    charge = moves[opponent['moves']['charged'][1]]
-    fast = moves[opponent['moves']['fast']]
-    needed = max(0, charge['energy'] - opponent['initial']['energy'])
-    gain = fast['energyGain']
-    turns = fast['turns']
-    if not isinstance(needed, int) or not isinstance(gain, int) or not isinstance(turns, int):
+    combatant = spec['combatants'][actor]
+    charge = moves[combatant['moves']['charged'][charged_slot]]
+    fast = moves[combatant['moves']['fast']]
+    cost, gain, turns = charge['energy'], fast['energyGain'], fast['turns']
+    if (type(cost) is not int or type(gain) is not int or type(turns) is not int
+            or not 0 <= cost <= 100 or not 1 <= turns <= 5):
         raise TacticSearchError('Unrecognized native move timings')
-    if not 0 < turns <= 5 or not 0 < gain <= 100:
+    needed = max(0, cost - combatant['initial']['energy'])
+    if needed and not 0 < gain <= 100:
         return None
-    turn = 1 + math.ceil(needed / gain) * turns
+    turn = 1 + (math.ceil(needed / gain) * turns if needed else 0)
     return turn if turn <= 500 else None
+
+
+def _followup_charge_turn(spec, moves, *, first_slot, second_slot, first_turn):
+    """Energy-only lower bound for a second charged move after post-charge lock.
+
+    This is intentionally conservative about claims: no schedule is labelled
+    legal unless the native trace proves both actions actually executed.
+    """
+    combatant = spec['combatants'][0]
+    fast = moves[combatant['moves']['fast']]
+    first = moves[combatant['moves']['charged'][first_slot]]
+    second = moves[combatant['moves']['charged'][second_slot]]
+    gain, duration = fast['energyGain'], fast['turns']
+    if not 0 < gain <= 100 or not 1 <= duration <= 5:
+        return None
+    first_fasts = (first_turn - 1) // duration
+    available = min(100, combatant['initial']['energy'] + first_fasts * gain)
+    remainder = max(0, available - first['energy'])
+    additional = math.ceil(max(0, second['energy'] - remainder) / gain)
+    second_turn = first_turn + 2 + additional * duration
+    return second_turn if second_turn <= 500 else None
 
 
 def _candidates(sandbox, spec):
@@ -71,18 +92,56 @@ def _candidates(sandbox, spec):
     profiles = [('original', self_actions)]
     used_ids = {action['id'] for action in seed_actions}
     busy = {(action['actor'], action['turn']) for action in seed_actions}
+    charge_moves = spec['combatants'][0]['moves']['charged']
+    fast = moves[spec['combatants'][0]['moves']['fast']]
+    duration = fast['turns']
 
-    for slot, move_id in enumerate(spec['combatants'][0]['moves']['charged']):
-        for turn in (1, 4, 7, 10, 13, 16):
-            name = f'search_self_{slot}_{turn}'
-            if (0, turn) not in busy and name not in used_ids:
-                profiles.append((f'charged_{slot}_t{turn}', self_actions + [
-                    {'id': name, 'actor': 0, 'turn': turn, 'kind': 'charged', 'move_id': move_id}]))
-    for turn in (1, 4, 7):
-        name = f'search_wait_{turn}'
-        if (0, turn) not in busy and name not in used_ids:
-            profiles.append((f'wait_t{turn}', self_actions + [
-                {'id': name, 'actor': 0, 'turn': turn, 'kind': 'wait'}]))
+    def add_profile(name, schedule):
+        if all(1 <= turn <= 500 and (0, turn) not in busy and aid not in used_ids
+               for aid, turn, _, _ in schedule) and len(set(turn for _, turn, _, _ in schedule)) == len(schedule):
+            additional = [{'id': aid, 'actor': 0, 'turn': turn, 'kind': kind,
+                           **({'move_id': move} if move is not None else {})}
+                          for aid, turn, kind, move in schedule]
+            profiles.append((name, self_actions + additional))
+
+    # Prefer a credible energy lower bound over hard-coded early charged turns.
+    # Delayed throws explicitly sample banking one or two extra fast moves.
+    first_turns = []
+    for slot, move_id in enumerate(charge_moves):
+        earliest = _first_possible_turn(spec, moves, actor=0, charged_slot=slot)
+        first_turns.append(earliest)
+        if earliest is None:
+            continue
+        for bank in (0, 1, 2):
+            turn = earliest + bank * duration
+            add_profile(f'charged_{slot}_bank{bank}', [
+                (f'search_self_{slot}_{bank}', turn, 'charged', move_id)
+            ])
+
+    # Two throws can make a different role possible than a single early throw.
+    # Include same move twice and both permutations of mixed moves.
+    for first_slot in range(len(charge_moves)):
+        earliest = first_turns[first_slot]
+        if earliest is None:
+            continue
+        for second_slot in range(len(charge_moves)):
+            second_turn = _followup_charge_turn(
+                spec, moves, first_slot=first_slot, second_slot=second_slot,
+                first_turn=earliest)
+            if second_turn is None:
+                continue
+            add_profile(f'double_{first_slot}_{second_slot}', [
+                (f'search_double_{first_slot}_{second_slot}_a', earliest, 'charged',
+                 charge_moves[first_slot]),
+                (f'search_double_{first_slot}_{second_slot}_b', second_turn, 'charged',
+                 charge_moves[second_slot]),
+            ])
+
+    wait_turns = [1]
+    if first_turns[0] is not None:
+        wait_turns.append(first_turns[0])
+    for turn in dict.fromkeys(wait_turns):
+        add_profile(f'wait_t{turn}', [(f'search_wait_{turn}', turn, 'wait', None)])
 
     alternate = _first_possible_turn(spec, moves)
     alt_id = 'search_opponent_alternate'
@@ -105,10 +164,12 @@ def _candidates(sandbox, spec):
 
         if (alternate is not None and (1, alternate) not in busy and alt_id not in active and
                 alt_id not in used_ids):
-            variations.append(('alternate_charged', shared + [{
-                'id': alt_id, 'actor': 1, 'turn': alternate, 'kind': 'charged',
-                'move_id': spec['combatants'][1]['moves']['charged'][1],
-            }], original))
+            altered = shared + [{'id': alt_id, 'actor': 1, 'turn': alternate, 'kind': 'charged',
+                                 'move_id': spec['combatants'][1]['moves']['charged'][1]}]
+            variations.append(('alternate_charged', altered, original))
+            if spec['combatants'][0]['initial']['shields'] > 0:
+                variations.append(('alternate_charged_self_shield', altered, original + [
+                    {'action_id': alt_id, 'defender': 0, 'use_shield': True}]))
 
         for response, actions, decisions in variations:
             raw = {**spec, 'actions': sorted(actions, key=lambda a: (a['turn'], a['actor'])),
@@ -124,7 +185,6 @@ def _candidates(sandbox, spec):
             if len(candidates) == MAX_CANDIDATES:
                 return candidates
     return candidates
-
 
 class TacticSearch:
     """Checkpoint each candidate separately; a restarted process reuses saved Sandbox cells."""
@@ -219,7 +279,8 @@ class TacticSearch:
         count = len(plan['candidates'])
         completed = sum(cell['status'] == 'complete' for cell in cells)
         valid = sum(cell['status'] == 'complete' and cell['all_self_executed'] and
-                    cell['opponent_response_executed'] for cell in cells)
+                    cell['opponent_response_executed'] and
+                    cell.get('all_requested_shields_honored', False) for cell in cells)
         exhausted = len(cells) == count
         state = ('blocked' if blocked else 'complete' if exhausted and completed == count
                  else 'partial' if cells else 'unknown')
@@ -277,6 +338,8 @@ class TacticSearch:
                         'all_self_executed': all(actions.get(a) == 'executed' for a in required_self),
                         'opponent_response_executed': alternate is None or
                         actions.get(alternate) == 'executed',
+                        'all_requested_shields_honored': all(
+                            row['used'] is row['requested'] for row in result['shield_results']),
                         'evidence_class': 'theoretical_script_only',
                         'simulator_cached': cached is not None}
                 body = _canonical_json(cell)

@@ -109,7 +109,8 @@ async function checkWidth(browser, width) {
                      fully_executed_scripts: 1, remaining_scripts: 3},
           results: [{index: 0, strategy: 'original', response: 'alternate_charged',
             status: 'complete', outcome: 'self_win', all_self_executed: true,
-            opponent_response_executed: true}], information_model: 'fixed_script_counterfactual',
+            opponent_response_executed: true, all_requested_shields_honored: true}],
+          information_model: 'fixed_script_counterfactual',
           live_reproducibility: 'not_verified'}});
       }
       if (payload.action === 'save') {
@@ -219,6 +220,7 @@ async function checkWidth(browser, width) {
     await page.locator('#search-step').click();
     await page.locator('#search-status').filter({hasText: /検証 1件/}).waitFor();
     await page.locator('#search-results').getByText(/相手が別のゲージ技を指定/).waitFor();
+    await page.locator('#search-results').getByText(/指定動作・シールドを確認/).waitFor();
     assert.equal(requests.filter(r => r.payload?.action === 'search_step').length, 1);
 
     failNext = true;

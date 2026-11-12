@@ -66,6 +66,65 @@ class TacticSearchTests(unittest.TestCase):
         actions = {x['action_id']: x for x in result['summary']['action_results']}
         self.assertEqual(actions['search_opponent_alternate']['status'], 'executed')
 
+
+    def test_charge_turns_use_energy_bounds_and_double_actions_are_preserved(self):
+        seed = self.seed()
+        identity = self.search.start(seed)
+        plan, _, _ = self.search._load(identity)
+        singles = [item for item in plan['candidates']
+                   if item['strategy'] == 'charged_0_bank0' and item['response'] == 'original']
+        self.assertEqual(len(singles), 1)
+        self.assertGreater(singles[0]['spec']['actions'][0]['turn'], 1)
+        doubles = [item for item in plan['candidates']
+                   if item['strategy'] == 'double_0_0' and item['response'] == 'original']
+        self.assertEqual(len(doubles), 1)
+        own = [action for action in doubles[0]['spec']['actions'] if action['actor'] == 0]
+        self.assertEqual([action['kind'] for action in own], ['charged', 'charged'])
+        self.assertEqual([action['move_id'] for action in own],
+                         [seed['combatants'][0]['moves']['charged'][0]] * 2)
+        self.assertGreater(own[1]['turn'], own[0]['turn'] + 1)
+        self.assertLessEqual(len(plan['candidates']), MAX_CANDIDATES)
+        self.assertEqual(self.search.step(identity, budget=0)['attempts_this_step'], 0)
+
+    def test_ready_initial_energy_supports_early_and_repeated_charged_moves(self):
+        seed = self.seed()
+        seed['combatants'][0]['initial']['energy'] = 100
+        plan, _, _ = self.search._load(self.search.start(seed))
+        single = next(c for c in plan['candidates']
+                      if c['strategy'] == 'charged_0_bank0' and c['response'] == 'original')
+        double = next(c for c in plan['candidates']
+                      if c['strategy'] == 'double_0_0' and c['response'] == 'original')
+        self.assertEqual([a['turn'] for a in single['spec']['actions'] if a['actor'] == 0], [1])
+        self.assertEqual([a['turn'] for a in double['spec']['actions'] if a['actor'] == 0], [1, 3])
+        result = self.search.sandbox.simulate(double['spec'])
+        self.assertEqual(result['status'], 'complete', result.get('error'))
+        by_id = {row['action_id']: row['status'] for row in result['summary']['action_results']}
+        self.assertEqual([by_id[action_id] for action_id in double['self_actions']],
+                         ['executed', 'executed'])
+
+    def test_requested_shield_that_cannot_be_used_is_not_validated(self):
+        seed = self.seed()
+        seed['combatants'][0]['initial']['energy'] = 100
+        seed['actions'] = [{'id': 'early', 'actor': 0, 'turn': 1,
+                            'kind': 'charged', 'move_id': seed['combatants'][0]['moves']['charged'][0]}]
+        seed['shield_decisions'] = [{'action_id': 'early', 'defender': 1, 'use_shield': True}]
+        identity = self.search.start(seed)
+        result = self.search.step(identity, budget=1)
+        self.assertEqual(result['coverage']['attempted_scripts'], 1)
+        self.assertFalse(result['results'][0]['all_requested_shields_honored'])
+        self.assertEqual(result['coverage']['fully_executed_scripts'], 0)
+
+    def test_opponent_alternative_can_request_our_shield_but_never_prove_reproducibility(self):
+        seed = self.seed()
+        seed['combatants'][0]['initial']['shields'] = 1
+        plan, _, _ = self.search._load(self.search.start(seed))
+        variants = [c for c in plan['candidates'] if
+                    c['response'] == 'alternate_charged_self_shield']
+        self.assertTrue(variants)
+        self.assertTrue(all(any(d['defender'] == 0 and d['use_shield']
+                                for d in candidate['spec']['shield_decisions']) for candidate in variants))
+        self.assertTrue(all(c['spec']['mode'] == 'sandbox' for c in variants))
+
     def test_budgets_owner_isolation_checkpoint_and_restored_cache(self):
         identity = self.search.start(self.seed())
         first = self.search.step(identity, budget=2)

@@ -108,9 +108,12 @@ def compare_tactics(service, evaluation_id, search_ids):
             opponent_executed = actual is not None and (
                 candidate['opponent_alternate_id'] is None or
                 actions.get(candidate['opponent_alternate_id']) == 'executed')
+            shields_honored = actual is not None and all(
+                row['used'] is row['requested'] for row in actual['shield_results'])
             if actual is not None and (self_executed != cell['all_self_executed'] or
-                    opponent_executed != cell['opponent_response_executed']):
-                raise TacticEvidenceUnavailable('Tactic action coverage is inconsistent')
+                    opponent_executed != cell['opponent_response_executed'] or
+                    shields_honored != cell['all_requested_shields_honored']):
+                raise TacticEvidenceUnavailable('Tactic action or shield coverage is inconsistent')
 
             for slot, standard_cell in paired:
                 distinct = (build, slot, key)
@@ -118,7 +121,7 @@ def compare_tactics(service, evaluation_id, search_ids):
                     continue
                 seen.add(distinct)
                 checked[build, slot] += 1
-                eligible_result = actual is not None and self_executed and opponent_executed
+                eligible_result = actual is not None and self_executed and opponent_executed and shields_honored
                 meets = _meets(requirements[slot], battle_facts(actual['summary'])) if eligible_result else None
                 if meets:
                     matches[build, slot] += 1
@@ -130,7 +133,9 @@ def compare_tactics(service, evaluation_id, search_ids):
                     'result_status': cell['status'],
                     'outcome': actual['summary']['outcome'] if actual is not None else None,
                     'meets': meets,
-                    'all_requested_actions_executed': eligible_result,
+                    'all_requested_actions_executed': bool(actual is not None and
+                                                           self_executed and opponent_executed),
+                    'all_requested_shields_honored': bool(shields_honored),
                     'classification': 'opponent_response_dependent'
                         if candidate['response'] != 'original' else 'specific_fixed_script',
                     'reproducibility': 'not_verified',
@@ -150,11 +155,13 @@ def compare_tactics(service, evaluation_id, search_ids):
             # Show complete counterexamples as well as possible wins, without
             # needing a large horizontal table or claiming unshown exhaustive coverage.
             rest = [item for item in items if item['meets'] is not True]
+            own, opponent = eligible[build, slot][0]['spec']['combatants']
             conditions.append({
                 'condition_id': slot,
                 'standard': standard[build, slot],
                 'tested_scripts': checked[build, slot],
                 'matching_scripts': matches[build, slot],
+                'unfavorable_shields': own['initial']['shields'] < opponent['initial']['shields'],
                 'paths': (positive + rest)[:MAX_PATHS_SHOWN],
                 'truncated': len(items) > MAX_PATHS_SHOWN,
             })
@@ -166,6 +173,40 @@ def compare_tactics(service, evaluation_id, search_ids):
             'conditions': conditions,
             'practical_role_covered': False,
         })
+    # Advisory ranking is intentionally separate from the immutable role
+    # evaluation. Partial exploration, different fixed scripts per matchup and
+    # unknown opponent decisions cannot establish practical substitutability.
+    all_path_builds = sum(item['theoretical_all_conditions'] for item in builds)
+    for item in builds:
+        conditions = item['conditions']
+        supported = sum(c['matching_scripts'] > 0 for c in conditions)
+        tested = sum(c['tested_scripts'] > 0 for c in conditions)
+        shield_advantage = sum(c['unfavorable_shields'] and c['matching_scripts'] > 0
+                               for c in conditions)
+        unique = item['theoretical_all_conditions'] and all_path_builds == 1
+        item['advisory'] = {
+            'scope': 'selected_builds_and_saved_scripts_only',
+            'classification': 'conditional_theoretical' if item['theoretical_all_conditions'] else 'pending',
+            'role_priority': role['definition']['priority'],
+            'required_conditions': len(requirements),
+            'tested_conditions': tested,
+            'theoretical_supported_conditions': supported,
+            'unfavorable_shield_conditions': shield_advantage,
+            'only_observed_complete_build': bool(unique),
+            'practical_substitution': 'not_established',
+            'reason_code': ('all_declared_conditions_have_individual_fixed_script_paths'
+                            if item['theoretical_all_conditions'] else
+                            'unverified_or_missing_role_conditions'),
+        }
+    # Only a reference ordering of the submitted, saved scripts. In particular
+    # do not sort the original role candidate records or update their status.
+    ranked = sorted(builds, key=lambda item: (
+        not item['theoretical_all_conditions'],
+        -item['advisory']['unfavorable_shield_conditions'],
+        -item['advisory']['theoretical_supported_conditions'],
+        -item['advisory']['tested_conditions'], item['build_id']))
+    for position, item in enumerate(ranked, 1):
+        item['advisory']['evidence_order'] = position
     return {
         'schema': SCHEMA, 'evaluation_id': evaluation_id, 'standard_state': role['state'],
         'status': 'counterfactual_only', 'information_fairness': 'not_established',
