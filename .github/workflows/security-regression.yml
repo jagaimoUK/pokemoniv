@@ -60,6 +60,7 @@ jobs:
           docker run --rm -v "$PWD:/work" -w /work -e STRATEGY_CHROMIUM_PATH=/usr/bin/chromium --entrypoint node pokemoniv-browser-ci tests/security_browser.cjs
           docker run --rm -v "$PWD:/work" -w /work -e CHROME_BIN=/usr/bin/chromium --entrypoint node pokemoniv-browser-ci tests/browser_meta_editor_smoke.cjs
           docker run --rm -v "$PWD:/work" -w /work -e CHROME_BIN=/usr/bin/chromium --entrypoint node pokemoniv-browser-ci tests/browser_missing_analysis.cjs
+          docker run --rm -v "$PWD:/work" -w /work -e CHROME_BIN=/usr/bin/chromium --entrypoint node pokemoniv-browser-ci tests/browser_sandbox.cjs
       - name: Audit operating-system and application packages and create SBOM
         run: |
           curl -fsSL --connect-timeout 15 --max-time 120 --retry 2 https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz -o /tmp/trivy.tar.gz

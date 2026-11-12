@@ -272,6 +272,15 @@ function renderMatch(parent,condition,current,result,request){
   const actions=node('div',null,body,'actions');
   button(actions,'この対面だけ計算',()=>simulate(condition,request),'quiet');
  }
+ if(result.can_sandbox&&condition.spec){
+  const actions=node('div',null,body,'actions');
+  button(actions,'Sandboxで対面を開く',()=>{
+   try{
+    sessionStorage.setItem('pokemoniv:sandbox-input-v1',JSON.stringify(condition.spec));
+    location.assign('/app/sandbox');
+   }catch(error){announce('対戦条件を一時保存できませんでした。',true);}
+  },'quiet');
+ }
  const peers=result.candidates.filter(candidate=>candidate.build_id!==current.build_id);
  if(peers.length){
   const comparison=detail(body,'この対面の手持ち・代替候補と比較');

@@ -6,6 +6,7 @@ from pvpoke_iv_search import IVSearch
 from pvpoke_missing_analysis import AnalysisUnavailable, MissingAnalysis
 from pvpoke_ownership import Ownership, OwnershipConflict, build_id
 from pvpoke_role_evaluation import RoleEvaluation, _definition, _hash, condition_id
+from pvpoke_sandbox_workspace import enabled as sandbox_enabled
 
 API_PATH = '/api/missing-analysis'
 APP_PATH = '/app-api/missing-analysis'
@@ -107,7 +108,7 @@ def _comparison(service, payload):
     builds[1:] = sorted(builds[1:], key=lambda build: priority[build['status']])
     return {'state': snapshot['state'], 'evaluation_id': snapshot['evaluation_id'], 'analysis_id': analysis_id,
             'role': {key: role[key] for key in ('role_id', 'priority', 'revision')}, 'reference': reference,
-            'candidates': builds, 'can_calculate': _can_calculate()}
+            'candidates': builds, 'can_calculate': _can_calculate(), 'can_sandbox': sandbox_enabled()}
 
 
 def _explore(service, payload):
