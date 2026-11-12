@@ -146,6 +146,38 @@ class TacticSearchTests(unittest.TestCase):
         self.assertFalse(_requested_actions_completed(spec, summary, ['opponent_throw']))
         self.assertTrue(_requested_actions_completed(spec, summary, ['self_throw']))
 
+    def test_fast_move_tap_without_resolution_is_not_success(self):
+        """Queued fast taps can be cancelled by KO before applying any damage."""
+        spec = {'actions': [
+            {'id': 'queued_fast', 'actor': 0, 'turn': 1,
+             'kind': 'fast', 'move_id': 'MUD_SHOT'}]}
+        summary = {'action_results': [
+            {'action_id': 'queued_fast', 'status': 'executed'}],
+            'executed_moves': []}
+        self.assertFalse(_requested_actions_completed(spec, summary, ['queued_fast']))
+        summary['executed_moves'] = [
+            {'action_id': 'queued_fast', 'actor': 0, 'kind': 'fast', 'move_id': 'MUD_SHOT'}]
+        self.assertTrue(_requested_actions_completed(spec, summary, ['queued_fast']))
+        summary['executed_moves'][0]['move_id'] = 'WRONG_MOVE'
+        self.assertFalse(_requested_actions_completed(spec, summary, ['queued_fast']))
+
+    def test_native_fast_start_and_resolution_are_independently_linked(self):
+        seed = self.seed()
+        seed['combatants'][1]['initial']['energy'] = 0
+        move_id = seed['combatants'][0]['moves']['fast']
+        seed['actions'] = [
+            {'id': 'actual_fast', 'actor': 0, 'turn': 1,
+             'kind': 'fast', 'move_id': move_id}]
+        native = self.search.sandbox.simulate(seed)
+        self.assertEqual(native['status'], 'complete', native.get('error'))
+        self.assertTrue(any(row['action_id'] == 'actual_fast' and row['status'] == 'executed'
+                            for row in native['summary']['action_results']))
+        self.assertTrue(any(event.get('action_id') == 'actual_fast' and
+                            event['kind'] == 'fast' and event['move_id'] == move_id
+                            for event in native['summary']['executed_moves']))
+        self.assertTrue(_requested_actions_completed(
+            native['summary']['spec'], native['summary'], ['actual_fast']))
+
     def test_existing_opponent_charged_request_must_execute(self):
         seed = self.seed()
         seed['combatants'][1]['initial']['energy'] = 0
