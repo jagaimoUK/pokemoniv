@@ -1,6 +1,7 @@
 """Check the actual preset UI in Chromium, using synthetic state and no accounts."""
 import argparse
 import base64
+import errno
 import json
 from pathlib import Path
 import shutil
@@ -50,6 +51,19 @@ def cdp_call(ws, method, params=None):
 cdp_call.sequence = 0
 
 
+class ClosingTemporaryDirectory(tempfile.TemporaryDirectory):
+    """Bounded retry for Chromium child-process profile-write races, without hiding failures."""
+
+    def cleanup(self):
+        for attempt in range(20):
+            try:
+                return super().cleanup()
+            except OSError as exc:
+                if exc.errno != errno.ENOTEMPTY or attempt == 19:
+                    raise
+                time.sleep(0.1)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output-dir',type=Path,default=Path('/tmp/meta-controls-qa'))
@@ -57,11 +71,12 @@ def main():
     chromium=shutil.which('chromium') or shutil.which('chromium-browser')
     if not chromium:raise SystemExit('Run this inside the existing Docker image (Chromium required)')
     page_html=HTML.replace('<script>','<script>window.fetch=async()=>({status:401,ok:false});',1).replace('</body>','<script>'+FIXTURE+'</script></body>')
-    with tempfile.TemporaryDirectory() as d:
+    with ClosingTemporaryDirectory() as d:
         directory=Path(d);page=directory/'presets.html';page.write_text(page_html,encoding='utf-8')
         profile=directory/'chrome';log=(directory/'chromium.log').open('w')
         process=subprocess.Popen([chromium,'--headless','--no-sandbox','--disable-gpu',
-            '--disable-dev-shm-usage','--hide-scrollbars','--remote-debugging-port=0',
+            '--disable-dev-shm-usage','--disable-background-networking','--no-first-run',
+            '--hide-scrollbars','--remote-debugging-port=0',
             '--remote-allow-origins=*','--user-data-dir='+str(profile),'about:blank'],stdout=log,stderr=log)
         ws=None
         try:
@@ -152,10 +167,26 @@ def main():
                 assert 'レベル・個体値付き 1行' in windows['preview'],windows
                 print(json.dumps({'paste_preview':pasted,'saved':saved,'windows_file':windows},ensure_ascii=False))
         finally:
-            if ws:ws.close()
-            process.terminate()
-            try:process.wait(timeout=5)
-            except subprocess.TimeoutExpired:process.kill();process.wait()
-            log.close()
+            # Request a graceful browser shutdown before removing its user-data directory.
+            # Closing only the tab's CDP socket leaves Chrome helpers writing to Default/.
+            if ws:
+                try:
+                    cdp_call(ws, 'Browser.close')
+                except (OSError, websocket.WebSocketException):
+                    # The browser can disconnect the CDP socket as it shuts down.
+                    pass
+                finally:
+                    ws.close()
+            try:
+                process.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            finally:
+                log.close()
 
 if __name__=='__main__':main()
