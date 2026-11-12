@@ -123,6 +123,10 @@ async function checkWidth(browser, width) {
     await page.getByText(/以下は保存済み戦術だけの参考順です/).waitFor();
     await page.locator('#tactic-evidence-results details.candidate').first().evaluate(el => {el.open = true});
     await page.getByText(/代替の実用性：未検証/).waitFor();
+    // Information-assumption warnings live under a collapsed matchup detail,
+    // not the outer candidate detail. Open both levels before asserting.
+    await page.locator('#tactic-evidence-results details.match').first()
+      .evaluate(el => {el.open = true});
     await page.getByText(/相手の未来の行動を仮定/).waitFor();
     await page.getByText(/代替の実用性：未検証/).waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
