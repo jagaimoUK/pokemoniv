@@ -24,6 +24,8 @@ Prepared for a **future independent Astra review**, not a self-certified product
 
 ## Invariants that must remain true
 - `search_start` creates a plan but does not execute battle simulations.
+- Native shield outcomes are checked separately from action execution. A requested shield that could not actually be used does not count toward role support; rechecking occurs when saved traces are compared.
+- Alternate opponent charged requests can be paired with self-shield requests, but those remain fixed-script counterfactuals.
 - Only the native Sandbox simulator can determine whether a requested action executed; calculated energy-only timing is a proposal, not a legality proof.
 - No scenario with unobserved opponent action or exact opponent IV may be called live-reproducible without a policy using *only* observables.
 - A complete script at one matchup cannot cover a separate matchup. Coverage is per exact build and exact condition ID.

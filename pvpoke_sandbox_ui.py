@@ -747,13 +747,15 @@ function showTacticProgress(data){
  $('search-status').dataset.tone=data.state==='blocked'||data.state==='stale'?'warning':'';
  const list=$('search-results');list.replaceChildren();
  const titles={original:'元の戦術',shield_no:'相手はシールドを使わない',shield_yes:'相手はシールドを使う',
-  alternate_charged:'相手が別のゲージ技を指定'};
+  alternate_charged:'相手が別のゲージ技を指定',
+  alternate_charged_self_shield:'相手の別技に自分のシールドを指定'};
  for(const item of data.results.slice(-8)){
   const line=node('p',null,list,'inset');
   const label=Object.hasOwn(titles,item.response)?titles[item.response]:item.response;
   line.textContent=(item.index+1)+'件目 · '+item.strategy+' · '+label+' · '+
    (item.status==='complete'?(outcomes[item.outcome]||item.outcome):'未完了')+
-   (item.all_self_executed&&item.opponent_response_executed?' · 指定動作を確認':' · 指定動作が未実行');
+   (item.all_self_executed&&item.opponent_response_executed&&item.all_requested_shields_honored
+    ?' · 指定動作・シールドを確認':' · 指定動作またはシールドが未実行');
  }
  if(coverage.attempted_scripts>8)node('p','直近8件を表示しています。',list,'muted');
  if(data.state==='blocked')announce('探索を安全に停止しました。'+data.incomplete_reason,'warning');
