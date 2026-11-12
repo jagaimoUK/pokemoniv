@@ -52,3 +52,36 @@ standard calculation routes, or any ownership/role state.
   4,096-IV scans and multiple opponent response trees.
 - Real ENOSPC, full security reachability, independent Astra review,
   mobile/device checks and safe deployment. Keep Draft, no release.
+
+## Stage: native shield-prompt timing, CMP and post-charge-lock audit
+
+The validation harness uses **only** a wrapped native Battle instance:
+`useMove` records the opponent's public charged-move **announcement before**
+upstream invokes the native shield decision, while the move ID is appended
+**only after** upstream `onMoveResolved` fires. A shield-policy wrapper
+captures the exact public observation handed to the fixed self-shield rule;
+the pure Python `propose` validates every captured choice. A move's name may
+appear later in history after resolution, never on the announcement being
+answered. The native engine's GameMaster, battle timing and CMP logic are not
+modified. These events are reconstructed from native hooks, **not** verified
+real Pokémon GO screenshots or network-visible timestamps.
+
+The native test harness now differentiates `action` (proposal) from
+`native_process` (native action validation and processing) and
+`native_resolution` (actual executed move). A post-charged-lock proposal
+might never be processed; a multi-turn fast move may resolve on a later turn.
+The previous `native_resolved_same_turn` indicator remains as a compatibility
+alias derived from the actual resolution, not a best-guess event matching.
+
+Test matrix: 0/1/2 shields (five cases), two enemy energy cases, a bounded
+explicit `charge_if_ready` opponent counterfactual to force same-turn charge
+for CMP resolution evidence, and round-trip between Node's captured pre-reveal
+prompt and the independent Python visible-input policy. Opponent scripted
+attack selection is deliberately not presented as live-play robustness.
+
+**Known limits:** real-app reveal timing, charge-tap behavior, 1/3/4/5-turn
+fast-move fixtures, buff/KO edge cases and exhaustive CMP order across IV
+boundaries require additional independent tests. Stable battle outcomes still
+do NOT imply robust player policy. This remains a private CI fixture, not
+an API, recommendation, role promotion or deployment. Results must be checked
+at the final commit SHA; no claims based solely on test author intent.

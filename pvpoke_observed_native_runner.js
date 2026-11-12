@@ -33,7 +33,7 @@ function bounded(value, min, max, label) {
 }
 function validate(input) {
   exact(input, ["gamemaster_path", "self", "opponent", "initial", "shields", "policy",
-                 "opponent_shield_rule"], "native request");
+                 "opponent_shield_rule", "opponent_attack_rule"], "native request");
   if (typeof input.gamemaster_path !== "string" ||
       !path.isAbsolute(input.gamemaster_path) || input.gamemaster_path.length > 4096) {
     throw Error("Invalid gamemaster path");
@@ -56,6 +56,10 @@ function validate(input) {
   if (typeof input.opponent_shield_rule !== "string" ||
       !new Set(["standard", "never", "always"]).has(input.opponent_shield_rule)) {
     throw Error("Invalid opponent response rule");
+  }
+  if (typeof input.opponent_attack_rule !== "string" ||
+      !new Set(["standard", "charge_if_ready"]).has(input.opponent_attack_rule)) {
+    throw Error("Invalid opponent attack rule");
   }
   const own = input.policy.own_charged_moves;
   if (!Array.isArray(own) || own.length !== 2) throw Error("Invalid own charged moves");
@@ -96,15 +100,110 @@ function runObserved(input) {
   loadMaster(input.gamemaster_path);
   // These classes were loaded by the pinned node_matrix into the current VM.
   // Access them without touching its exports or the engine source hashes.
-  const native = vm.runInThisContext("({ActionLogic,TimelineAction})");
+  const native = vm.runInThisContext("({Battle,ActionLogic,TimelineAction})");
   const observed = [];
   const decisions = [];
+  const shieldPrompts = [];
+  let ownFastTurns = null;
   let installed = false;
   const source = input.policy;
 
+  // Wrap only the battle instance in this disposable native harness. A
+  // charged-move *announcement* must exist before native shieldPolicy fires.
+  // The move's identity is recorded only after onMoveResolved.
+  function AuditedBattle() {
+    const battle = new native.Battle();
+    const nativeUseMove = battle.useMove.bind(battle);
+    const nativeProcessAction = battle.processAction.bind(battle);
+    let selfActionIndex = null;
+    battle.processAction = (action, actor, opponent) => {
+      const previous = selfActionIndex;
+      const index = action._observed_decision_index;
+      if (actor.index === 0 && Number.isInteger(index)) {
+        const row = decisions[index];
+        if (!row || row.native_process) throw Error("Duplicate observed action");
+        row.native_process = {
+          turn: battle.getTurns(),
+          valid: action.valid === true && !action.processed
+        };
+        selfActionIndex = index;
+      }
+      try {
+        return nativeProcessAction(action, actor, opponent);
+      } finally {
+        selfActionIndex = previous;
+      }
+    };
+    battle.useMove = (attacker, defender, move, ...settings) => {
+      if (attacker.index === 1 && defender.index === 0 && move.category === "charged") {
+        observed.push({turn: battle.getTurns(), kind: "opponent_charge_announced"});
+        if (observed.length > MAX_VISIBLE_EVENTS) throw Error("Observation limit exceeded");
+      }
+      const result = nativeUseMove(attacker, defender, move, ...settings);
+      if (attacker.index === 0 && selfActionIndex !== null) {
+        const row = decisions[selfActionIndex];
+        if (row.native_resolution) throw Error("Duplicate own native move resolution");
+        row.native_resolution = {
+          turn: battle.getTurns(), kind: move.category, move_id: move.moveId
+        };
+      }
+      return result;
+    };
+
+    // This callback is invoked inside the real PvPoke shield decision path,
+    // between announcement and resolution. The own policy cannot inspect
+    // the incoming move ID because its allowed snapshot has no such field.
+    let installedShieldPolicy;
+    Object.defineProperty(battle, "shieldPolicy", {
+      configurable: true,
+      set(fn) { installedShieldPolicy = fn; },
+      get() {
+        if (!installedShieldPolicy) return undefined;
+        return defenderIndex => {
+          const snapshot = defenderIndex === 0 ? {
+            turn: battle.getTurns(), phase: "shield_prompt",
+            own_energy: battle.getPokemon()[0].energy,
+            own_shields: battle.getPokemon()[0].shields,
+            opponent_shields_visible: battle.getPokemon()[1].shields,
+            own_can_act: false,
+            events: observed.map(event => ({...event}))
+          } : null;
+          if (snapshot && (snapshot.events.at(-1)?.kind !== "opponent_charge_announced" ||
+                           snapshot.events.at(-1).turn !== snapshot.turn)) {
+            throw Error("Self shield prompt must precede charged-move reveal");
+          }
+          const shield = installedShieldPolicy(defenderIndex);
+          if (snapshot) {
+            if (shieldPrompts.length >= MAX_VISIBLE_EVENTS) {
+              throw Error("Shield prompt budget exceeded");
+            }
+            const announced = snapshot.events.filter(
+              event => event.kind === "opponent_charge_announced").length;
+            const expected = snapshot.own_shields > 0 &&
+              (source.shield_rule === "always" ||
+               (source.shield_rule === "first_announcement" && announced === 1));
+            if (shield !== expected) throw Error("Shield decision used nonpublic assumptions");
+            shieldPrompts.push({visible: frozenClone(snapshot),
+                                action: {kind: "shield", use_shield: shield}});
+          }
+          return shield;
+        };
+      }
+    });
+    return battle;
+  }
+
   const patchedLogic = {
     decideAction(battle, own, opponent) {
-      if (own.index !== 0) return native.ActionLogic.decideAction(battle, own, opponent);
+      if (own.index !== 0) {
+        if (input.opponent_attack_rule === "charge_if_ready" &&
+            own.energy >= own.chargedMoves[0].energy) {
+          // Explicit opponent counterfactual, never an observed own decision.
+          return new native.TimelineAction("charged", own.index, battle.getTurns(), 0,
+            {priority: own.priority, shielded: false, buffs: false, charge: 1});
+        }
+        return native.ActionLogic.decideAction(battle, own, opponent);
+      }
       if (!installed) {
         const previous = battle.onMoveResolved;
         if (typeof previous !== "function") throw Error("Missing native resolution hook");
@@ -115,7 +214,10 @@ function runObserved(input) {
           // native resolution. Record both historical stages *after* it lands.
           const turn = battle.getTurns();
           if (move.category === "charged") {
-            observed.push({turn, kind: "opponent_charge_announced"});
+            if (observed.at(-1)?.kind !== "opponent_charge_announced" ||
+                observed.at(-1).turn !== turn) {
+              throw Error("Opponent charged move resolved without public announcement");
+            }
             observed.push({turn, kind: "opponent_charge_resolved", move_id: move.moveId});
           } else {
             observed.push({turn, kind: "opponent_fast"});
@@ -126,6 +228,7 @@ function runObserved(input) {
         };
         installed = true;
       }
+      if (ownFastTurns === null) ownFastTurns = own.fastMove.turns;
       const nativeMoves = own.chargedMoves.slice(0, 2);
       for (let i = 0; i < 2; i++) {
         if (nativeMoves[i]?.moveId !== source.own_charged_moves[i].move_id ||
@@ -144,8 +247,10 @@ function runObserved(input) {
       decisions.push({turn: visible.turn, visible, action: selected});
       const slot = selected.kind === "charged"
         ? nativeMoves.findIndex(move => move.moveId === selected.move_id) : 0;
-      return new native.TimelineAction(selected.kind, own.index,
+      const action = new native.TimelineAction(selected.kind, own.index,
         battle.getTurns(), slot, {priority: own.priority, shielded: false, buffs: false, charge: 1});
+      action._observed_decision_index = decisions.length - 1;
+      return action;
     }
   };
   const ownShields = Array.from({length: 512}, (_, i) =>
@@ -155,7 +260,7 @@ function runObserved(input) {
   const opponentShields = opponentRule === "standard"
     ? {kind: "standard"}
     : {kind: "manual", decisions: Array(512).fill(opponentRule === "always")};
-  const runner = strategyRunner({ActionLogic: patchedLogic});
+  const runner = strategyRunner({Battle: AuditedBattle, ActionLogic: patchedLogic});
   const detail = runner.run({
     self: input.self, opponent: input.opponent,
     initial: input.initial, shields: input.shields,
@@ -178,17 +283,39 @@ function runObserved(input) {
             chosen_without_move_identity: true};
   });
   const verified = decisions.map(decision => {
-    const hit = detail.events.some(event =>
-      event.actor === 0 && event.turn === decision.turn &&
-      event.kind === decision.action.kind &&
-      (decision.action.kind !== "charged" || event.move_id === decision.action.move_id));
-    return {...decision, native_resolved_same_turn: hit};
+    // "Chosen" is not synonymous with "queued", "processed", or "resolved":
+    // cooldown, a post-charge lock and CMP/KO can cancel an intended action.
+    const resolution = decision.native_resolution || null;
+    if (resolution && (resolution.kind !== decision.action.kind ||
+        (resolution.kind === "charged" &&
+         resolution.move_id !== decision.action.move_id))) {
+      throw Error("Native resolved a different self move than the chosen action");
+    }
+    if (resolution && !detail.events.some(event => event.actor === 0 &&
+          event.turn === resolution.turn && event.kind === resolution.kind &&
+          event.move_id === resolution.move_id)) {
+      throw Error("Native self move resolution is missing from detailed events");
+    }
+    return {...decision,
+      native_process: decision.native_process || null,
+      native_resolution: resolution,
+      native_resolved_same_turn: Boolean(resolution && resolution.turn === decision.turn)
+    };
   });
+  const actualSelfShields = detail.events.filter(
+    event => event.actor === 1 && event.kind === "charged" && event.shielded).length;
+  if (actualSelfShields !== shieldPrompts.filter(item => item.action.use_shield).length ||
+      actualSelfShields !== detail.shields_used[0]) {
+    throw Error("Actual native shield usage differs from pre-reveal decisions");
+  }
   return {
     schema: RESULT, information_model: "observed_input_native_experiment",
     status: "counterfactual_only",
     outcome: detail.outcome, turns: detail.turns,
     own_proposals: verified, self_shield_audit: shieldAudits,
+    self_shield_prompts: shieldPrompts,
+    self_fast_move_turns: ownFastTurns,
+    opponent_attack_rule: input.opponent_attack_rule,
     observed_opponent_event_count: observed.length,
     native_move_events: detail.events.map(e => ({
       turn: e.turn, actor: e.actor, kind: e.kind, move_id: e.move_id,

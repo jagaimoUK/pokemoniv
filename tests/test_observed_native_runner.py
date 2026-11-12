@@ -34,10 +34,13 @@ class NativeObservedMultiTurnTests(unittest.TestCase):
         self.sandbox = SandboxService(self.standard)
 
     def request(self, energy=0, enemy_energy=0, enemy_ivs=None,
-                shield_rule="first_announcement", enemy_shield_rule="standard"):
+                shield_rule="first_announcement", enemy_shield_rule="standard",
+                opponent_attack_rule="standard", shields=(1, 1)):
         spec = scripted_spec(energy=energy, shield=1)
         spec["actions"] = []
         spec["shield_decisions"] = []
+        spec["combatants"][0]["initial"]["shields"] = shields[0]
+        spec["combatants"][1]["initial"]["shields"] = shields[1]
         spec["combatants"][1]["initial"]["energy"] = enemy_energy
         if enemy_ivs is not None:
             spec["combatants"][1]["ivs"] = enemy_ivs
@@ -52,7 +55,8 @@ class NativeObservedMultiTurnTests(unittest.TestCase):
         }
         return {**{key: native[key] for key in ("self", "opponent", "initial", "shields")},
                 "gamemaster_path": str(self.client.gamemaster),
-                "policy": policy, "opponent_shield_rule": enemy_shield_rule}
+                "policy": policy, "opponent_shield_rule": enemy_shield_rule,
+                "opponent_attack_rule": opponent_attack_rule}
 
     def native(self, request, *, good=True):
         process = subprocess.run(
@@ -139,6 +143,94 @@ class NativeObservedMultiTurnTests(unittest.TestCase):
         req["policy"]["own_charged_moves"][0]["move_id"] = "ICE_BEAM"
         self.assertIn("equipped", self.native(req, good=False))
 
+    def test_native_charge_announcement_precedes_self_shield_commit_and_reveal(self):
+        for shields, rule in (((0, 0), "always"), ((1, 1), "never"),
+                              ((1, 2), "first_announcement"),
+                              ((2, 1), "always"), ((2, 2), "first_announcement")):
+            with self.subTest(shields=shields, rule=rule):
+                req = self.request(energy=100, enemy_energy=100, shields=shields,
+                                   shield_rule=rule, opponent_attack_rule="charge_if_ready")
+                data = self.native(req)
+                self.assertEqual(data["live_reproducibility"], "not_verified")
+                self.assertFalse(data["practical_role_covered"])
+                enemy_charge_events = [
+                    item for item in data["native_move_events"]
+                    if item["actor"] == 1 and item["kind"] == "charged"
+                ]
+                # Both actions were declared for the same native turn.
+                self.assertTrue(enemy_charge_events)
+                consumed = sum(item["shielded"] for item in enemy_charge_events)
+                self.assertEqual(consumed, sum(
+                    prompt["action"]["use_shield"]
+                    for prompt in data["self_shield_prompts"]))
+                self.assertLessEqual(consumed, shields[0])
+                for prompt in data["self_shield_prompts"]:
+                    visible = prompt["visible"]
+                    self.assertEqual(visible["events"][-1]["kind"],
+                                     "opponent_charge_announced")
+                    self.assertFalse("move_id" in visible["events"][-1])
+                    self.assertEqual(
+                        propose(visible, req["policy"])["action"],
+                        prompt["action"])
+                # Fixed rules never turn this hypothetical opponent script into
+                # a verified player strategy, regardless of the native winner.
+                self.assertEqual(data["status"], "counterfactual_only")
+
+    def test_native_cmp_and_cooldown_distinguish_requested_from_resolved(self):
+        req = self.request(energy=100, enemy_energy=100, shields=(2, 2),
+                           shield_rule="always",
+                           opponent_attack_rule="charge_if_ready")
+        data = self.native(req)
+        first = data["own_proposals"][0]
+        self.assertEqual(first["action"]["kind"], "charged")
+        self.assertEqual(first["native_process"]["turn"], 1)
+        self.assertTrue(first["native_process"]["valid"])
+        self.assertIsNotNone(first["native_resolution"])
+        self.assertEqual(first["native_resolution"]["turn"], 1)
+        own_and_enemy_charges = [
+            event for event in data["native_move_events"]
+            if event["kind"] == "charged" and event["turn"] == 1]
+        self.assertEqual({event["actor"] for event in own_and_enemy_charges}, {0, 1})
+        self.assertTrue(all(event["move_id"] for event in own_and_enemy_charges))
+        self.assertEqual(data["self_fast_move_turns"], 2)
+        self.assertTrue(any(row["action"]["kind"] == "fast"
+                            for row in data["own_proposals"]))
+        # An ignored post-charge proposal and a queued fast attack should
+        # not masquerade as a same-turn resolved move.
+        for row in data["own_proposals"]:
+            if row["native_resolution"]:
+                self.assertIsNotNone(row["native_process"])
+                self.assertTrue(row["native_process"]["valid"])
+                self.assertEqual(row["native_resolution"]["kind"],
+                                 row["action"]["kind"])
+            if row["native_process"] is None:
+                self.assertIsNone(row["native_resolution"])
+            if row["action"]["kind"] == "fast" and row["native_resolution"]:
+                self.assertGreaterEqual(row["native_resolution"]["turn"],
+                                        row["turn"])
+        self.assertEqual(data["live_reproducibility"], "not_verified")
+
+    def test_never_reveal_opponent_move_id_during_shield_prompt(self):
+        for enemy_energy in (0, 100):
+            req = self.request(energy=0, enemy_energy=enemy_energy,
+                               opponent_attack_rule="charge_if_ready",
+                               shield_rule="first_announcement", shields=(2, 2))
+            data = self.native(req)
+            for prompt in data["self_shield_prompts"]:
+                text = json.dumps(prompt["visible"], sort_keys=True)
+                self.assertNotIn('"opponent_energy"', text)
+                self.assertNotIn('"opponent_ivs"', text)
+                self.assertEqual(propose(prompt["visible"], req["policy"])["action"],
+                                 prompt["action"])
+                # Charge IDs may exist from PREVIOUS resolutions, but not
+                # on the charge announcement being answered now.
+                self.assertNotIn("move_id", prompt["visible"]["events"][-1])
+            for index, row in enumerate(data["own_proposals"]):
+                self.assertEqual(row["action"],
+                                 propose(row["visible"], req["policy"])["action"])
+                if index > 0:
+                    self.assertGreater(row["turn"],
+                                       data["own_proposals"][index - 1]["turn"])
 
 if __name__ == "__main__":
     unittest.main()
