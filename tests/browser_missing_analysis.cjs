@@ -71,7 +71,8 @@ async function checkWidth(browser, width) {
       if (payload.action === 'explore') {
         assert.equal(payload.budget, 0);
         return route.fulfill({json: {completed_iv_count: 1, eligible_iv_count: 4096,
-                                     qualifying_count: 1, qualifying: [{attack: 0, defense: 15, hp: 15}]}});
+                                     qualifying_count: 1, not_fully_tested_iv_count: 4095,
+                                     qualifying: [{attack: 0, defense: 15, hp: 15}]}});
       }
       throw Error('Unexpected request ' + path);
     });
@@ -83,7 +84,8 @@ async function checkWidth(browser, width) {
     await page.getByText('対戦証拠待ち', {exact: true}).waitFor();
     await page.locator('summary').filter({hasText: '重要IVを探索'}).click();
     await page.getByRole('button', {name: '探索範囲を確認'}).click();
-    await page.getByText('達成したIV　0/15/15', {exact: true}).waitFor();
+    await page.getByText('達成を確認したIV　0/15/15', {exact: true}).waitFor();
+    await page.getByText(/全条件の検証が未完了 4095通り/).waitFor();
     assert.equal(await page.getByRole('button', {name: '1対面を追加検証'}).count(), 0);
     assert.equal(await page.getByRole('button', {name: 'この対面だけ計算'}).count(), 0);
     await page.locator('#tactic-evidence-read').click();

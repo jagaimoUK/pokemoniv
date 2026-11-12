@@ -99,6 +99,45 @@ class IVSearchTests(unittest.TestCase):
         self.assertIsNone(changed['coverage'])
         self.assertEqual(changed['new_battles'], 0)
 
+    def test_opponent_iv_static_boundary_profiles_use_native_not_new_battles(self):
+        """Discover opponent-side CMP/damage/HP frontier without fake win labels."""
+        spec = battle_spec(left=0, right=2, shields=(0, 0))
+        with patch.object(self.service, 'simulate',
+                          side_effect=AssertionError('No full battles for a static frontier')):
+            limited = self.search.opponent_boundaries(spec, iv_floors=(14, 14, 15))
+        self.assertEqual(limited['source_opponent_species_id'],
+                         spec['combatants'][1]['species_id'])
+        self.assertEqual(limited['eligible_iv_count'], 4)
+        self.assertEqual(limited['profiled_iv_count'], 4)
+        self.assertEqual(limited['native_battles_run'], 0)
+        self.assertEqual(limited['evidence_class'], 'static_boundaries_only')
+        self.assertFalse(limited['battle_outcomes_verified'])
+        self.assertEqual(set(limited['boundary_ivs']), {
+            'hp', 'cmp', 'breakpoint', 'bulkpoint', 'charged_1', 'charged_2',
+            'incoming_charged_1', 'incoming_charged_2'})
+        for label, bits in limited['boundary_ivs'].items():
+            self.assertTrue(indices(bits) <= {0xeef, 0xeff, 0xfef, 0xfff}, label)
+            self.assertEqual(limited['boundary_counts'][label], len(indices(bits)))
+        self.assertTrue(limited['representatives'])
+        self.assertTrue(all(item['attack'] >= 14 and item['defense'] >= 14 and
+                            item['hp'] == 15 and item['level'] > 0 and
+                            len(item['static_profile']) == 8
+                            for item in limited['representatives']))
+        with patch.object(self.service, 'simulate',
+                          side_effect=AssertionError('Boundary preview cannot run a battle')):
+            only = self.search.opponent_boundaries(spec, iv_floors=(15, 15, 15))
+        self.assertEqual(only['eligible_iv_count'], 1)
+        self.assertEqual((only['representatives'][0]['attack'],
+                          only['representatives'][0]['defense'],
+                          only['representatives'][0]['hp']), (15, 15, 15))
+        self.assertEqual(self.service.cache_stats['engine_calls'], 0)
+
+    def test_opponent_iv_boundary_input_requires_a_valid_iv_floor(self):
+        spec = battle_spec()
+        for floors in (('14', 14, 15), (True, 14, 15), (16, 0, 0), (0, 0), None):
+            with self.subTest(floors=floors), self.assertRaises(ValueError):
+                self.search.opponent_boundaries(spec, iv_floors=floors)
+
     def test_input_scope_and_corrupt_checkpoint_fail_closed(self):
         first = battle_spec()
         with self.assertRaises(ValueError):

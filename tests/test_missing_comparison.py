@@ -190,6 +190,26 @@ class MissingLocalTests(server.ServerFixture):
         self.assertTrue(all(candidate['party_substitution'] == 'pending'
                             for candidate in report['candidates']))
 
+    def test_opponent_boundary_preview_is_read_only_scope_bound_and_static(self):
+        status, comparison = self.compare(case())
+        self.assertEqual(status, 200)
+        reference = comparison['reference']['build_id']
+        first = comparison['candidates'][0]['conditions'][0]['battle_key']
+        request = {'action': 'opponent_boundaries',
+                   'evaluation_id': comparison['evaluation_id'],
+                   'build_id': reference, 'battle_key': first,
+                   'iv_floors': [15, 15, 15]}
+        with patch.object(server.web.BattleService, 'simulate',
+                          side_effect=AssertionError('Must not run PvPoke battle')):
+            status, report = self.compare(request)
+        self.assertEqual(status, 200)
+        self.assertEqual(report['eligible_iv_count'], 1)
+        self.assertEqual(report['native_battles_run'], 0)
+        self.assertFalse(report['battle_outcomes_verified'])
+        self.assertEqual(self.compare({**request, 'battle_key': '0' * 64})[0], 400)
+        self.assertEqual(self.compare({**request, 'owner_scope': 'other'})[0], 400)
+        self.assertEqual(self.compare({**request, 'iv_floors': [True, 15, 15]})[0], 400)
+
     def test_nonneutral_setup_produces_conditional_role_alternative(self):
         payload = case(energy=20)
         code, initial = self.compare(payload)
