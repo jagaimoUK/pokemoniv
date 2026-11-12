@@ -55,6 +55,53 @@ class OwnershipTests(unittest.TestCase):
                 "SELECT 1 FROM sqlite_schema WHERE name='should_not_be_written'").fetchone())
             self.assertEqual(db.execute('SELECT COUNT(*) FROM ownership_events_v1').fetchone()[0], 1)
 
+    def test_disk_full_abort_is_atomic_for_owned_instance_history_and_revision(self):
+        """Inject an actual SQLite statement abort, in DELETE and external WAL modes.
+
+        A late append failure must roll back the earlier instance UPDATE and
+        ledger revision bump. Never mutate production data or require ENOSPC.
+        """
+        for journal_mode in ('delete', 'wal'):
+            with self.subTest(journal_mode=journal_mode):
+                isolated = BattleStore(self.root / f'injected-{journal_mode}.sqlite3')
+                owner = Ownership(isolated, species_ids=self.inventory.species_ids)
+                other = Ownership(BattleStore(isolated.path, owner_scope='other'),
+                                  species_ids=self.inventory.species_ids)
+                owner.register('subject', self.observed)
+                before = owner.get('subject')
+                before_revision = owner.revision()
+                with closing(sqlite3.connect(isolated.path)) as db:
+                    selected, = db.execute(f'PRAGMA journal_mode={journal_mode}').fetchone()
+                    self.assertEqual(selected, journal_mode)
+                    db.execute("""
+                        CREATE TRIGGER simulate_disk_full BEFORE INSERT
+                        ON ownership_events_v1 BEGIN
+                            SELECT RAISE(ABORT, 'database or disk is full');
+                        END
+                    """)
+                with self.assertRaisesRegex(sqlite3.DatabaseError, 'database or disk is full'):
+                    owner.confirm('confirmed-event', 'subject', expected_revision=0,
+                                  state='confirmed_owned')
+                self.assertEqual(owner.get('subject'), before)
+                self.assertEqual(owner.revision(), before_revision)
+                self.assertEqual(owner.history('subject'), [])
+                self.assertIsNone(other.get('subject'))
+                self.assertEqual(other.revision(), 0)
+                with closing(sqlite3.connect(isolated.path)) as db:
+                    self.assertEqual(db.execute(
+                        'SELECT COUNT(*) FROM ownership_events_v1').fetchone()[0], 0)
+                    db.execute('DROP TRIGGER simulate_disk_full')
+                event = owner.confirm('confirmed-event', 'subject', expected_revision=0,
+                                      state='confirmed_owned')
+                self.assertEqual(event['new_state'], 'confirmed_owned')
+                self.assertEqual(owner.get('subject')['state'], 'confirmed_owned')
+                self.assertEqual(owner.revision(), before_revision + 1)
+                self.assertEqual(len(owner.history('subject')), 1)
+                self.assertEqual(owner.confirm('confirmed-event', 'subject',
+                                               expected_revision=0,
+                                               state='confirmed_owned'), event)
+                self.assertIsNone(other.get('subject'))
+
     def test_equal_ivs_keep_distinct_ids_and_only_confirmation_changes_ownership(self):
         result = self.service.simulate(self.spec)
         plan = self.analysis.save_plan(self.service, [self.spec])
