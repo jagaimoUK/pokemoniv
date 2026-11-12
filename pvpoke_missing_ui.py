@@ -433,11 +433,23 @@ async function compareSavedTactics(){
  node('p','標準状態：'+(gaps[data.standard_state]?.[0]||'不明')+
   ' ／ 新規対戦 '+data.new_battles+'件',root,'muted');
  node('p','理論上の戦術であり、観測情報に基づく実戦再現性は未検証です。',root,'muted');
- for(const build of data.builds){
+ node('p','以下は保存済み戦術だけの参考順です。既存の推薦順・所持判定・不足判定は変更しません。',root,'muted');
+ for(const build of [...data.builds].sort((a,b)=>
+  (a.advisory?.evidence_order??999)-(b.advisory?.evidence_order??999))){
   if(!build.conditions.length)continue;
-  const group=detail(root,'候補 '+build.build_id.slice(0,12)+'…','candidate');
+  const advisory=build.advisory;
+  const group=detail(root,(advisory?'参考'+advisory.evidence_order+'位 · ':'')+
+   '候補 '+build.build_id.slice(0,12)+'…','candidate');
   node('p',build.theoretical_all_conditions?'全指定対面に理論上の勝ち筋があります。実戦の充足は未確認です。':
    '全指定対面での役割充足は証明できていません。',group);
+  if(advisory){
+   node('p','指定条件 '+advisory.required_conditions+'件 ／ 実際に確認 '+advisory.tested_conditions+
+    '件 ／ 固定戦術で条件達成 '+advisory.theoretical_supported_conditions+'件 ／ 不利シールドで達成 '+
+    advisory.unfavorable_shield_conditions+'件',group,'muted');
+   if(advisory.only_observed_complete_build)
+    node('p','今回選んだ個体・保存済み戦術の範囲では、全条件を満たした候補はこの個体だけです。未探索個体との比較ではありません。',group,'muted');
+   node('p','代替の実用性：未検証（相手の判断・非公開情報への依存は排除できていません）',group,'muted');
+  }
   for(const condition of build.conditions){
    const box=detail(group,'重要対面：検証 '+condition.tested_scripts+'／条件達成 '+condition.matching_scripts,'match');
    node('p','標準計算：'+(condition.standard.meets===true?'条件達成':condition.standard.meets===false?'条件未達':'証拠不足'),box);
