@@ -200,6 +200,53 @@ class TacticEvidenceTests(unittest.TestCase):
         self.assertEqual(result['new_battles'], 0)
         self.assertEqual(snapshot['state'], 'evidence_pending')
 
+    def test_sampled_opponent_responses_never_promote_live_role(self):
+        """Compare native evidence only for the *same* declared self script."""
+        self.search.step(self.search_id, budget=2)
+        with patch('pvpoke_sandbox.subprocess.run',
+                   side_effect=AssertionError('Saved comparison must not simulate')):
+            result = compare_tactics(self.service, self.evaluation['evaluation_id'],
+                                     [self.search_id])
+        condition = result['builds'][0]['conditions'][0]
+        self.assertEqual(condition['tested_scripts'], 2)
+        self.assertTrue(condition['response_sensitivity'])
+        group = condition['response_sensitivity'][0]
+        self.assertEqual(group['tested_scenarios'], 2)
+        self.assertEqual(group['matching_scenarios'] + group['nonmatching_scenarios'] +
+                         group['unverified_scenarios'], 2)
+        self.assertFalse(group['opponent_scenarios_exhaustive'])
+        self.assertFalse(group['observation_conditioned'])
+        self.assertEqual(group['live_reproducibility'], 'not_verified')
+        self.assertFalse(result['builds'][0]['practical_role_covered'])
+
+    def test_response_disagreement_requires_two_verified_opposite_outcomes(self):
+        from pvpoke_tactic_evidence import _response_sensitivity, _self_script_fingerprint
+        common = {'spec': {'actions': [
+            {'id': 'mine', 'actor': 0, 'turn': 3, 'kind': 'charged', 'move_id': 'AQUA_TAIL'},
+            {'id': 'enemy', 'actor': 1, 'turn': 3, 'kind': 'charged', 'move_id': 'ICE_BEAM'}],
+            'shield_decisions': []}}
+        with_shield = {'spec': {**common['spec'], 'shield_decisions': [
+            {'action_id': 'enemy', 'defender': 0, 'use_shield': True}]}}
+        without_shield = _self_script_fingerprint(common)
+        with_shield_id = _self_script_fingerprint(with_shield)
+        self.assertNotEqual(without_shield, with_shield_id)
+        rows = [{'self_script_fingerprint': without_shield, 'strategy': 'fixed',
+                 'meets': value} for value in (True, False, None)]
+        rows += [{'self_script_fingerprint': with_shield_id, 'strategy': 'fixed',
+                  'meets': True}]
+        groups = _response_sensitivity(rows)
+        self.assertEqual(len(groups), 2)
+        diverged = next(row for row in groups if row['self_script_fingerprint'] == without_shield)
+        self.assertEqual((diverged['matching_scenarios'], diverged['nonmatching_scenarios'],
+                          diverged['unverified_scenarios']), (1, 1, 1))
+        self.assertTrue(diverged['observed_disagreement'])
+        self.assertFalse(diverged['all_sampled_scenarios_meet'])
+        isolated = next(row for row in groups if row['self_script_fingerprint'] == with_shield_id)
+        self.assertEqual(isolated['tested_scenarios'], 1)
+        self.assertTrue(isolated['all_sampled_scenarios_meet'])
+        self.assertFalse(isolated['opponent_scenarios_exhaustive'])
+        self.assertEqual(isolated['live_reproducibility'], 'not_verified')
+
     def test_invalid_search_list_is_not_accepted(self):
         for search_ids in ([], [self.search_id] * 2, ['xyz'], [self.search_id] * 7, 'bad'):
             with self.assertRaises(ValueError):

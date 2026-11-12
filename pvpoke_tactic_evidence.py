@@ -52,6 +52,56 @@ def _information_assumptions(candidate):
     return assumptions
 
 
+def _self_script_fingerprint(candidate):
+    """Group *specified* self actions, not a purported live controller.
+
+    In particular, choosing to shield an incoming charge is a self decision:
+    alternate shield choices must not be merged into one supposed policy.
+    The opposing move's ID is deliberately absent from this self-side key.
+    """
+    spec = candidate['spec']
+    own = sorted(
+        (action['turn'], action['kind'], action.get('move_id'))
+        for action in spec['actions'] if action['actor'] == 0
+    )
+    actions = {action['id']: action for action in spec['actions']}
+    shields = sorted(
+        (actions[choice['action_id']]['turn'], choice['use_shield'])
+        for choice in spec['shield_decisions'] if choice['defender'] == 0
+    )
+    return _json_hash([own, shields])
+
+
+def _response_sensitivity(paths):
+    """Summarize verified outcomes for identical fixed self actions.
+
+    These are *sampled counterfactuals*, not an exhaustive opponent game tree,
+    an observation-conditioned policy, or a proof of a practical role.
+    """
+    by_script = defaultdict(list)
+    for row in paths:
+        by_script[row['self_script_fingerprint']].append(row)
+    groups = []
+    for key, rows in by_script.items():
+        yes = sum(row['meets'] is True for row in rows)
+        no = sum(row['meets'] is False for row in rows)
+        unknown = len(rows) - yes - no
+        groups.append({
+            'self_script_fingerprint': key,
+            'strategy': rows[0]['strategy'],
+            'tested_scenarios': len(rows),
+            'matching_scenarios': yes,
+            'nonmatching_scenarios': no,
+            'unverified_scenarios': unknown,
+            'observed_disagreement': bool(yes and no),
+            'all_sampled_scenarios_meet': bool(yes and no == 0 and unknown == 0),
+            'opponent_scenarios_exhaustive': False,
+            'observation_conditioned': False,
+            'live_reproducibility': 'not_verified',
+        })
+    return sorted(groups, key=lambda item: (item['strategy'], item['self_script_fingerprint']))
+
+
 def _required_slots(cell, requirements):
     """One normalized saved matchup may match an exact or full-HP role anchor."""
     slots = [condition_id(cell['spec'])]
@@ -166,6 +216,7 @@ def compare_tactics(service, evaluation_id, search_ids):
                     'reproducibility': 'not_verified',
                     'observation_conditioned': False,
                     'information_assumptions': _information_assumptions(candidate),
+                    'self_script_fingerprint': _self_script_fingerprint(candidate),
                 })
     builds = []
     for candidate in role['candidates']:
@@ -188,6 +239,10 @@ def compare_tactics(service, evaluation_id, search_ids):
                 'standard': standard[build, slot],
                 'tested_scripts': checked[build, slot],
                 'matching_scripts': matches[build, slot],
+                'response_sensitivity': _response_sensitivity(items)[:MAX_PATHS_SHOWN],
+                'response_sensitivity_truncated': (
+                    len({item['self_script_fingerprint'] for item in items}) > MAX_PATHS_SHOWN
+                ),
                 'unfavorable_shields': own['initial']['shields'] < opponent['initial']['shields'],
                 'paths': (positive + rest)[:MAX_PATHS_SHOWN],
                 'truncated': len(items) > MAX_PATHS_SHOWN,

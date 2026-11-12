@@ -491,6 +491,16 @@ async function compareSavedTactics(){
   for(const condition of build.conditions){
    const box=detail(group,'重要対面：検証 '+condition.tested_scripts+'／条件達成 '+condition.matching_scripts,'match');
    node('p','標準計算：'+(condition.standard.meets===true?'条件達成':condition.standard.meets===false?'条件未達':'証拠不足'),box);
+   for(const group of condition.response_sensitivity||[]){
+    const label='自分の固定行動「'+group.strategy+'」：保存済みシナリオ '+
+      group.tested_scenarios+'件 ／ 条件達成 '+group.matching_scenarios+
+      '件 ／ 未達 '+group.nonmatching_scenarios+
+      '件 ／ 判定保留 '+group.unverified_scenarios+'件。';
+    node('p',label+(group.observed_disagreement?'相手側の条件で結果が変わっています。':
+      '結果が変わらないと証明したものではありません。')+
+      ' 相手の全行動は未網羅、実戦再現性も未検証です。',box,'muted');
+   }
+   if(condition.response_sensitivity_truncated)node('p','固定行動別の概要は一部のみ表示しています。',box,'muted');
    for(const path of condition.paths){
     node('p',path.strategy+' ／ 相手の反応 '+path.opponent_response+' ／ '+
       (path.meets===true?'戦術で条件達成':path.meets===false?'条件未達':'未実行・未確定')+
