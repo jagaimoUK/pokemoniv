@@ -146,8 +146,13 @@ def _explore(service, payload):
         bits ^= lsb
     return {'state': step['state'], 'new_battles': step['new_battles'],
             'eligible_iv_count': coverage['eligible_iv_count'], 'qualifying_count': count,
-            'completed_iv_count': coverage['all_completed_iv_count'], 'qualifying': examples,
-            'can_calculate': _can_calculate()}
+            'completed_iv_count': coverage['all_completed_iv_count'],
+            # Every IV lacking at least one required matchup is still not fully
+            # tested. This can include known failures; it is *not* a count of
+            # possible wins and must never be merged into qualifying_count.
+            'not_fully_tested_iv_count': (
+                coverage['eligible_iv_count'] - coverage['all_completed_iv_count']),
+            'qualifying': examples, 'can_calculate': _can_calculate()}
 
 
 def app_operation(service, payload):

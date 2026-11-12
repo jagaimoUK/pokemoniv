@@ -151,6 +151,17 @@ class MissingLocalTests(server.ServerFixture):
         self.assertEqual(explored['not_fully_tested_iv_count'], 4096)
         self.assertIn('全条件の検証が未完了', HTML)
         self.assertIn('達成確認済み', HTML)
+        # After exactly one native battle, one IV may be fully assessed.
+        status, progressed = self.compare({
+            'action': 'explore',
+            'evaluation_id': compared['evaluation_id'],
+            'build_id': compared['reference']['build_id'],
+            'budget': 1,
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(progressed['completed_iv_count'], 1)
+        self.assertEqual(progressed['not_fully_tested_iv_count'], 4095)
+        self.assertEqual(progressed['new_battles'], 1)
 
     def test_cross_species_partial_evidence_cannot_be_combined_into_one_role(self):
         """Two builds each clearing a different matchup are not substitutable."""

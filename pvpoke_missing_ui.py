@@ -358,8 +358,8 @@ function renderExploration(parent,result){
  const actions=node('div',null,panel,'actions');
  async function read(budget){
   const data=await api('missing-analysis',{action:'explore',evaluation_id:result.evaluation_id,build_id:result.reference.build_id,budget});
-  info.textContent='全条件を計算済み '+data.completed_iv_count+' / '+data.eligible_iv_count+'通り ／ 条件達成 '+data.qualifying_count+'通り';
-  examples.textContent=data.qualifying.length?'達成したIV'+(data.qualifying_count>data.qualifying.length?'（一部）':'')+'　'+data.qualifying.map(ivText).join('、'):'';
+  info.textContent='全条件を計算済み '+data.completed_iv_count+' / '+data.eligible_iv_count+'通り ／ 達成確認済み '+data.qualifying_count+'通り ／ 全条件の検証が未完了 '+data.not_fully_tested_iv_count+'通り';
+  examples.textContent=data.qualifying.length?'達成を確認したIV'+(data.qualifying_count>data.qualifying.length?'（一部）':'')+'　'+data.qualifying.map(ivText).join('、'):'';
   announce(budget?'新規対戦 '+data.new_battles+'件。探索の進捗を更新しました。':'保存済みの探索範囲を確認しました。');
  }
  button(actions,'探索範囲を確認',()=>perform(()=>read(0)),'quiet');
