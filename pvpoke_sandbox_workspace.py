@@ -6,6 +6,7 @@ import time
 
 from pvpoke_battle_service import MAX_REQUEST_BYTES, _canonical_json, _identifier, _integer, _json_hash, _object
 from pvpoke_sandbox import SandboxService
+from pvpoke_tactic_search import TacticSearch
 
 API_PATH = '/api/sandbox'
 APP_PATH = '/app-api/sandbox'
@@ -25,6 +26,10 @@ class TacticUnavailable(ValueError):
 
 def enabled():
     return os.environ.get('PVP_SANDBOX_ENABLED') == '1'
+
+
+def search_enabled():
+    return os.environ.get('PVP_TACTIC_SEARCH_ENABLED') == '1'
 
 
 def _id(value):
@@ -152,6 +157,19 @@ def app_operation(service, payload):
         spec, _ = sandbox.prepare(payload['spec'])
         return service.simulate({'schema': spec['schema'], 'mode': 'standard', 'rules': spec['rules'],
                                  'combatants': spec['combatants']})
+    if action in ('search_start', 'search_step'):
+        if not search_enabled():
+            raise TacticUnavailable('Tactic search is disabled')
+        search = TacticSearch(service)
+        if action == 'search_start':
+            _object(payload, 'start tactic search', ('action', 'spec'))
+            search_id = search.start(payload['spec'])
+            return search.step(search_id, budget=0)
+        _object(payload, 'advance tactic search', ('action', 'search_id', 'budget'))
+        result = search.step(payload['search_id'], budget=payload['budget'])
+        if result is None:
+            raise ValueError('Unknown tactic search')
+        return result
     tactics = TacticStore(service.store)
     if action == 'save':
         _object(payload, 'save tactic request', ('action', 'tactic_id', 'expected_revision', 'name', 'spec'))

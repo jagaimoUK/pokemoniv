@@ -10,6 +10,7 @@ process.env.PVP_PVPOKE_SOURCE = path.resolve(__dirname, '../vendor/pvpoke');
 const {runSandbox} = require('../pvpoke_sandbox_runner.js');
 const gamemasterPath = path.join(__dirname, 'fixtures/strategy_gamemaster.json');
 const html = fs.readFileSync('pvpoke_sandbox_ui.py', 'utf8').split("HTML = r'''")[1].split("'''")[0];
+const searchHtml = html.replace('data-tactic-search="0"','data-tactic-search="1"');
 const digest = tag => crypto.createHash('sha256').update(html.split('<' + tag + '>')[1].split('</' + tag + '>')[0]).digest('base64');
 const csp = "default-src 'none'; connect-src 'self'; script-src 'sha256-" + digest('script') + "'; style-src 'sha256-" + digest('style') + "'";
 const origin = 'http://127.0.0.1:9877';
@@ -62,7 +63,7 @@ async function checkWidth(browser, width) {
       const request = route.request();
       const url = new URL(request.url());
       if (url.pathname === '/app/sandbox') {
-        return route.fulfill({contentType: 'text/html', body: html, headers: {'Content-Security-Policy': csp}});
+        return route.fulfill({contentType: 'text/html', body: searchHtml, headers: {'Content-Security-Policy': csp}});
       }
       if (url.pathname === '/favicon.ico') return route.fulfill({status: 404, body: ''});
       const payload = request.postDataJSON();
@@ -86,6 +87,25 @@ async function checkWidth(browser, width) {
         assert.equal(payload.spec.shield_decisions, undefined);
         assert.equal(payload.spec.combatants[0].initial.energy, 100);
         return route.fulfill({json: fixtureResult(payload.spec).summary});
+      }
+      if (payload.action === 'search_start') {
+        assert.equal(payload.spec.mode, 'sandbox');
+        return route.fulfill({json: {search_id: 'f'.repeat(64), state: 'unknown',
+          coverage: {planned_scripts: 4, attempted_scripts: 0, complete_scripts: 0,
+                     fully_executed_scripts: 0, remaining_scripts: 4},
+          results: [], information_model: 'fixed_script_counterfactual',
+          live_reproducibility: 'not_verified'}});
+      }
+      if (payload.action === 'search_step') {
+        assert.equal(payload.search_id, 'f'.repeat(64));
+        assert.equal(payload.budget, 4);
+        return route.fulfill({json: {search_id: payload.search_id, state: 'partial',
+          coverage: {planned_scripts: 4, attempted_scripts: 1, complete_scripts: 1,
+                     fully_executed_scripts: 1, remaining_scripts: 3},
+          results: [{index: 0, strategy: 'original', response: 'alternate_charged',
+            status: 'complete', outcome: 'self_win', all_self_executed: true,
+            opponent_response_executed: true}], information_model: 'fixed_script_counterfactual',
+          live_reproducibility: 'not_verified'}});
       }
       if (payload.action === 'save') {
         assert.match(payload.tactic_id, /^[a-f0-9]{32}$/);
@@ -183,6 +203,15 @@ async function checkWidth(browser, width) {
     await page.locator('#save').click();
     await page.locator('#save-status').filter({hasText: /保存済みの版 1/}).waitFor();
     assert.equal(tactics.size, 2);
+
+    assert.equal(await page.locator('#tactic-search-panel').isVisible(),true);
+    await page.locator('#tactic-search-panel summary').click();
+    await page.locator('#search-start').click();
+    await page.locator('#search-status').filter({hasText: /候補 4件/}).waitFor();
+    await page.locator('#search-step').click();
+    await page.locator('#search-status').filter({hasText: /検証 1件/}).waitFor();
+    await page.locator('#search-results').getByText(/相手が別のゲージ技を指定/).waitFor();
+    assert.equal(requests.filter(r => r.payload?.action === 'search_step').length, 1);
 
     failNext = true;
     await page.locator('#simulate').click();

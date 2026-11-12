@@ -47,6 +47,19 @@ class SandboxGatewayTests(server.ServerFixture):
             self.assertEqual(request(self.server, APP_PATH, payload, headers=auth)[0], 200)
             call.assert_called_once_with(API_PATH, payload, headers={'X-PvPoke-Token': 'internal-test-token'}, timeout=65)
 
+    def test_search_requests_keep_auth_origin_and_rate_budget(self):
+        auth = {'Authorization': 'Bearer ' + server.gateway.API_KEY, 'Content-Type': 'application/json'}
+        payload = {'action': 'search_step', 'search_id': 'f' * 64, 'budget': 4}
+        with patch.dict(os.environ, {'PVP_SANDBOX_ENABLED': '1', 'PVP_TACTIC_SEARCH_ENABLED': '0'}):
+            self.assertEqual(request(self.server, APP_PATH, payload, headers=auth)[0], 503)
+        with patch.dict(os.environ, {'PVP_SANDBOX_ENABLED': '1', 'PVP_TACTIC_SEARCH_ENABLED': '1'}), patch.object(
+                server.gateway.backend, '_token', return_value='internal-test-token'), patch.object(
+                server.gateway.backend, '_request', return_value={'search_id': 'f' * 64}) as call:
+            self.assertEqual(request(self.server, APP_PATH, payload)[0], 401)
+            self.assertEqual(request(self.server, APP_PATH, payload, headers={**auth, 'Origin': 'https://evil.invalid'})[0], 403)
+            self.assertEqual(request(self.server, APP_PATH, payload, headers=auth)[0], 200)
+            call.assert_called_once_with(API_PATH, payload, headers={'X-PvPoke-Token': 'internal-test-token'}, timeout=65)
+
 
 class SandboxLocalTests(server.ServerFixture):
     handler = server.web.Handler
@@ -66,6 +79,21 @@ class SandboxLocalTests(server.ServerFixture):
         headers = {'Content-Type': 'application/json', 'X-PvPoke-Token': server.web.TOKEN}
         status, body, _ = request(self.server, API_PATH, payload, headers=headers)
         return status, json.loads(body)
+
+    def test_tactic_search_starts_without_battle_and_resumes_with_bounded_budget(self):
+        spec = scripted_spec()
+        with patch.dict(os.environ, {'PVP_TACTIC_SEARCH_ENABLED': '0'}):
+            self.assertEqual(self.call({'action': 'search_start', 'spec': spec})[0], 503)
+        with patch.dict(os.environ, {'PVP_TACTIC_SEARCH_ENABLED': '1'}):
+            with patch.object(SandboxService, 'simulate') as simulate:
+                code, started = self.call({'action': 'search_start', 'spec': spec})
+                self.assertEqual((code, started['coverage']['attempted_scripts']), (200, 0))
+                simulate.assert_not_called()
+            code, advanced = self.call({'action': 'search_step', 'search_id': started['search_id'], 'budget': 1})
+            self.assertEqual(code, 200, advanced)
+            self.assertEqual(advanced['coverage']['attempted_scripts'], 1)
+            self.assertEqual(self.call({'action': 'search_step', 'search_id': started['search_id'], 'budget': 9})[0], 400)
+            self.assertEqual(advanced['live_reproducibility'], 'not_verified')
 
     def test_compute_compare_revision_conflict_and_restoration(self):
         spec = scripted_spec()

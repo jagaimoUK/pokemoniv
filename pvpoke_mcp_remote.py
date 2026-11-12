@@ -388,6 +388,9 @@ class Handler(BaseHTTPRequestHandler):
             from pvpoke_sandbox_ui import HTML as sandbox_html
             page = sandbox_html.replace(
                 '<!--MISSING_ANALYSIS_NAV-->', '<a href="/app/missing">不足分析</a>' if missing_enabled() else '')
+            page = page.replace('data-tactic-search="0"',
+                                'data-tactic-search="1"' if os.environ.get('PVP_TACTIC_SEARCH_ENABLED') == '1'
+                                else 'data-tactic-search="0"')
         elif self.path == '/app/migration':
             page = browser_migration.page()
         elif self.path == '/flashcards':
@@ -437,9 +440,12 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError('入力はJSONオブジェクトで指定してください')
             if workspace:
                 sandbox = self.path == SANDBOX_APP_PATH
+                if sandbox and args.get('action') in ('search_start', 'search_step') and os.environ.get(
+                        'PVP_TACTIC_SEARCH_ENABLED') != '1':
+                    return self.respond(503, {'error': 'Tactic search is disabled'})
                 if not (sandbox_enabled() if sandbox else missing_enabled()):
                     return self.respond(503, {'error': 'Analysis workspace is disabled'})
-                if sandbox and args.get('action') in ('simulate', 'standard') and not self.rate_allowed('compute-owner', 12, 60):
+                if sandbox and args.get('action') in ('simulate', 'standard', 'search_start', 'search_step') and not self.rate_allowed('compute-owner', 12, 60):
                     return
                 endpoint = SANDBOX_API_PATH if sandbox else MISSING_API_PATH
                 try:
