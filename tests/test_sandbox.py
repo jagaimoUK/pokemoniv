@@ -283,6 +283,58 @@ class SandboxTests(unittest.TestCase):
                 self.sandbox._get(key, spec)
             native_process.assert_not_called()
 
+    def test_cmp_draw_and_debuff_native_proofs_survive_saved_cache_validation(self):
+        """Validate real complex native traces, not merely a synthetic phase list."""
+        cmp_spec = battle_spec(left=2, right=0, shields=(0, 0))
+        cmp_spec['mode'] = 'sandbox'
+        for actor in cmp_spec['combatants']:
+            actor['initial'].update(hp=1, energy=100)
+        cmp_spec['actions'] = [
+            {'id': 'cmp_loser', 'actor': 0, 'turn': 1,
+             'kind': 'charged', 'move_id': 'ICE_BEAM'},
+            {'id': 'cmp_winner', 'actor': 1, 'turn': 1,
+             'kind': 'charged', 'move_id': 'AQUA_TAIL'},
+        ]
+        cmp_spec['shield_decisions'] = []
+
+        draw = battle_spec(left=0, right=0, shields=(0, 0))
+        draw['mode'] = 'sandbox'
+        for actor in draw['combatants']:
+            actor['initial'].update(hp=1, energy=100)
+        draw['actions'] = [
+            {'id': 'first', 'actor': 0, 'turn': 1,
+             'kind': 'charged', 'move_id': 'AQUA_TAIL'},
+            {'id': 'second', 'actor': 1, 'turn': 1,
+             'kind': 'charged', 'move_id': 'AQUA_TAIL'},
+        ]
+        draw['shield_decisions'] = []
+
+        debuff = battle_spec(left=5, right=2, shields=(0, 0))
+        debuff['mode'] = 'sandbox'
+        debuff['combatants'][0]['initial']['energy'] = 100
+        debuff['actions'] = [
+            {'id': 'debuff', 'actor': 0, 'turn': 1,
+             'kind': 'charged', 'move_id': 'ICY_WIND'}
+        ]
+        debuff['shield_decisions'] = []
+
+        for name, spec in (('cmp', cmp_spec), ('simultaneous_ko', draw),
+                           ('debuff', debuff)):
+            with self.subTest(condition=name):
+                native = self.sandbox.simulate(spec)
+                self.assertEqual(native['status'], 'complete', native.get('error'))
+                self.assertTrue(native['trace'])
+                if name == 'simultaneous_ko':
+                    self.assertEqual(native['summary']['outcome'], 'simultaneous_ko')
+                if name == 'debuff':
+                    self.assertTrue(any(row['phase'] == 'effects' and
+                                        row['before'][1]['buffs'] != row['after'][1]['buffs']
+                                        for row in native['trace']))
+                with patch('pvpoke_sandbox.subprocess.run',
+                           side_effect=AssertionError('Must read validated cache')) as runner:
+                    self.assertEqual(self.sandbox.simulate(spec), native)
+                    runner.assert_not_called()
+
     def test_wait_only_timeout_is_partial_and_not_saved(self):
         spec = scripted_spec(energy=0)
         spec['actions'] = [

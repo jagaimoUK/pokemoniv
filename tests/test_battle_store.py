@@ -201,6 +201,27 @@ class BattleStoreTests(unittest.TestCase):
                                0)
             self.assertLessEqual(db.execute('PRAGMA page_count').fetchone()[0], expected)
 
+    def test_default_journal_mode_and_synthetic_low_disk_priority(self):
+        """Validate actual journal setting and low-space refusal without real ENOSPC."""
+        from types import SimpleNamespace
+        from pvpoke_battle_store import NONCRITICAL_DISK_RESERVE_BYTES
+
+        store = BattleStore(self.root / 'isolated-disk-policy.sqlite3')
+        with store._writer(critical=True) as db:
+            self.assertEqual(db.execute('PRAGMA journal_mode').fetchone()[0], 'delete')
+            db.execute('CREATE TABLE owner_events (name TEXT PRIMARY KEY)')
+            db.execute('INSERT INTO owner_events VALUES (?)', ('first',))
+        simulated = SimpleNamespace(free=NONCRITICAL_DISK_RESERVE_BYTES - 1)
+        with patch('pvpoke_battle_store.shutil.disk_usage', return_value=simulated):
+            with self.assertRaises(BattleStoreError):
+                with store._writer() as db:
+                    db.execute('INSERT INTO owner_events VALUES (?)', ('disposable',))
+            with store._writer(critical=True) as db:
+                db.execute('INSERT INTO owner_events VALUES (?)', ('second',))
+        with store._reader() as db:
+            self.assertEqual([row[0] for row in db.execute(
+                'SELECT name FROM owner_events ORDER BY name')], ['first', 'second'])
+
     def test_sqlite_full_fails_safely_without_eviction(self):
         original = self.service.simulate(self.spec)
         limited = self.make_service(BattleStore(self.store.path, max_bytes=8192))

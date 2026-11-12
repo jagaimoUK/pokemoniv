@@ -277,6 +277,40 @@ class TacticSearchTests(unittest.TestCase):
         self.assertEqual(result['state'], 'stale')
         self.assertEqual(result['attempts_this_step'], 0)
 
+    def test_hidden_opponent_variations_cannot_change_a_live_self_policy(self):
+        """Planner cannot claim a live policy from moves, IVs or energy unseen."""
+        base = self.seed()
+        hidden_energy = copy.deepcopy(base)
+        hidden_energy['combatants'][1]['initial']['energy'] = 0
+        hidden_ivs = copy.deepcopy(base)
+        hidden_ivs['combatants'][1]['ivs'] = {
+            'attack': 0, 'defense': 0, 'hp': 0}
+        hidden_moves = copy.deepcopy(base)
+        hidden_moves['combatants'][1]['moves']['charged'].reverse()
+        reference = None
+        with patch('pvpoke_sandbox.subprocess.run',
+                   side_effect=AssertionError('Planning may not simulate')) as native:
+            for condition in (base, hidden_energy, hidden_ivs, hidden_moves):
+                identity = self.search.start(condition)
+                plan, _, _ = self.search._load(identity)
+                # Compare identical self scripts across counterfactual opponent
+                # responses; the scripts are not observation-based decisions.
+                original = {
+                    item['strategy']: tuple(
+                        (a['turn'], a['kind'], a.get('move_id'))
+                        for a in item['spec']['actions'] if a['actor'] == 0)
+                    for item in plan['candidates'] if item['response'] == 'original'
+                }
+                if reference is None:
+                    reference = original
+                else:
+                    self.assertEqual(original, reference)
+                progress = self.search.step(identity, budget=0)
+                self.assertEqual(progress['information_model'],
+                                 'fixed_script_counterfactual')
+                self.assertEqual(progress['live_reproducibility'], 'not_verified')
+            native.assert_not_called()
+
     def test_no_unsupported_claim_of_live_reproducibility(self):
         identity = self.search.start(self.seed())
         result = self.search.step(identity, budget=1)
