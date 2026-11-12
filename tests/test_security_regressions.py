@@ -77,6 +77,33 @@ class GatewaySecurityTests(unittest.TestCase):
             self.assertEqual(status, 503)
             self.assertNotIn(b'private-db-details', body)
 
+
+    def test_authenticated_bridge_failures_never_expose_private_upstream_details(self):
+        """No internal URL, backend response body or fake secret in app JSON."""
+        marker = 'TEST_PRIVATE_ENDPOINT_127.0.0.1:8765_TOKEN_NOT_REAL'
+        key = 'Bearer ' + remote.API_KEY
+        with patch.object(remote.backend, 'meta_status', side_effect=remote.backend.BridgeError(
+                'ローカルアプリに接続できません: http://127.0.0.1:8765/' + marker)) as backend:
+            status, _, data = self.request('/app-api/meta-status')
+            self.assertEqual(status, 401)
+            backend.assert_not_called()
+            status, _, data = self.request('/app-api/meta-status', key)
+            self.assertEqual(status, 503)
+            self.assertNotIn(marker.encode(), data)
+            self.assertNotIn(b'127.0.0.1', data)
+            self.assertIn('error', json.loads(data))
+
+        # A remembered app cookie may access app endpoints, but it should
+        # never reveal the backend's private HTTP error response body.
+        cookie = remote.BROWSER_LOGIN.issue().split(';', 1)[0]
+        with patch.object(remote.backend, 'meta_presets', side_effect=remote.backend.BridgeError(
+                'ローカルアプリ HTTP 400: {"error":"' + marker + '"}')):
+            status, _, data = self.request('/app-api/meta-presets', cookie=cookie)
+            self.assertEqual(status, 400)
+            self.assertNotIn(marker.encode(), data)
+            self.assertNotIn(b'127.0.0.1', data)
+            self.assertIn('error', json.loads(data))
+
     def test_backup_store_failure_returns_503(self):
         token = remote.BACKUP_TOKENS.issue()
         with patch.object(self.store, 'active', side_effect=OSError('private-file-details')):

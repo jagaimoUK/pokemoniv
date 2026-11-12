@@ -551,7 +551,16 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(200, result)
         except RecursionError:
             self.respond(400, {'error': 'Request JSON is too deeply nested'})
-        except (ValueError, TypeError, KeyError, backend.BridgeError) as exc:
+        except backend.BridgeError as exc:
+            # The upstream message can contain internal hostnames, paths,
+            # response bodies, or credentials. Never serialize it to a browser.
+            # Preserve useful, explicitly recognized client-error status codes.
+            upstream = re.match(r'^ローカルアプリ HTTP (400|404|409|413|422):', str(exc))
+            status = int(upstream.group(1)) if upstream else 503
+            message = ('入力内容または保存状態を確認してください' if upstream
+                       else '内部計算サービスに接続できません。再試行してください')
+            self.respond(status, {'error': message})
+        except (ValueError, TypeError, KeyError) as exc:
             self.respond(400, {'error': str(exc)})
         except Exception:
             logging.exception('App request failed')
