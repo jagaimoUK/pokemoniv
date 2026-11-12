@@ -152,6 +152,55 @@ class LocalBattleAPITests(ServerFixture):
         return post(self.server, self.path, battle_spec() if spec is None else spec)
 
 
+
+    def test_loopback_host_rebinding_and_content_type_guards(self):
+        """A forged Host must never expose local GET data or run battles."""
+        port = self.server.server_address[1]
+        for path in ('/', '/api/catalog', '/api/status', '/download'):
+            for host in ('attacker.example', f'127.0.0.1:{port}.attacker.example'):
+                with self.subTest(path=path, host=host):
+                    conn = http.client.HTTPConnection(*self.server.server_address, timeout=3)
+                    try:
+                        conn.request('GET', path, headers={'Host': host})
+                        response = conn.getresponse()
+                        data = response.read()
+                        self.assertEqual(response.status, 403)
+                        self.assertNotIn(web.TOKEN.encode(), data)
+                    finally:
+                        conn.close()
+
+        # Ordinary browser/bridge requests still work on both loopback names.
+        for host in (f'127.0.0.1:{port}', f'localhost:{port}'):
+            conn = http.client.HTTPConnection(*self.server.server_address, timeout=3)
+            try:
+                conn.request('GET', '/', headers={'Host': host})
+                response = conn.getresponse()
+                body = response.read()
+                self.assertEqual(response.status, 200)
+                self.assertIn(web.TOKEN.encode(), body)
+            finally:
+                conn.close()
+
+        with patch.object(web, 'DirectMatrixClient') as client:
+            conn = http.client.HTTPConnection(*self.server.server_address, timeout=3)
+            try:
+                conn.request('POST', '/api/battles/simulate',
+                             json.dumps(battle_spec()).encode(),
+                             {'Host': 'attacker.example', 'Content-Type': 'application/json',
+                              'X-PvPoke-Token': web.TOKEN})
+                response = conn.getresponse()
+                response.read()
+                self.assertEqual(response.status, 403)
+            finally:
+                conn.close()
+
+            for disguised in ('text/plain; application/json', 'application/json-invalid'):
+                with self.subTest(content_type=disguised):
+                    code, _ = post(self.server, '/api/battles/simulate', battle_spec(),
+                                   content_type=disguised)
+                    self.assertEqual(code, 415)
+            client.assert_not_called()
+
     def test_unexpected_loopback_failure_does_not_return_private_details(self):
         """Unexpected 500 responses reveal no internal filesystem details."""
         marker = 'TEST_PRIVATE_DB_PATH_TOKEN_NOT_REAL'

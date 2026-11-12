@@ -568,7 +568,20 @@ class Handler(BaseHTTPRequestHandler):
         except BrokenPipeError:
             pass
 
+    def _trusted_local_host(self):
+        """Reject DNS-rebinding Host values on this loopback-only service.
+
+        A browser cannot freely set the Host header. The public gateway
+        remains responsible for user authentication and authorization.
+        """
+        names = self.headers.get_all('Host', [])
+        port = self.server.server_address[1]
+        return (len(names) == 1 and
+                names[0].strip().lower() in (f'127.0.0.1:{port}', f'localhost:{port}'))
+
     def do_GET(self):
+        if not self._trusted_local_host():
+            return self.respond(403, {'error': 'Local host required'})
         path = urlparse(self.path).path
         if path == '/':
             self.respond(200, HTML.replace('__TOKEN__', TOKEN), 'text/html; charset=utf-8')
@@ -643,6 +656,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         global CANCEL_REQUESTED, BATTLE_RUNNING
+        if not self._trusted_local_host():
+            return self.respond(403, {'error': 'Local host required'})
         path = urlparse(self.path).path
         if path not in ('/api/prepare','/api/run','/api/prepare24','/api/run24','/api/cancel','/api/meta/sync','/api/meta/preview','/api/meta/presets',
                         '/api/party/list','/api/party/get','/api/party/save',
@@ -655,10 +670,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(403, {'error':'ローカル画面以外からは操作できません'})
         if self.headers.get('X-PvPoke-Token') != TOKEN:
             return self.respond(403, {'error':'この画面を再読み込みしてください'})
+        # Never accept disguised types such as text/plain;application/json.
+        # Both the app and the internal bridge send application/json.
         content_type = self.headers.get('Content-Type', '')
-        if ('application/json' not in content_type or
-                path in (MISSING_API_PATH, SANDBOX_API_PATH) and
-                content_type.split(';')[0].strip().lower() != 'application/json'):
+        if content_type.split(';', 1)[0].strip().lower() != 'application/json':
             return self.respond(415, {'error':'JSONで送信してください'})
         workspace_route = path in (MISSING_API_PATH, SANDBOX_API_PATH)
         common_battle = workspace_route or path == '/api/battles/simulate'
