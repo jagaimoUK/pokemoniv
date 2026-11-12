@@ -51,7 +51,8 @@ class NativeObservedMultiTurnTests(unittest.TestCase):
             "energy_reserve": 0,
             "shield_rule": shield_rule,
         }
-        return {**native, "gamemaster_path": str(self.client.gamemaster),
+        return {**{key: native[key] for key in ("self", "opponent", "initial", "shields")},
+                "gamemaster_path": str(self.client.gamemaster),
                 "policy": policy, "opponent_shield_rule": enemy_shield_rule}
 
     def native(self, request, *, good=True):
