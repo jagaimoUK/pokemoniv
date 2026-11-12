@@ -74,6 +74,45 @@ class TacticEvidenceTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT COUNT(*) FROM battle_results').fetchone()[0], 0)
         self.assertEqual(self.service.cache_stats['engine_calls'], 0)
 
+    def test_counterfactual_paths_disclose_unobservable_assumptions(self):
+        """A native win must never hide the opponent response assumed in advance."""
+        self.search.step(self.search_id, budget=2)
+        with patch('pvpoke_sandbox.subprocess.run',
+                   side_effect=AssertionError('Audit must reuse native facts')):
+            result = compare_tactics(self.service, self.evaluation['evaluation_id'],
+                                     [self.search_id])
+        self.assertEqual(result['information_fairness'], 'not_established')
+        self.assertEqual(result['live_reproducibility'], 'not_verified')
+        self.assertFalse(result['builds'][0]['practical_role_covered'])
+        paths = result['builds'][0]['conditions'][0]['paths']
+        self.assertGreaterEqual(len(paths), 2)
+        original = next(row for row in paths if row['opponent_response'] == 'original')
+        alternate = next(row for row in paths if row['opponent_response'] == 'alternate_charged')
+        for row in (original, alternate):
+            self.assertIs(row['observation_conditioned'], False)
+            self.assertIn('fixed_timed_self_actions', row['information_assumptions'])
+            self.assertEqual(row['reproducibility'], 'not_verified')
+        self.assertIn('prespecified_opponent_actions', alternate['information_assumptions'])
+        self.assertIn('unrevealed_opponent_charged_move_assumed',
+                      alternate['information_assumptions'])
+
+    def test_shield_choices_in_fixed_scripts_get_conservative_info_warnings(self):
+        from pvpoke_tactic_evidence import _information_assumptions
+        script = {
+            'response': 'alternate_charged_self_shield',
+            'spec': {'actions': [{
+                'id': 'charge', 'actor': 1, 'turn': 3, 'kind': 'charged',
+                'move_id': 'ICE_BEAM'}],
+                'shield_decisions': [
+                    {'action_id': 'charge', 'defender': 0, 'use_shield': True},
+                    {'action_id': 'self_charge', 'defender': 1, 'use_shield': False}]},
+        }
+        assumptions = _information_assumptions(script)
+        self.assertIn('prespecified_opponent_actions', assumptions)
+        self.assertIn('unrevealed_opponent_charged_move_assumed', assumptions)
+        self.assertIn('own_shield_before_opponent_move_reveal', assumptions)
+        self.assertIn('assumed_opponent_shield_choice', assumptions)
+
     def test_wrong_owner_and_unrelated_matchup_are_rejected(self):
         other = BattleService(self.client, store=BattleStore(self.store.path, owner_scope='other'))
         with self.assertRaises(ValueError):

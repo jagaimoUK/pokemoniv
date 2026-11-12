@@ -65,7 +65,7 @@ async function checkWidth(browser, width) {
           theoretical_all_conditions:false,advisory:{evidence_order:1,role_priority:3,
           required_conditions:1,tested_conditions:1,theoretical_supported_conditions:0,
           unfavorable_shield_conditions:0,only_observed_complete_build:false},
-          conditions:[{standard:{meets:null},tested_scripts:1,
+          conditions:[{standard:{meets:null},tested_scripts:1,          conditions:[{standard:{meets:null},tested_scripts:1,
           matching_scripts:0,truncated:false,paths:[{strategy:'original',
           opponent_response:'alternate_charged',meets:null}]}]}]}});
       }
@@ -119,6 +119,8 @@ async function checkWidth(browser, width) {
     await page.getByText(/理論上の戦術であり、観測情報に基づく実戦再現性は未検証です/).waitFor();
     await page.getByText(/以下は保存済み戦術だけの参考順です/).waitFor();
     await page.locator('#tactic-evidence-results details.candidate').first().evaluate(el => {el.open = true});
+    await page.getByText(/代替の実用性：未検証/).waitFor();
+    await page.getByText(/相手の未来の行動を仮定/).waitFor();
     await page.getByText(/代替の実用性：未検証/).waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
     assert.deepEqual(errors, []);

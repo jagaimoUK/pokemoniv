@@ -43,6 +43,23 @@ class MissingGatewayTests(server.ServerFixture):
         self.enterContext(patch.object(server.gateway, 'RATE_BUDGET', server.RateBudget()))
         super().setUp()
 
+    def test_public_pages_cannot_embed_private_keys_and_api_needs_auth(self):
+        """No private credentials or owner data in public app shell/unauth requests."""
+        with patch.dict(os.environ, {
+                'PVP_MISSING_ANALYSIS_ENABLED': '1',
+                'PVP_SANDBOX_ENABLED': '1'}), patch.object(
+                server.gateway.backend, '_request') as backend:
+            for path in ('/app', PAGE_PATH, '/app/sandbox', '/app/party', '/app/migration'):
+                status, body, _ = request(self.server, path)
+                self.assertEqual(status, 200, path)
+                self.assertNotIn(server.gateway.API_KEY.encode(), body, path)
+                self.assertNotIn(server.web.TOKEN.encode(), body, path)
+            for path in (APP_PATH, '/app-api/sandbox'):
+                self.assertEqual(request(self.server, path, {'action': 'list'},
+                                         headers={'Content-Type': 'application/json'})[0],
+                                 401)
+            backend.assert_not_called()
+
     def test_flag_origin_auth_and_fixed_route(self):
         auth = {'Authorization': 'Bearer ' + server.gateway.API_KEY, 'Content-Type': 'application/json'}
         with patch.dict(os.environ, {'PVP_MISSING_ANALYSIS_ENABLED': '0'}):
