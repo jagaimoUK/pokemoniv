@@ -99,6 +99,32 @@ class TacticEvidenceTests(unittest.TestCase):
             with self.assertRaises((ValueError, sqlite3.Error)):
                 compare_tactics(self.service, self.evaluation['evaluation_id'], [self.search_id])
 
+    def test_one_saved_matchup_does_not_fill_a_second_required_matchup(self):
+        second = {**self.standard_spec, 'combatants': [dict(c) for c in self.standard_spec['combatants']]}
+        second['combatants'][1] = {**second['combatants'][1], 'initial': {
+            **second['combatants'][1]['initial'], 'shields': 1}}
+        plan_id = MissingAnalysis(self.store).save_plan(self.service, [self.standard_spec, second])
+        normalized1, _ = self.service._prepare(self.standard_spec)
+        normalized2, _ = self.service._prepare(second)
+        role = {'role_id': 'two_matchups', 'revision': 1, 'priority': 99,
+                'meta_snapshot': 'd' * 64, 'requirements': {
+                    condition_id(normalized1): {'minimum': {'fast_damage': 0}},
+                    condition_id(normalized2): {'minimum': {'fast_damage': 0}}}}
+        snapshot = RoleEvaluation(self.store).evaluate(
+            plan_id, role, active_versions=self.service.versions, normalizer=self.service)
+        self.search.step(self.search_id, budget=2)
+        with patch('pvpoke_sandbox.subprocess.run', side_effect=AssertionError('no new battles')):
+            result = compare_tactics(self.service, snapshot['evaluation_id'], [self.search_id])
+        build = result['builds'][0]
+        self.assertFalse(build['theoretical_all_conditions'])
+        self.assertFalse(build['practical_role_covered'])
+        self.assertEqual(build['advisory']['classification'], 'pending')
+        self.assertEqual(build['advisory']['required_conditions'], 2)
+        self.assertEqual(build['advisory']['tested_conditions'], 1)
+        self.assertEqual(build['advisory']['role_priority'], 99)
+        self.assertEqual(result['new_battles'], 0)
+        self.assertEqual(snapshot['state'], 'evidence_pending')
+
     def test_invalid_search_list_is_not_accepted(self):
         for search_ids in ([], [self.search_id] * 2, ['xyz'], [self.search_id] * 7, 'bad'):
             with self.assertRaises(ValueError):
