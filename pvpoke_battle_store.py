@@ -117,8 +117,18 @@ class BattleStore:
         if type(critical) is not bool:
             raise ValueError('Invalid battle writer priority')
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if not critical and shutil.disk_usage(self.path.parent).free <= NONCRITICAL_DISK_RESERVE_BYTES:
-            raise BattleStoreError('Noncritical battle writes paused to protect disk space')
+        if not critical:
+            if shutil.disk_usage(self.path.parent).free <= NONCRITICAL_DISK_RESERVE_BYTES:
+                raise BattleStoreError('Noncritical battle writes paused to protect disk space')
+            # An externally enabled WAL can exceed the main DB page quota even
+            # while its page_count is tiny. Stop expendable cache writes, never
+            # delete or truncate another process's WAL or user records.
+            try:
+                wal_bytes = self.path.with_name(self.path.name + '-wal').stat().st_size
+            except FileNotFoundError:
+                wal_bytes = 0
+            if wal_bytes > self.max_bytes:
+                raise BattleStoreError('Noncritical battle writes paused: oversized SQLite WAL')
         with closing(sqlite3.connect(self.path, timeout=0.25)) as db, db:
             total_pages = self.max_bytes // db.execute('PRAGMA page_size').fetchone()[0]
             if total_pages < 2:

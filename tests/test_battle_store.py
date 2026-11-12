@@ -222,6 +222,35 @@ class BattleStoreTests(unittest.TestCase):
             self.assertEqual([row[0] for row in db.execute(
                 'SELECT name FROM owner_events ORDER BY name')], ['first', 'second'])
 
+    def test_external_wal_growth_pauses_only_disposable_writes_and_recovers(self):
+        """Real WAL file growth in a disposable local SQLite; NOT disk ENOSPC."""
+        isolated = BattleStore(self.root / 'wal-growth.sqlite3', max_bytes=128 * 1024)
+        with isolated._writer(critical=True) as db:
+            db.execute('CREATE TABLE external_events (value TEXT)')
+            db.execute('INSERT INTO external_events VALUES (?)', ('initial',))
+        with closing(sqlite3.connect(isolated.path)) as external:
+            self.assertEqual(external.execute('PRAGMA journal_mode=WAL').fetchone()[0], 'wal')
+            external.execute('PRAGMA wal_autocheckpoint=0')
+            for sequence in range(45):
+                with external:
+                    external.execute('UPDATE external_events SET value=?', (str(sequence),))
+            wal = isolated.path.with_name(isolated.path.name + '-wal')
+            self.assertGreater(wal.stat().st_size, isolated.max_bytes)
+            with self.assertRaisesRegex(BattleStoreError, 'oversized SQLite WAL'):
+                with isolated._writer() as db:
+                    db.execute('UPDATE external_events SET value=?', ('disposable',))
+            # Important owner-authored changes retain the reserved write path.
+            with isolated._writer(critical=True) as db:
+                db.execute('UPDATE external_events SET value=?', ('critical',))
+            self.assertEqual(external.execute(
+                'SELECT value FROM external_events').fetchone()[0], 'critical')
+            self.assertEqual(external.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0], 0)
+            with isolated._writer() as db:
+                db.execute('UPDATE external_events SET value=?', ('recovered',))
+            self.assertEqual(external.execute(
+                'SELECT value FROM external_events').fetchone()[0], 'recovered')
+            self.assertEqual(external.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+
     def test_sqlite_full_fails_safely_without_eviction(self):
         original = self.service.simulate(self.spec)
         limited = self.make_service(BattleStore(self.store.path, max_bytes=8192))
