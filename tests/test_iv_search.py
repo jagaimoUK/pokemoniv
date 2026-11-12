@@ -132,6 +132,30 @@ class IVSearchTests(unittest.TestCase):
                           only['representatives'][0]['hp']), (15, 15, 15))
         self.assertEqual(self.service.cache_stats['engine_calls'], 0)
 
+    def test_full_opponent_iv_static_preview_profiles_all_4096_without_battles(self):
+        """Probe the actual worst-case candidate pool, not only 1-4 handpicked IVs."""
+        from time import perf_counter
+
+        spec = battle_spec(left=0, right=2, shields=(0, 0))
+        start = perf_counter()
+        with patch.object(self.service, 'simulate',
+                          side_effect=AssertionError('Static profiling must not run battles')):
+            report = self.search.opponent_boundaries(spec)
+        elapsed = perf_counter() - start
+        print(f'Native static opponent IV profiler 4096 candidates: {elapsed:.3f}s')
+        self.assertEqual((report['raw_iv_count'], report['eligible_iv_count'],
+                          report['profiled_iv_count']), (4096, 4096, 4096))
+        self.assertEqual(report['native_battles_run'], 0)
+        self.assertFalse(report['battle_outcomes_verified'])
+        self.assertEqual(report['evidence_class'], 'static_boundaries_only')
+        self.assertEqual(self.service.cache_stats['engine_calls'], 0)
+        self.assertFalse(self.store.path.exists(), 'Read-only profiling must not write SQLite')
+        self.assertTrue(1 <= len(report['representatives']) <= 32)
+        self.assertEqual(len(report['boundary_ivs']), 8)
+        for kind, bits in report['boundary_ivs'].items():
+            self.assertEqual(len(bits), 1024, kind)
+            self.assertEqual(report['boundary_counts'][kind], len(indices(bits)))
+
     def test_opponent_iv_boundary_input_requires_a_valid_iv_floor(self):
         spec = battle_spec()
         for floors in (('14', 14, 15), (True, 14, 15), (16, 0, 0), (0, 0), None):
