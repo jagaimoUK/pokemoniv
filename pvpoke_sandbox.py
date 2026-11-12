@@ -197,8 +197,22 @@ def _validate_cached_sandbox(value, key, spec, versions):
     # A valid digest cannot authenticate an impossible opening state.
     # The native runner records the battle's actual initial snapshot before
     # emitting its first event, including events that are only move starts.
-    if trace and trace[0]['before'] != initial:
+    if not trace or trace[0]['before'] != initial:
         raise ValueError('Stored Sandbox trace starts from an inconsistent state')
+    # In the pinned native runner, "start" records a tap only. Damage/energy
+    # changes occur at "resolve"; buffs and debuffs are recorded at "effects".
+    # Each snapshot must continue exactly from the prior event, and the final
+    # snapshot must equal the battle's declared terminal state.
+    last_state = initial
+    for step in trace:
+        if step['before'] != last_state:
+            raise ValueError('Stored Sandbox trace has a discontinuous state')
+        if step['phase'] == 'start' and step['after'] != step['before']:
+            raise ValueError('Stored Sandbox action start changed battle state')
+        last_state = step['after']
+    if last_state != terminal:
+        raise ValueError('Stored Sandbox trace differs from terminal state')
+
     resolved = [entry for entry in trace if entry['phase'] == 'resolve']
     if len(resolved) != len(events):
         raise ValueError('Saved Sandbox trace is missing resolved moves')
@@ -206,6 +220,12 @@ def _validate_cached_sandbox(value, key, spec, versions):
         if any(step.get(field) != event.get(field) for field in (
                 'turn', 'actor', 'kind', 'move_id', 'action_id')) or step['actual_damage'] != event['damage']:
             raise ValueError('Stored Sandbox trace disagrees with resolved move')
+        target = 1 - event['actor']
+        # Native onMoveResolved captures applied damage and target HP at the
+        # same point, before the post-damage "effects" phase runs.
+        if (step['after'][target]['hp'] != event['target_hp'] or
+                step['before'][target]['hp'] - step['after'][target]['hp'] != event['damage']):
+            raise ValueError('Saved Sandbox resolved HP differs from applied damage')
 
 
 class SandboxService:
