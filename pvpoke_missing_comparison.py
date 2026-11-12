@@ -6,7 +6,8 @@ from pvpoke_iv_search import IVSearch
 from pvpoke_missing_analysis import AnalysisUnavailable, MissingAnalysis
 from pvpoke_ownership import Ownership, OwnershipConflict, build_id
 from pvpoke_role_evaluation import RoleEvaluation, _definition, _hash, condition_id
-from pvpoke_sandbox_workspace import enabled as sandbox_enabled
+from pvpoke_sandbox_workspace import enabled as sandbox_enabled, search_enabled
+from pvpoke_tactic_evidence import compare_tactics
 
 API_PATH = '/api/missing-analysis'
 APP_PATH = '/app-api/missing-analysis'
@@ -155,6 +156,11 @@ def app_operation(service, payload):
         return _comparison(service, payload)
     if action == 'explore':
         return _explore(service, payload)
+    if action == 'tactic_evidence':
+        _object(payload, 'tactic evidence', ('action', 'evaluation_id', 'search_ids'))
+        if not sandbox_enabled() or not search_enabled():
+            raise AnalysisUnavailable('Tactical comparison disabled')
+        return compare_tactics(service, payload['evaluation_id'], payload['search_ids'])
     if action == 'ownership':
         _object(payload, 'ownership confirmation',
                 ('action', 'instance_id', 'event_id', 'expected_revision', 'state'), ('observation', 'register'))

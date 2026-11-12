@@ -35,6 +35,10 @@ input,select,button{font:inherit;color:inherit;min-height:44px;border:1px solid 
 <section class="stack"><div><h2>比較する個体</h2><p class="intro">同じポケモンの別個体や、別のポケモンを最大7体追加できます。手持ちの確認は結果から行えます。</p></div><div id="alternatives" class="stack"></div><div class="actions"><button id="add-alternative" type="button" class="quiet" data-action>比較する個体を追加</button></div></section>
 <div class="actions"><button id="evaluate" class="primary" data-action>保存済みの対面結果を照合</button></div>
 </form>
+<section id="tactic-evidence-panel" class="results stack" hidden><h2>Sandbox戦術の根拠</h2>
+<p>標準計算と指定戦術は別の結果です。実戦再現性は未検証で、所持・役割の判定は変更しません。</p>
+<div class="actions"><button id="tactic-evidence-read" type="button" data-action>保存済み戦術を不足分析と照合</button></div>
+<div id="tactic-evidence-results" class="stack"></div></section>
 <section id="results" class="results stack" aria-labelledby="results-heading" hidden><h2 id="results-heading" tabindex="-1">不足分析の結果</h2><p id="edited" class="muted" hidden>入力が変更されました。表示中の結果は前回の条件です。</p><div id="result-tree"></div></section>
 </div>
 <datalist id="pokemon-list"></datalist>
@@ -54,6 +58,7 @@ const builds={exact:'個体値・CP・Lv・技が一致',unverified:'一致の�
 let credential='',catalog=Object.create(null),moves={},speciesNames=new Map(),busy=false,editRevision=0,displayed=null;
 let reference;
 const alternatives=[],scenarios=[];
+const tacticLinkKey='pokemoniv:tactic-evidence-link-v1';
 
 function node(tag,text,parent,cls){
  const el=document.createElement(tag);
@@ -277,6 +282,11 @@ function renderMatch(parent,condition,current,result,request){
   button(actions,'Sandboxで対面を開く',()=>{
    try{
     sessionStorage.setItem('pokemoniv:sandbox-input-v1',JSON.stringify(condition.spec));
+    let old=null;try{old=JSON.parse(sessionStorage.getItem(tacticLinkKey)||'null');}catch{}
+    const search_ids=old?.evaluation_id===result.evaluation_id&&Array.isArray(old.search_ids)
+      ?old.search_ids.filter(id=>/^[a-f0-9]{64}$/.test(id)).slice(-6):[];
+    sessionStorage.setItem(tacticLinkKey,JSON.stringify({evaluation_id:result.evaluation_id,
+      build_id:current.build_id,search_ids}));
     location.assign('/app/sandbox');
    }catch(error){announce('対戦条件を一時保存できませんでした。',true);}
   },'quiet');
@@ -404,6 +414,43 @@ function confirmOwnership(change,request,form){
   catch(error){announce('所持の確認は記録しました。結果の更新に失敗しました。もう一度照合してください。',true);}
  });
 }
+function linkedTactics(){
+ try{
+  const link=JSON.parse(sessionStorage.getItem(tacticLinkKey)||'null');
+  if(/^[a-f0-9]{64}$/.test(link?.evaluation_id)&&Array.isArray(link.search_ids)&&
+     link.search_ids.length>=1&&link.search_ids.length<=6&&
+     link.search_ids.every(id=>typeof id==='string'&&/^[a-f0-9]{64}$/.test(id)))return link;
+ }catch{}
+ return null;
+}
+async function compareSavedTactics(){
+ const link=linkedTactics();if(!link)throw Error('保存済みの戦術探索が見つかりません。');
+ const data=await api('missing-analysis',{action:'tactic_evidence',
+  evaluation_id:link.evaluation_id,search_ids:link.search_ids});
+ if(data.schema!=='missing-tactic-evidence-v1'||!Array.isArray(data.builds))
+  throw Error('戦術証拠の形式が異なります。');
+ const root=$('tactic-evidence-results');root.replaceChildren();
+ node('p','標準状態：'+(gaps[data.standard_state]?.[0]||'不明')+
+  ' ／ 新規対戦 '+data.new_battles+'件',root,'muted');
+ node('p','理論上の戦術であり、観測情報に基づく実戦再現性は未検証です。',root,'muted');
+ for(const build of data.builds){
+  if(!build.conditions.length)continue;
+  const group=detail(root,'候補 '+build.build_id.slice(0,12)+'…','candidate');
+  node('p',build.theoretical_all_conditions?'全指定対面に理論上の勝ち筋があります。実戦の充足は未確認です。':
+   '全指定対面での役割充足は証明できていません。',group);
+  for(const condition of build.conditions){
+   const box=detail(group,'重要対面：検証 '+condition.tested_scripts+'／条件達成 '+condition.matching_scripts,'match');
+   node('p','標準計算：'+(condition.standard.meets===true?'条件達成':condition.standard.meets===false?'条件未達':'証拠不足'),box);
+   for(const path of condition.paths){
+    node('p',path.strategy+' ／ 相手の反応 '+path.opponent_response+' ／ '+
+      (path.meets===true?'戦術で条件達成':path.meets===false?'条件未達':'未実行・未確定')+
+      ' ／ 実戦再現性は未検証',box,'muted');
+   }
+   if(condition.truncated)node('p','表示は8件まで。件数は全件を集計しています。',box,'muted');
+  }
+ }
+ announce('標準対戦・保有状態を変更せず、保存済み戦術を照合しました。');
+}
 async function connect(manual){
  if(manual)credential=$('credential').value.trim();
  announce('ポケモンと技の一覧を読み込んでいます。');
@@ -413,6 +460,7 @@ async function connect(manual){
   moves=data.moves||{};speciesList(data.species);
   $('credential').value='';$('login').hidden=true;$('workspace').hidden=false;
   reference=buildEditor($('reference'),'基準個体',{open:true});addScenario(false);
+   $('tactic-evidence-panel').hidden=!linkedTactics();
   announce('基準個体と対面を入力してください。');
  }catch(error){
   credential='';$('login').hidden=false;
@@ -437,6 +485,7 @@ $('analysis-form').addEventListener('submit',event=>{
   announce('保存済みの結果を照合しました。');$('results-heading').focus();
  });
 });
+$('tactic-evidence-read').addEventListener('click',()=>perform(compareSavedTactics));
 $('add-scenario').addEventListener('click',()=>addScenario(true));
 $('add-alternative').addEventListener('click',addAlternative);
 perform(()=>connect(false));
