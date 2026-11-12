@@ -65,9 +65,12 @@ async function checkWidth(browser, width) {
           theoretical_all_conditions:false,advisory:{evidence_order:1,role_priority:3,
           required_conditions:1,tested_conditions:1,theoretical_supported_conditions:0,
           unfavorable_shield_conditions:0,only_observed_complete_build:false},
-          conditions:[{standard:{meets:null},tested_scripts:1,          conditions:[{standard:{meets:null},tested_scripts:1,
+          conditions:[{standard:{meets:null},tested_scripts:1,
           matching_scripts:0,truncated:false,paths:[{strategy:'original',
-          opponent_response:'alternate_charged',meets:null}]}]}]}});
+          opponent_response:'alternate_charged',meets:null,
+          observation_conditioned:false,information_assumptions:[
+            'fixed_timed_self_actions','prespecified_opponent_actions',
+            'unrevealed_opponent_charged_move_assumed']}]}]}]}});
       }
       if (payload.action === 'explore') {
         assert.ok([0,32].includes(payload.budget));

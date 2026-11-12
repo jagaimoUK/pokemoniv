@@ -495,6 +495,17 @@ async function compareSavedTactics(){
     node('p',path.strategy+' ／ 相手の反応 '+path.opponent_response+' ／ '+
       (path.meets===true?'戦術で条件達成':path.meets===false?'条件未達':'未実行・未確定')+
       ' ／ 実戦再現性は未検証',box,'muted');
+    const assumptions=Array.isArray(path.information_assumptions)?path.information_assumptions:[];
+    const labels={
+     fixed_timed_self_actions:'自分の行動を事前に固定',
+     prespecified_opponent_actions:'相手の未来の行動を仮定',
+     unrevealed_opponent_charged_move_assumed:'未公開の相手ゲージ技を仮定',
+     assumed_opponent_shield_choice:'相手のシールド判断を仮定',
+     own_shield_before_opponent_move_reveal:'相手の技が分かる前にシールド判断'
+    };
+    if(assumptions.length)node('p','情報の前提：'+assumptions.map(
+     code=>labels[code]||'未分類の前提').join('・')+
+     '。実戦で選べる行動とは限りません。',box,'muted');
    }
    if(condition.truncated)node('p','表示は8件まで。件数は全件を集計しています。',box,'muted');
   }

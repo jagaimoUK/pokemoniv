@@ -24,6 +24,31 @@ class TacticEvidenceUnavailable(ValueError):
     """The saved role or tactic evidence is stale, corrupt, or no longer complete."""
 
 
+def _information_assumptions(candidate):
+    """Conservatively disclose unobserved choices a fixed script assumes.
+
+    This is an *explanation of counterfactual inputs*, never a prediction of
+    live reproducibility or proof that a hidden choice is necessary to win.
+    """
+    spec = candidate['spec']
+    actions = spec['actions']
+    decisions = spec['shield_decisions']
+    assumptions = ['fixed_timed_self_actions']
+    if any(action['actor'] == 1 for action in actions):
+        assumptions.append('prespecified_opponent_actions')
+    if candidate['response'] in ('alternate_charged', 'alternate_charged_self_shield'):
+        assumptions.append('unrevealed_opponent_charged_move_assumed')
+    if any(choice['defender'] == 1 for choice in decisions):
+        assumptions.append('assumed_opponent_shield_choice')
+    if (any(choice['defender'] == 0 for choice in decisions) and
+            any(action['actor'] == 1 and action['kind'] == 'charged'
+                for action in actions)):
+        # In GO, the charged move's identity has not been shown when the
+        # defending player must commit to shielding or not shielding.
+        assumptions.append('own_shield_before_opponent_move_reveal')
+    return assumptions
+
+
 def _required_slots(cell, requirements):
     """One normalized saved matchup may match an exact or full-HP role anchor."""
     slots = [condition_id(cell['spec'])]
@@ -136,6 +161,8 @@ def compare_tactics(service, evaluation_id, search_ids):
                     'classification': 'opponent_response_dependent'
                         if candidate['response'] != 'original' else 'specific_fixed_script',
                     'reproducibility': 'not_verified',
+                    'observation_conditioned': False,
+                    'information_assumptions': _information_assumptions(candidate),
                 })
     builds = []
     for candidate in role['candidates']:
