@@ -100,3 +100,29 @@ native cooldown and at-least-two-turn difference between proposal and
 damage resolution. Two-turn Mud Shot is already exercised. The 1-, 4-, and
 5-turn fast-move cases remain untested; random tie CMP and KO-before-charge
 also need targeted adversarial evidence. All changes are still harness-only.
+
+## Stage: 1/4/5-turn boundaries, equal-CMP, and KO-before-resolution
+
+The **legal** Quagsire WATER_GUN fixture tests the 1-turn case. Since the
+minimal seven-species test GameMaster has no legally equipped 4- or 5-turn
+fast move, the tests create ephemeral, local **synthetic** GameMaster copies
+where Quagsire is allowed to learn CONFUSION (4 turns) or INCINERATE (5 turns).
+These test only the pinned native engine's cooldown and action-resolution
+timing, **not** a legal GO team or important IV.
+
+All 1/4/5-turn cases compare expected damage resolution turn =
+requested turn + (fast move duration - 1), using the actual native result;
+the prior two-/three-turn tests remain unchanged. Equally matched Quagsire
+IV/level exposes a same-stat CMP turn; the counterfactual output explicitly
+counts equal-stat simultaneous charges without treating deterministic native
+tie order as evidence of real GO tie probability. A low-HP Azumarill scenario
+tests that losing CMP and fainting before its declared charge does **not**
+mark the action resolved.
+
+Only `native_cmp_audit.equal_stat_turns_with_no_priority_claim` is added
+to the **test harness output**, not the public API. No vendor implementation,
+recommended IV, persistence, user data, or production endpoint is altered.
+
+All new tests must pass at the final commit SHA; if the native timing differs
+from these hypotheses, reject or correct only the documented test oracle
+based on actual pinned `Battle.js`, not by silently inventing game logic.

@@ -315,9 +315,11 @@ function runObserved(input) {
     cmpTurns.get(event.turn).push(event.actor);
   }
   let cmpChecked = 0;
+  let cmpEqualStatTurns = 0;
   for (const actors of cmpTurns.values()) {
     if (!actors.includes(0) || !actors.includes(1)) continue;
     cmpChecked++;
+    if (nativeCmpAttack[0] === nativeCmpAttack[1]) cmpEqualStatTurns++;
     const expectedFirst = nativeCmpAttack[0] > nativeCmpAttack[1] ? 0 :
       nativeCmpAttack[1] > nativeCmpAttack[0] ? 1 : null;
     if (expectedFirst !== null && actors[0] !== expectedFirst) {
@@ -339,6 +341,7 @@ function runObserved(input) {
     self_shield_prompts: shieldPrompts,
     self_fast_move_turns: ownFastTurns,
     native_cmp_audit: {simultaneous_charge_turns_checked: cmpChecked,
+                       equal_stat_turns_with_no_priority_claim: cmpEqualStatTurns,
                        compared_using_private_native_stats_only: true},
     opponent_attack_rule: input.opponent_attack_rule,
     observed_opponent_event_count: observed.length,

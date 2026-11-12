@@ -262,6 +262,87 @@ class NativeObservedMultiTurnTests(unittest.TestCase):
             self.assertEqual(propose(row["visible"], req["policy"])["action"],
                              row["action"])
 
+    def test_fast_move_native_1_4_5_turn_boundaries_without_user_data(self):
+        # WATER_GUN is genuinely legal on Quagsire. The other two are
+        # synthetic move combinations in a disposable copy of the *fixture*
+        # GameMaster to exercise the native 4/5-turn timing code. They do NOT
+        # represent legal GO matchups or practical role recommendations.
+        original = json.loads((FIXTURES / "strategy_gamemaster.json").read_text())
+        for move, turns, synthetic in (
+                ("WATER_GUN", 1, False),
+                ("CONFUSION", 4, True),
+                ("INCINERATE", 5, True)):
+            with self.subTest(fast=move, turns=turns):
+                req = self.request(energy=0, enemy_energy=0, shields=(1, 1),
+                                   shield_rule="never")
+                req["self"]["fast"] = move
+                if synthetic:
+                    copied = copy.deepcopy(original)
+                    species = next(p for p in copied["pokemon"]
+                                   if p["speciesId"] == "quagsire")
+                    self.assertNotIn(move, species["fastMoves"])
+                    species["fastMoves"].append(move)
+                    master = self.root / ("synthetic-" + move + ".json")
+                    master.write_text(json.dumps(copied, sort_keys=True))
+                    req["gamemaster_path"] = str(master)
+                result = self.native(req)
+                self.assertEqual(result["self_fast_move_turns"], turns)
+                self.assertFalse(result["practical_role_covered"])
+                self.assertEqual(result["live_reproducibility"], "not_verified")
+                fasts = [row for row in result["own_proposals"]
+                         if row["action"]["kind"] == "fast"
+                         and row["native_resolution"] is not None]
+                self.assertGreaterEqual(len(fasts), 2)
+                self.assertEqual(fasts[0]["native_resolution"]["move_id"], move)
+                self.assertEqual(fasts[0]["native_resolution"]["turn"],
+                                 fasts[0]["turn"] + turns - 1)
+                self.assertGreaterEqual(fasts[1]["turn"] - fasts[0]["turn"], turns)
+                for row in result["own_proposals"]:
+                    self.assertEqual(propose(row["visible"], req["policy"])["action"],
+                                     row["action"])
+
+    def test_equal_attack_cmp_cannot_prove_random_tie_win(self):
+        req = self.request(energy=100, enemy_energy=100, shields=(2, 2),
+                           shield_rule="always",
+                           opponent_attack_rule="charge_if_ready")
+        req["opponent"] = copy.deepcopy(req["self"])
+        req["initial"][1] = copy.deepcopy(req["initial"][0])
+        result = self.native(req)
+        audit = result["native_cmp_audit"]
+        self.assertGreater(audit["simultaneous_charge_turns_checked"], 0)
+        self.assertGreater(audit["equal_stat_turns_with_no_priority_claim"], 0)
+        self.assertTrue(audit["compared_using_private_native_stats_only"])
+        self.assertEqual(result["status"], "counterfactual_only")
+        self.assertFalse(result["practical_role_covered"])
+        self.assertEqual(result["live_reproducibility"], "not_verified")
+        # The same native tie order in a deterministic engine is NOT proof
+        # of either side winning GO's random CMP tie.
+
+    def test_ko_before_charged_execution_is_not_called_a_success(self):
+        req = self.request(energy=100, enemy_energy=100, shields=(0, 0),
+                           shield_rule="never",
+                           opponent_attack_rule="charge_if_ready")
+        # Low-HP Azumarill loses CMP against Quagsire, which can knock it
+        # out before the selected ICE_BEAM actually resolves.
+        req["self"], req["opponent"] = req["opponent"], req["self"]
+        req["initial"].reverse()
+        req["shields"].reverse()
+        req["initial"][0]["hp_points"] = 1
+        req["policy"]["own_charged_moves"] = [
+            {"move_id": "ICE_BEAM", "energy_cost": 55},
+            {"move_id": "PLAY_ROUGH", "energy_cost": 60},
+        ]
+        result = self.native(req)
+        first = result["own_proposals"][0]
+        self.assertEqual(first["action"],
+                         {"kind": "charged", "move_id": "ICE_BEAM"})
+        self.assertIsNone(first["native_resolution"])
+        self.assertFalse(first["native_resolved_same_turn"])
+        self.assertFalse(result["practical_role_covered"])
+        self.assertEqual(result["live_reproducibility"], "not_verified")
+        self.assertEqual(propose(first["visible"], req["policy"])["action"],
+                         first["action"])
+
 
 if __name__ == "__main__":
     unittest.main()
