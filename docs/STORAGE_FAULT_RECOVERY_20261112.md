@@ -93,3 +93,29 @@ These are newly added tests, **unverified until the exact new commit's
 GitHub Actions Security and regression job passes**. They cannot prove
 power-loss durability, externally concurrent writers, all WAL checkpoint
 failure conditions, or production filesystem semantics.
+
+## Real tmpfs ENOSPC follow-up: DELETE hot-journal recovery
+
+The first execution of the new disposable-volume test reached a genuine
+SQLITE_FULL failure, but a subsequent `mode=ro` open in **DELETE mode**
+raised `sqlite3.OperationalError: attempt to write a readonly database`.
+The normal SQLite tests passed (574 tests, one opt-in skip); only the new
+destructive tmpfs test failed. This is a release-significant recovery gap,
+not evidence that owner records were deleted.
+
+The reader now retries **only** if SQLite reports the extended error
+`SQLITE_READONLY_ROLLBACK` or `SQLITE_READONLY_RECOVERY`. It closes the
+failed read connection, briefly opens the server-owned database writable
+to allow SQLite to replay its own hot journal, checks `PRAGMA quick_check`,
+and then reopens the original read-only connection. There are no manual
+journal deletions, row alterations, schema modifications or unbounded
+retries. If the filesystem is still full or corrupt, it fails closed.
+
+The test also increases the removable dummy file from 512 KiB to 1280 KiB,
+so removing it after the deliberately failed transaction frees adequate
+space for journal recovery on the 2 MiB test filesystem. It still forces
+a 4 MiB SQLite write on that smaller filesystem to cause actual ENOSPC,
+and tests both DELETE and WAL journal modes.
+
+This attempted correction is **not verified until its exact-commit CI
+succeeds**, including both tmpfs subtests and later image security scan.

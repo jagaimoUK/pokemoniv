@@ -53,7 +53,9 @@ class RealENOSPCTests(unittest.TestCase):
                 # Consumes some real tmpfs blocks. Deleting this dummy file
                 # afterwards restores headroom for a legitimate retry.
                 filler = Path(tmp) / 'removable-filler.bin'
-                filler.write_bytes(b'x' * (512 * 1024))
+                # Releasing more than half the tiny filesystem leaves room
+                # for SQLite's own rollback recovery after an ENOSPC failure.
+                filler.write_bytes(b'x' * (1280 * 1024))
                 try:
                     with self.assertRaises(sqlite3.DatabaseError) as error:
                         owner.confirm('after-full', 'subject', expected_revision=0,

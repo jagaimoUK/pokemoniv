@@ -102,10 +102,42 @@ class BattleStore:
 
     @contextmanager
     def _reader(self):
-        with closing(sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True, timeout=0.25)) as db, db:
-            db.execute('BEGIN')
-            if self._version(db) != (APPLICATION_ID, SCHEMA_VERSION):
-                raise BattleStoreError('Unrecognized battle database version')
+        """Read without writes; recover only a known hot rollback journal.
+
+        A physical ENOSPC during a DELETE-mode transaction may leave a hot
+        journal. SQLite cannot replay it through mode=ro and reports
+        SQLITE_READONLY_ROLLBACK. A single bounded writable connection lets
+        SQLite perform its own atomic rollback after capacity is restored.
+        Never delete a journal, rebuild a DB or repeat recovery indefinitely.
+        """
+        def open_verified_reader():
+            db = sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro',
+                                 uri=True, timeout=0.25)
+            try:
+                db.execute('BEGIN')
+                if self._version(db) != (APPLICATION_ID, SCHEMA_VERSION):
+                    raise BattleStoreError('Unrecognized battle database version')
+                return db
+            except BaseException:
+                db.close()
+                raise
+
+        try:
+            db = open_verified_reader()
+        except sqlite3.OperationalError as exc:
+            readonly_recovery = (
+                sqlite3.SQLITE_READONLY_ROLLBACK,
+                sqlite3.SQLITE_READONLY_RECOVERY,
+            )
+            if getattr(exc, 'sqlite_errorcode', None) not in readonly_recovery:
+                raise
+            # Never attempt recovery while the failed read transaction still
+            # holds a lock. Only a trusted server-owned DB path is used.
+            with closing(sqlite3.connect(self.path, timeout=2.0)) as recovering:
+                if recovering.execute('PRAGMA quick_check(1)').fetchone()[0] != 'ok':
+                    raise BattleStoreError('SQLite recovery integrity check failed')
+            db = open_verified_reader()
+        with closing(db), db:
             yield db
 
     @contextmanager
