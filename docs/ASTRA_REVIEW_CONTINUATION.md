@@ -128,3 +128,23 @@ Sources and current limits: the original Japanese request document defines these
 - Initial PR #112 head was \`3d793b9...\`; red test commit \`f02d557...\`. This checkpoint is paired with a new remediation commit on branch \`fix/tactic-review-recovery-20261112\`; its exact GitHub-generated SHA is reported in the review handoff.
 - No production merge/deploy/configuration/DB changes. No ChatGPT PvPoke MCP calls.
 - Next: confirm new commit's Actions, read any failures, fix only reproducible regressions, then document remaining uncertainty and do not approve publication prematurely.
+
+
+### Independent finding G6-002: started-but-unresolved native fast action (P1)
+- **Red test at \`b78e78ec0e317ac1e2a5a53d26930f9ec4aa1a97\` (confirmed):** \`test_fast_move_tap_without_resolution_is_not_success\` fails with \`AssertionError: True is not false\`. Synthetic fast request is marked "executed" but has no resolved native damage event. Positive fixture \`test_native_fast_start_and_resolution_are_independently_linked\` independently checks that legal native fast moves have a linked \`action_id\`, \`actor\`, \`kind\`, \`move_id\` event.
+- **Source of truth:** pinned vendor \`Battle.js\` queues fast attacks to resolve after their cooldown, and \`pvpoke_sandbox_runner.js\` documents that a tap may start even when KO prevents damage. The previous helper only enforced resolution for charged attacks.
+- **Root cause:** \`_requested_actions_completed()\` accepted an \`executed\` fast start without requiring resolution.
+- **Targeted fix in paired commit:** require matching native resolved event for *both* fast and charged requests; wait still requires only executed-start status. This is conservative: a queued but unlanded tap cannot establish tactical role support.
+- **Post-fix state:** pending exact-head CI (expect the prior red test plus positive native fixture to pass). Native GameMaster, vendor Battle.js, standard calculation, ownership and production remain untouched.
+
+### Security triage checkpoint
+- Earlier exact-head security workflow recorded Trivy **HIGH 103** with no fixable HIGH/CRITICAL at the then-available package versions. At least \`libsqlite3-0\` appears in HIGH rows (e.g. CVE-2026-119373/119374/119379), so these findings cannot all be dismissed as unused packages: SQLite is exercised by app record storage.
+- Also affected packages in the report include Kerberos libraries and utilities such as \`mount\`/ \`login\`; whether they are reachable from untrusted web requests is not established from package names alone.
+- This is **triage, not exploit confirmation or a clean security audit**. OS/package advisory verification and individual path review are still required. Do not release solely because no vendor fix is listed.
+
+### Updated work state
+- Latest source: 完了; tests and native semantics: 作業中; live information-fairness policy: 未着手; role/IV coverage: 作業中; security/capacity: 作業中; G6-001 source fix: 作業中 (green verification outstanding); G6-002 source fix: 作業中 (green verification outstanding); full regression/build: 作業中; GitHub save: 完了.
+- Changed this stage: \`tests/test_tactic_search.py\`, \`pvpoke_tactic_search.py\`, \`docs/ASTRA_REVIEW_CONTINUATION.md\`. Parent red SHA \`b78e78ec0e317ac1e2a5a53d26930f9ec4aa1a97\`, branch \`fix/tactic-review-recovery-20261112\`. Exact new commit SHA appears in PR #112 / final handoff.
+- Previous Work uncommitted edits: unknown/unrecoverable; this environment uses direct GitHub commits, no local checkout.
+- Remaining: green CI + 324 golden + browser smoke, owner boundary, WAL and true disk exhaustion, information fairness, full IV search, performance comparison; do not mark the feature publishable.
+- Next concrete action: read CI conclusions on new HEAD, retrieve failure logs if any, only then finalize the Draft checkpoint and report commit SHA.

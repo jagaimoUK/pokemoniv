@@ -199,13 +199,17 @@ def _requested_actions_completed(spec, summary, action_ids):
     """
     actions = {action['id']: action for action in spec['actions']}
     statuses = {row['action_id']: row['status'] for row in summary['action_results']}
-    resolved = {(row['action_id'], row['actor'], row['move_id'])
+    # Native fast taps can start, then be cancelled before their damage resolves
+    # (for example by a KO). Both fast and charged requests need the actual
+    # resolved event; wait requests only need their executed start.
+    resolved = {(row['action_id'], row['actor'], row['kind'], row['move_id'])
                 for row in summary['executed_moves']
-                if row['kind'] == 'charged' and 'action_id' in row}
+                if row['kind'] in ('fast', 'charged') and 'action_id' in row}
     return all(
         aid in actions and statuses.get(aid) == 'executed' and
-        (actions[aid]['kind'] != 'charged' or
-         (aid, actions[aid]['actor'], actions[aid]['move_id']) in resolved)
+        (actions[aid]['kind'] == 'wait' or
+         (aid, actions[aid]['actor'], actions[aid]['kind'],
+          actions[aid]['move_id']) in resolved)
         for aid in action_ids
     )
 
