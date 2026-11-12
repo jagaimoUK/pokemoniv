@@ -10,7 +10,6 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
 
 from pvpoke_battle_service import BattleService, _canonical_json
 from pvpoke_battle_store import BattleStore
@@ -69,9 +68,10 @@ class NativeObservedMultiTurnTests(unittest.TestCase):
 
     def test_multi_turn_native_actions_agree_with_pure_visible_policy(self):
         req = self.request(energy=0, shield_rule="first_announcement")
-        with patch("pvpoke_sandbox.subprocess.run",
-                   side_effect=AssertionError("No normal Sandbox write or replay")):
-            data = self.native(req)
+        # subprocess is a process-global Python module: patching its run()
+        # in Sandbox also blocks this test harness's intended native Node
+        # process. Instead, assert no persistent Sandbox/standard DB is made.
+        data = self.native(req)
         self.assertEqual(data["schema"], "observed-native-counterfactual-v1")
         self.assertEqual(data["status"], "counterfactual_only")
         self.assertFalse(data["observation_provenance_verified"])
