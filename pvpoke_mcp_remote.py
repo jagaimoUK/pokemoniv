@@ -434,8 +434,11 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < size <= limit:
                 return self.respond(413, {'error': 'Invalid body size'})
             raw = self.read_body(size)
-            args = (json.loads(raw, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
-                    if workspace or battle else json.loads(raw))
+            # All app routes must interpret the same JSON identically.
+            # Duplicate keys and non-finite numbers cannot override state or
+            # produce ambiguous validation results on legacy endpoints.
+            args = json.loads(raw, object_pairs_hook=_unique_object,
+                              parse_constant=_reject_constant)
             if not isinstance(args, dict):
                 raise ValueError('入力はJSONオブジェクトで指定してください')
             if workspace:
@@ -595,7 +598,8 @@ class Handler(BaseHTTPRequestHandler):
             size=int(self.headers.get('Content-Length','0'))
             if not 0 < size <= limit:
                 return self.respond(413, {'error':'バックアップの容量上限を超えています'})
-            args=json.loads(self.read_body(size))
+            args=json.loads(self.read_body(size), object_pairs_hook=_unique_object,
+                            parse_constant=_reject_constant)
             if not isinstance(args,dict):
                 raise ValueError()
             if self.path.endswith('/status'):
@@ -732,7 +736,9 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < size <= 1_000_000:
                 self.respond(413, {'error': 'Invalid body size'})
                 return
-            data = json.loads(self.read_body(size))
+            data = json.loads(self.read_body(size),
+                              object_pairs_hook=_unique_object,
+                              parse_constant=_reject_constant)
             if not isinstance(data, dict) or data.get('jsonrpc') != '2.0' or not isinstance(data.get('method'), str):
                 self.respond(400, {'jsonrpc':'2.0','id':data.get('id') if isinstance(data,dict) else None,
                                    'error':{'code':-32600,'message':'Invalid Request'}})

@@ -201,6 +201,27 @@ class LocalBattleAPITests(ServerFixture):
                     self.assertEqual(code, 415)
             client.assert_not_called()
 
+
+    def test_local_nonbattle_json_routes_reject_duplicate_fields_and_nan(self):
+        """Legacy /api/prepare uses the same strict JSON parser as /api/battles."""
+        with patch.object(web, 'prepare_payload') as prepare:
+            for body in (b'{"x":1,"x":2}',
+                         b'{"x":{"nested":1,"nested":2}}',
+                         b'{"x":NaN}', b'{"x":Infinity}'):
+                with self.subTest(body=body):
+                    conn = http.client.HTTPConnection(*self.server.server_address,
+                                                      timeout=4)
+                    try:
+                        conn.request('POST', '/api/prepare', body, {
+                            'Content-Type': 'application/json',
+                            'X-PvPoke-Token': web.TOKEN})
+                        result = conn.getresponse()
+                        data = result.read()
+                        self.assertEqual(result.status, 400, data)
+                    finally:
+                        conn.close()
+            prepare.assert_not_called()
+
     def test_unexpected_loopback_failure_does_not_return_private_details(self):
         """Unexpected 500 responses reveal no internal filesystem details."""
         marker = 'TEST_PRIVATE_DB_PATH_TOKEN_NOT_REAL'

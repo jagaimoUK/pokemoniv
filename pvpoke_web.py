@@ -684,8 +684,8 @@ class Handler(BaseHTTPRequestHandler):
             if n < 2 or n > limit:
                 raise ValueError('入力が大きすぎるか空です')
             raw = self.rfile.read(n)
-            payload = (json.loads(raw, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
-                       if common_battle else json.loads(raw))
+            payload = json.loads(raw, object_pairs_hook=_unique_object,
+                                 parse_constant=_reject_constant)
             if not isinstance(payload, dict):
                 raise ValueError('入力はJSONオブジェクトで指定してください')
             if common_battle:

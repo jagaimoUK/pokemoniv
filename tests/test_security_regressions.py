@@ -105,6 +105,42 @@ class GatewaySecurityTests(unittest.TestCase):
             self.assertIn('error', json.loads(data))
 
 
+
+    def test_all_authenticated_json_routes_reject_duplicate_and_nonfinite_fields(self):
+        """Ambiguous payloads never reach app, backup or MCP dispatch."""
+        key = 'Bearer ' + remote.API_KEY
+        backup_token = 'Bearer ' + remote.BACKUP_TOKENS.issue()
+        cases = (
+            ('/app-api/meta-status', key,
+             (b'{"x":1,"x":2}', b'{"x":{"nested":1,"nested":2}}', b'{"x":NaN}')),
+            ('/visual-backup/v1/status', backup_token,
+             (b'{"action":"status","action":"upload"}', b'{"x":Infinity}')),
+            ('/mcp', key,
+             (b'{"jsonrpc":"2.0","id":3,"method":"ping","method":"tools/call"}',
+              b'{"jsonrpc":"2.0","id":3,"method":"ping","params":{"x":-Infinity}}')),
+        )
+        with patch.object(remote.backend, 'meta_status') as app, \
+             patch.object(remote.VISUAL_BACKUP, 'head') as backup, \
+             patch.object(remote, 'call_tool') as dispatch:
+            for path, credential, payloads in cases:
+                for body in payloads:
+                    with self.subTest(path=path, body=body[:40]):
+                        connection = http.client.HTTPConnection(*self.server.server_address,
+                                                                timeout=4)
+                        try:
+                            connection.request('POST', path, body, {
+                                'Content-Type': 'application/json',
+                                'Authorization': credential})
+                            response = connection.getresponse()
+                            result = response.read()
+                            self.assertEqual(response.status, 400, result)
+                            self.assertIn('error', json.loads(result))
+                        finally:
+                            connection.close()
+            app.assert_not_called()
+            backup.assert_not_called()
+            dispatch.assert_not_called()
+
     def test_mcp_unexpected_errors_and_protocol_rejections_hide_details(self):
         """Authenticated tools must not return backend paths in error text."""
         secret = 'TEST_PRIVATE_BACKEND_PATH_TOKEN_NOT_REAL'
