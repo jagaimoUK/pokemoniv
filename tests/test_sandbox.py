@@ -129,8 +129,8 @@ class SandboxTests(unittest.TestCase):
         import json
         from pvpoke_battle_service import _canonical_json, _json_hash
         cases = (
-            lambda value: value['summary'].update(outcome='opponent_win'),
-            lambda value: value['summary']['terminal'][0].update(hp=0),
+            lambda value: value['summary'].update(outcome='timeout'),
+            lambda value: value['summary']['terminal'][0].update(hp=99999),
             lambda value: value['summary']['action_results'][0].update(status='rejected', reason='test'),
             lambda value: value['summary']['shields_used'].__setitem__(1, 2),
             lambda value: value['trace'].pop(next(i for i, event in enumerate(value['trace'])
