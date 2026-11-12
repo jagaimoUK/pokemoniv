@@ -170,6 +170,37 @@ class BattleStoreTests(unittest.TestCase):
         self.assertNotIn('/private/internal', str(result))
         self.assertEqual(self.service.cache_stats['storage_errors'], 4)
 
+    def test_reserved_database_quota_preserves_space_for_critical_events(self):
+        from pvpoke_battle_store import RESERVED_DB_PAGE_FRACTION
+        path = self.root / 'capacity-reserve.sqlite3'
+        limited = BattleStore(path, max_bytes=256 * 1024)
+        with limited._writer() as db:
+            db.execute('CREATE TABLE disposable_test_cache (id INTEGER PRIMARY KEY, payload BLOB)')
+            page_size = db.execute('PRAGMA page_size').fetchone()[0]
+            expected = limited.max_bytes // page_size
+            self.assertEqual(db.execute('PRAGMA max_page_count').fetchone()[0],
+                             expected - expected // RESERVED_DB_PAGE_FRACTION)
+        stopped = False
+        for index in range(32):
+            try:
+                with limited._writer() as db:
+                    db.execute('INSERT INTO disposable_test_cache VALUES (?, zeroblob(16384))',
+                               (index,))
+            except (BattleStoreError, sqlite3.OperationalError):
+                stopped = True
+                break
+        self.assertTrue(stopped, 'Low-priority writes should stop at the reserved boundary')
+        with limited._writer(critical=True) as db:
+            self.assertEqual(db.execute('PRAGMA max_page_count').fetchone()[0], expected)
+            db.execute('CREATE TABLE critical_test_events (event_id TEXT PRIMARY KEY)')
+            db.execute('INSERT INTO critical_test_events VALUES (?)', ('kept',))
+        with limited._reader() as db:
+            self.assertEqual(db.execute('SELECT event_id FROM critical_test_events').fetchone()[0],
+                             'kept')
+            self.assertGreater(db.execute('SELECT COUNT(*) FROM disposable_test_cache').fetchone()[0],
+                               0)
+            self.assertLessEqual(db.execute('PRAGMA page_count').fetchone()[0], expected)
+
     def test_sqlite_full_fails_safely_without_eviction(self):
         original = self.service.simulate(self.spec)
         limited = self.make_service(BattleStore(self.store.path, max_bytes=8192))

@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 import time
 
@@ -16,6 +17,9 @@ from pvpoke_battle_service import _canonical_json, validate_complete_result
 SCHEMA_VERSION = 1
 APPLICATION_ID = 0x50564252  # PVBR
 MAX_DB_BYTES = 32 * 1024 * 1024
+# Keep headroom for explicit ownership and other user-authored records.
+RESERVED_DB_PAGE_FRACTION = 8
+NONCRITICAL_DISK_RESERVE_BYTES = 8 * 1024 * 1024
 MAX_RESULT_BYTES = 512 * 1024
 COMPLETENESS = 'standard-summary-v1'
 SINGLE_OWNER = 'local-owner'
@@ -102,18 +106,34 @@ class BattleStore:
             yield db
 
     @contextmanager
-    def _writer(self):
+    def _writer(self, *, critical=False):
+        """Keep a SQLite quota and disk reserve for important user records.
+
+        Recalculable writes cannot consume the last 1/8 of SQLite pages
+        or the last 8 MiB of disk free space. Critical writes may use this
+        reserve. Other processes can still exhaust the filesystem; nothing
+        here deletes existing data.
+        """
+        if type(critical) is not bool:
+            raise ValueError('Invalid battle writer priority')
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if not critical and shutil.disk_usage(self.path.parent).free <= NONCRITICAL_DISK_RESERVE_BYTES:
+            raise BattleStoreError('Noncritical battle writes paused to protect disk space')
         with closing(sqlite3.connect(self.path, timeout=0.25)) as db, db:
-            pages = self.max_bytes // db.execute('PRAGMA page_size').fetchone()[0]
-            if pages < 2:
+            total_pages = self.max_bytes // db.execute('PRAGMA page_size').fetchone()[0]
+            if total_pages < 2:
                 raise BattleStoreError('Battle database size limit is too small')
+            reserve = total_pages // RESERVED_DB_PAGE_FRACTION if total_pages >= 16 else 0
+            pages = total_pages if critical else total_pages - reserve
             db.execute(f'PRAGMA max_page_count = {pages}')
+            # SQLite cannot reduce max_page_count below an already allocated DB.
+            if db.execute('PRAGMA page_count').fetchone()[0] > pages:
+                raise BattleStoreError('Battle database reserved capacity is exhausted')
             db.execute('BEGIN IMMEDIATE')
             self._migrate(db)
             yield db
             if db.execute('PRAGMA page_count').fetchone()[0] > pages:
-                raise BattleStoreError('Battle database exceeds the size limit')
+                raise BattleStoreError('Battle database exceeds its write quota')
 
     def get(self, key, spec, versions, *, completeness=COMPLETENESS):
         """Return a validated summary, or None when this owner has no matching row."""

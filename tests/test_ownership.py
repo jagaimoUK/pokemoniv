@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from pvpoke_battle_service import BattleService
-from pvpoke_battle_store import BattleStore
+from pvpoke_battle_store import BattleStore, BattleStoreError
 from pvpoke_direct_backend import DirectMatrixClient
 from pvpoke_missing_analysis import AnalysisUnavailable, MissingAnalysis
 from pvpoke_ownership import Ownership, OwnershipConflict, OwnershipUnavailable
@@ -38,6 +38,22 @@ class OwnershipTests(unittest.TestCase):
     def evidence(self, plan, **kwargs):
         return self.analysis.evidence(plan, active_versions=self.service.versions,
                                       normalizer=self.service, **kwargs)
+
+    def test_inventory_events_commit_when_disposable_writes_are_paused(self):
+        with patch('pvpoke_battle_store.shutil.disk_usage') as disk:
+            disk.return_value.free = 0
+            with self.assertRaisesRegex(BattleStoreError, 'disk space'):
+                with self.store._writer() as db:
+                    db.execute('CREATE TABLE should_not_be_written (value INTEGER)')
+            self.inventory.register('critical-instance', self.observed)
+            confirmed = self.inventory.confirm('critical-event', 'critical-instance',
+                                               expected_revision=0, state='confirmed_owned')
+            self.assertEqual(confirmed['new_state'], 'confirmed_owned')
+            self.assertEqual(self.inventory.get('critical-instance')['state'], 'confirmed_owned')
+        with closing(sqlite3.connect(self.store.path)) as db:
+            self.assertIsNone(db.execute(
+                "SELECT 1 FROM sqlite_schema WHERE name='should_not_be_written'").fetchone())
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM ownership_events_v1').fetchone()[0], 1)
 
     def test_equal_ivs_keep_distinct_ids_and_only_confirmation_changes_ownership(self):
         result = self.service.simulate(self.spec)

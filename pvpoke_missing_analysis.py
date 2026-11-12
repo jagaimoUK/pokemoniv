@@ -64,7 +64,7 @@ class MissingAnalysis:
             raise ValueError('Analysis plan exceeds size limit')
         analysis_id = _json_hash(plan)
         try:
-            with self.store._writer() as db:
+            with self.store._writer(critical=True) as db:
                 # The table has its own version. Existing BattleStore readers
                 # still accept this v1 database and ignore the new table.
                 db.execute('''CREATE TABLE IF NOT EXISTS missing_analysis_plans_v1 (

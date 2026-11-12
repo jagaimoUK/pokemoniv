@@ -116,7 +116,7 @@ class TacticStore:
         record = {'tactic_id': tactic_id, 'revision': expected_revision + 1, 'name': name, 'spec': spec,
                   'saved_at': int(time.time())}
         try:
-            with self.store._writer() as db:
+            with self.store._writer(critical=True) as db:
                 db.execute('''CREATE TABLE IF NOT EXISTS sandbox_tactics_v1 (
                     owner_scope TEXT NOT NULL, tactic_id TEXT NOT NULL, revision INTEGER NOT NULL,
                     body BLOB NOT NULL, digest TEXT NOT NULL, saved_at INTEGER NOT NULL,

@@ -133,7 +133,8 @@ class SandboxTests(unittest.TestCase):
             lambda value: value['summary']['terminal'][0].update(hp=0),
             lambda value: value['summary']['action_results'][0].update(status='rejected', reason='test'),
             lambda value: value['summary']['shields_used'].__setitem__(1, 2),
-            lambda value: value['trace'].pop(),
+            lambda value: value['trace'].pop(next(i for i, event in enumerate(value['trace'])
+                                                   if event['phase'] == 'resolve')),
         )
         for corrupt in cases:
             with self.subTest(corrupt=corrupt):
