@@ -58,3 +58,14 @@ or establish production multi-tenant authentication. One WAL file-size stat
 is added only to cache writes; no method-level before/after HTTP benchmark
 is established. Keep Draft and no deployment pending independent Astra review
 and the remaining high-risk engineering gates.
+
+## Additional fail-closed input and native opening checks
+
+The history contract rejects turn zero, out-of-order observations, unknown or
+unhashable event types, charge resolution without a prior public announcement,
+overlapping announcements, and moving to an action decision while a charge
+announcement is still awaiting resolution. A new isolated **two-world** pinned
+native Sandbox fixture attempts the same charge action at turn 1 under
+different hidden opponent IV/energy. Its result is a *single opening action*
+check, not a turn-by-turn live controller and not proof of a practical role.
+Exact passing status must be established from the final GitHub CI run.

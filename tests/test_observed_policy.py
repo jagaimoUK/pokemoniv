@@ -154,6 +154,39 @@ class VisiblePolicyTests(unittest.TestCase):
         self.assertEqual(propose(later, policy())["action"]["kind"], "charged")
         self.assertEqual(propose(early, policy()), decision)
 
+    def test_observed_event_sequence_is_causal_and_cannot_peek(self):
+        for events in (
+            [{"turn": 0, "kind": "opponent_fast"}],
+            [{"turn": 2, "kind": "opponent_charge_resolved", "move_id": "ICE_BEAM"}],
+            [{"turn": 2, "kind": "opponent_charge_announced"},
+             {"turn": 3, "kind": "opponent_charge_announced"}],
+            [{"turn": 2, "kind": "opponent_charge_announced"},
+             {"turn": 1, "kind": "opponent_charge_resolved", "move_id": "ICE_BEAM"}],
+            [{"turn": 1, "kind": []}],
+        ):
+            with self.subTest(events=events):
+                with self.assertRaises(ValueError):
+                    propose({**snapshot(), "events": events}, policy())
+        visible = snapshot()
+        visible["events"].append({"turn": 3, "kind": "opponent_charge_announced"})
+        with self.assertRaises(ValueError):
+            propose(visible, policy())  # pending public prompt, not normal turn
+        visible["phase"] = "shield_prompt"
+        self.assertEqual(propose(visible, policy())["action"]["kind"], "shield")
+        visible["events"].append({"turn": 3, "kind": "opponent_charge_resolved",
+                                  "move_id": "ICE_BEAM"})
+        with self.assertRaises(ValueError):
+            propose(visible, policy())  # no second prompt after resolution
+
+    def test_unhashable_decision_values_fail_closed(self):
+        for field, value in (("phase", []), ("phase", {}),
+                             ("events", [{"turn": 1, "kind": {}}])):
+            with self.subTest(field=field):
+                with self.assertRaises(ValueError):
+                    propose({**snapshot(), field: value}, policy())
+        with self.assertRaises(ValueError):
+            propose(snapshot(), {**policy(), "shield_rule": []})
+
 
 if __name__ == "__main__":
     unittest.main()

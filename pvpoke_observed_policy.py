@@ -36,14 +36,15 @@ def _events(value, current_turn):
         raise ValueError("Invalid observed history size")
     previous = 0
     announced = 0
+    pending_charge = False
     for event in value:
         if type(event) is not dict or set(event) not in (
                 {"turn", "kind"}, {"turn", "kind", "move_id"}):
             raise ValueError("Invalid observed event fields")
-        turn = _int(event["turn"], previous, current_turn, "event turn")
+        turn = _int(event["turn"], max(1, previous), current_turn, "event turn")
         previous = turn
         kind = event["kind"]
-        if kind not in EVENTS:
+        if type(kind) is not str or kind not in EVENTS:
             raise ValueError("Unknown visible event")
         if "move_id" in event:
             # Revealed *after* an opponent charge resolves, not before the
@@ -52,8 +53,15 @@ def _events(value, current_turn):
                     r"[A-Z0-9_]{1,100}", event["move_id"]):
                 raise ValueError("Unrevealed move or invalid move ID")
         if kind == "opponent_charge_announced":
+            if pending_charge:
+                raise ValueError("Overlapping charge announcements are unobservable")
+            pending_charge = True
             announced += 1
-    return announced
+        elif kind == "opponent_charge_resolved":
+            if not pending_charge:
+                raise ValueError("Unannounced opponent charge resolution")
+            pending_charge = False
+    return announced, pending_charge
 
 
 def propose(snapshot, policy):
@@ -69,14 +77,14 @@ def propose(snapshot, policy):
     ), "visible snapshot")
     turn = _int(snapshot["turn"], 1, 500, "turn")
     phase = snapshot["phase"]
-    if phase not in PHASES:
+    if type(phase) is not str or phase not in PHASES:
         raise ValueError("Unknown decision phase")
     energy = _int(snapshot["own_energy"], 0, 100, "own energy")
     shields = _int(snapshot["own_shields"], 0, 2, "own shields")
     _int(snapshot["opponent_shields_visible"], 0, 2, "visible opponent shields")
     if type(snapshot["own_can_act"]) is not bool:
         raise ValueError("Invalid own action readiness")
-    announcements = _events(snapshot["events"], turn)
+    announcements, pending_charge = _events(snapshot["events"], turn)
 
     _object(policy, ("own_charged_moves", "energy_reserve", "shield_rule"),
             "fixed self policy")
@@ -95,15 +103,18 @@ def propose(snapshot, policy):
         _int(move["energy_cost"], 1, 100, "charged move cost")
     reserve = _int(policy["energy_reserve"], 0, 30, "energy reserve")
     rule = policy["shield_rule"]
-    if rule not in SHIELD_RULES:
+    if type(rule) is not str or rule not in SHIELD_RULES:
         raise ValueError("Unknown shield rule")
 
     if phase == "shield_prompt":
-        if not snapshot["events"] or snapshot["events"][-1]["kind"] != "opponent_charge_announced":
+        if (not pending_charge or not snapshot["events"] or
+                snapshot["events"][-1]["kind"] != "opponent_charge_announced"):
             raise ValueError("Shield choice requires a visible charge announcement")
         use = shields > 0 and (rule == "always" or
                             (rule == "first_announcement" and announcements == 1))
         action = {"kind": "shield", "use_shield": use}
+    elif pending_charge:
+        raise ValueError("Resolve the visible charge prompt before the next turn")
     elif not snapshot["own_can_act"]:
         action = {"kind": "wait"}
     else:
