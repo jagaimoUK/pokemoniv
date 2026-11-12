@@ -160,6 +160,33 @@ class SandboxTests(unittest.TestCase):
                     self.assertEqual(failed['status'], 'failed')
                     native.assert_not_called()
 
+    def test_rehashed_first_trace_state_must_match_initial(self):
+        """A valid checksum cannot make a fabricated first state trustworthy."""
+        import json
+        from pvpoke_battle_service import _canonical_json, _json_hash
+        from pvpoke_battle_store import BattleStoreError
+
+        result = self.sandbox.simulate(scripted_spec())
+        self.assertEqual(result['status'], 'complete', result.get('error'))
+        key, spec = result['summary']['battle_key'], result['summary']['spec']
+        self.assertTrue(result['trace'])
+        self.assertEqual(result['trace'][0]['before'], result['initial'])
+        with closing(sqlite3.connect(self.store.path)) as db, db:
+            saved = json.loads(db.execute(
+                'SELECT body FROM sandbox_results_v1').fetchone()[0])
+            original_hp = saved['trace'][0]['before'][0]['hp']
+            self.assertGreater(original_hp, 0)
+            saved['trace'][0]['before'][0]['hp'] = original_hp - 1
+            payload = _canonical_json(saved)
+            db.execute('UPDATE sandbox_results_v1 SET body=?, digest=?',
+                       (payload, _json_hash(saved)))
+        with patch('pvpoke_sandbox.subprocess.run',
+                   side_effect=AssertionError('corrupt cache must not invoke engine')) as native:
+            with self.assertRaises(BattleStoreError):
+                self.sandbox._get(key, spec)
+            self.assertEqual(self.sandbox.simulate(spec)['status'], 'failed')
+            native.assert_not_called()
+
     def test_wait_only_timeout_is_partial_and_not_saved(self):
         spec = scripted_spec(energy=0)
         spec['actions'] = [
