@@ -122,7 +122,8 @@ async function checkWidth(browser, width) {
     await page.getByText(/代替の実用性：未検証/).waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
     assert.deepEqual(errors, []);
-    assert.equal(requests.length, width > 320 ? 5 : 4);
+    // The optional 32-battle click at 390px is exactly one extra API call.
+    assert.equal(requests.length, width > 320 ? 6 : 4);
   } finally {
     await page.close();
   }
