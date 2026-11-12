@@ -182,3 +182,10 @@ Sources and current limits: the original Japanese request document defines these
 **Changed files at this checkpoint:** \`tests/test_sandbox.py\` and \`docs/ASTRA_REVIEW_CONTINUATION.md\`. Current branch remains \`fix/tactic-review-recovery-20261112\`; this is a test-only commit on top of \`e7cdb07b...\`. No local checkout, so Work-local uncommitted changes unknown; no production changes, no PvPoke MCP calls.
 
 **Next precise action:** inspect actual new-head CI, distinguish a violation of the native trace contract from an invalid proposed invariant, then repair narrowly and verify a green exact head. Do not promote previous or new tests to live-play proof.
+
+
+### Stage-II RED checkpoint (first run \`0da16f10aa2536b63044317e90c2eb8b7672dd8d\`)
+- CI \`Meta preset regression and image build\`: **515 Python tests, 4 failing subtests**. Good native trace oracle \`test_native_complete_trace_state_chain_matches_terminal\` passed.
+- Confirmed missing rejection for **three distinct rehashed cache mutations**: changed \`executed_moves[0].target_hp\`; changed \`trace[0].after\` at a move start; changed \`effects.before\` energy.
+- Fourth \`change_last_hp\` failed for a **bad test assumption**: the native fixture legitimately KO'd side 0, whose HP was 0 rather than >1. This is **not** a fourth confirmed cache defect. The paired test-only commit updates the test to mutate the surviving side without altering outcome.
+- No source repair yet. Avoid reporting all 4 as independently reproduced vulnerabilities. Next check corrected red run then patch native trace integrity; never adjust the expected failure assertion to hide defects.

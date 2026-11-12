@@ -211,9 +211,11 @@ class SandboxTests(unittest.TestCase):
         from pvpoke_battle_store import BattleStoreError
 
         def change_last_hp(record):
-            state = record['summary']['terminal'][0]
-            self.assertGreater(state['hp'], 1)
-            state['hp'] -= 1
+            # The scripted fixture can KO side 0; mutate a surviving side
+            # without changing the outcome classification.
+            survivors = [side for side in record['summary']['terminal'] if side['hp'] > 1]
+            self.assertTrue(survivors, 'Fixture must contain a survivor with HP > 1')
+            survivors[0]['hp'] -= 1
 
         def change_target_hp(record):
             event = record['summary']['executed_moves'][0]
