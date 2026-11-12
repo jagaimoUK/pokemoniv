@@ -162,6 +162,19 @@ class MissingLocalTests(server.ServerFixture):
         self.assertEqual(progressed['completed_iv_count'], 1)
         self.assertEqual(progressed['not_fully_tested_iv_count'], 4095)
         self.assertEqual(progressed['new_battles'], 1)
+        # Opt-in batches keep the server-side native limit (32), and resume
+        # from the same saved plan without reclassifying any unknown IV as lost.
+        batch_request = {
+            'action': 'explore',
+            'evaluation_id': compared['evaluation_id'],
+            'build_id': compared['reference']['build_id'], 'budget': 8,
+        }
+        status, batch = self.compare(batch_request)
+        self.assertEqual(status, 200)
+        self.assertEqual(batch['new_battles'], 8)
+        self.assertEqual(batch['completed_iv_count'], 9)
+        self.assertEqual(batch['not_fully_tested_iv_count'], 4087)
+        self.assertEqual(self.compare({**batch_request, 'budget': 33})[0], 400)
 
     def test_cross_species_partial_evidence_cannot_be_combined_into_one_role(self):
         """Two builds each clearing a different matchup are not substitutable."""

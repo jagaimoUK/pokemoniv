@@ -70,9 +70,11 @@ async function checkWidth(browser, width) {
           opponent_response:'alternate_charged',meets:null}]}]}]}});
       }
       if (payload.action === 'explore') {
-        assert.equal(payload.budget, 0);
-        return route.fulfill({json: {completed_iv_count: 1, eligible_iv_count: 4096,
-                                     qualifying_count: 1, not_fully_tested_iv_count: 4095,
+        assert.ok([0,32].includes(payload.budget));
+        const count = payload.budget === 32 ? 33 : 1;
+        return route.fulfill({json: {completed_iv_count: count, eligible_iv_count: 4096,
+                                     qualifying_count: 1, not_fully_tested_iv_count: 4096-count,
+                                     new_battles: payload.budget,
                                      qualifying: [{attack: 0, defense: 15, hp: 15}]}});
       }
       if (payload.action === 'opponent_boundaries') {
@@ -99,10 +101,16 @@ async function checkWidth(browser, width) {
     await page.getByRole('button', {name: '探索範囲を確認'}).click();
     await page.getByText('達成を確認したIV　0/15/15', {exact: true}).waitFor();
     await page.getByText(/全条件の検証が未完了 4095通り/).waitFor();
-    assert.equal(await page.getByRole('button', {name: '1対面を追加検証'}).count(),
+    assert.equal(await page.getByRole('button', {name: '追加検証', exact: true}).count(),
+      width > 320 ? 1 : 0);
+    assert.equal(await page.getByRole('combobox', {name: '追加検証数'}).count(),
       width > 320 ? 1 : 0);
     assert.equal(await page.getByRole('button', {name: 'この対面だけ計算'}).count(), 0);
     if (width > 320) {
+      await page.getByRole('combobox', {name: '追加検証数'}).selectOption('32');
+      await page.getByRole('button', {name: '追加検証', exact: true}).click();
+      await page.getByText(/全条件を計算済み 33 \/ 4096通り/).waitFor();
+      await page.getByText(/全条件の検証が未完了 4063通り/).waitFor();
       await page.getByRole('button', {name:'相手IV境界を確認'}).click();
       await page.getByText(/静的境界のみ（勝敗未検証）/).waitFor();
       await page.getByText(/代表例（最大32件・勝敗未検証）：0\/15\/15/).waitFor();

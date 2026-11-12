@@ -391,7 +391,16 @@ function renderExploration(parent,result){
   announce(budget?'新規対戦 '+data.new_battles+'件。探索の進捗を更新しました。':'保存済みの探索範囲を確認しました。');
  }
  button(actions,'探索範囲を確認',()=>perform(()=>read(0)),'quiet');
- if(result.can_calculate)button(actions,'1対面を追加検証',()=>perform(()=>read(1)),'quiet');
+ if(result.can_calculate){
+  // Explicit opt-in budget: never silently launch a 4096-IV background job.
+  const budgetSelect=node('select',null,actions);
+  budgetSelect.setAttribute('aria-label','追加検証数');
+  for(const count of [1,8,32]){
+   const option=node('option',count+'件',budgetSelect);
+   option.value=String(count);
+  }
+  button(actions,'追加検証',()=>perform(()=>read(Number(budgetSelect.value))),'quiet');
+ }
  renderOpponentBoundaries(panel,result);
 }
 function renderResult(result,request,revision){

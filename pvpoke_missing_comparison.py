@@ -115,7 +115,7 @@ def _comparison(service, payload):
 def _explore(service, payload):
     _object(payload, 'IV exploration request', ('action', 'evaluation_id', 'build_id', 'budget'))
     selected = _hash(payload['build_id'])
-    budget = _integer(payload['budget'], 'IV exploration budget', 0, 1)
+    budget = _integer(payload['budget'], 'IV exploration budget', 0, 32)
     if budget and not _can_calculate():
         raise AnalysisUnavailable('New battle calculation is disabled')
     history = RoleEvaluation(service.store).history(payload['evaluation_id'])
