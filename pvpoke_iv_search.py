@@ -422,13 +422,24 @@ class IVSearch:
             before = self.service.cache_stats['engine_calls']
             outcomes = Counter()
             if tasks:
+                # Adaptive boundary picks are intentionally outside the
+                # sequential cursor prefix. If interrupted before an adaptive
+                # pick, do not move the durable cursor past unplayed prefix IVs.
+                total_positions = len(source['templates']) * len(plan['order'])
+                checkpoint = next_offset
+                prefix_span = (checkpoint - offset) % total_positions or total_positions
+
+                def interruption_cursor(position):
+                    distance = (position - offset) % total_positions
+                    return position if distance < prefix_span else checkpoint
+
                 attempted = 0
                 for position, spec in tasks:
                     # Do not start more native calls after the batch deadline.
                     # Always allow one attempt, so progress remains possible
                     # when the source scan itself is slow.
                     if attempted and perf_counter() >= deadline:
-                        next_offset = position
+                        next_offset = interruption_cursor(position)
                         break
                     errors = self.service.cache_stats['storage_errors']
                     result = self.service.simulate(spec)
@@ -440,7 +451,7 @@ class IVSearch:
                         # An unavailable/partial battle is NOT saved evidence.
                         # Retry this exact candidate on the next step rather
                         # than silently moving the persistent cursor past it.
-                        next_offset = position
+                        next_offset = interruption_cursor(position)
                         break
                 try:
                     with self.store._writer() as db:

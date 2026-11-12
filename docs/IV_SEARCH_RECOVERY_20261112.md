@@ -59,3 +59,25 @@ reservation remains unresolved. Tests need final GitHub CI verification.
 Full 4,096×6 stress, real ENOSPC, external-worker interleavings,
 Astra independent review, current CVE reachability and Android device
 testing remain separate approval gates.
+
+## Follow-up: adaptive-neighbor interruption cursor (2026-11-12)
+
+A close native result can cause the planner to pick neighboring IVs outside
+the next sequential scan prefix. The previous interruption path saved the
+position of that later adaptive pick as the new cursor, potentially postponing
+still-unplayed earlier IVs until a complete scan wraps around. No role was
+marked complete incorrectly, but resume order and progress fairness suffered.
+
+The bounded step now distinguishes positions within the planned sequential
+prefix from out-of-order adaptive picks. A failed or timed-out prefix IV
+remains the exact retry cursor. An interrupted adaptive IV instead keeps the
+prefix checkpoint so previously scheduled sequential work is not skipped.
+Saved results are still recognized as complete on subsequent scans; no schema
+or native calculation change was required.
+
+Regression: eight eligible IVs with a seeded close native matchup, verified
+scheduled positions [1, 2, 5, 6] after cursor 1, then a simulated timeout
+before the adaptive pick. Expect persisted cursor 3 (not 5), three completed
+IVs and the next restart to calculate position 3 first. This does not establish
+full 4096 x six-condition capacity, physical ENOSPC safety or multi-process
+transactional reservations. Exact-head CI must be checked separately.

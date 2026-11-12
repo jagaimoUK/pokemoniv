@@ -266,6 +266,48 @@ class IVSearchTests(unittest.TestCase):
         self.assertEqual(step['coverage']['all_completed_iv_count'], 2)
         self.assertEqual(restarted.step(search_id, budget=1)['state'], 'complete')
 
+    def test_adaptive_batch_timeout_preserves_unplayed_cursor_prefix(self):
+        # A close native battle creates two out-of-order neighbor picks.
+        # Interruption before those picks must not skip sequential candidates.
+        spec = battle_spec(left=0, right=0, shields=(0, 0))
+        normalized, _ = self.service._prepare(spec)
+        pivot = _pool(self.service, normalized, (14, 14, 14))[0][0xeef]
+        spec['combatants'][1].update(
+            level=pivot['level'], ivs={'attack': 14, 'defense': 14, 'hp': 15})
+        custom_order = [0xeef, 0xfff, 0xeee, 0xffe,
+                        0xefe, 0xfef, 0xeff, 0xfee]
+
+        def order(profiles, stats, count, default_index):
+            _, boundaries = _prioritize(profiles, stats, count, default_index)
+            self.assertEqual(set(custom_order), set(profiles))
+            return custom_order, boundaries
+
+        with patch('pvpoke_iv_search._prioritize', side_effect=order):
+            search_id = self.search.start([spec], iv_floors=(14, 14, 14))
+        self.assertEqual(self.search.step(search_id, budget=1)['new_battles'], 1)
+        plan, offset = self.search._load(search_id)
+        _, tasks, planned_cursor = self.search._scan(plan, offset, 4, {})
+        self.assertEqual((offset, [position for position, _ in tasks], planned_cursor),
+                         (1, [1, 2, 5, 6], 3))
+
+        with patch('pvpoke_iv_search.perf_counter', side_effect=[0.0, 0.0, 11.0]):
+            partial = self.search.step(search_id, budget=4)
+        self.assertEqual(partial['new_battles'], 2)
+        self.assertEqual(self.search._load(search_id)[1], 3)
+        self.assertEqual(partial['coverage']['all_completed_iv_count'], 3)
+
+        reopened = IVSearch(self.service_for(self.store))
+        seen = []
+        simulate = reopened.service.simulate
+
+        def recorded(request):
+            seen.append(request['combatants'][0]['ivs'])
+            return simulate(request)
+
+        with patch.object(reopened.service, 'simulate', side_effect=recorded):
+            reopened.step(search_id, budget=1)
+        self.assertEqual(seen, [{'attack': 15, 'defense': 15, 'hp': 14}])
+
     def test_partial_native_success_survives_interrupted_batch(self):
         search_id = self.search.start([battle_spec()], iv_floors=(15, 15, 14))
         real = self.service.simulate
