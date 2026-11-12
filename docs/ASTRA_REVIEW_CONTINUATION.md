@@ -101,3 +101,30 @@ Sources and current limits: the original Japanese request document defines these
 - Uncommitted changes: unknown outside GitHub; connector edits commit directly.
 - Tests: 5/5 existing Actions passed at initial HEAD. No new local tests executed. Do not conflate with the prior 510-test count.
 - Next operation: inspect cached-state validation against native trace shape, add a precise red regression test, only then patch the defect and verify CI.
+
+
+### Independent finding G6-001: forged opening Sandbox state (P1)
+- **Reproduction (confirmed red, not an assumption):** on test-only SQLite data, alter the first native trace event's \`before[0].hp\` while preserving the stored \`initial\`; recalculate canonical JSON + SHA256 digest. Prior cache validation accepted the contradiction.
+- **Red CI at commit \`f02d55754067e387f0631dc32dd8614e741fc403\`:** Python suite \`511 run / 510 passed / 1 failed\`. New test \`test_rehashed_first_trace_state_must_match_initial\` failed exactly with \`AssertionError: BattleStoreError not raised\`; three workflows running the suite reported the same failure. This is an intentional red test, **not** a previously passing build.
+- **Root cause:** \`_validate_cached_sandbox()\` only bounds individual trace states; it did not require the first event's \`before\` snapshot to equal the validated initial state. The SHA256 digest is not an authenticity proof after rehashing.
+- **Targeted fix (in this checkpoint's paired source change):** reject any nonempty complete trace whose first \`before\` state differs from \`initial\`; malformed saved facts fail closed, without rerunning native PvPoke or deleting data.
+- **Green status:** pending exact-HEAD CI. A later, independent test must still address intermediate trace-state transitions and terminal/effects linkage. No production change.
+
+### Current progress after G6-001 remediation commit
+| Stage | State | Evidence | Remaining |
+|---|---|---|---|
+| Latest source | 完了 | PR #112, Draft, base #111; prior HEAD \`f02d557...\`; original 5/5 initial CI | New head/CI |
+| Battle independent review | 作業中 | Native runner semantics reviewed; forged initial timeline contradiction reproduced | Additional energy/CMP/fast action fixtures |
+| Live reproducibility | 未着手 | Still counterfactual fixed scripts | Observational-equivalence policies/tests |
+| Missing IV / roles | 作業中 | Exact-build intersection and unknown-ownership state inspected, no new failure proven | Full IV coverage and alternative substitution tests |
+| Security / storage | 作業中 | P1 cache contradiction proven; capacity reserve code inspected | WAL, tiny quota, crash/repair, owner HTTP, Trivy reachability |
+| Repairs | 作業中 | Minimal cache fix and regression test committed together | Verify post-fix CI; further inconsistent trace cases |
+| Regression | 作業中 | Red run: 511/510/1 | Green 511+ golden/JS/browser/build checks |
+| GitHub saving | 完了 | Source, test, handoff on existing Draft branch | Record exact final commit in visible handoff |
+
+- Previous Work-local unsaved 3 files remain inaccessible; do not overwrite or claim recovered.
+- No local working tree available for inspection; uncommitted changes in the previous Work environment remain unknown.
+- Changed in this pass: \`tests/test_sandbox.py\`, \`pvpoke_sandbox.py\`, \`docs/ASTRA_REVIEW_CONTINUATION.md\`.
+- Initial PR #112 head was \`3d793b9...\`; red test commit \`f02d557...\`. This checkpoint is paired with a new remediation commit on branch \`fix/tactic-review-recovery-20261112\`; its exact GitHub-generated SHA is reported in the review handoff.
+- No production merge/deploy/configuration/DB changes. No ChatGPT PvPoke MCP calls.
+- Next: confirm new commit's Actions, read any failures, fix only reproducible regressions, then document remaining uncertainty and do not approve publication prematurely.

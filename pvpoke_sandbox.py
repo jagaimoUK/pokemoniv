@@ -194,6 +194,11 @@ def _validate_cached_sandbox(value, key, spec, versions):
         raise ValueError('Stored Sandbox damage totals differ')
     _shield_results(value['shield_results'], spec['shield_decisions'], events)
     trace = _trace(value['trace'], actions, actual, turns)
+    # A valid digest cannot authenticate an impossible opening state.
+    # The native runner records the battle's actual initial snapshot before
+    # emitting its first event, including events that are only move starts.
+    if trace and trace[0]['before'] != initial:
+        raise ValueError('Stored Sandbox trace starts from an inconsistent state')
     resolved = [entry for entry in trace if entry['phase'] == 'resolve']
     if len(resolved) != len(events):
         raise ValueError('Saved Sandbox trace is missing resolved moves')
