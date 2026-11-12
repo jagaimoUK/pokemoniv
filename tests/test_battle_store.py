@@ -10,6 +10,8 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -169,6 +171,32 @@ class BattleStoreTests(unittest.TestCase):
         self.assertEqual(result['status'], 'complete')
         self.assertNotIn('/private/internal', str(result))
         self.assertEqual(self.service.cache_stats['storage_errors'], 4)
+
+    def test_critical_writer_survives_brief_database_lock_contention(self):
+        """Short concurrent writes should serialize instead of losing a user edit."""
+        path = self.root / 'critical-lock.sqlite3'
+        store = BattleStore(path)
+        with store._writer(critical=True) as db:
+            db.execute('CREATE TABLE lock_checks (id INTEGER PRIMARY KEY)')
+        with closing(sqlite3.connect(path)) as holder:
+            holder.execute('BEGIN IMMEDIATE')
+            started = threading.Event()
+
+            def write_critical():
+                started.set()
+                with store._writer(critical=True) as db:
+                    db.execute('INSERT INTO lock_checks VALUES (1)')
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(write_critical)
+                self.assertTrue(started.wait(3), 'critical writer did not start')
+                try:
+                    time.sleep(0.4)  # Longer than the disposable 0.25 s budget.
+                finally:
+                    holder.rollback()
+                future.result(timeout=5)
+        with store._reader() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM lock_checks').fetchone()[0], 1)
 
     def test_reserved_database_quota_preserves_space_for_critical_events(self):
         from pvpoke_battle_store import RESERVED_DB_PAGE_FRACTION

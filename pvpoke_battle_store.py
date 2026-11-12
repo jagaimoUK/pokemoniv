@@ -133,7 +133,11 @@ class BattleStore:
                 wal_bytes = 0
             if wal_bytes > self.max_bytes:
                 raise BattleStoreError('Noncritical battle writes paused: oversized SQLite WAL')
-        with closing(sqlite3.connect(self.path, timeout=0.25)) as db, db:
+        # Critical owner-authored writes get a bounded lock wait; transient
+        # contention must not make a valid confirmation look unavailable.
+        # Disposable cache writes retain their fast 250 ms failure budget.
+        wait = 2.0 if critical else 0.25
+        with closing(sqlite3.connect(self.path, timeout=wait)) as db, db:
             total_pages = self.max_bytes // db.execute('PRAGMA page_size').fetchone()[0]
             if total_pages < 2:
                 raise BattleStoreError('Battle database size limit is too small')

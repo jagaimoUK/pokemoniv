@@ -53,6 +53,13 @@ jobs:
           docker run --rm -v "$PWD:/work" -w /work --entrypoint python pokemoniv-security-ci -m unittest discover -s tests -p 'test*.py'
           docker run --rm --entrypoint python pokemoniv-security-ci -m pip inspect > python-packages.json
           docker run --rm --entrypoint dpkg-query pokemoniv-security-ci -W > os-packages.txt
+      - name: Real ENOSPC and ownership rollback in disposable 2 MiB tmpfs
+        run: |
+          docker run --rm --user 10001:10001 \
+            --tmpfs /tmp/pvp-enospc:rw,size=2m,mode=1777 \
+            -e PYTHONPATH=/app -e PVP_REAL_ENOSPC_ROOT=/tmp/pvp-enospc \
+            -v "$PWD/tests:/tests:ro" --entrypoint python pokemoniv-security-ci \
+            -m unittest discover -s /tests -p test_real_enospc.py -v
       - name: Mobile browser initialization under CSP
         run: |
           docker build --target browser-check -t pokemoniv-browser-ci .

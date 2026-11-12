@@ -67,3 +67,29 @@ The assertion now captures `before_revision` immediately after registration,
 asserts it is unchanged after the failed confirmation, and verifies a +1
 increment only after a successful retry. This is a **test fixture correction**,
 not a product data modification. Confirm green CI on the new exact HEAD.
+
+## Follow-up: physical ENOSPC and critical writer contention
+
+The exact prior commit's full CI reported a rare SQLite `database is locked`
+while two owners' tactic snapshots raced on `BEGIN IMMEDIATE` in the same
+temporary database. The short 250 ms timeout is appropriate for disposable
+cache writes, but too aggressive for manual saved data. Critical writes now
+wait up to **2 seconds for the SQLite lock**, without delaying uncontended
+operations. Noncritical writes retain their 250 ms timeout. A regression
+holds a real SQLite write lock for 400 ms and verifies the critical writer
+commits after release.
+
+The security CI now includes `tests/test_real_enospc.py`, executed **only**
+inside a Docker container with an empty 2 MiB tmpfs mounted at
+`/tmp/pvp-enospc`. The test refuses volumes larger than 4 MiB. For both
+DELETE and WAL journal modes it creates a synthetic owner instance, injects
+a 4 MiB late write through an isolated SQLite trigger, verifies **actual
+full-filesystem write refusal**, rollback of owner state/history/revision,
+cross-owner isolation, integrity_check, and idempotent retry after space
+is freed. The test does not mount or fill a production volume, nor touch
+user data.
+
+These are newly added tests, **unverified until the exact new commit's
+GitHub Actions Security and regression job passes**. They cannot prove
+power-loss durability, externally concurrent writers, all WAL checkpoint
+failure conditions, or production filesystem semantics.
