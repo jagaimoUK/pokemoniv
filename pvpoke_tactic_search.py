@@ -302,6 +302,51 @@ class TacticSearch:
         except (sqlite3.Error, OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
             raise TacticSearchError('Could not read tactic search checkpoint') from exc
 
+    def _verify_saved_facts(self, plan, cells):
+        """Check cached completed-cell success against its native Sandbox evidence.
+
+        The checkpoint checksum is not an authenticity proof. Use one
+        owner-scoped SQLite snapshot, not a new battle simulation.
+        """
+        for index, cell in enumerate(cells):
+            candidate = plan['candidates'][index]
+            if (cell.get('status') not in ('complete', 'partial') or
+                    cell.get('strategy') != candidate['strategy'] or
+                    cell.get('response') != candidate['response'] or
+                    cell.get('evidence_class') != 'theoretical_script_only' or
+                    type(cell.get('simulator_cached')) is not bool):
+                raise TacticSearchError('Saved tactic metadata differs from planned script')
+        complete = [(index, cell) for index, cell in enumerate(cells)
+                    if cell['status'] == 'complete']
+        if not complete:
+            return
+        try:
+            with self.store._reader() as db:
+                for index, cell in complete:
+                    candidate = plan['candidates'][index]
+                    native = self.sandbox._cached(db, cell['candidate_key'],
+                                                  candidate['spec'])
+                    if native is None:
+                        raise ValueError('Native battle proof is unavailable')
+                    summary = native['summary']
+                    expected = {
+                        'battle_key': summary['battle_key'],
+                        'outcome': summary['outcome'],
+                        'all_self_executed': _requested_actions_completed(
+                            candidate['spec'], summary, candidate['self_actions']),
+                        'opponent_response_executed': _requested_actions_completed(
+                            candidate['spec'], summary, candidate['opponent_actions']),
+                        'all_requested_shields_honored': all(
+                            row['used'] is row['requested']
+                            for row in native['shield_results']),
+                    }
+                    if any(cell.get(field) != value or
+                           (type(value) is bool and type(cell.get(field)) is not bool)
+                           for field, value in expected.items()):
+                        raise ValueError('Saved tactic flags differ from native battle proof')
+        except (sqlite3.Error, OSError, ValueError, KeyError, TypeError) as exc:
+            raise TacticSearchError('Could not verify saved native tactic evidence') from exc
+
     @staticmethod
     def _progress(search_id, plan, cells, *, attempts=0, cache_hits=0, blocked=None):
         count = len(plan['candidates'])
@@ -332,6 +377,7 @@ class TacticSearch:
             if plan['version'] != self._version():
                 return {**self._progress(search_id, plan, cells), 'state': 'stale',
                         'incomplete_reason': 'calculation_or_search_version_changed'}
+            self._verify_saved_facts(plan, cells)
             calls = hits = 0
             started = monotonic()
             blocked = None

@@ -213,6 +213,19 @@ def _validate_cached_sandbox(value, key, spec, versions):
     if last_state != terminal:
         raise ValueError('Stored Sandbox trace differs from terminal state')
 
+    # Native Battle.useMove always pairs resolve with a subsequent effects
+    # event, including moves whose effects are a no-op. Missing no-op events
+    # cannot be discovered by checking the HP/state chain alone.
+    for position, step in enumerate(trace):
+        if step['phase'] == 'resolve':
+            effect = trace[position + 1] if position + 1 < len(trace) else None
+            if effect is None or effect['phase'] != 'effects' or any(
+                    effect.get(field) != step.get(field)
+                    for field in ('turn', 'actor', 'kind', 'move_id', 'action_id')):
+                raise ValueError('Saved Sandbox resolution lacks native effects')
+        elif step['phase'] == 'effects':
+            if position == 0 or trace[position - 1]['phase'] != 'resolve':
+                raise ValueError('Saved Sandbox effects lack native resolution')
     resolved = [entry for entry in trace if entry['phase'] == 'resolve']
     if len(resolved) != len(events):
         raise ValueError('Saved Sandbox trace is missing resolved moves')
