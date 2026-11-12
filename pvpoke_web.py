@@ -44,6 +44,7 @@ from pvpoke_missing_comparison import API_PATH as MISSING_API_PATH, MAX_REQUEST_
 from pvpoke_missing_comparison import app_operation as missing_operation, enabled as missing_enabled
 from pvpoke_ownership import OwnershipConflict, OwnershipUnavailable
 from pvpoke_sandbox_workspace import API_PATH as SANDBOX_API_PATH, TacticConflict, TacticUnavailable
+from pvpoke_tactic_search import TacticSearchError
 from pvpoke_sandbox_workspace import app_operation as sandbox_operation, enabled as sandbox_enabled, list_operation as list_tactics
 from pvpoke_direct_backend import DirectMatrixClient
 from pvpoke_app_input import app_presets
@@ -711,7 +712,7 @@ class Handler(BaseHTTPRequestHandler):
                         result = service.simulate(payload)
                 except (OwnershipConflict, TacticConflict):
                     workspace_status = 409
-                except (AnalysisUnavailable, OwnershipUnavailable, TacticUnavailable, BattleStoreError):
+                except (AnalysisUnavailable, OwnershipUnavailable, TacticUnavailable, TacticSearchError, BattleStoreError):
                     workspace_status = 503
                 except (ValueError, KeyError, TypeError, RecursionError):
                     workspace_status = 400
