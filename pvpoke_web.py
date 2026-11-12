@@ -14,6 +14,7 @@ from collections import deque
 from datetime import datetime
 import io
 import json
+import logging
 import os
 import signal
 import sqlite3
@@ -141,8 +142,10 @@ def load_catalog():
                             'presets': presets, 'timestamp': gm.get('timestamp')})
         meta_variants.start(WORK, LOCK, STATUS, battle_busy=lambda: BATTLE_RUNNING)
     except Exception as exc:
+        logging.warning('Game catalog initialization failed: %s', type(exc).__name__)
         with LOCK:
-            CATALOG.update({'ready': False, 'error': str(exc)})
+            CATALOG.update({'ready': False,
+                            'error': 'ゲームデータの読み込みに失敗しました。再試行してください'})
 
 
 def parse_ivs(raw):
@@ -421,10 +424,15 @@ def background_run(shields, batch24=False, batch_mode='simple', meta_file=None, 
                                  'ZIPが完成しました' if STATUS['state']=='done' else
                                  '計算が中断されました。ログを確認してね')
     except Exception as exc:
+        # STATUS is exposed by local /api/status and can be relayed by
+        # authenticated app job polling. Never store unexpected exception
+        # text, which may include backend filesystem paths or secrets.
+        logging.warning('Background IV calculation failed: %s', type(exc).__name__)
         with LOCK:
-            STATUS['logs'].append(f'ERROR: {exc}')
+            STATUS['logs'].append('ERROR: 計算処理の内部エラー')
             STATUS['state'] = 'cancelled' if CANCEL_REQUESTED else 'error'
-            STATUS['message'] = '計算を中止しました' if CANCEL_REQUESTED else str(exc)
+            STATUS['message'] = ('計算を中止しました' if CANCEL_REQUESTED else
+                                 '計算処理に失敗しました。再試行してください')
             STATUS['finished_at'] = datetime.now().isoformat(timespec='microseconds')
     finally:
         with LOCK:
