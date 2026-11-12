@@ -148,3 +148,37 @@ Sources and current limits: the original Japanese request document defines these
 - Previous Work uncommitted edits: unknown/unrecoverable; this environment uses direct GitHub commits, no local checkout.
 - Remaining: green CI + 324 golden + browser smoke, owner boundary, WAL and true disk exhaustion, information fairness, full IV search, performance comparison; do not mark the feature publishable.
 - Next concrete action: read CI conclusions on new HEAD, retrieve failure logs if any, only then finalize the Draft checkpoint and report commit SHA.
+
+
+---
+
+## GPT-6 independent continuation, stage II (2026-11-12 JST, red-test checkpoint)
+
+**Original sources inspected before proposing a repair:** the uploaded missing-analysis / Sandbox / common-battle-engine requirements and security instructions; pinned native \`pvpoke_sandbox_runner.js\` and \`vendor/pvpoke/src/js/battle/Battle.js\`. Prior stage conclusions are not treated as proof.
+
+**Git/CI verified at start:** Draft PR #112 still open and stacked on #111; branch \`fix/tactic-review-recovery-20261112\`, starting HEAD \`e7cdb07b5ac4b6fcf0ab09832b9f9302692558c2\`; its 5/5 Actions succeeded, 513/513 Python tests passed. GitHub is updated via explicit parent-checked connector commits; the prior Work-local uncommitted state cannot be inspected.
+
+### Independent invariants to challenge (pre-repair)
+- A complete native battle starts from the saved \`initial\`, emits sequential \`start/resolve/effects\` state snapshots, and ends in \`summary.terminal\`.
+- Each \`start\` has the same \`before\` and \`after\`, since starting/tapping a move does not apply damage or buffs.
+- Every adjacent trace event must preserve state continuity (unless a separately verified native transition is identified).
+- Native \`onMoveResolved\` emits a move's \`target_hp\` equal to the defender's HP after the resolve; the change in HP on resolution equals applied damage.
+- State continuity and target HP are not implied by a matching JSON checksum. A rehashed inconsistent row must be rejected with no native rerun.
+- Hidden opponent IV/energy/move/shield preferences must not be treated as known at decision time; a fixed-script result stays \`counterfactual_only\`, \`live_reproducibility=not_verified\` until observable-history policies are separately tested.
+- Exact legal build and owner confirmation remain separate; untested IVs are not missing/losing, and absence of an inventory entry is unknown.
+
+### Checkpoint status (this commit deliberately adds red tests *before* source repair)
+| Stage | State | Verified this stage | Remaining |
+|---|---|---|---|
+| Latest source/PR/CI | 完了 | PR #112 head/stack, 5/5 initial CI, 513 Python | Reverify head after edits |
+| Native battle/trace review | 作業中 | Trace runner callbacks examined; new normal-native and rehashed-mutation tests added | Read exact CI failures, patch only confirmed defects |
+| Information fairness | 作業中 | Counterfactual metadata and lack of observable policy confirmed in code | Hidden-state equivalence fixtures; real-play reproducibility not established |
+| Role / IV coverage | 作業中 | Existing exact-build/unknown status verified by source | Exotic substitutes, incomplete 4096 IV coverage |
+| Security / capacity | 作業中 | Mutated cache fail-closed test cases added | WAL/disk exhaustion and restart, owner route reachability, Trivy HIGH 103 |
+| Defect fixes | 未着手 | Stage-II code untouched, awaiting red-test result | Minimal fix to validated failures |
+| Regression/build | 未着手 | 513/513 and 5/5 are **starting** HEAD results | New red and green, JS, Docker, browser |
+| GitHub checkpoint | 完了 | Documentation and test-only stage committed to existing Draft branch | Record failing assertions, fixes, final SHA/status |
+
+**Changed files at this checkpoint:** \`tests/test_sandbox.py\` and \`docs/ASTRA_REVIEW_CONTINUATION.md\`. Current branch remains \`fix/tactic-review-recovery-20261112\`; this is a test-only commit on top of \`e7cdb07b...\`. No local checkout, so Work-local uncommitted changes unknown; no production changes, no PvPoke MCP calls.
+
+**Next precise action:** inspect actual new-head CI, distinguish a violation of the native trace contract from an invalid proposed invariant, then repair narrowly and verify a green exact head. Do not promote previous or new tests to live-play proof.

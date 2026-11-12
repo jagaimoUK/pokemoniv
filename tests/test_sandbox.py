@@ -187,6 +187,72 @@ class SandboxTests(unittest.TestCase):
             self.assertEqual(self.sandbox.simulate(spec)['status'], 'failed')
             native.assert_not_called()
 
+    def test_native_complete_trace_state_chain_matches_terminal(self):
+        """Oracle: snapshots come from the pinned native runner, not hand-made output."""
+        for spec in (scripted_spec(), scripted_spec(energy=0)):
+            with self.subTest(energy=spec['combatants'][0]['initial']['energy']):
+                result = self.sandbox.simulate(spec)
+                self.assertEqual(result['status'], 'complete', result.get('error'))
+                steps = result['trace']
+                self.assertTrue(steps)
+                self.assertEqual(steps[0]['before'], result['initial'])
+                self.assertEqual(steps[-1]['after'], result['summary']['terminal'])
+                for previous, following in zip(steps, steps[1:]):
+                    self.assertEqual(previous['after'], following['before'],
+                                     'Native trace has an unrepresented state transition')
+                for step in steps:
+                    if step['phase'] == 'start':
+                        self.assertEqual(step['before'], step['after'])
+
+    def test_rehashed_trace_state_and_target_hp_must_fail_closed(self):
+        """Rehashing an impossible timeline cannot turn it into verified evidence."""
+        import json
+        from pvpoke_battle_service import _canonical_json, _json_hash
+        from pvpoke_battle_store import BattleStoreError
+
+        def change_last_hp(record):
+            state = record['summary']['terminal'][0]
+            self.assertGreater(state['hp'], 1)
+            state['hp'] -= 1
+
+        def change_target_hp(record):
+            event = record['summary']['executed_moves'][0]
+            event['target_hp'] += 1
+
+        def change_start_after(record):
+            state = record['trace'][0]['after'][0]
+            self.assertGreater(state['hp'], 0)
+            state['hp'] -= 1
+
+        def change_effects_before(record):
+            effect = next(row for row in record['trace'] if row['phase'] == 'effects')
+            state = effect['before'][0]
+            state['energy_points'] = (state['energy_points'] + 1) % 101
+
+        for index, corrupt in enumerate((
+                change_last_hp, change_target_hp,
+                change_start_after, change_effects_before)):
+            with self.subTest(corruption=corrupt.__name__):
+                store = BattleStore(self.root / f'trace-integrity-{index}.sqlite3')
+                self.standard.store = store
+                sandbox = SandboxService(self.standard)
+                result = sandbox.simulate(scripted_spec())
+                self.assertEqual(result['status'], 'complete', result.get('error'))
+                key, spec = result['summary']['battle_key'], result['summary']['spec']
+                with closing(sqlite3.connect(store.path)) as db, db:
+                    record = json.loads(db.execute(
+                        'SELECT body FROM sandbox_results_v1').fetchone()[0])
+                    corrupt(record)
+                    data = _canonical_json(record)
+                    db.execute('UPDATE sandbox_results_v1 SET body=?,digest=?',
+                               (data, _json_hash(record)))
+                with patch('pvpoke_sandbox.subprocess.run',
+                           side_effect=AssertionError('corrupt cache must not invoke engine')) as native:
+                    with self.assertRaises(BattleStoreError):
+                        sandbox._get(key, spec)
+                    self.assertEqual(sandbox.simulate(spec)['status'], 'failed')
+                    native.assert_not_called()
+
     def test_wait_only_timeout_is_partial_and_not_saved(self):
         spec = scripted_spec(energy=0)
         spec['actions'] = [
