@@ -17,6 +17,12 @@ OUTCOMES = {"self_win": "self_ko_win", "opponent_win": "opponent_ko_win",
             "simultaneous_ko": "simultaneous_ko"}
 RESOURCES = {"hp": "hp", "energy": "energy", "shields_remaining": "shields"}
 
+# This read-only advisory compares stored searches; the original Sandbox
+# continues to support its separate, larger 4096-receipt compute/checkpoint
+# budget. Bound total replay and JSON parsing across *all* IDs in one request.
+MAX_REFERENCE_RECEIPTS = 1024
+MAX_REFERENCE_RECEIPT_BYTES = 8 * 1024 * 1024
+
 
 def _world_key(battle):
     return _json_hash([battle["self"], battle["opponent"], battle["initial"], battle["shields"]])
@@ -66,6 +72,50 @@ def _policy_condition(policy, scenario_indices, aligned_role_ids):
     return {"policy_hash": policy["policy_hash"],
             "scenario_count": len(scenario_indices), "outcomes": counts,
             "aligned_roles": matches}
+
+
+def _bounded_observed_summaries(observed, search_ids):
+    """Preflight inexpensive SQLite metadata before reconstructing any replay.
+
+    One read transaction pins the metadata, receipts, and their validation to
+    the same owner-scoped snapshot. User-supplied IDs only appear as SQL values.
+    """
+    owner = observed.store.owner_scope
+    placeholders = ",".join("?" for _ in search_ids)
+    params = (owner, *search_ids)
+    with observed.store._reader() as db:
+        if not db.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='observed_jobs_v2'"
+        ).fetchone():
+            raise ValueError("Observed search unavailable for this owner")
+        jobs = db.execute(
+            f"SELECT id,cursor FROM observed_jobs_v2 "
+            f"WHERE owner=? AND id IN ({placeholders})", params).fetchall()
+        if len(jobs) != len(search_ids):
+            raise ValueError("Observed search unavailable for this owner")
+        if any(type(cursor) is not int or cursor < 0 or cursor > 4096
+               for _, cursor in jobs):
+            raise ValueError("Invalid observed checkpoint")
+        if sum(cursor for _, cursor in jobs) > MAX_REFERENCE_RECEIPTS:
+            raise ValueError("Observed reference work budget exceeded; inspect Sandbox")
+        if not db.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='observed_work_v2'"
+        ).fetchone():
+            raise ValueError("Observed saved work unavailable")
+        saved_bytes = db.execute(
+            f"SELECT COALESCE(SUM(LENGTH(receipt)),0) FROM observed_work_v2 "
+            f"WHERE owner=? AND id IN ({placeholders})", params).fetchone()[0]
+        if saved_bytes > MAX_REFERENCE_RECEIPT_BYTES:
+            raise ValueError("Observed reference byte budget exceeded; inspect Sandbox")
+        output = []
+        for search_id in search_ids:
+            loaded = observed._read(db, search_id)
+            if loaded is None:
+                raise ValueError("Observed search unavailable for this owner")
+            if loaded.get("stale"):
+                raise ValueError("Observed search is stale")
+            output.append((search_id, loaded, observed._summary(search_id, loaded)))
+        return output
 
 
 def compare_observed(service, evaluation_id, search_ids):
@@ -118,14 +168,7 @@ def compare_observed(service, evaluation_id, search_ids):
             })
 
     links = []
-    for search_id in search_ids:
-        with service.store._reader() as db:
-            loaded = observed._read(db, search_id)
-            if loaded is None:
-                raise ValueError("Observed search unavailable for this owner")
-            if loaded.get("stale"):
-                raise ValueError("Observed search is stale")
-            summary = observed._summary(search_id, loaded)
+    for search_id, loaded, summary in _bounded_observed_summaries(observed, search_ids):
         keys = {_world_key(entry["battle"]) for entry in loaded["plan"]["manifest"].values()}
         by_condition = {(item["build_id"], item["condition_id"]): item
                         for key in keys for item in index.get(key, [])}

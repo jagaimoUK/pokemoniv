@@ -129,6 +129,59 @@ class MissingObservedEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "stale"):
                 compare_observed(self.service, role["evaluation_id"], [search_id])
 
+    def test_large_checkpoint_is_rejected_before_full_history_replay(self):
+        """A legitimate owner can request a 1025-receipt job; refuse before _read."""
+        role = self.evaluation()
+        search_id = self.observed()
+        with self.store._writer() as db:
+            db.execute("UPDATE observed_jobs_v2 SET cursor=? WHERE owner=? AND id=?",
+                       (1025, self.store.owner_scope, search_id))
+        with patch.object(ObservedSearch, "_read",
+                          side_effect=AssertionError("unbounded replay attempted")):
+            with self.assertRaisesRegex(ValueError, "budget|limit"):
+                compare_observed(self.service, role["evaluation_id"], [search_id])
+
+    def test_cumulative_receipt_bytes_are_bounded_before_replay(self):
+        """18 individually-sized but collectively excessive synthetic receipts."""
+        role = self.evaluation()
+        search_id = self.observed()
+        fake = "x" * (480 * 1024)  # Each below the 512 KiB per-receipt limit.
+        with self.store._writer() as db:
+            for position in range(18):
+                db.execute("INSERT INTO observed_work_v2 VALUES (?,?,?,?,?,?,?)",
+                           (self.store.owner_scope, search_id, position, "f" * 64,
+                            fake, "a" * 64, 0))
+            db.execute("UPDATE observed_jobs_v2 SET cursor=? WHERE owner=? AND id=?",
+                       (18, self.store.owner_scope, search_id))
+        with patch.object(ObservedSearch, "_read",
+                          side_effect=AssertionError("large saved data replay attempted")):
+            with self.assertRaisesRegex(ValueError, "budget|limit"):
+                compare_observed(self.service, role["evaluation_id"], [search_id])
+
+    def test_parallel_reference_reads_keep_data_unchanged_and_measure_latency(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import statistics
+        import time
+        role = self.evaluation()
+        search_id = self.observed()
+        before = hashlib.sha256(self.store.path.read_bytes()).digest()
+
+        def read(_):
+            started = time.perf_counter_ns()
+            result = compare_observed(self.service, role["evaluation_id"], [search_id])
+            return ((time.perf_counter_ns() - started) / 1_000_000,
+                    result["links"][0]["search_id"], result["links"][0]["work"])
+
+        # Simulates distinct authenticated reads, never a live endpoint flood.
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            samples = list(pool.map(read, range(12)))
+        self.assertTrue(all((result_id, work) == (search_id, 0)
+                            for _, result_id, work in samples))
+        self.assertEqual(hashlib.sha256(self.store.path.read_bytes()).digest(), before)
+        values = sorted(sample[0] for sample in samples)
+        print("STAGE6_OBSERVED_REFERENCE_MS n=12 concurrent=4 p50=%.3f p95=%.3f"
+              % (statistics.median(values), values[int((len(values) - 1) * .95)]))
+
     def test_multiple_saved_jobs_do_not_merge_policies(self):
         role = self.evaluation()
         ids = [self.observed(horizon=horizon) for horizon in (1, 2)]
