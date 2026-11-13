@@ -122,18 +122,25 @@ def compare_observed(service, evaluation_id, search_ids):
 
     sandbox = SandboxService(service)
     observed = ObservedSearch(sandbox)
-    # The preflight and replay must use one immutable SQLite read snapshot.
-    # Otherwise a concurrent step could append receipts between two readers.
+    # The preflight and raw fetch must use one immutable SQLite read snapshot,
+    # then close the reader before JSON decoding and replay verification.
     with service.store._reader() as db:
         _check_receipt_budget(db, service.store.owner_scope, search_ids)
-        loaded_jobs = {}
+        snapshots = {}
         for search_id in search_ids:
-            loaded = observed._read(db, search_id)
-            if loaded is None:
+            snapshot = observed._fetch(db, search_id)
+            if snapshot is None:
                 raise ValueError("Observed search unavailable for this owner")
-            if loaded.get("stale"):
-                raise ValueError("Observed search is stale")
-            loaded_jobs[search_id] = loaded
+            snapshots[search_id] = snapshot
+
+    loaded_jobs = {}
+    for search_id, snapshot in snapshots.items():
+        loaded = observed._replay(snapshot)
+        if loaded is None:
+            raise ValueError("Observed search unavailable for this owner")
+        if loaded.get("stale"):
+            raise ValueError("Observed search is stale")
+        loaded_jobs[search_id] = loaded
 
     requirements = role["definition"]["requirements"]
     index = {}

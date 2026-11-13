@@ -2,6 +2,7 @@
 import copy
 import hashlib
 import sqlite3
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import tempfile
@@ -138,10 +139,12 @@ class MissingObservedEvidenceTests(unittest.TestCase):
         observed = ObservedSearch(self.sandbox)
         observed.step(search_id, 0, 1)
         with patch("pvpoke_observed_evidence.MAX_COMPARE_RECEIPTS", 0):
-            with patch.object(observed, "_read",
-                              side_effect=AssertionError("expensive read must not start")):
-                with self.assertRaisesRegex(ValueError, "too large"):
-                    compare_observed(self.service, role["evaluation_id"], [search_id])
+            with patch.object(ObservedSearch, "_fetch",
+                              side_effect=AssertionError("expensive fetch must not start")):
+                with patch.object(ObservedSearch, "_replay",
+                                  side_effect=AssertionError("expensive replay must not start")):
+                    with self.assertRaisesRegex(ValueError, "too large"):
+                        compare_observed(self.service, role["evaluation_id"], [search_id])
         with patch("pvpoke_observed_evidence.MAX_COMPARE_RECEIPT_BYTES", 1):
             with self.assertRaisesRegex(ValueError, "too large"):
                 compare_observed(self.service, role["evaluation_id"], [search_id])
@@ -176,20 +179,30 @@ class MissingObservedEvidenceTests(unittest.TestCase):
         sid = self.observed()
         import pvpoke_observed_evidence as module
         original_check = module._check_receipt_budget
-        original_read = ObservedSearch._read
+        original_fetch = ObservedSearch._fetch
+        original_replay = ObservedSearch._replay
         snapshot = []
+        replayed = []
 
         def preflight(db, owner, ids):
             snapshot.append(db)
             return original_check(db, owner, ids)
 
-        def load(search, db, search_id):
+        def fetch(search, db, search_id):
             self.assertIs(db, snapshot[0])
-            return original_read(search, db, search_id)
+            return original_fetch(search, db, search_id)
+
+        def replay(search, raw):
+            with self.assertRaises(sqlite3.ProgrammingError):
+                snapshot[0].execute("SELECT 1")
+            replayed.append(raw["search_id"])
+            return original_replay(search, raw)
 
         with patch.object(module, "_check_receipt_budget", side_effect=preflight):
-            with patch.object(ObservedSearch, "_read", autospec=True, side_effect=load):
-                result = compare_observed(self.service, role["evaluation_id"], [sid])
+            with patch.object(ObservedSearch, "_fetch", autospec=True, side_effect=fetch):
+                with patch.object(ObservedSearch, "_replay", autospec=True, side_effect=replay):
+                    result = compare_observed(self.service, role["evaluation_id"], [sid])
+        self.assertEqual(replayed, [sid])
         self.assertEqual(result["links"][0]["search_id"], sid)
 
     def test_parallel_readers_return_same_owner_scoped_result(self):
@@ -208,6 +221,217 @@ class MissingObservedEvidenceTests(unittest.TestCase):
         self.assertEqual([row["search_id"] for row in result["links"]], ids)
         self.assertTrue(all(row["build_id"] == result["links"][0]["build_id"]
                             for row in result["links"]))
+
+    def test_concurrent_writer_succeeds_during_reader_replay_in_delete_mode(self):
+        """In DELETE mode, reader releases its SHARED lock before in-memory replay so writers proceed."""
+        role = self.evaluation()
+        sid = self.observed()
+        observed = ObservedSearch(self.sandbox)
+        observed.step(sid, 0, 1)
+
+        with self.store._reader() as db:
+            self.assertEqual(db.execute("PRAGMA journal_mode").fetchone()[0], "delete")
+
+        from pvpoke_observed_search import Search
+        original_advance = Search.advance
+
+        for mode in ("compare_observed", "observed_get"):
+            with self.subTest(mode=mode):
+                reader_in_replay = threading.Event()
+                writer_done = threading.Event()
+                writer_result = {}
+                key = f"test-key-{mode}"
+
+                def hook_advance(search_inst, state, value):
+                    reader_in_replay.set()
+                    self.assertTrue(writer_done.wait(timeout=5.0), "writer thread timed out")
+                    return original_advance(search_inst, state, value)
+
+                def writer_task():
+                    try:
+                        self.assertTrue(reader_in_replay.wait(timeout=5.0), "reader did not enter replay")
+                        with self.store._writer(critical=False) as db:
+                            db.execute(
+                                "INSERT OR IGNORE INTO battle_results VALUES (?,?,?,?,?,?)",
+                                ("local-owner", key, "standard-summary-v1", b"{}", "hash", 1),
+                            )
+                        writer_result["success"] = True
+                    except Exception as exc:
+                        writer_result["error"] = exc
+                    finally:
+                        writer_done.set()
+
+                thread = threading.Thread(target=writer_task)
+                with patch.object(Search, "advance", hook_advance):
+                    thread.start()
+                    try:
+                        if mode == "compare_observed":
+                            result = compare_observed(self.service, role["evaluation_id"], [sid])
+                            self.assertEqual(result["links"][0]["search_id"], sid)
+                        else:
+                            summary = observed.get(sid)
+                            self.assertEqual(summary["work"], 1)
+                    finally:
+                        writer_done.set()
+                        thread.join(timeout=5.0)
+                self.assertFalse(thread.is_alive())
+                self.assertTrue(writer_result.get("success"),
+                                f"Writer failed with error: {writer_result.get('error')}")
+                with self.store._reader() as db:
+                    count = db.execute(
+                        "SELECT COUNT(*) FROM battle_results WHERE owner_scope=? AND battle_key=?",
+                        ("local-owner", key),
+                    ).fetchone()[0]
+                self.assertEqual(count, 1)
+
+    def test_snapshot_isolation_prevents_concurrent_append_mixing(self):
+        """Concurrent observed.step during replay must not corrupt the in-flight snapshot."""
+        role = self.evaluation()
+        sid = self.observed(horizon=2)
+        observed = ObservedSearch(self.sandbox)
+        observed.step(sid, 0, 1)
+
+        from pvpoke_observed_search import Search
+        original_advance = Search.advance
+        reader_thread = threading.current_thread()
+        reader_in_replay = threading.Event()
+        writer_done = threading.Event()
+        writer_result = {}
+
+        def hook_advance(search_inst, state, value):
+            if threading.current_thread() is reader_thread and not reader_in_replay.is_set():
+                reader_in_replay.set()
+                self.assertTrue(writer_done.wait(timeout=5.0), "concurrent step timed out")
+            return original_advance(search_inst, state, value)
+
+        def concurrent_step():
+            try:
+                self.assertTrue(reader_in_replay.wait(timeout=5.0), "reader did not enter replay")
+                stepped = ObservedSearch(self.sandbox).step(sid, 1, 1)
+                writer_result["work"] = stepped["work"]
+            except Exception as exc:
+                writer_result["error"] = exc
+            finally:
+                writer_done.set()
+
+        thread = threading.Thread(target=concurrent_step)
+        with patch.object(Search, "advance", hook_advance):
+            thread.start()
+            try:
+                result = compare_observed(self.service, role["evaluation_id"], [sid])
+            finally:
+                writer_done.set()
+                thread.join(timeout=5.0)
+        self.assertFalse(thread.is_alive())
+        self.assertNotIn("error", writer_result)
+        self.assertEqual(writer_result.get("work"), 2)
+        self.assertEqual(result["links"][0]["work"], 1)
+        after = compare_observed(self.service, role["evaluation_id"], [sid])
+        self.assertEqual(after["links"][0]["work"], 2)
+
+    def test_reader_cleans_up_on_fetch_and_replay_errors(self):
+        """Errors during SQL fetch or in-memory replay must not leak SQLite locks."""
+        role = self.evaluation()
+        sid = self.observed()
+        observed = ObservedSearch(self.sandbox)
+        observed.step(sid, 0, 1)
+
+        from pvpoke_battle_store import BattleStoreError
+        # 1. Error during _fetch (e.g. non-existent search ID)
+        with self.assertRaisesRegex(ValueError, "unavailable for this owner"):
+            compare_observed(self.service, role["evaluation_id"], ["f" * 64])
+
+        # 2. Error during _replay (corrupt digest)
+        with self.store._writer(critical=True) as db:
+            db.execute("UPDATE observed_work_v2 SET digest='invalid' WHERE id=?", (sid,))
+        with self.assertRaises(BattleStoreError):
+            compare_observed(self.service, role["evaluation_id"], [sid])
+
+        # Writer must proceed immediately after both failure paths
+        with self.store._writer(critical=False) as db:
+            db.execute("INSERT OR IGNORE INTO battle_results VALUES (?,?,?,?,?,?)",
+                       ("local-owner", "test-key-cleanup", "standard-summary-v1", b"{}", "hash", 1))
+
+    def test_1024_valid_receipts_succeed_and_1025_is_rejected_before_fetch(self):
+        """Exact 1024 valid receipts replay cleanly; 1025th fails in SQL preflight before _fetch."""
+        from pvpoke_observed_observation import history_key
+        from pvpoke_observed_search import canonical, digest, _move_data
+
+        role = self.evaluation()
+        controllers = [
+            {"attack": "standard", "shield": "never"},
+            {"attack": "charge_if_ready", "shield": "never"},
+            {"attack": "standard", "shield": "always"},
+            {"attack": "charge_if_ready", "shield": "always"},
+        ]
+        branches = [
+            {"fast_delay": d, "miss_first_fast": m, "reverse_fast_batch": False}
+            for d in (0, 1) for m in (False, True)
+        ]
+        worlds = []
+        for energy in range(32):
+            world = copy.deepcopy(self.world)
+            world["combatants"][1]["initial"]["energy"] = energy
+            worlds.append(world)
+
+        observed = ObservedSearch(self.sandbox)
+        sid = observed.start(worlds, controllers, branches, 1, roles=self.roles)["search_id"]
+        with self.store._reader() as db:
+            snap = observed._fetch(db, sid)
+        loaded = observed._replay(snap)
+        search, state = loaded["search"], loaded["state"]
+        move_data = _move_data(self.sandbox)
+        events = [{"seq": 1, "observed_time_range": [1, 1], "kind": "window"}]
+        fkey = history_key(search.context, events)
+
+        def next_row(pos):
+            item = state["frontier"][-1]
+            scenario = search.scenarios[item["index"]]
+            wid = observed._work_id(sid, search, state)
+            if fkey not in item["table"]:
+                receipt = {"status": "frontier", "key": fkey, "events": events,
+                           "legal": ["fast", "wait_one_window"]}
+            else:
+                battle = loaded["plan"]["manifest"][scenario]["battle"]
+                init_state = [
+                    [battle["initial"][s].get("hp_points", 100),
+                     battle["initial"][s].get("energy_points", 0),
+                     battle["shields"][s]]
+                    for s in (0, 1)
+                ]
+                fast_id = battle["self"]["fast"]
+                egain = int(move_data[fast_id]["energyGain"])
+                receipt = {
+                    "status": "complete", "outcome": "self_ko_win", "initial": init_state,
+                    "moves": [{"actor": 0, "move": fast_id, "kind": "fast", "window": 1,
+                               "damage": init_state[1][0], "shielded": False}],
+                    "terminal": [[init_state[0][0], min(100, init_state[0][1] + egain), init_state[0][2]],
+                                 [0, init_state[1][1], init_state[1][2]]],
+                }
+            search.advance(state, receipt)
+            return (self.store.owner_scope, sid, pos, wid,
+                    canonical(receipt), digest([wid, receipt, 1024]), 1024)
+
+        rows_1024 = [next_row(pos) for pos in range(1024)]
+        with self.store._writer() as db:
+            db.executemany("INSERT INTO observed_work_v2 VALUES (?,?,?,?,?,?,?)", rows_1024)
+            db.execute("UPDATE observed_jobs_v2 SET cursor=? WHERE owner=? AND id=?",
+                       (1024, self.store.owner_scope, sid))
+
+        result = compare_observed(self.service, role["evaluation_id"], [sid])
+        self.assertEqual(result["links"][0]["work"], 1024)
+        self.assertEqual(observed.get(sid)["work"], 1024)
+
+        row_1025 = next_row(1024)
+        with self.store._writer() as db:
+            db.execute("INSERT INTO observed_work_v2 VALUES (?,?,?,?,?,?,?)", row_1025)
+            db.execute("UPDATE observed_jobs_v2 SET cursor=? WHERE owner=? AND id=?",
+                       (1025, self.store.owner_scope, sid))
+
+        with patch.object(ObservedSearch, "_fetch",
+                          side_effect=AssertionError("_fetch must not run past 1024")):
+            with self.assertRaisesRegex(ValueError, "too large"):
+                compare_observed(self.service, role["evaluation_id"], [sid])
 
 
 if __name__ == "__main__":

@@ -351,7 +351,7 @@ class ObservedSearch:
                        (self.store.owner_scope, search_id, body))
         return self.get(search_id)
 
-    def _read(self, db, search_id):
+    def _fetch(self, db, search_id):
         if type(search_id) is not str or not re.fullmatch(r"[a-f0-9]{64}", search_id):
             raise ValueError("Invalid observed search ID")
         if not db.execute("SELECT 1 FROM sqlite_schema WHERE name='observed_jobs_v2'").fetchone():
@@ -364,6 +364,18 @@ class ObservedSearch:
         body, cursor, paused = job
         if len(body) > 1024 * 1024 or not integer(cursor, 0, MAX_WORK) or paused not in (0, 1):
             raise BattleStoreError("Invalid observed checkpoint")
+        rows = db.execute("""SELECT position,work_id,receipt,digest,rss FROM observed_work_v2
+                          WHERE owner=? AND id=? ORDER BY position LIMIT ?""",
+                          (owner, search_id, cursor + 1)).fetchall()
+        return {"search_id": search_id, "body": body, "cursor": cursor,
+                "paused": paused, "rows": rows}
+
+    def _replay(self, snapshot):
+        if snapshot is None:
+            return None
+        search_id = snapshot["search_id"]
+        body, cursor, paused, rows = (
+            snapshot["body"], snapshot["cursor"], snapshot["paused"], snapshot["rows"])
         plan = json.loads(body)
         if digest(plan) != search_id or plan.get("schema") != SCHEMA:
             raise BattleStoreError("Invalid observed plan")
@@ -375,9 +387,6 @@ class ObservedSearch:
         search = Search(context, plan["manifest"], normalize_roles(plan["roles"]) if "roles" in plan else None)
         state = initial_state()
         move_data = None
-        rows = db.execute("""SELECT position,work_id,receipt,digest,rss FROM observed_work_v2
-                          WHERE owner=? AND id=? ORDER BY position LIMIT ?""",
-                          (owner, search_id, cursor + 1))
         for position, work_id, receipt, checksum, rss in rows:
             if (position != state["work"] or not state["frontier"] or state["stop_reason"]
                     or len(receipt) > MAX_OUTPUT or not integer(rss, 0, RSS_KIB * 2)
@@ -396,6 +405,9 @@ class ObservedSearch:
         if state["work"] != cursor:
             raise BattleStoreError("Missing observed work receipt")
         return {"search": search, "state": state, "plan": plan, "paused": bool(paused)}
+
+    def _read(self, db, search_id):
+        return self._replay(self._fetch(db, search_id))
 
     @staticmethod
     def _work_id(search_id, search, state):
@@ -444,7 +456,8 @@ class ObservedSearch:
         if not self.store.path.exists():
             return None
         with self.store._reader() as db:
-            return self._summary(search_id, self._read(db, search_id))
+            snapshot = self._fetch(db, search_id)
+        return self._summary(search_id, self._replay(snapshot))
 
     def pause(self, search_id, *, paused=True):
         if type(paused) is not bool:
