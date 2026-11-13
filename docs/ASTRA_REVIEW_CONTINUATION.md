@@ -1,3 +1,20 @@
+## 2026-11-13 JST 第8段階：SQLite読取ロック解放とreader/writer競合解消（CI全5件成功）
+
+作業開始時確認：GitHub PR #111(`bbc0619f`)、#112(`a9d6ee55`)、#113(`a721cd844ad5ed7e6b13c17716667e4471f1bf13`) は全てDraft・未マージ。直前HEAD `a721cd8` に対する5 CIは成功済み。
+
+今回の差分：
+- 根本原因：SQLite DELETEモードにおいて、`compare_observed()` および `ObservedSearch.get()` が `store._reader()` のSHAREDロックを保持したまま全レシートの `json.loads`、`validate_damage`、`Search.advance` などの重いCPU処理を実行し、並行writerが250msタイムアウトで `sqlite3.OperationalError: database is locked` となる問題を解消。
+- 修正内容：`pvpoke_observed_search.py` の `_read` を SQL行データ一括フェッチ（`_fetch`）とインメモリ検証・探索状態復元（`_replay`）に分離。`compare_observed()` および `ObservedSearch.get()` において、同一読取スナップショット内で `_check_receipt_budget` と `_fetch` を実行後、直ちに `_reader()` を抜けてSQLiteロックを解放（ロック保持時間は1024件レシートで約39msから実測約2.37msへ短縮）。ロック解放後にメモリ上のデータに対して `_replay` を実行し、並行writerの即時成功を保証。
+- 整合性維持：同一DBスナップショットからの取得（TOCTOU防止）、1024件/16MiB既存上限、他ownerデータの完全除外、異常系での確実な接続・ロック解放を維持。
+- 回帰・検証テスト：`tests/test_missing_observed_evidence.py` を拡充し、DELETEモード下での並行writer成功検証、スナップショット分離（再生中の並行step追加が混入しないこと）、フェッチ/再生失敗時のロック解放、1024件合法レシート完全再生および1025件目のSQL事前拒否を追加（14/14 PASS）。観測系テスト全体（51/51 PASS）、ストレージ系（18/18 PASS）、バックアップ・合成負荷（31/31 PASS）ローカル確認済み。
+- コミットとCI：最新HEAD `4b57ea094643c03efefbd06066406db3f8bdb59c` に対し、GitHub Actions全5ワークフロー（IV text contract, Meta preset/image, 24-mode, Recommendation performance, Security and regression）が全て SUCCESS で完了。
+
+安全制約と公開判定：
+- PR #111〜#113はDraftを維持。main・本番・機能フラグ（`PVP_OBSERVED_SEARCH_ENABLED=0`）は未変更。ChatGPT接続PvPoke MCP使用なし。
+- 限定試験判定は **A（限定試験開始不可）** を維持。
+
+---
+
 ## 2026-11-13 JST 第7段階：隔離試験の実行準備・合成負荷計測（CI前の保存）
 
 作業開始時確認：GitHub PR #111(`bbc0619f`)、#112(`a9d6ee55`)、#113(`c4739336380c22e54ce4f8eb93335e6abf056dc7`) は全てDraft・未マージ。#113の正本ブランチにGitHub上の未保存差分はなく、ローカルWork別環境の未コミット変更はGitHubだけから確認できない。既存第6段階の5 CIは成功。
