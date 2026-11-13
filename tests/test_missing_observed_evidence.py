@@ -158,6 +158,30 @@ class MissingObservedEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "budget|limit"):
                 compare_observed(self.service, role["evaluation_id"], [search_id])
 
+    def test_parallel_reference_reads_keep_data_unchanged_and_measure_latency(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import statistics
+        import time
+        role = self.evaluation()
+        search_id = self.observed()
+        before = hashlib.sha256(self.store.path.read_bytes()).digest()
+
+        def read(_):
+            started = time.perf_counter_ns()
+            result = compare_observed(self.service, role["evaluation_id"], [search_id])
+            return ((time.perf_counter_ns() - started) / 1_000_000,
+                    result["links"][0]["search_id"], result["links"][0]["work"])
+
+        # Simulates distinct authenticated reads, never a live endpoint flood.
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            samples = list(pool.map(read, range(12)))
+        self.assertTrue(all((result_id, work) == (search_id, 0)
+                            for _, result_id, work in samples))
+        self.assertEqual(hashlib.sha256(self.store.path.read_bytes()).digest(), before)
+        values = sorted(sample[0] for sample in samples)
+        print("STAGE6_OBSERVED_REFERENCE_MS n=12 concurrent=4 p50=%.3f p95=%.3f"
+              % (statistics.median(values), values[int((len(values) - 1) * .95)]))
+
     def test_multiple_saved_jobs_do_not_merge_policies(self):
         role = self.evaluation()
         ids = [self.observed(horizon=horizon) for horizon in (1, 2)]
