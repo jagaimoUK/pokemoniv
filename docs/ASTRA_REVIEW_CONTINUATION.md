@@ -9,9 +9,15 @@
 - 回帰・検証テスト：`tests/test_missing_observed_evidence.py` を拡充し、DELETEモード下での並行writer成功検証、スナップショット分離（再生中の並行step追加が混入しないこと）、フェッチ/再生失敗時のロック解放、1024件合法レシート完全再生および1025件目のSQL事前拒否を追加（14/14 PASS）。観測系テスト全体（51/51 PASS）、ストレージ系（18/18 PASS）、バックアップ・合成負荷（31/31 PASS）ローカル確認済み。
 - コミットとCI：最新HEAD `4b57ea094643c03efefbd06066406db3f8bdb59c` に対し、GitHub Actions全5ワークフロー（IV text contract, Meta preset/image, 24-mode, Recommendation performance, Security and regression）が全て SUCCESS で完了。
 
+- HTTP切断・タイムアウトおよびレート制限の検証：
+  - 経路確認：Client -> Nginx (80/443, proxy_http_version 1.0) -> Gateway (8788, BoundedHTTPServer max 24) -> urllib.request (8765, timeout 65s) -> Engine (Python/Node)。
+  - クライアント切断時の挙動：同期HTTPモデルのため、クライアント切断（FIN/RST）時もバックエンド計算は即時中断されず最後まで継続する。計算完了後のレスポンス書き込み時に `BrokenPipeError`/`ConnectionResetError` を検知するが、`finally` 節により `APP_REQUEST_SLOTS`（4並列）およびワーカースロット（24並列）は確実に即時解放され、リソースリークは生じないことを隔離合成テストで実証。
+  - レート制限・リソース防御：Gateway層の `RateBudget`（Token Bucket）により、未認証GETは `public`（300/60s）、POSTは `entry`（300/60s）、重い計算処理は `compute-owner`（12/60s）に制限され、超過時は `429 Too Many Requests`（`Retry-After: 10`）を返却。計算並行数は `APP_REQUEST_SLOTS` で最大4に制限され、超過時は `503 Service Unavailable` を即時返却。未認証POSTはスロット・トークン消費前に `401 Unauthorized` で遮断。Nginx層（10r/s burst=40 nodelay, conn 24）と多層防御を形成。
+  - 限定試験評価：切断時の即時キャンセルは行われないものの、4並列スロット×12回/分×各ステップ計算量上限（1024レシート等）×多層タイムアウト（20s/65s/80s/90s）によりDoS・リソース枯渇は確実に防止されており、限定試験要件を満たす。即時キャンセル機構はP2（一般公開前）課題として整理。
+
 安全制約と公開判定：
 - PR #111〜#113はDraftを維持。main・本番・機能フラグ（`PVP_OBSERVED_SEARCH_ENABLED=0`）は未変更。ChatGPT接続PvPoke MCP使用なし。
-- 限定試験判定は **A（限定試験開始不可）** を維持。
+- 限定試験判定は **A（限定試験開始不可：本番Edge/DNS挙動および残存CVE確認前）** を維持。
 
 ---
 
