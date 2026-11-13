@@ -135,6 +135,20 @@ th{color:var(--text-muted);font-weight:600}
 <a id="search-to-missing" href="/app/missing" hidden>不足分析へ戻って戦術証拠を照合</a>
 </details>
 </section>
+<section id="observed-panel" class="panel stack" data-observed-search="0" hidden>
+<details class="stack tight" id="observed-details">
+<summary>観測履歴で戦術を探索（試験版）</summary>
+<p class="muted">現在の相手設定に対し、即時観測と通常技の通知が遅れる条件で、同じ方策を検証します。実機での再現性は未確認です。不足分析の判定には反映しません。</p>
+<div class="row">
+<button id="observed-start" type="button" data-request>現在の条件で開始</button>
+<button id="observed-step" type="button" data-request>最大8回を検証</button>
+<button id="observed-stop" type="button" data-request>一時停止</button>
+<button id="observed-resume" type="button" data-request>再開</button>
+<button id="observed-get" type="button" data-request>前回の探索を取得</button>
+</div>
+<p id="observed-status" class="notice" role="status" aria-live="polite">探索を開始してください。</p>
+</details>
+</section>
 <section class="panel stack">
 <h2>戦術の保存と復元</h2>
 <form id="save-form" class="stack tight"><label>戦術名<input id="tactic-name" maxlength="64" required autocomplete="off"></label><p id="save-status" class="muted"></p><div class="row"><button id="save" type="submit" class="primary" data-request>戦術を保存</button></div></form>
@@ -763,6 +777,40 @@ function showTacticProgress(data){
  else if(data.state==='stale')announce('探索開始時と計算バージョンが異なります。候補を作り直してください。','warning');
  refreshButtons();
 }
+const observedStorage='pokemoniv:observed-search-v2';
+let observedJob=null;
+function renderObserved(data){
+ observedJob=data;
+ const reason={policy_limit:'方策数の上限',work_limit:'再生回数の上限',
+  incomplete:'未対応または未完了のシナリオあり',policy_found:'宣言範囲の検証を完了',
+  no_policy_in_declared_class:'宣言した方策範囲の探索を完了'};
+ const role=data.role===true?'宣言した全シナリオで成立':
+  data.role===false?'宣言した方策範囲で成立せず':'未確定';
+ const status=data.status==='stale'?'計算バージョンが変わりました。新しく開始してください。':
+  role+' · 再生 '+data.work+' 回 · '+data.scenario_count+' シナリオ'+
+  (data.paused?' · 一時停止中':data.stop_reason?' · '+(reason[data.stop_reason]||'停止'):' · 検証を続けられます');
+ $('observed-status').textContent=status;
+ try{sessionStorage.setItem(observedStorage,data.search_id);}catch{}
+}
+async function beginObserved(spec){
+ const {actions,shield_decisions,policies,...battle}=spec;
+ const data=await api('sandbox',{action:'observed_start',worlds:[battle],horizon:500,
+  controllers:[{attack:'standard',shield:'standard'},{attack:'charge_if_ready',shield:'never'}],
+  branches:[{fast_delay:0,miss_first_fast:false,reverse_fast_batch:false},
+   {fast_delay:1,miss_first_fast:true,reverse_fast_batch:false}]});
+ renderObserved(data);
+}
+async function observedOperation(action){
+ let search_id=observedJob?.search_id;
+ if(!search_id){try{search_id=sessionStorage.getItem(observedStorage);}catch{}}
+ if(!/^[a-f0-9]{64}$/.test(search_id||''))throw Error('保存済み探索がありません。');
+ const args={action,search_id};
+ if(action==='observed_step'){
+  if(!observedJob||observedJob.status!=='pending')throw Error('探索を取得して、停止中なら再開してください。');
+  Object.assign(args,{expected_work:observedJob.work,budget:8});
+ }
+ renderObserved(await api('sandbox',args));
+}
 async function beginTacticSearch(spec){
  announce('戦術候補を作成しています。この操作では対戦計算しません。');
  const key=scriptKey();
@@ -865,6 +913,9 @@ async function connect(manual){
  $('connection').hidden=true;
  $('workspace').hidden=false;
  $('tactic-search-panel').hidden=$('tactic-search-panel').dataset.tacticSearch!=='1';
+ $('observed-panel').hidden=$('observed-panel').dataset.observedSearch!=='1';
+ if(!$('observed-panel').hidden&&new URLSearchParams(location.search).get('observed')==='1')
+  $('observed-details').open=true;
  let imported=false,importError=false;
  try{imported=importSpec();}
  catch{importError=true;}
@@ -890,6 +941,10 @@ $('action-form').addEventListener('submit',editAction);
 $('remove-action').addEventListener('click',removeAction);
 $('simulate').addEventListener('click',()=>withSpec('sandbox',simulate));
 $('standard').addEventListener('click',()=>withSpec('standard',simulateStandard));
+$('observed-start').addEventListener('click',()=>withSpec('standard',spec=>beginObserved({...spec,mode:'sandbox'})));
+for(const operation of ['step','stop','resume','get']){
+ $('observed-'+operation).addEventListener('click',()=>perform(()=>observedOperation('observed_'+operation)));
+}
 $('search-start').addEventListener('click',()=>withSpec('sandbox',beginTacticSearch));
 $('search-step').addEventListener('click',()=>perform(advanceTacticSearch));
 $('undo').addEventListener('click',()=>changeHistory(undo,redo));

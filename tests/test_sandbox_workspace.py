@@ -60,6 +60,22 @@ class SandboxGatewayTests(server.ServerFixture):
             self.assertEqual(request(self.server, APP_PATH, payload, headers=auth)[0], 200)
             call.assert_called_once_with(API_PATH, payload, headers={'X-PvPoke-Token': 'internal-test-token'}, timeout=65)
 
+    def test_observed_gateway_auth_origin_and_disabled_flag(self):
+        auth = {'Authorization': 'Bearer ' + server.gateway.API_KEY, 'Content-Type': 'application/json'}
+        payload = {'action': 'observed_step', 'search_id': 'f' * 64, 'budget': 1, 'expected_work': 0}
+        with patch.dict(os.environ, {'PVP_SANDBOX_ENABLED': '1', 'PVP_OBSERVED_SEARCH_ENABLED': '0'}):
+            self.assertEqual(request(self.server, APP_PATH, payload, headers=auth)[0], 503)
+        with patch.dict(os.environ, {'PVP_SANDBOX_ENABLED': '1', 'PVP_OBSERVED_SEARCH_ENABLED': '1'}), patch.object(
+                server.gateway.backend, '_token', return_value='internal-test-token'), patch.object(
+                server.gateway.backend, '_request', return_value={'work': 1}) as call:
+            self.assertEqual(request(self.server, APP_PATH, payload)[0], 401)
+            self.assertEqual(request(self.server, APP_PATH, payload, headers={**auth, 'Origin': 'https://other.invalid'})[0], 403)
+            code, html, _ = request(self.server, PAGE_PATH + '?observed=1')
+            self.assertEqual(code, 200)
+            self.assertIn(b'data-observed-search="1"', html)
+            self.assertEqual(request(self.server, APP_PATH, payload, headers=auth)[0], 200)
+            call.assert_called_once_with(API_PATH, payload, headers={'X-PvPoke-Token': 'internal-test-token'}, timeout=65)
+
 
 class SandboxLocalTests(server.ServerFixture):
     handler = server.web.Handler
@@ -79,6 +95,28 @@ class SandboxLocalTests(server.ServerFixture):
         headers = {'Content-Type': 'application/json', 'X-PvPoke-Token': server.web.TOKEN}
         status, body, _ = request(self.server, API_PATH, payload, headers=headers)
         return status, json.loads(body)
+
+    def test_observed_search_start_step_stop_resume(self):
+        spec = scripted_spec(energy=0)
+        spec.update(actions=[], shield_decisions=[])
+        payload = {"action": "observed_start", "worlds": [spec], "horizon": 1,
+                   "controllers": [{"attack": "standard", "shield": "never"}],
+                   "branches": [{"fast_delay": 0, "miss_first_fast": False,
+                                 "reverse_fast_batch": False}]}
+        with patch.dict(os.environ, {"PVP_OBSERVED_SEARCH_ENABLED": "1"}):
+            code, started = self.call(payload)
+            self.assertEqual(code, 200)
+            self.assertEqual(started["work"], 0)
+            self.assertIsNone(started["role"])
+            base = {"search_id": started["search_id"]}
+            self.assertEqual(self.call({**base, "action": "observed_get", "owner": "other"})[0], 400)
+            self.assertTrue(self.call({**base, "action": "observed_stop"})[1]["paused"])
+            self.assertFalse(self.call({**base, "action": "observed_resume"})[1]["paused"])
+            code, result = self.call({**base, "action": "observed_step", "expected_work": 0, "budget": 4})
+            self.assertEqual((code, result["work"]), (200, 3))
+            self.assertIsNone(result["role"])
+            self.assertFalse(result["practical_role_covered"])
+            self.assertEqual(self.call({**base, "action": "observed_get"})[1], result)
 
     def test_tactic_search_starts_without_battle_and_resumes_with_bounded_budget(self):
         spec = scripted_spec()

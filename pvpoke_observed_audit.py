@@ -77,3 +77,24 @@ def audit_traces(traces, policy):
             "supplied_prefixes_consistent": True,
             "information_fairness": "not_established",
             "live_reproducibility": "not_verified", "practical_role_covered": False}
+
+
+def audit_v2(context, traces, table):
+    """Check distinct native decision prefixes against one committed table."""
+    from pvpoke_observed_observation import FLAGS, ObservationV2
+
+    seen = {}
+    repeated = 0
+    if not 1 <= len(traces) <= 1024:
+        raise ValueError("Invalid v2 trace count")
+    for trace in traces:
+        for index, event in enumerate(trace):
+            if event.get("kind") != "intent":
+                continue
+            view = ObservationV2.read(context, trace[:index])
+            action = event.get("action")
+            if action not in view.legal or table.get(view.key) != action:
+                raise ValueError("V2 trace differs from committed shared policy")
+            repeated += view.key in seen
+            seen[view.key] = action
+    return {"schema": "observed-audit-v2", "shared_prefixes": repeated, **FLAGS}

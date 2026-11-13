@@ -11,6 +11,7 @@ from pvpoke_tactic_search import TacticSearch
 API_PATH = '/api/sandbox'
 APP_PATH = '/app-api/sandbox'
 PAGE_PATH = '/app/sandbox'
+OBSERVED_ACTIONS = ('observed_start', 'observed_step', 'observed_get', 'observed_stop', 'observed_resume')
 TABLE = 'sandbox_tactics_v1'
 MAX_REVISION = 2**31 - 1
 MAX_RECORD_BYTES = MAX_REQUEST_BYTES * 2
@@ -30,6 +31,10 @@ def enabled():
 
 def search_enabled():
     return os.environ.get('PVP_TACTIC_SEARCH_ENABLED') == '1'
+
+
+def observed_enabled():
+    return os.environ.get("PVP_OBSERVED_SEARCH_ENABLED") == "1"
 
 
 def _id(value):
@@ -149,6 +154,25 @@ def list_operation(store, payload):
 def app_operation(service, payload):
     action = payload.get('action')
     sandbox = SandboxService(service)
+    if action in OBSERVED_ACTIONS:
+        if not observed_enabled():
+            raise TacticUnavailable('Observed search is disabled')
+        from pvpoke_observed_search import ObservedSearch
+        search = ObservedSearch(sandbox)
+        if action == 'observed_start':
+            _object(payload, 'start observed search', ('action', 'worlds', 'controllers', 'branches', 'horizon'))
+            return search.start(*(payload[k] for k in ('worlds', 'controllers', 'branches', 'horizon')))
+        required = ('action', 'search_id')
+        if action == 'observed_step':
+            _object(payload, 'advance observed search', (*required, 'expected_work', 'budget'))
+            result = search.step(payload['search_id'], payload['expected_work'], payload['budget'])
+        else:
+            _object(payload, 'saved observed search', required)
+            result = (search.get(payload['search_id']) if action == 'observed_get' else
+                      search.pause(payload['search_id'], paused=action == 'observed_stop'))
+        if result is None:
+            raise ValueError('Unknown observed search')
+        return result
     if action == 'simulate':
         _object(payload, 'Sandbox request', ('action', 'spec'))
         return sandbox.simulate(payload['spec'])

@@ -35,7 +35,7 @@ input,select,button{font:inherit;color:inherit;min-height:44px;border:1px solid 
 <section class="stack"><div><h2>比較する個体</h2><p class="intro">同じポケモンの別個体や、別のポケモンを最大7体追加できます。手持ちの確認は結果から行えます。</p></div><div id="alternatives" class="stack"></div><div class="actions"><button id="add-alternative" type="button" class="quiet" data-action>比較する個体を追加</button></div></section>
 <div class="actions"><button id="evaluate" class="primary" data-action>保存済みの対面結果を照合</button></div>
 </form>
-<section id="tactic-evidence-panel" class="results stack" hidden><h2>Sandbox戦術の根拠</h2>
+<section id="tactic-evidence-panel" data-observed-search="0" class="results stack" hidden><h2>Sandbox戦術の根拠</h2>
 <p>標準計算と指定戦術は別の結果です。実戦再現性は未検証で、所持・役割の判定は変更しません。</p>
 <div class="actions"><button id="tactic-evidence-read" type="button" data-action>保存済み戦術を不足分析と照合</button></div>
 <div id="tactic-evidence-results" class="stack"></div></section>
@@ -279,7 +279,7 @@ function renderMatch(parent,condition,current,result,request){
  }
  if(result.can_sandbox&&condition.spec){
   const actions=node('div',null,body,'actions');
-  button(actions,'Sandboxで対面を開く',()=>{
+  const openSandbox=observed=>{
    try{
     sessionStorage.setItem('pokemoniv:sandbox-input-v1',JSON.stringify(condition.spec));
     let old=null;try{old=JSON.parse(sessionStorage.getItem(tacticLinkKey)||'null');}catch{}
@@ -287,9 +287,12 @@ function renderMatch(parent,condition,current,result,request){
       ?old.search_ids.filter(id=>/^[a-f0-9]{64}$/.test(id)).slice(-6):[];
     sessionStorage.setItem(tacticLinkKey,JSON.stringify({evaluation_id:result.evaluation_id,
       build_id:current.build_id,search_ids}));
-    location.assign('/app/sandbox');
+    location.assign(observed?'/app/sandbox?observed=1':'/app/sandbox');
    }catch(error){announce('対戦条件を一時保存できませんでした。',true);}
-  },'quiet');
+  };
+  button(actions,'Sandboxで対面を開く',()=>openSandbox(false),'quiet');
+  if($('tactic-evidence-panel').dataset.observedSearch==='1')
+   button(actions,'観測履歴で検証（試験版）',()=>openSandbox(true),'quiet');
  }
  const peers=result.candidates.filter(candidate=>candidate.build_id!==current.build_id);
  if(peers.length){

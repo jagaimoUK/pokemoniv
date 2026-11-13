@@ -29,6 +29,7 @@ from pvpoke_missing_comparison import PAGE_PATH as MISSING_PAGE_PATH, MAX_REQUES
 from pvpoke_missing_comparison import enabled as missing_enabled
 from pvpoke_sandbox_workspace import APP_PATH as SANDBOX_APP_PATH, API_PATH as SANDBOX_API_PATH
 from pvpoke_sandbox_workspace import PAGE_PATH as SANDBOX_PAGE_PATH, enabled as sandbox_enabled
+from pvpoke_sandbox_workspace import OBSERVED_ACTIONS, observed_enabled
 from pvpoke_app_access import AppAccess, BrowserLogin
 from pvpoke_app_input import parse_import
 from pvpoke_score_search import search_low_scores
@@ -381,8 +382,10 @@ class Handler(BaseHTTPRequestHandler):
             if not missing_enabled():
                 return self.respond(404, {'error': 'Not found'})
             from pvpoke_missing_ui import HTML as missing_html
-            page = missing_html
-        elif self.path == SANDBOX_PAGE_PATH:
+            page = missing_html.replace('data-observed-search="0"',
+                                        'data-observed-search="1"' if sandbox_enabled() and observed_enabled()
+                                        else 'data-observed-search="0"')
+        elif self.path in (SANDBOX_PAGE_PATH, SANDBOX_PAGE_PATH + '?observed=1'):
             if not sandbox_enabled():
                 return self.respond(404, {'error': 'Not found'})
             from pvpoke_sandbox_ui import HTML as sandbox_html
@@ -391,6 +394,8 @@ class Handler(BaseHTTPRequestHandler):
             page = page.replace('data-tactic-search="0"',
                                 'data-tactic-search="1"' if os.environ.get('PVP_TACTIC_SEARCH_ENABLED') == '1'
                                 else 'data-tactic-search="0"')
+            if observed_enabled():
+                page = page.replace('data-observed-search="0"', 'data-observed-search="1"')
         elif self.path == '/app/migration':
             page = browser_migration.page()
         elif self.path == '/flashcards':
@@ -446,9 +451,11 @@ class Handler(BaseHTTPRequestHandler):
                 if sandbox and args.get('action') in ('search_start', 'search_step') and os.environ.get(
                         'PVP_TACTIC_SEARCH_ENABLED') != '1':
                     return self.respond(503, {'error': 'Tactic search is disabled'})
+                if sandbox and args.get('action') in OBSERVED_ACTIONS and not observed_enabled():
+                    return self.respond(503, {'error': 'Observed search is disabled'})
                 if not (sandbox_enabled() if sandbox else missing_enabled()):
                     return self.respond(503, {'error': 'Analysis workspace is disabled'})
-                if sandbox and args.get('action') in ('simulate', 'standard', 'search_start', 'search_step') and not self.rate_allowed('compute-owner', 12, 60):
+                if sandbox and args.get('action') in ('simulate', 'standard', 'search_start', 'search_step', 'observed_start', 'observed_step') and not self.rate_allowed('compute-owner', 12, 60):
                     return
                 endpoint = SANDBOX_API_PATH if sandbox else MISSING_API_PATH
                 try:
@@ -634,7 +641,8 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        if self.path in ('/flashcards', '/app/party', '/app/migration', MISSING_PAGE_PATH, SANDBOX_PAGE_PATH):
+        if self.path in ('/flashcards', '/app/party', '/app/migration', MISSING_PAGE_PATH, SANDBOX_PAGE_PATH,
+                         SANDBOX_PAGE_PATH + '?observed=1'):
             return self.app_page()
         # This one read-only route contains only global, fixed PvP rankings
         # transformed into GO search terms. Do not expose private app APIs,

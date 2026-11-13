@@ -31,7 +31,7 @@ function exact(value, keys, name) {
 function bounded(value, min, max, label) {
   if (!Number.isSafeInteger(value) || value < min || value > max) throw Error("Invalid " + label);
 }
-function validate(input) {
+function validate(input, v2 = false) {
   exact(input, ["gamemaster_path", "self", "opponent", "initial", "shields", "policy",
                  "opponent_shield_rule", "opponent_attack_rule"], "native request");
   if (typeof input.gamemaster_path !== "string" ||
@@ -54,11 +54,12 @@ function validate(input) {
   if (typeof input.policy.shield_rule !== "string" ||
       !RULES.has(input.policy.shield_rule)) throw Error("Invalid self shield rule");
   if (typeof input.opponent_shield_rule !== "string" ||
-      !new Set(["standard", "never", "always"]).has(input.opponent_shield_rule)) {
+      !new Set(["standard", "never", "always", ...(v2 ? ["first"] : [])]).has(input.opponent_shield_rule)) {
     throw Error("Invalid opponent response rule");
   }
   if (typeof input.opponent_attack_rule !== "string" ||
-      !new Set(["standard", "charge_if_ready"]).has(input.opponent_attack_rule)) {
+      !new Set(["standard", "charge_if_ready",
+        ...(v2 ? ["charge_slot_1", "bank_1", "bank_2"] : [])]).has(input.opponent_attack_rule)) {
     throw Error("Invalid opponent attack rule");
   }
   const own = input.policy.own_charged_moves;
@@ -360,7 +361,255 @@ function runObserved(input) {
   };
 }
 
-module.exports = {runObserved};
+const V2_FLAGS = {information_fairness: "not_established", live_reproducibility: "not_verified",
+  practical_role_covered: false};
+
+function canonicalV2(value) {
+  if (Array.isArray(value)) return "[" + value.map(canonicalV2).join(",") + "]";
+  if (value !== null && typeof value === "object") {
+    return "{" + Object.keys(value).sort().map(k => JSON.stringify(k) + ":" + canonicalV2(value[k])).join(",") + "}";
+  }
+  return JSON.stringify(value);
+}
+
+function runObservedV2(input) {
+  const {observed_v2: plan, ...request} = input;
+  validate(request, true);
+  exact(plan, ["context_hash", "table", "horizon", "branch", "seed"], "replay plan");
+  const hashPattern = /^[a-f0-9]{64}$/;
+  const actions = ["fast", "charge_0", "charge_1", "wait_one_window", "shield_no", "shield_yes"];
+  if (!hashPattern.test(plan.context_hash) || !plan.table || typeof plan.table !== "object" ||
+      Array.isArray(plan.table) || Object.keys(plan.table).length > 512 ||
+      Object.entries(plan.table).some(([key, action]) => !hashPattern.test(key) || !actions.includes(action))) {
+    throw Error("Invalid shared policy");
+  }
+  bounded(plan.horizon, 1, 500, "horizon");
+  bounded(plan.seed, 0, 2147483647, "seed");
+  const {branch} = plan;
+  exact(branch, ["fast_delay", "miss_first_fast", "reverse_fast_batch"], "delivery branch");
+  bounded(branch.fast_delay, 0, 2, "delivery delay");
+  if (typeof branch.miss_first_fast !== "boolean" || typeof branch.reverse_fast_batch !== "boolean") {
+    throw Error("Invalid delivery branch");
+  }
+  loadMaster(request.gamemaster_path);
+  const {Battle, ActionLogic, TimelineAction} = vm.runInThisContext("({Battle,ActionLogic,TimelineAction})");
+  const crypto = require("node:crypto");
+  const events = [], intents = [], moves = [], pending = [];
+  const stopped = Symbol("bounded replay stop");
+  const costs = request.policy.own_charged_moves.map(move => move.energy_cost);
+  const shields = request.shields.slice();
+  let energy = request.initial[0].energy_points ?? 0;
+  bounded(energy, 0, 100, "initial energy");
+  let clock = 0, decisionCount = 0, visibleCount = 0, opponentFastCount = 0;
+  let opponentBanked = 0, ownCharges = 0;
+  let fastGain, status, active, initialState;
+
+  function stop(result) {
+    status = result;
+    throw stopped;
+  }
+
+  function publish(kind, fields = {}) {
+    if (kind !== "window" && kind !== "charge_announced" && kind !== "intent" &&
+        ++visibleCount > MAX_VISIBLE_EVENTS) stop({status: "unknown", reason: "history_limit"});
+    events.push({seq: events.length + 1, observed_time_range: [clock, clock], kind, ...fields});
+  }
+
+  function choose(phase) {
+    if (++decisionCount > 512) stop({status: "unknown", reason: "history_limit"});
+    publish(phase);
+    const legal = phase === "window"
+      ? actions.slice(0, 4).filter(action => !action.startsWith("charge_") || energy >= costs[Number(action.at(-1))])
+      : shields[0] ? actions.slice(4) : ["shield_no"];
+    const key = crypto.createHash("sha256")
+      .update(canonicalV2(["observed-history-v2", plan.context_hash, events])).digest("hex");
+    if (!Object.hasOwn(plan.table, key)) stop({status: "frontier", key, legal, events});
+    const action = plan.table[key];
+    if (!legal.includes(action)) stop({status: "unknown", reason: "invalid_policy_intent"});
+    publish("intent", {action});
+    const row = {key, action, window: clock, status: "proposed"};
+    intents.push(row);
+    return row;
+  }
+
+  function wrappedBattle() {
+    const battle = new Battle();
+    const originalStep = battle.step.bind(battle);
+    const originalTurnAction = battle.getTurnAction.bind(battle);
+    const originalProcess = battle.processAction.bind(battle);
+    const originalUse = battle.useMove.bind(battle);
+    const originalStart = battle.start.bind(battle);
+    let started = false;
+    let inputRow, deliveredCharge;
+    let processing = null;
+    battle.start = () => {
+      originalStart();
+      if (started) return;
+      started = true;
+      const [own, enemy] = battle.getPokemon();
+      if ([own, enemy].some(p => p.formChange ||
+          [p.fastMove, ...p.chargedMoves].some(m => m.formChange ||
+            (m.buffs && m.buffApplyChance !== 1)))) {
+        stop({status: "unknown", reason: "unsupported_uncertainty"});
+      }
+      initialState = [own, enemy].map(p => [p.hp, p.energy, p.shields]);
+      fastGain = own.fastMove.energyGain;
+      if (own.chargedMoves.slice(0, 2).some((m, i) =>
+          m.energy !== costs[i] || m.moveId !== request.policy.own_charged_moves[i].move_id)) {
+        throw Error("Invalid public move costs");
+      }
+    };
+    battle.step = () => {
+      if (clock >= plan.horizon) stop({status: "complete", outcome: "timeout",
+        terminal: battle.getPokemon().map(p => [p.hp, p.energy, p.shields]), intents, moves});
+      clock++;
+      const batch = pending.filter(item => item.at <= clock);
+      if (branch.reverse_fast_batch) batch.reverse();
+      for (const item of batch) publish("opponent_fast", {move_id: item.move});
+      for (let i = pending.length - 1; i >= 0; i--) {
+        if (pending[i].at <= clock) pending.splice(i, 1);
+      }
+      inputRow = choose("window");
+      if (inputRow.action === "wait_one_window") inputRow.status = "no_input";
+      originalStep();
+      for (const action of battle.getQueuedActions()) {
+        if (action.observedIntent?.status === "proposed") action.observedIntent.status = "queued";
+      }
+      if (inputRow.status === "proposed") inputRow.status = "not_accepted";
+    };
+    battle.getTurnAction = (own, opponent) => {
+      if (own.index !== 0) return originalTurnAction(own, opponent);
+      // Returning null here bypasses the engine's automatic fast fallback.
+      // For non-wait inputs retain the engine's cooldown and CMP decisions.
+      if (inputRow.action === "wait_one_window") return null;
+      active = inputRow;
+      try {
+        return originalTurnAction(own, opponent);
+      } finally {
+        active = null;
+      }
+    };
+    battle.processAction = (action, own, opponent) => {
+      processing = action.observedIntent;
+      if (processing) processing.status = action.valid ? "not_resolved" : "cancelled";
+      try {
+        return originalProcess(action, own, opponent);
+      } finally {
+        processing = null;
+      }
+    };
+    battle.useMove = (attacker, defender, move, ...rest) => {
+      deliveredCharge = null;
+      if (move.category === "charged" && attacker.index === 0) ownCharges++;
+      if (move.category === "charged" && attacker.index === 1) {
+        deliveredCharge = choose("charge_announced");
+      }
+      // This hook is independent of the generic runner's shield policy.
+      battle.shieldPolicy = index => {
+        if (index === 0) return deliveredCharge?.action === "shield_yes";
+        if (request.opponent_shield_rule === "standard") return undefined;
+        return request.opponent_shield_rule === "always" ||
+          (request.opponent_shield_rule === "first" && ownCharges === 1);
+      };
+      const energyBefore = attacker.energy;
+      const oldResolved = battle.onMoveResolved;
+      battle.onMoveResolved = (actor, target, resolved, damage, shielded) => {
+        oldResolved?.(actor, target, resolved, damage, shielded);
+        moves.push({actor: actor.index, move: resolved.moveId, kind: resolved.category,
+          window: clock, damage, shielded: Boolean(shielded)});
+        if (actor.index === 0) {
+          if (processing) processing.status = "resolved";
+          if (resolved.category === "fast") {
+            energy = Math.min(100, energy + fastGain);
+            publish("own_fast_resolved");
+          } else {
+            const slot = actor.chargedMoves.findIndex(m => m.moveId === resolved.moveId);
+            energy -= costs[slot];
+            publish("own_charge_resolved", {slot});
+            if (shielded) {
+              shields[1]--;
+              publish("opponent_shield_used");
+            }
+          }
+        } else if (resolved.category === "charged") {
+          opponentBanked = 0;
+          deliveredCharge.status = shielded ? "shield_consumed" :
+            deliveredCharge.action === "shield_yes" ? "not_resolved" : "declined";
+          if (shielded) {
+            shields[0]--;
+            publish("own_shield_used");
+          }
+          publish("charge_revealed", {move_id: resolved.moveId});
+        } else {
+          const bankMove = actor.chargedMoves[0];
+          if (energyBefore >= bankMove.energy || opponentBanked > 0) opponentBanked++;
+          const missed = ++opponentFastCount === 1 && branch.miss_first_fast;
+          if (!missed) pending.push({at: clock + 1 + branch.fast_delay, move: resolved.moveId});
+        }
+      };
+      try {
+        return originalUse(attacker, defender, move, ...rest);
+      } finally {
+        battle.onMoveResolved = oldResolved;
+      }
+    };
+    return battle;
+  }
+
+  const actionLogic = {...ActionLogic, decideAction(battle, own, opponent) {
+    if (own.index === 0) {
+      if (!active) throw Error("Own intent outside public decision window");
+      const charged = active.action.startsWith("charge_");
+      const action = new TimelineAction(charged ? "charged" : "fast", 0, battle.getTurns(),
+        charged ? Number(active.action.at(-1)) : 0,
+        {priority: own.priority, shielded: false, buffs: false, charge: 1});
+      action.observedIntent = active;
+      if (charged && own.energy >= own.chargedMoves[action.value].energy &&
+          own.stats.atk === opponent.stats.atk) {
+        // Conservatively exclude equal attack charge cases until both CMP
+        // orders can be evaluated, even when a tie would not resolve.
+        stop({status: "unknown", reason: "unsupported_uncertainty"});
+      }
+      return action;
+    }
+    const rule = request.opponent_attack_rule;
+    if (rule !== "standard") {
+      const slot = rule === "charge_slot_1" ? 1 : 0;
+      const bank = rule === "bank_1" ? 1 : rule === "bank_2" ? 2 : 0;
+      const ready = own.energy >= own.chargedMoves[slot].energy;
+      const charged = ready && opponentBanked >= bank;
+      return new TimelineAction(charged ? "charged" : "fast", own.index, battle.getTurns(), slot,
+        {priority: own.priority, shielded: false, buffs: false, charge: 1});
+    }
+    return ActionLogic.decideAction(battle, own, opponent);
+  }};
+  // The worker runs one request at a time. Seed the vendor RNG and restore
+  // the global function even when a frontier interrupts the simulation.
+  const random = Math.random;
+  let rng = plan.seed;
+  Math.random = () => {
+    rng = (Math.imul(1664525, rng) + 1013904223) >>> 0;
+    return rng / 4294967296;
+  };
+  try {
+    const detail = strategyRunner({Battle: wrappedBattle, ActionLogic: actionLogic}).run({
+      ...request, public_moves: false, bait: [false, false],
+    });
+    status = {status: "complete", outcome: detail.outcome,
+      terminal: detail.terminal.map(p => [p.hp, p.energy_points, p.shields]), intents, moves};
+  } catch (error) {
+    if (error !== stopped) throw error;
+  } finally {
+    Math.random = random;
+  }
+  if (status.status === "complete") {
+    for (const row of intents) if (row.status === "queued") row.status = "not_resolved";
+  }
+  return {schema: "observed-native-v2", ...status,
+    ...(status.status === "complete" ? {events, initial: initialState} : {}), ...V2_FLAGS};
+}
+
+module.exports = {runObserved, runObservedV2};
 if (require.main === module) {
   const chunks = [];
   let bytes = 0;
@@ -375,7 +624,8 @@ if (require.main === module) {
   process.stdin.on("end", () => {
     if (process.exitCode) return;
     try {
-      const result = runObserved(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      const result = Object.hasOwn(input, "observed_v2") ? runObservedV2(input) : runObserved(input);
       const body = JSON.stringify(result) + "\n";
       if (Buffer.byteLength(body) > MAX_OUTPUT_BYTES) {
         throw Error("Native observation output budget exceeded");

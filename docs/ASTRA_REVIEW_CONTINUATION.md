@@ -1,3 +1,21 @@
+## 2026-11-13 JST 第3段階：観測履歴方策の試験実装
+
+起点は `3e1f426da6023839f54a26bc12c6f4b62ad0cc92`（CI 11/11成功）。PR #111/#112 はDraft。本節を追加したSHAは `git log -1 --format=%H -- docs/ASTRA_REVIEW_CONTINUATION.md` で確認できる。CIはそのSHAに対応するPR #112のChecksを参照。
+
+- A：`pvpoke_observed_observation.py` に厳格な公開イベント、時刻区間、順序、自分の入力を含む履歴キーを追加。自身の開始ゲージと盾を宣言済みとする合成モデル。v1の入口は維持。
+- B：`pvpoke_observed_native_runner.js` に合成時計に沿う操作機会、共有方策、未定義履歴停止、盾決定後の技公開、入力の受付と解決の記録を追加。相手通常技イベントの即時相当・遅延・初回欠落を指定できる。順序変更は同時配送の通常技バッチに限定され、盾と技公開の因果順は維持する。乱数seedを固定して再生し、確率効果・動的フォーム・同値CMPの可能性は保守的に除外する。vendor・通常計算は未変更。
+- C：`pvpoke_observed_search.py` と `pvpoke_observed_audit.py` で、宣言済み世界×controller×観測枝を同じ履歴テーブルで評価。異なる世界の個別最適手の合算を反例で検出。候補を上限で切った場合は不存在を報告しない。初版の役割述語は自己KO勝利。残量を併記する。一般の役割ベクトルとPareto比較は未実装。
+- D：BattleStoreのownerと書き込み枠を使用し、`observed_jobs_v2` と `observed_work_v2` を追加。再生1件ごとに結果とカーソルを原子的に保存し、保存済みの同じカーソルを再実行しない。未コミットの処理が中断・失敗した場合はその1件を再生し直す。版、作業ID、公開履歴、結果のHP・ゲージ・盾収支を検証する。改変者による一貫した全記録の書換えへの真正性保証は含まない。
+- E：`pvpoke_sandbox_workspace.py`、`pvpoke_mcp_remote.py`、Sandbox/不足分析UI、Dockerfileを更新。既存認証・Origin・計算枠を使い、`PVP_OBSERVED_SEARCH_ENABLED=1` で試験機能を有効化できる。Sandbox画面は現在指定した相手1個体から開始し、複数候補はAPIで宣言する。不足分析から試験画面を開ける。既存の役割判定には接続しない。停止は次の処理単位から有効。
+
+再現：`python -m unittest discover -s tests -p 'test_*.py'` と `for f in tests/test_*.js tests/test_*.cjs; do node "$f" || exit; done`。新規試験は `tests/test_observed_observation.py`、`tests/test_observed_v2_native.py`、`tests/test_observed_search.py`。既存の `tests/test_sandbox_workspace.py` にAPIの認証・起動・再開を追加。標準324条件とSandbox合成200例の回帰を含む。ローカルのDockerビルドと実機検証は未実施。
+
+合成2世界、4操作窓、20再生の保存込み実測はp50 55.7ms、p95 78.0ms、子プロセスのサンプリング最高RSS 31,144 KiB、保存レシート9,652 bytes（SQLiteページ等を除く）。開始3.4ms。高速化比較ではない。上限は世界32、controller 8、観測枝4、方策64、500ターン、1ステップ8回・ネイティブ再生の合計5秒目安、1ジョブ4,096回。256 MiB RSSはLinux監視による停止目標であり、瞬間的な超過を防ぐ厳密なOS上限ではない。
+
+次の作業は、実機での操作窓・通知と解決の観測時刻・遅延・見落とし・HP表示の校正、一般の役割評価、同値CMPと確率枝、複数世界の画面入力、最大負荷・実容量不足・バックアップ復元・ブラウザ動作の確認。公開判定は保留。`information_fairness=not_established`、`live_reproducibility=not_verified`、`practical_role_covered=false` を維持。Draft、マージなし、デプロイなし、接続PvPoke MCP不使用。
+
+---
+
 ## 2026-11-13 JST 第2段階：観測方策の設計と限定試作
 
 起点 `790c461419edb40f69171d9d43af6255eaa510f3` のCIは11/11成功。開始時の作業ツリーはクリーン、PR #111/#112はDraft。新しい仕様の正本は [観測戦術設計](OBSERVED_TACTIC_DESIGN_20261113.md)。この節と設計書を追加したコミットが最新チェックポイント。SHAは `git log -1 --format=%H -- docs/OBSERVED_TACTIC_DESIGN_20261113.md` で取得する（自己参照SHAを文書内に捏造しない）。
