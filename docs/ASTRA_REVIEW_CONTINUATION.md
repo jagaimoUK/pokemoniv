@@ -1,3 +1,13 @@
+## 2026-11-13 JST 第7段階：隔離試験の実行準備・合成負荷計測（CI前の保存）
+
+作業開始時確認：GitHub PR #111(`bbc0619f`)、#112(`a9d6ee55`)、#113(`c4739336380c22e54ce4f8eb93335e6abf056dc7`) は全てDraft・未マージ。#113の正本ブランチにGitHub上の未保存差分はなく、ローカルWork別環境の未コミット変更はGitHubだけから確認できない。既存第6段階の5 CIは成功。
+
+今回の差分：`tests/test_stage7_observed_load.py`（実APIの小規模21回・4並列の測定、合成1024件のSQL事前チェックと1025件拒否）、`tests/stage7_container_smoke.py`（隔離コンテナでuid/capability/no-new-privs/ネットワーク遮断/合成認証/短時間HTTP計測）、`.github/workflows/security-regression.yml`（追加ビルドなしでDocker imageに対するnonroot/cap-drop/CPU・memory/PID・ネットワークなし起動）、`docs/STAGE7_TRIAL_ENVIRONMENT_20261113.md`（本番分離案と運用ゲート）。既存資料を消さない。
+
+安全制約：DockerコマンドはGitHub Actions上の**合成・公開ポートなしの使い捨てコンテナのみ**。本番・Railway・Cloud Runへのデプロイ、フラグON、実データ転送はしない。独立のセキュリティレビュー（別人・別モデルによる署名）は**未実施**である。CI結果・実測数値は最新HEADのジョブログを確認してからPRコメントで追記する。
+
+---
+
 ## 2026-11-13 JST 第6段階：セキュリティ到達性と限定試験ゲート（CI実行前）
 
 PR #113の現行ブランチに、`docs/STAGE6_SECURITY_RELEASE_GATE_20261113.md` を追加。対象HEAD `87562be7779a626dd06da1984228042fa09976b0` の実イメージ監査artifact（CI run 43368355869、artifact 14012015457）でHIGH103行/25ユニークCVEを確認。分類・修正版記載・実コードへの到達性と、管理者限定試験の条件を同文書に記録。観測照合の累積receipt事前上限（1024件/16MiB）および同一対戦の重複正規化削減を実装。テストとCIの最終結果はPR #113コメントに追記する。現時点は公開/試験とも未実施、環境フラグ既定OFF、変更前に戻す場合はこのcommitをrevertできる。旧記録は以下の通り保持。
