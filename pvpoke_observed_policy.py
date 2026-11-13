@@ -1,6 +1,7 @@
 """Internal, pure observation-only decision *proposal* for PvP research.
 
-This is NOT a runnable native PvPoke policy or a claim of practical wins.
+This pure proposal is replayed by an isolated native experiment; it is not
+a live observation adapter or a claim of practical wins.
 A future adapter must prove that snapshot/events come from information already
 observable at each decision point, then validate actual native executions.
 Never pass a full native battle state or the opponent's private statistics.
@@ -127,6 +128,7 @@ def propose(snapshot, policy):
         "schema": SCHEMA,
         "action": action,
         "information_model": "visible_input_contract_only",
+        "information_fairness": "not_established",
         "observation_provenance_verified": False,
         "native_execution_verified": False,
         "practical_role_covered": False,

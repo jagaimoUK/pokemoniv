@@ -16,6 +16,7 @@ from pvpoke_battle_store import BattleStore
 from pvpoke_child_env import child_environment
 from pvpoke_direct_backend import DirectMatrixClient
 from pvpoke_observed_policy import propose
+from pvpoke_observed_audit import audit_traces
 from pvpoke_sandbox import SandboxService
 from test_battle_service import FIXTURES
 from test_sandbox import scripted_spec
@@ -105,6 +106,9 @@ class NativeObservedMultiTurnTests(unittest.TestCase):
                          enemy_shield_rule="always"),
         ]
         data = [self.native(world) for world in worlds]
+        audit = audit_traces([item["decision_trace"] for item in data], worlds[0]["policy"])
+        self.assertGreater(audit["repeated_histories"], 0)
+        self.assertEqual(audit["information_fairness"], "not_established")
         for row in data:
             self.assertGreaterEqual(len(row["own_proposals"]), 2)
             self.assertEqual(row["own_proposals"][0]["action"],
@@ -122,6 +126,37 @@ class NativeObservedMultiTurnTests(unittest.TestCase):
                                  propose(action["visible"], req["policy"])["action"])
             for shield in row["self_shield_audit"]:
                 self.assertTrue(shield["chosen_without_move_identity"])
+
+    def test_all_shared_native_prefixes_include_shields_and_do_not_use_hidden_move(self):
+        traces = []
+        for energy, ivs, first_move in (
+            (0, {"attack": 0, "defense": 0, "hp": 0}, "ICE_BEAM"),
+            (100, {"attack": 0, "defense": 15, "hp": 15}, "ICE_BEAM"),
+            (100, {"attack": 0, "defense": 14, "hp": 14}, "PLAY_ROUGH"),
+        ):
+            req = self.request(energy=0, enemy_energy=energy, enemy_ivs=ivs,
+                               shields=(2, 2), opponent_attack_rule="charge_if_ready")
+            if req["opponent"]["charged1"] != first_move:
+                req["opponent"]["charged1"], req["opponent"]["charged2"] = (
+                    req["opponent"]["charged2"], req["opponent"]["charged1"])
+            result = self.native(req)
+            self.assertEqual(result["information_fairness"], "not_established")
+            trace = result["decision_trace"]
+            self.assertTrue(any(r["visible"]["phase"] == "shield_prompt" for r in trace))
+            for record in trace:
+                self.assertEqual(propose(record["visible"], req["policy"])["action"],
+                                 record["action"])
+            traces.append(trace)
+        prompts = [next(r for r in t if r["visible"]["phase"] == "shield_prompt")
+                   for t in traces[1:]]
+        self.assertEqual(prompts[0], prompts[1])
+        audit = audit_traces(traces, req["policy"])
+        self.assertGreater(audit["repeated_histories"], 0)
+        # A world-specific winning move chosen before any reveal is rejected.
+        tampered = copy.deepcopy(traces)
+        tampered[1][0]["action"] = {"kind": "wait"}
+        with self.assertRaisesRegex(ValueError, "Different actions"):
+            audit_traces(tampered, req["policy"])
 
     def test_tampered_public_policy_or_hidden_fields_never_execute(self):
         req = self.request()

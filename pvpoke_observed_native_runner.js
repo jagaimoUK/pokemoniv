@@ -104,6 +104,7 @@ function runObserved(input) {
   const observed = [];
   const decisions = [];
   const shieldPrompts = [];
+  const decisionTrace = []; // Causal order, including pre-reveal shield choices.
   let ownFastTurns = null;
   let nativeCmpAttack = null; // Test-only oracle; NEVER passed to proposeSelf.
   let installed = false;
@@ -186,6 +187,7 @@ function runObserved(input) {
             if (shield !== expected) throw Error("Shield decision used nonpublic assumptions");
             shieldPrompts.push({visible: frozenClone(snapshot),
                                 action: {kind: "shield", use_shield: shield}});
+            decisionTrace.push(shieldPrompts.at(-1));
           }
           return shield;
         };
@@ -251,6 +253,7 @@ function runObserved(input) {
       const selected = proposeSelf(visible, source, nativeMoves);
       if (decisions.length >= 500) throw Error("Native decision limit exceeded");
       decisions.push({turn: visible.turn, visible, action: selected});
+      decisionTrace.push({visible, action: selected});
       const slot = selected.kind === "charged"
         ? nativeMoves.findIndex(move => move.moveId === selected.move_id) : 0;
       const action = new native.TimelineAction(selected.kind, own.index,
@@ -339,6 +342,7 @@ function runObserved(input) {
     outcome: detail.outcome, turns: detail.turns,
     own_proposals: verified, self_shield_audit: shieldAudits,
     self_shield_prompts: shieldPrompts,
+    decision_trace: decisionTrace,
     self_fast_move_turns: ownFastTurns,
     native_cmp_audit: {simultaneous_charge_turns_checked: cmpChecked,
                        equal_stat_turns_with_no_priority_claim: cmpEqualStatTurns,
@@ -350,6 +354,7 @@ function runObserved(input) {
       shielded: e.shielded
     })),
     observation_provenance_verified: false,
+    information_fairness: "not_established",
     live_reproducibility: "not_verified",
     practical_role_covered: false,
   };
