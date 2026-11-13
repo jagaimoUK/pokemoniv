@@ -1,3 +1,24 @@
+## 2026-11-13 JST 第5段階：不足分析への観測戦術リンクとモバイルUI（CI確認前）
+
+対象：Draft PR #113、ブランチ `feature/missing-observed-integration-20261113`。第4段階の正本は `a9d6ee55a2b7745e8d82c28426d0feb2269feed1`、PR #111/#112はDraft・未マージ。GitHub上の修正ブランチで作業し、他の未コミット変更は確認できない。前回Work内の非永続な差分は回収していない。
+
+| 工程 | 状態 | 確認済み | 残作業 |
+|---|---|---|---|
+| 現行ソース・PR・設計確認 | 完了 | #112 HEADと観測設計、欠損比較API、Sandbox画面を確認 | なし |
+| 不足分析と観測結果の照合 | 実装済み・CI再検証中 | `pvpoke_observed_evidence.py`、`pvpoke_missing_comparison.py`。既存評価・保有者・版・ビルド・相手・初期状態の一致を確認。未対応Sandboxフォームは他の適用可能な一致を妨げない | CI全件、追加異常系 |
+| モバイル操作・結果の分類 | 実装済み・CI再検証中 | `pvpoke_missing_ui.py` の候補別参考表示、固定戦術の横並び概要、フォームのセッション復元。Sandbox画面から観測IDを安全に引き継ぐ | 320/390px Chromium、実機未実施 |
+| セキュリティ・保全 | 実装済み・CI再検証中 | ownerに束縛された認証API内の読み取り専用照合。通常の役割評価・所有状態・ランキングを変更せず、新規対戦計算0件。ユーザーデータを外部へ転送しない | 実容量・電源断、実機 |
+| テスト | CI再検証中 | `tests/test_missing_observed_evidence.py` と `tests/browser_missing_analysis.cjs` を追加・更新。初回Python616件中1失敗・1スキップ。失敗原因は対戦上限を超える不正な合成IVで、合法な別IVケースへ修正済み | 最新コミットのCI確認 |
+| 公開判断 | 未着手 | Draft PRのみ。main・本番・既存フラグは変更していない | 重大な問題がないか確認し、試験公開可否を判断 |
+
+通常の固定戦術・観測方策・標準対戦は別証拠であり、後者2つで前者の判定を自動変更しない。同じBuildでもシールドや初期ゲージ・相手IVが異なれば別条件。通常役割と観測役割は勝敗・HP・ゲージ・残盾が同義のときに限って対応づける。観測方策の共有成功も宣言済み世界・controller・観測枝に限り、実戦保証ではない。
+
+`information_fairness=not_established`、`live_reproducibility=not_verified`、`practical_role_covered=false` を維持。実機観測時刻・同値CMP・確率効果の実機検証は今回延期。性能p50/p95新規比較は未測定。ユーザー承認までPRをマージ・デプロイ・フラグ有効化しない。ChatGPT接続PvPoke MCP使用なし。
+
+**次の操作**：PR #113の最新HEADに対するGitHub Actionsとブラウザ検証を確認する。失敗時はジョブログの原因だけを修正して回帰を再実行し、Draft維持。完了後この節に対する追記はPRコメントで行い、無駄なCI再実行を避ける。
+
+---
+
 ## 2026-11-13 JST 第4段階：役割条件・相手候補・保存復旧
 
 起点は `b06d3e0de9204105332cc40bdb7c2651fe995533`、CI 12/12 成功。PR #111/#112 はDraft。本節のSHAは `git log -1 --format=%H -- docs/ASTRA_REVIEW_CONTINUATION.md`、CIはPR #112のChecksで確認。

@@ -5,7 +5,7 @@ or live reproducibility. No native replay or write transaction is performed.
 """
 from __future__ import annotations
 
-from pvpoke_battle_service import _json_hash
+from pvpoke_battle_service import _json_hash, UnsupportedBattle
 from pvpoke_missing_analysis import MissingAnalysis
 from pvpoke_observed_observation import FLAGS
 from pvpoke_observed_search import ObservedSearch
@@ -74,8 +74,13 @@ def compare_observed(service, evaluation_id, search_ids):
             if slot not in requirements:
                 continue
             spec = cell["spec"]
-            _, payload = sandbox.prepare({"schema": spec["schema"], "mode": "sandbox",
-                                          "rules": spec["rules"], "combatants": spec["combatants"]})
+            try:
+                _, payload = sandbox.prepare({"schema": spec["schema"], "mode": "sandbox",
+                                              "rules": spec["rules"], "combatants": spec["combatants"]})
+            except UnsupportedBattle:
+                # Standard matchups can include forms the experimental Sandbox
+                # explicitly does not support. Do not hide valid other matches.
+                continue
             key = _world_key(payload)
             check = next((candidate["checks"].get(slot) for candidate in role["candidates"]
                           if candidate["build_id"] == cell["build_id"]), None)

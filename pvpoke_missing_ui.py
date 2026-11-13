@@ -66,6 +66,7 @@ let reference;
 const alternatives=[],scenarios=[];
 const tacticLinkKey='pokemoniv:tactic-evidence-link-v1';
 const observedLinkKey='pokemoniv:observed-evidence-link-v1';
+const fixedEvidenceTargets=new Map();
 const missingFormKey='pokemoniv:missing-analysis-form-v1';
 
 function node(tag,text,parent,cls){
@@ -432,6 +433,7 @@ function renderExploration(parent,result){
 }
 function renderResult(result,request,revision){
  const tree=$('result-tree');tree.replaceChildren();
+ fixedEvidenceTargets.clear();$('tactic-evidence-results').replaceChildren();
  const species=detail(tree,name(result.reference.species_id),'edit',true);
  const role=detail(species,roles[result.role.role_id]||result.role.role_id,'role',true);
  const cards=node('div',null,role,'stack');
@@ -449,6 +451,10 @@ function renderResult(result,request,revision){
   tag(tags,...(badges[candidate.status]||badges.pending));
   if(candidate.party_substitution==='pending')tag(tags,'パーティでの入替は未評価','wait');
   node('p','技構成　'+moveText(candidate),body,'muted');
+  if(result.can_sandbox){
+   fixedEvidenceTargets.set(candidate.build_id,
+    node('p','固定戦術：保存済みの根拠は上のパネルから照合できます。',body,'muted'));
+  }
   if($('tactic-evidence-panel').dataset.observedSearch==='1'){
    const observed=detail(body,'観測戦術の参考結果を確認','match');
    const controls=node('div',null,observed,'stack');
@@ -498,6 +504,8 @@ function linkedTactics(){
 }
 async function compareSavedTactics(){
  const link=linkedTactics();if(!link)throw Error('保存済みの戦術探索が見つかりません。');
+ if(!displayed||displayed.evaluation_id!==link.evaluation_id)
+  throw Error('比較条件が変更されています。不足分析をもう一度照合してください。');
  const data=await api('missing-analysis',{action:'tactic_evidence',
   evaluation_id:link.evaluation_id,search_ids:link.search_ids});
  if(data.schema!=='missing-tactic-evidence-v1'||!Array.isArray(data.builds))
@@ -509,6 +517,12 @@ async function compareSavedTactics(){
  node('p','以下は保存済み戦術だけの参考順です。既存の推薦順・所持判定・不足判定は変更しません。',root,'muted');
  for(const build of [...data.builds].sort((a,b)=>
   (a.advisory?.evidence_order??999)-(b.advisory?.evidence_order??999))){
+  const target=fixedEvidenceTargets.get(build.build_id);
+  if(target&&build.advisory){
+   target.textContent='固定戦術（参考）：宣言した'+build.advisory.required_conditions+
+    '条件中 '+build.advisory.theoretical_supported_conditions+
+    '条件で理論上の成立例を保存。観測情報に基づく実戦再現性は未検証。';
+  }
   if(!build.conditions.length)continue;
   const advisory=build.advisory;
   const group=detail(root,(advisory?'参考'+advisory.evidence_order+'位 · ':'')+

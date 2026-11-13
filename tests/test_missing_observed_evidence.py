@@ -83,8 +83,8 @@ class MissingObservedEvidenceTests(unittest.TestCase):
             with self.subTest(variant=variant):
                 other = copy.deepcopy(self.world)
                 if variant == "opponent_iv":
-                    other["combatants"][1]["ivs"]["attack"] = (
-                        other["combatants"][1]["ivs"]["attack"] + 1) % 16
+                    # Lowering DEF remains legal at the same level and CP cap.
+                    other["combatants"][1]["ivs"]["defense"] = 14
                 elif variant == "own_energy":
                     other["combatants"][0]["initial"]["energy"] = 35
                 else:
