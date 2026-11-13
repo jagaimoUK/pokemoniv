@@ -166,10 +166,10 @@ async function checkWidth(browser, width) {
     await page.getByText('有限シナリオの参考結果').waitFor();
     await page.getByText(/分析外の追加候補 1件/).waitFor();
     await page.getByText(/実戦再現性は未検証/).first().waitFor();
-    const observedGroup=page.locator('#results details.match').filter({
-      has:page.getByText(/同じ役割条件で比べられる観測役割/)
-    }).first();
-    await observedGroup.evaluate(el=>{el.open=true});
+    // The observed-policy box nests a matchup detail. Open the inner detail,
+    // not the already-open outer summary, before asserting its visible contents.
+    await page.locator('#results details.match summary')
+      .filter({hasText:/^対面 /}).first().click();
     await page.getByText(/同じ役割条件で比べられる観測役割：win/).waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
     assert.deepEqual(errors, []);
