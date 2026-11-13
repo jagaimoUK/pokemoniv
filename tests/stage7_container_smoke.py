@@ -98,5 +98,15 @@ if __name__ == "__main__":
     observed = {"limits": limits()}
     security()
     observed["loopback_health"] = load()
-    observed["memory_current"] = open("/sys/fs/cgroup/memory.current").read().strip()         if os.path.exists("/sys/fs/cgroup/memory.current") else "unavailable"
+    for name in ("memory.current", "memory.peak", "cpu.stat"):
+        path = "/sys/fs/cgroup/" + name
+        if os.path.exists(path):
+            with open(path, encoding="ascii") as stream:
+                value = stream.read().strip()
+            if name == "cpu.stat":
+                observed["cpu_usage_usec"] = next(
+                    (int(line.split()[1]) for line in value.splitlines()
+                     if line.startswith("usage_usec ")), None)
+            else:
+                observed[name.replace(".", "_")] = value
     print("STAGE7_CONTAINER_RESULT " + json.dumps(observed, sort_keys=True))
