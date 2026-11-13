@@ -604,6 +604,20 @@ async function compareSavedObserved(evaluationId,buildId,parent){
    node('p',condition.aligned_role_ids.length?
     '同じ役割条件で比べられる観測役割：'+condition.aligned_role_ids.join('、'):
     '通常評価と観測役割の条件が異なります。直接の勝敗比較は保留です。',box,'muted');
+   for(const [i,summary] of (condition.policy_scenarios||[]).entries()){
+    const values=summary.outcomes||{};
+    node('p','方策 '+(i+1)+'：この対面の有限条件 '+summary.scenario_count+
+     '件 · 勝ち '+(values.self_ko_win||0)+' / 負け '+(values.opponent_ko_win||0)+
+     ' / 同時KO '+(values.simultaneous_ko||0)+' / 時間切れ '+(values.timeout||0)+
+     ' / 不明 '+(values.unknown||0),box,'muted');
+    for(const role of summary.aligned_roles||[]){
+     node('p','条件 '+role.id+'：'+(role.meets===true?'宣言したこの対面の範囲で成立':
+      role.meets===false?'未達のケースあり':'未確認が残る')+
+      ' · 成立 '+role.passed+' / 未達 '+role.failed+' / 不明 '+role.unknown,box,'muted');
+     if(condition.standard_meets===false&&role.meets===true)
+      node('p','通常計算で未達の対面に、観測方策による理論上の改善可能性があります。実戦再現性は未検証です。',box,'muted');
+    }
+   }
   }
   for(const [index,policy] of link.policies.slice(0,8).entries()){
    const box=detail(parent,'共有方策 '+(index+1)+' · '+

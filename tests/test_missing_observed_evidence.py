@@ -10,7 +10,7 @@ from pvpoke_battle_service import BattleService
 from pvpoke_battle_store import BattleStore
 from pvpoke_direct_backend import DirectMatrixClient
 from pvpoke_missing_analysis import MissingAnalysis
-from pvpoke_observed_evidence import compare_observed
+from pvpoke_observed_evidence import compare_observed, _policy_condition
 from pvpoke_observed_search import ObservedSearch
 from pvpoke_role_evaluation import RoleEvaluation, condition_id
 from pvpoke_sandbox import SandboxService
@@ -53,6 +53,21 @@ class MissingObservedEvidenceTests(unittest.TestCase):
         return ObservedSearch(self.sandbox).start(
             [self.world if world is None else world], self.controllers,
             self.branches, horizon, roles=self.roles if roles is None else roles)["search_id"]
+
+    def test_policy_scenario_counts_are_not_combined_across_opponents(self):
+        policy = {"policy_hash": "e" * 64,
+                  "outcomes": ["self_ko_win", "opponent_ko_win", None, "timeout"],
+                  "roles": [{"id": "win", "scenario_meets": [True, False, None, False]}]}
+        left = _policy_condition(policy, [0, 2], ["win"])
+        right = _policy_condition(policy, [1, 3], ["win"])
+        self.assertEqual(left["outcomes"]["self_ko_win"], 1)
+        self.assertEqual(left["outcomes"]["opponent_ko_win"], 0)
+        self.assertEqual(left["outcomes"]["unknown"], 1)
+        self.assertIsNone(left["aligned_roles"][0]["meets"])
+        self.assertEqual(right["outcomes"]["opponent_ko_win"], 1)
+        self.assertEqual(right["outcomes"]["timeout"], 1)
+        self.assertEqual(right["outcomes"]["self_ko_win"], 0)
+        self.assertIs(right["aligned_roles"][0]["meets"], False)
 
     def test_link_matches_only_exact_build_and_starting_conditions_without_writes(self):
         role = self.evaluation()

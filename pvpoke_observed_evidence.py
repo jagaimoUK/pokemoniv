@@ -43,6 +43,31 @@ def _compact(policy):
                       for role in policy.get("roles", [])]}
 
 
+def _policy_condition(policy, scenario_indices, aligned_role_ids):
+    """Summary for one matched matchup, never for a union of different worlds."""
+    counts = {name: 0 for name in (*OUTCOMES.values(), "timeout", "unknown")}
+    outcomes = policy["outcomes"]
+    for index in scenario_indices:
+        outcome = outcomes[index] if index < len(outcomes) else None
+        counts[outcome if outcome in counts else "unknown"] += 1
+    matches = []
+    for role in policy.get("roles", []):
+        if role["id"] not in aligned_role_ids:
+            continue
+        values = role["scenario_meets"]
+        rows = [values[index] if index < len(values) else None
+                for index in scenario_indices]
+        matches.append({
+            "id": role["id"], "passed": rows.count(True),
+            "failed": rows.count(False), "unknown": rows.count(None),
+            "meets": (False if False in rows else
+                      None if None in rows else True),
+        })
+    return {"policy_hash": policy["policy_hash"],
+            "scenario_count": len(scenario_indices), "outcomes": counts,
+            "aligned_roles": matches}
+
+
 def compare_observed(service, evaluation_id, search_ids):
     """Return only stored, exactly matched candidate/scenario evidence."""
     _hash(evaluation_id)
@@ -110,9 +135,20 @@ def compare_observed(service, evaluation_id, search_ids):
         if len(builds) != 1:
             raise ValueError("Observed search cannot combine different builds")
         declared_roles = loaded["plan"].get("roles", [])
-        conditions = [{**item, "aligned_role_ids":
-                       _aligned_roles(requirements[item["condition_id"]], declared_roles)}
-                      for item in sorted(by_condition.values(), key=lambda v: v["condition_id"])]
+        manifest = loaded["plan"]["manifest"]
+        scenario_indices = {}
+        for idx, scenario in enumerate(loaded["search"].scenarios):
+            scenario_indices.setdefault(_world_key(manifest[scenario]["battle"]), []).append(idx)
+        conditions = []
+        for condition in sorted(by_condition.values(), key=lambda v: v["condition_id"]):
+            aligned = _aligned_roles(requirements[condition["condition_id"]], declared_roles)
+            world = next(key for key in keys if condition in index.get(key, []))
+            indices = scenario_indices.get(world, [])
+            conditions.append({**condition, "aligned_role_ids": aligned,
+                               "scenario_count": len(indices),
+                               "policy_scenarios": [
+                                   _policy_condition(policy, indices, aligned)
+                                   for policy in summary["evaluations"]]})
         links.append({
             "search_id": search_id, "build_id": next(iter(builds)),
             "conditions": conditions, "matching_worlds": len(keys & set(index)),

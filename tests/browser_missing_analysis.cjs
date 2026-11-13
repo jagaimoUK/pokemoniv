@@ -93,7 +93,10 @@ async function checkWidth(browser, width) {
             additional_worlds:1, scenario_count:2, work:4, observed_status:'stopped',
             stop_reason:'policy_found', policy_scope_truncated:false, evaluation_count:1,
             conditions:[{opponent:{species_id:rows[2].species},shields:[1,1],
-              standard_meets:null,aligned_role_ids:['win']}],
+              standard_meets:null,aligned_role_ids:['win'],scenario_count:2,
+              policy_scenarios:[{scenario_count:2,outcomes:{
+                self_ko_win:1,opponent_ko_win:0,simultaneous_ko:0,timeout:0,unknown:1
+              },aligned_roles:[{id:'win',passed:1,failed:0,unknown:1,meets:null}]}]}],
             policies:[{role:true, tested:2, failed:0, unknown:0,
               roles:[{id:'win',meets:true,passed:2,failed:0,unknown:0,
                 resource_floor:{hp:3,energy:9,shields:0}}]}]
@@ -171,6 +174,8 @@ async function checkWidth(browser, width) {
     await page.locator('#results details.match summary')
       .filter({hasText:/^対面 /}).first().click();
     await page.getByText(/同じ役割条件で比べられる観測役割：win/).waitFor();
+    await page.getByText(/方策 1：この対面の有限条件 2件/).waitFor();
+    await page.getByText(/条件 win：未確認が残る/).waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
     assert.deepEqual(errors, []);
     // The optional 32-battle click at 390px is exactly one extra API call.
