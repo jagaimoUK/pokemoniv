@@ -13,7 +13,7 @@ from pvpoke_battle_store import BattleStoreError
 from pvpoke_missing_analysis import MissingAnalysis, battle_facts
 from pvpoke_ownership import build_id
 from pvpoke_role_evaluation import RoleEvaluation, _hash, _meets, condition_id
-from pvpoke_tactic_search import TacticSearch, TacticSearchError
+from pvpoke_tactic_search import TacticSearch, TacticSearchError, _requested_actions_completed
 
 SCHEMA = 'missing-tactic-evidence-v1'
 MAX_SEARCHES = 6
@@ -22,6 +22,84 @@ MAX_PATHS_SHOWN = 8
 
 class TacticEvidenceUnavailable(ValueError):
     """The saved role or tactic evidence is stale, corrupt, or no longer complete."""
+
+
+def _information_assumptions(candidate):
+    """Conservatively disclose unobserved choices a fixed script assumes.
+
+    This is an *explanation of counterfactual inputs*, never a prediction of
+    live reproducibility or proof that a hidden choice is necessary to win.
+    """
+    spec = candidate['spec']
+    actions = spec['actions']
+    decisions = spec['shield_decisions']
+    assumptions = ['fixed_timed_self_actions']
+    if any(action['actor'] == 1 for action in actions):
+        assumptions.append('prespecified_opponent_actions')
+    # Even an "original" seed may prescribe an exact enemy charged move.
+    # The current move name cannot be observed at shield-commitment time.
+    if any(action['actor'] == 1 and action['kind'] == 'charged'
+           for action in actions):
+        assumptions.append('unrevealed_opponent_charged_move_assumed')
+    if any(choice['defender'] == 1 for choice in decisions):
+        assumptions.append('assumed_opponent_shield_choice')
+    if (any(choice['defender'] == 0 for choice in decisions) and
+            any(action['actor'] == 1 and action['kind'] == 'charged'
+                for action in actions)):
+        # In GO, the charged move's identity has not been shown when the
+        # defending player must commit to shielding or not shielding.
+        assumptions.append('own_shield_before_opponent_move_reveal')
+    return assumptions
+
+
+def _self_script_fingerprint(candidate):
+    """Group *specified* self actions, not a purported live controller.
+
+    In particular, choosing to shield an incoming charge is a self decision:
+    alternate shield choices must not be merged into one supposed policy.
+    The opposing move's ID is deliberately absent from this self-side key.
+    """
+    spec = candidate['spec']
+    own = sorted(
+        (action['turn'], action['kind'], action.get('move_id'))
+        for action in spec['actions'] if action['actor'] == 0
+    )
+    actions = {action['id']: action for action in spec['actions']}
+    shields = sorted(
+        (actions[choice['action_id']]['turn'], choice['use_shield'])
+        for choice in spec['shield_decisions'] if choice['defender'] == 0
+    )
+    return _json_hash([own, shields])
+
+
+def _response_sensitivity(paths):
+    """Summarize verified outcomes for identical fixed self actions.
+
+    These are *sampled counterfactuals*, not an exhaustive opponent game tree,
+    an observation-conditioned policy, or a proof of a practical role.
+    """
+    by_script = defaultdict(list)
+    for row in paths:
+        by_script[row['self_script_fingerprint']].append(row)
+    groups = []
+    for key, rows in by_script.items():
+        yes = sum(row['meets'] is True for row in rows)
+        no = sum(row['meets'] is False for row in rows)
+        unknown = len(rows) - yes - no
+        groups.append({
+            'self_script_fingerprint': key,
+            'strategy': rows[0]['strategy'],
+            'tested_scenarios': len(rows),
+            'matching_scenarios': yes,
+            'nonmatching_scenarios': no,
+            'unverified_scenarios': unknown,
+            'observed_disagreement': bool(yes and no),
+            'all_sampled_scenarios_meet': bool(yes and no == 0 and unknown == 0),
+            'opponent_scenarios_exhaustive': False,
+            'observation_conditioned': False,
+            'live_reproducibility': 'not_verified',
+        })
+    return sorted(groups, key=lambda item: (item['strategy'], item['self_script_fingerprint']))
 
 
 def _required_slots(cell, requirements):
@@ -101,13 +179,10 @@ def compare_tactics(service, evaluation_id, search_ids):
                     actual['summary']['battle_key'] != cell['battle_key'] or
                     actual['summary']['outcome'] != cell['outcome']):
                 raise TacticEvidenceUnavailable('Completed tactic fact is no longer verifiable')
-            actions = {row['action_id']: row['status']
-                       for row in actual['summary']['action_results']} if actual is not None else {}
-            self_executed = actual is not None and all(
-                actions.get(action_id) == 'executed' for action_id in candidate['self_actions'])
-            opponent_executed = actual is not None and (
-                candidate['opponent_alternate_id'] is None or
-                actions.get(candidate['opponent_alternate_id']) == 'executed')
+            self_executed = actual is not None and _requested_actions_completed(
+                candidate['spec'], actual['summary'], candidate['self_actions'])
+            opponent_executed = actual is not None and _requested_actions_completed(
+                candidate['spec'], actual['summary'], candidate['opponent_actions'])
             shields_honored = actual is not None and all(
                 row['used'] is row['requested'] for row in actual['shield_results'])
             if actual is not None and (self_executed != cell['all_self_executed'] or
@@ -139,6 +214,9 @@ def compare_tactics(service, evaluation_id, search_ids):
                     'classification': 'opponent_response_dependent'
                         if candidate['response'] != 'original' else 'specific_fixed_script',
                     'reproducibility': 'not_verified',
+                    'observation_conditioned': False,
+                    'information_assumptions': _information_assumptions(candidate),
+                    'self_script_fingerprint': _self_script_fingerprint(candidate),
                 })
     builds = []
     for candidate in role['candidates']:
@@ -161,6 +239,10 @@ def compare_tactics(service, evaluation_id, search_ids):
                 'standard': standard[build, slot],
                 'tested_scripts': checked[build, slot],
                 'matching_scripts': matches[build, slot],
+                'response_sensitivity': _response_sensitivity(items)[:MAX_PATHS_SHOWN],
+                'response_sensitivity_truncated': (
+                    len({item['self_script_fingerprint'] for item in items}) > MAX_PATHS_SHOWN
+                ),
                 'unfavorable_shields': own['initial']['shields'] < opponent['initial']['shields'],
                 'paths': (positive + rest)[:MAX_PATHS_SHOWN],
                 'truncated': len(items) > MAX_PATHS_SHOWN,

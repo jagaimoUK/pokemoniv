@@ -151,6 +151,94 @@ class LocalBattleAPITests(ServerFixture):
     def request(self, spec=None):
         return post(self.server, self.path, battle_spec() if spec is None else spec)
 
+
+
+    def test_loopback_host_rebinding_and_content_type_guards(self):
+        """A forged Host must never expose local GET data or run battles."""
+        port = self.server.server_address[1]
+        for path in ('/', '/api/catalog', '/api/status', '/download'):
+            for host in ('attacker.example', f'127.0.0.1:{port}.attacker.example'):
+                with self.subTest(path=path, host=host):
+                    conn = http.client.HTTPConnection(*self.server.server_address, timeout=3)
+                    try:
+                        conn.request('GET', path, headers={'Host': host})
+                        response = conn.getresponse()
+                        data = response.read()
+                        self.assertEqual(response.status, 403)
+                        self.assertNotIn(web.TOKEN.encode(), data)
+                    finally:
+                        conn.close()
+
+        # Ordinary browser/bridge requests still work on both loopback names.
+        for host in (f'127.0.0.1:{port}', f'localhost:{port}'):
+            conn = http.client.HTTPConnection(*self.server.server_address, timeout=3)
+            try:
+                conn.request('GET', '/', headers={'Host': host})
+                response = conn.getresponse()
+                body = response.read()
+                self.assertEqual(response.status, 200)
+                self.assertIn(web.TOKEN.encode(), body)
+            finally:
+                conn.close()
+
+        with patch.object(web, 'DirectMatrixClient') as client:
+            conn = http.client.HTTPConnection(*self.server.server_address, timeout=3)
+            try:
+                conn.request('POST', '/api/battles/simulate',
+                             json.dumps(battle_spec()).encode(),
+                             {'Host': 'attacker.example', 'Content-Type': 'application/json',
+                              'X-PvPoke-Token': web.TOKEN})
+                response = conn.getresponse()
+                response.read()
+                self.assertEqual(response.status, 403)
+            finally:
+                conn.close()
+
+            for disguised in ('text/plain; application/json', 'application/json-invalid'):
+                with self.subTest(content_type=disguised):
+                    code, _ = post(self.server, '/api/battles/simulate', battle_spec(),
+                                   content_type=disguised)
+                    self.assertEqual(code, 415)
+            client.assert_not_called()
+
+
+    def test_local_nonbattle_json_routes_reject_duplicate_fields_and_nan(self):
+        """Legacy /api/prepare uses the same strict JSON parser as /api/battles."""
+        with patch.object(web, 'prepare_payload') as prepare:
+            for body in (b'{"x":1,"x":2}',
+                         b'{"x":{"nested":1,"nested":2}}',
+                         b'{"x":NaN}', b'{"x":Infinity}'):
+                with self.subTest(body=body):
+                    conn = http.client.HTTPConnection(*self.server.server_address,
+                                                      timeout=4)
+                    try:
+                        conn.request('POST', '/api/prepare', body, {
+                            'Content-Type': 'application/json',
+                            'X-PvPoke-Token': web.TOKEN})
+                        result = conn.getresponse()
+                        data = result.read()
+                        self.assertEqual(result.status, 400, data)
+                    finally:
+                        conn.close()
+            prepare.assert_not_called()
+
+    def test_unexpected_loopback_failure_does_not_return_private_details(self):
+        """Unexpected 500 responses reveal no internal filesystem details."""
+        marker = 'TEST_PRIVATE_DB_PATH_TOKEN_NOT_REAL'
+        with patch.object(web, 'prepare_payload', side_effect=RuntimeError(marker)):
+            connection = http.client.HTTPConnection(*self.server.server_address, timeout=5)
+            try:
+                connection.request('POST', '/api/prepare', b'{}',
+                                   {'Content-Type': 'application/json',
+                                    'X-PvPoke-Token': web.TOKEN})
+                response = connection.getresponse()
+                data = response.read()
+                self.assertEqual(response.status, 500)
+                self.assertNotIn(marker.encode(), data)
+                self.assertIn('error', json.loads(data))
+            finally:
+                connection.close()
+
     def test_opt_in_invalid_unsupported_and_busy(self):
         with patch.dict(os.environ, {'PVP_BATTLE_API_ENABLED': ''}), patch.object(
                 web, 'DirectMatrixClient') as node:

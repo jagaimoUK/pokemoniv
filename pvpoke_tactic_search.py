@@ -181,10 +181,38 @@ def _candidates(sandbox, spec):
             seen.add(fingerprint)
             candidates.append({'strategy': strategy, 'response': response, 'spec': normalized,
                                'self_actions': [a['id'] for a in mine],
-                               'opponent_alternate_id': alt_id if response == 'alternate_charged' else None})
+                               # Existing opponent actions must execute too, not only a newly
+                               # generated alternate. A scripted response is not optional evidence.
+                               'opponent_actions': [a['id'] for a in normalized['actions']
+                                                    if a['actor'] == 1],
+                               'opponent_alternate_id': alt_id if response in (
+                                   'alternate_charged', 'alternate_charged_self_shield') else None})
             if len(candidates) == MAX_CANDIDATES:
                 return candidates
     return candidates
+
+def _requested_actions_completed(spec, summary, action_ids):
+    """Verify native action starts and resolved charged moves match the script.
+
+    A 'started' charged action alone is not proof the selected move landed.
+    Resolved events must agree on the action ID, actor and move ID.
+    """
+    actions = {action['id']: action for action in spec['actions']}
+    statuses = {row['action_id']: row['status'] for row in summary['action_results']}
+    # Native fast taps can start, then be cancelled before their damage resolves
+    # (for example by a KO). Both fast and charged requests need the actual
+    # resolved event; wait requests only need their executed start.
+    resolved = {(row['action_id'], row['actor'], row['kind'], row['move_id'])
+                for row in summary['executed_moves']
+                if row['kind'] in ('fast', 'charged') and 'action_id' in row}
+    return all(
+        aid in actions and statuses.get(aid) == 'executed' and
+        (actions[aid]['kind'] == 'wait' or
+         (aid, actions[aid]['actor'], actions[aid]['kind'],
+          actions[aid]['move_id']) in resolved)
+        for aid in action_ids
+    )
+
 
 class TacticSearch:
     """Checkpoint each candidate separately; a restarted process reuses saved Sandbox cells."""
@@ -274,6 +302,51 @@ class TacticSearch:
         except (sqlite3.Error, OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
             raise TacticSearchError('Could not read tactic search checkpoint') from exc
 
+    def _verify_saved_facts(self, plan, cells):
+        """Check cached completed-cell success against its native Sandbox evidence.
+
+        The checkpoint checksum is not an authenticity proof. Use one
+        owner-scoped SQLite snapshot, not a new battle simulation.
+        """
+        for index, cell in enumerate(cells):
+            candidate = plan['candidates'][index]
+            if (cell.get('status') not in ('complete', 'partial') or
+                    cell.get('strategy') != candidate['strategy'] or
+                    cell.get('response') != candidate['response'] or
+                    cell.get('evidence_class') != 'theoretical_script_only' or
+                    type(cell.get('simulator_cached')) is not bool):
+                raise TacticSearchError('Saved tactic metadata differs from planned script')
+        complete = [(index, cell) for index, cell in enumerate(cells)
+                    if cell['status'] == 'complete']
+        if not complete:
+            return
+        try:
+            with self.store._reader() as db:
+                for index, cell in complete:
+                    candidate = plan['candidates'][index]
+                    native = self.sandbox._cached(db, cell['candidate_key'],
+                                                  candidate['spec'])
+                    if native is None:
+                        raise ValueError('Native battle proof is unavailable')
+                    summary = native['summary']
+                    expected = {
+                        'battle_key': summary['battle_key'],
+                        'outcome': summary['outcome'],
+                        'all_self_executed': _requested_actions_completed(
+                            candidate['spec'], summary, candidate['self_actions']),
+                        'opponent_response_executed': _requested_actions_completed(
+                            candidate['spec'], summary, candidate['opponent_actions']),
+                        'all_requested_shields_honored': all(
+                            row['used'] is row['requested']
+                            for row in native['shield_results']),
+                    }
+                    if any(cell.get(field) != value or
+                           (type(value) is bool and type(cell.get(field)) is not bool)
+                           for field, value in expected.items()):
+                        raise ValueError('Saved tactic flags differ from native battle proof')
+        except (sqlite3.Error, OSError, ValueError, KeyError, TypeError) as exc:
+            raise TacticSearchError('Could not verify saved native tactic evidence') from exc
+
     @staticmethod
     def _progress(search_id, plan, cells, *, attempts=0, cache_hits=0, blocked=None):
         count = len(plan['candidates'])
@@ -304,6 +377,7 @@ class TacticSearch:
             if plan['version'] != self._version():
                 return {**self._progress(search_id, plan, cells), 'state': 'stale',
                         'incomplete_reason': 'calculation_or_search_version_changed'}
+            self._verify_saved_facts(plan, cells)
             calls = hits = 0
             started = monotonic()
             blocked = None
@@ -329,15 +403,15 @@ class TacticSearch:
                     blocked = 'sandbox_' + result['status']
                     break
                 summary = result['summary']
-                actions = {a['action_id']: a['status'] for a in summary['action_results']}
                 required_self = candidate['self_actions']
-                alternate = candidate['opponent_alternate_id']
+                required_opponent = candidate['opponent_actions']
                 cell = {'index': index, 'candidate_key': key, 'battle_key': summary['battle_key'],
                         'strategy': candidate['strategy'], 'response': candidate['response'],
                         'status': result['status'], 'outcome': summary['outcome'],
-                        'all_self_executed': all(actions.get(a) == 'executed' for a in required_self),
-                        'opponent_response_executed': alternate is None or
-                        actions.get(alternate) == 'executed',
+                        'all_self_executed': _requested_actions_completed(
+                            spec, summary, required_self),
+                        'opponent_response_executed': _requested_actions_completed(
+                            spec, summary, required_opponent),
                         'all_requested_shields_honored': all(
                             row['used'] is row['requested'] for row in result['shield_results']),
                         'evidence_class': 'theoretical_script_only',

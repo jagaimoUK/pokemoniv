@@ -47,11 +47,12 @@ async function checkWidth(browser, width) {
         const candidate = payload.candidates[0];
         const opponent = payload.scenarios[0].opponent;
         const condition = {opponent, shields: [1, 1], state: 'unknown', meets: null,
+                           battle_key: 'c'.repeat(64),
                            spec: {combatants: [{initial: {energy: 0}}, opponent]}};
         const reference = {build_id: 'b'.repeat(64), species_id: candidate.species_id};
         return route.fulfill({json: {
           state: 'evidence_pending', evaluation_id: 'e'.repeat(64), reference,
-          role: {role_id: 'lead', priority: 1}, can_calculate: false,
+          role: {role_id: 'lead', priority: 1}, can_calculate: width > 320,
           candidates: [{...candidate, ...reference, status: 'pending', party_substitution: 'pending',
                         conditions: [condition], owned_instances: []}],
         }});
@@ -65,13 +66,36 @@ async function checkWidth(browser, width) {
           required_conditions:1,tested_conditions:1,theoretical_supported_conditions:0,
           unfavorable_shield_conditions:0,only_observed_complete_build:false},
           conditions:[{standard:{meets:null},tested_scripts:1,
-          matching_scripts:0,truncated:false,paths:[{strategy:'original',
-          opponent_response:'alternate_charged',meets:null}]}]}]}});
+          matching_scripts:0,truncated:false,
+          response_sensitivity:[{strategy:'original',tested_scenarios:2,
+            matching_scenarios:1,nonmatching_scenarios:1,unverified_scenarios:0,
+            observed_disagreement:true,opponent_scenarios_exhaustive:false,
+            live_reproducibility:'not_verified'}],paths:[{strategy:'original',
+          opponent_response:'alternate_charged',meets:null,
+          observation_conditioned:false,information_assumptions:[
+            'fixed_timed_self_actions','prespecified_opponent_actions',
+            'unrevealed_opponent_charged_move_assumed']}]}]}]}});
       }
       if (payload.action === 'explore') {
-        assert.equal(payload.budget, 0);
-        return route.fulfill({json: {completed_iv_count: 1, eligible_iv_count: 4096,
-                                     qualifying_count: 1, qualifying: [{attack: 0, defense: 15, hp: 15}]}});
+        assert.ok([0,32].includes(payload.budget));
+        const count = payload.budget === 32 ? 2 : 1;
+        return route.fulfill({json: {completed_iv_count: count, eligible_iv_count: 4096,
+                                     qualifying_count: 1, not_fully_tested_iv_count: 4096-count,
+                                     fully_tested_nonqualifying_iv_count: count-1,
+                                     retry_needed: payload.budget === 32, new_battles: count-1,
+                                     qualifying: [{attack: 0, defense: 15, hp: 15}]}});
+      }
+      if (payload.action === 'opponent_boundaries') {
+        assert.equal(payload.evaluation_id,'e'.repeat(64));
+        assert.equal(payload.build_id,'b'.repeat(64));
+        assert.equal(payload.battle_key,'c'.repeat(64));
+        return route.fulfill({json:{
+          raw_iv_count:4096, profiled_iv_count:4096, distinct_static_profile_count:17,
+          native_battles_run:0, battle_outcomes_verified:false,
+          boundary_counts:{hp:4,cmp:2,breakpoint:6,bulkpoint:3,
+            charged_1:2,charged_2:1,incoming_charged_1:2,incoming_charged_2:2},
+          representatives:[{attack:0,defense:15,hp:15}]
+        }});
       }
       throw Error('Unexpected request ' + path);
     });
@@ -83,17 +107,40 @@ async function checkWidth(browser, width) {
     await page.getByText('対戦証拠待ち', {exact: true}).waitFor();
     await page.locator('summary').filter({hasText: '重要IVを探索'}).click();
     await page.getByRole('button', {name: '探索範囲を確認'}).click();
-    await page.getByText('達成したIV　0/15/15', {exact: true}).waitFor();
-    assert.equal(await page.getByRole('button', {name: '1対面を追加検証'}).count(), 0);
+    await page.getByText('達成を確認したIV　0/15/15', {exact: true}).waitFor();
+    await page.getByText(/全条件の検証が未完了 4095通り/).waitFor();
+    assert.equal(await page.getByRole('button', {name: '追加検証', exact: true}).count(),
+      width > 320 ? 1 : 0);
+    assert.equal(await page.getByRole('combobox', {name: '追加検証数'}).count(),
+      width > 320 ? 1 : 0);
     assert.equal(await page.getByRole('button', {name: 'この対面だけ計算'}).count(), 0);
+    if (width > 320) {
+      await page.getByRole('combobox', {name: '追加検証数'}).selectOption('32');
+      await page.getByRole('button', {name: '追加検証', exact: true}).click();
+      await page.getByText(/全条件を計算済み 2 \/ 4096通り/).waitFor();
+      await page.getByText(/全条件を検証して未達成 1通り/).waitFor();
+      await page.getByText(/全条件の検証が未完了 4094通り/).waitFor();
+      await page.locator('p.muted').filter({hasText: /途中の対戦結果を確定できませんでした/}).waitFor();
+      await page.getByRole('button', {name:'相手IV境界を確認'}).click();
+      await page.getByText(/静的境界のみ（勝敗未検証）/).waitFor();
+      await page.getByText(/代表例（最大32件・勝敗未検証）：0\/15\/15/).waitFor();
+    }
     await page.locator('#tactic-evidence-read').click();
     await page.getByText(/理論上の戦術であり、観測情報に基づく実戦再現性は未検証です/).waitFor();
     await page.getByText(/以下は保存済み戦術だけの参考順です/).waitFor();
     await page.locator('#tactic-evidence-results details.candidate').first().evaluate(el => {el.open = true});
     await page.getByText(/代替の実用性：未検証/).waitFor();
+    // Information-assumption warnings live under a collapsed matchup detail,
+    // not the outer candidate detail. Open both levels before asserting.
+    await page.locator('#tactic-evidence-results details.match').first()
+      .evaluate(el => {el.open = true});
+    await page.getByText(/相手の未来の行動を仮定/).waitFor();
+    await page.getByText(/相手側の条件で結果が変わっています/).waitFor();
+    await page.getByText(/代替の実用性：未検証/).waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
     assert.deepEqual(errors, []);
-    assert.equal(requests.length, 4);
+    // The optional 32-battle click at 390px is exactly one extra API call.
+    assert.equal(requests.length, width > 320 ? 6 : 4);
   } finally {
     await page.close();
   }

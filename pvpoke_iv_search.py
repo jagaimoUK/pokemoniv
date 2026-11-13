@@ -5,6 +5,7 @@ import re
 import sqlite3
 import subprocess
 import threading
+from time import perf_counter
 from bisect import bisect_right
 from collections import Counter
 from pathlib import Path
@@ -14,7 +15,7 @@ from pvpoke_battle_store import BattleStoreError
 from pvpoke_calculation_version import content_hash
 from pvpoke_child_env import child_environment
 from pvpoke_direct_backend import DirectMatrixError
-from pvpoke_iv_modes import _cp, _levels, select_opponent_ivs
+from pvpoke_iv_modes import _cp, _levels, select_opponent_ivs, species_iv_floor
 from pvpoke_missing_analysis import AnalysisUnavailable, battle_facts
 from pvpoke_role_evaluation import _definition, _meets, condition_id
 
@@ -22,6 +23,9 @@ SCHEMA = 'important-iv-search-v1'
 RAW_IV_COUNT = 4096
 MAX_CONDITIONS = 6
 MAX_STEP_BATTLES = 32
+# A hard bound on the *batch*, except one in-flight native call can itself
+# consume its own process timeout. Planning/static profiling run separately.
+MAX_STEP_WALL_SECONDS = 10.0
 CLOSE_RATING_MARGIN = 25
 MAX_PLAN_BYTES = 96 * 1024
 IV_KEYS = ('attack', 'defense', 'hp')
@@ -175,8 +179,9 @@ class IVSearch:
             templates.append(spec)
             conditions.append({'opponent': payload['opponent'],
                                'buffs': [side['buffs'] for side in payload['initial']]})
-        # Purified Pokémon have at least two points in each IV.
-        floors = [max(n, 2) for n in iv_floors] if 'RETURN' in fixed[1]['charged'] else list(iv_floors)
+        # Use the same catalogue/moveset eligibility as existing IV selection.
+        floor = species_iv_floor(self.service.species[fixed[0]], fixed[1]['charged'])
+        floors = [max(n, floor) for n in iv_floors]
         source = {'schema': SCHEMA, 'versions': dict(self.service.versions), 'profiler': profiler,
                   'templates': templates, 'floors': floors}
         search_id = _json_hash(source)
@@ -213,6 +218,79 @@ class IVSearch:
         except (sqlite3.Error, OSError, BattleStoreError) as exc:
             raise AnalysisUnavailable('Could not save IV search') from exc
         return search_id
+
+    def opponent_boundaries(self, request, *, iv_floors=(0, 0, 0)):
+        """Profile opponent-side IV thresholds, not battle wins or role coverage.
+
+        The already pinned PvPoke static profiler expects the varying Pokémon
+        on its candidate (left) side. Swap sides only for this disposable
+        static calculation; do not reverse or persist standard battle results.
+        """
+        if (type(iv_floors) not in (list, tuple) or len(iv_floors) != 3 or
+                any(type(value) is not int or not 0 <= value <= 15 for value in iv_floors)):
+            raise ValueError('Invalid opponent IV floors')
+        version = self._check_inputs()
+        spec, payload = self.service._prepare(request)
+        if spec['mode'] != 'standard':
+            raise ValueError('Opponent boundary preview requires a standard battle')
+        own, opponent = spec['combatants']
+        full, _ = self.service._combatant({
+            **opponent, 'initial': {**opponent['initial'], 'hp': 'full'}})
+        if full['initial']['hp'] != opponent['initial']['hp']:
+            raise ValueError('Opponent boundary preview requires full opponent HP')
+        floor = species_iv_floor(self.service.species[opponent['species_id']], opponent['moves']['charged'])
+        floors = [max(n, floor) for n in iv_floors]
+        flipped = {**spec, 'combatants': [opponent, own]}
+        rows, stats = _pool(self.service, flipped, floors)
+        if not rows:
+            raise ValueError('No opponent IVs satisfy the specified rules')
+        # Static profile orientation is opponent -> original self. Restore
+        # the corresponding native initial stat stages in this orientation.
+        conditions = [{
+            'opponent': payload['self'],
+            'buffs': [payload['initial'][1]['buffs'], payload['initial'][0]['buffs']],
+        }]
+        profiles = _profiles(self.service, rows, conditions)
+        original = opponent['ivs']
+        original_index = (original['attack'] << 8) | (
+            original['defense'] << 4) | original['hp']
+        order, boundary_rows = _prioritize(profiles, stats, 1, original_index)
+        if self._check_inputs() != version:
+            raise AnalysisUnavailable('Opponent IV profiler inputs changed during calculation')
+        boundaries = boundary_rows[0]
+        examples, seen = [], set()
+        for index in order:
+            signature = profiles[index]
+            if signature in seen:
+                continue
+            seen.add(signature)
+            row = rows[index]
+            examples.append({
+                'attack': row['atk'], 'defense': row['def'], 'hp': row['hp'],
+                'level': row['level'], 'cp': row['cp'],
+                'static_profile': list(signature[0]),
+            })
+            if len(examples) == 32:
+                break
+        return {
+            'source_battle_key': _json_hash(spec),
+            'source_opponent_species_id': opponent['species_id'],
+            'versions': dict(self.service.versions),
+            'raw_iv_count': RAW_IV_COUNT,
+            'iv_floors': floors,
+            'eligible_iv_count': len(rows),
+            'profiled_iv_count': len(profiles),
+            'distinct_static_profile_count': len(set(profiles.values())),
+            'boundary_ivs': boundaries,
+            'boundary_counts': {
+                name: int.from_bytes(bytes.fromhex(bits), 'little').bit_count()
+                for name, bits in boundaries.items()
+            },
+            'representatives': examples,
+            'native_battles_run': 0,
+            'battle_outcomes_verified': False,
+            'evidence_class': 'static_boundaries_only',
+        }
 
     def _load(self, search_id):
         if type(search_id) is not str or not re.fullmatch(r'[a-f0-9]{64}', search_id):
@@ -339,21 +417,52 @@ class IVSearch:
             if source['versions'] != self.service.versions or source['profiler'] != self._check_inputs():
                 return {'search_id': search_id, 'state': 'stale', 'coverage': None, 'new_battles': 0}
             requirements = definition['requirements'] if definition else {}
+            deadline = perf_counter() + MAX_STEP_WALL_SECONDS if budget else None
             coverage, tasks, next_offset = self._scan(plan, offset, budget, requirements)
             before = self.service.cache_stats['engine_calls']
             outcomes = Counter()
             if tasks:
-                for _, spec in tasks:
+                # Adaptive boundary picks are intentionally outside the
+                # sequential cursor prefix. If interrupted before an adaptive
+                # pick, do not move the durable cursor past unplayed prefix IVs.
+                total_positions = len(source['templates']) * len(plan['order'])
+                checkpoint = next_offset
+                prefix_span = (checkpoint - offset) % total_positions or total_positions
+
+                def interruption_cursor(position):
+                    distance = (position - offset) % total_positions
+                    return position if distance < prefix_span else checkpoint
+
+                attempted = 0
+                for position, spec in tasks:
+                    # Do not start more native calls after the batch deadline.
+                    # Always allow one attempt, so progress remains possible
+                    # when the source scan itself is slow.
+                    if attempted and perf_counter() >= deadline:
+                        next_offset = interruption_cursor(position)
+                        break
                     errors = self.service.cache_stats['storage_errors']
                     result = self.service.simulate(spec)
                     if self.service.cache_stats['storage_errors'] != errors:
                         raise AnalysisUnavailable('Could not persist IV battle evidence')
+                    attempted += 1
                     outcomes[result['status']] += 1
+                    if result['status'] != 'complete':
+                        # An unavailable/partial battle is NOT saved evidence.
+                        # Retry this exact candidate on the next step rather
+                        # than silently moving the persistent cursor past it.
+                        next_offset = interruption_cursor(position)
+                        break
                 try:
                     with self.store._writer() as db:
-                        db.execute('''UPDATE important_iv_searches_v1 SET next_offset=?
+                        changed = db.execute('''UPDATE important_iv_searches_v1 SET next_offset=?
                             WHERE owner_scope=? AND search_id=? AND next_offset=?''',
                             (next_offset, self.store.owner_scope, search_id, offset))
+                        if changed.rowcount != 1:
+                            # Another worker advanced this checkpoint. Do not
+                            # report success using a stale cursor or overwrite
+                            # its progress; already committed results are safe.
+                            raise BattleStoreError('IV search checkpoint was changed concurrently')
                 except (sqlite3.Error, OSError, BattleStoreError) as exc:
                     raise AnalysisUnavailable('Could not save IV search checkpoint') from exc
                 coverage, _, _ = self._scan(plan, offset, 0, requirements)

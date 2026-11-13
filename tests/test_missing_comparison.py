@@ -43,6 +43,23 @@ class MissingGatewayTests(server.ServerFixture):
         self.enterContext(patch.object(server.gateway, 'RATE_BUDGET', server.RateBudget()))
         super().setUp()
 
+    def test_public_pages_cannot_embed_private_keys_and_api_needs_auth(self):
+        """No private credentials or owner data in public app shell/unauth requests."""
+        with patch.dict(os.environ, {
+                'PVP_MISSING_ANALYSIS_ENABLED': '1',
+                'PVP_SANDBOX_ENABLED': '1'}), patch.object(
+                server.gateway.backend, '_request') as backend:
+            for path in ('/app', PAGE_PATH, '/app/sandbox', '/app/party', '/app/migration'):
+                status, body, _ = request(self.server, path)
+                self.assertEqual(status, 200, path)
+                self.assertNotIn(server.gateway.API_KEY.encode(), body, path)
+                self.assertNotIn(server.web.TOKEN.encode(), body, path)
+            for path in (APP_PATH, '/app-api/sandbox'):
+                self.assertEqual(request(self.server, path, {'action': 'list'},
+                                         headers={'Content-Type': 'application/json'})[0],
+                                 401)
+            backend.assert_not_called()
+
     def test_flag_origin_auth_and_fixed_route(self):
         auth = {'Authorization': 'Bearer ' + server.gateway.API_KEY, 'Content-Type': 'application/json'}
         with patch.dict(os.environ, {'PVP_MISSING_ANALYSIS_ENABLED': '0'}):
@@ -127,6 +144,124 @@ class MissingLocalTests(server.ServerFixture):
             engine.assert_not_called()
         foreign = BattleStore(self.root / 'volume' / 'battle_analysis.sqlite3', owner_scope='foreign')
         self.assertIsNone(Ownership(foreign).get('fixture'))
+
+    def test_unplayed_iv_space_is_explicitly_unverified_not_a_proven_zero(self):
+        """At 0/4096, zero confirmed successes must not mean no eligible IV wins."""
+        from pvpoke_missing_ui import HTML
+
+        status, compared = self.compare(case())
+        self.assertEqual(status, 200)
+        self.assertEqual(compared['state'], 'evidence_pending')
+        status, explored = self.compare({
+            'action': 'explore',
+            'evaluation_id': compared['evaluation_id'],
+            'build_id': compared['reference']['build_id'],
+            'budget': 0,
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(explored['state'], 'unknown')
+        self.assertEqual(explored['eligible_iv_count'], 4096)
+        self.assertEqual(explored['completed_iv_count'], 0)
+        self.assertEqual(explored['qualifying_count'], 0)
+        # A zero is only the number of *proven* matches, never a proof of
+        # absence. The API must explicitly carry the unverified remainder.
+        self.assertEqual(explored['not_fully_tested_iv_count'], 4096)
+        self.assertIn('全条件の検証が未完了', HTML)
+        self.assertIn('達成確認済み', HTML)
+        # After exactly one native battle, one IV may be fully assessed.
+        status, progressed = self.compare({
+            'action': 'explore',
+            'evaluation_id': compared['evaluation_id'],
+            'build_id': compared['reference']['build_id'],
+            'budget': 1,
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(progressed['completed_iv_count'], 1)
+        self.assertEqual(progressed['not_fully_tested_iv_count'], 4095)
+        self.assertEqual(progressed['new_battles'], 1)
+        # Opt-in batches keep the server-side native limit (32), and resume
+        # from the same saved plan without reclassifying any unknown IV as lost.
+        batch_request = {
+            'action': 'explore',
+            'evaluation_id': compared['evaluation_id'],
+            'build_id': compared['reference']['build_id'], 'budget': 8,
+        }
+        status, batch = self.compare(batch_request)
+        self.assertEqual(status, 200)
+        self.assertEqual(batch['new_battles'], 8)
+        self.assertEqual(batch['completed_iv_count'], 9)
+        self.assertEqual(batch['not_fully_tested_iv_count'], 4087)
+        self.assertEqual(self.compare({**batch_request, 'budget': 33})[0], 400)
+
+    def test_exploration_distinguishes_failed_attempt_from_saved_nonqualification(self):
+        status, compared = self.compare(case(threshold=10000))
+        self.assertEqual(status, 200)
+        request = {'action': 'explore', 'evaluation_id': compared['evaluation_id'],
+                   'build_id': compared['reference']['build_id'], 'budget': 1}
+        _, before = self.compare(request)
+        self.assertEqual(before['completed_iv_count'], 1)
+        with patch.object(server.web.BattleService, 'simulate', return_value={
+                'status': 'failed', 'error': {'message': 'private fixture detail'}}):
+            status, interrupted = self.compare(request)
+        self.assertEqual(status, 200)
+        self.assertTrue(interrupted['retry_needed'])
+        self.assertEqual(interrupted['completed_iv_count'], 1)
+        self.assertEqual(interrupted['fully_tested_nonqualifying_iv_count'], 1)
+        self.assertEqual(interrupted['not_fully_tested_iv_count'], 4095)
+        self.assertNotIn('private fixture detail', json.dumps(interrupted))
+
+        _, resumed = self.compare(request)
+        self.assertFalse(resumed['retry_needed'])
+        self.assertEqual(resumed['completed_iv_count'], 2)
+        self.assertEqual(resumed['fully_tested_nonqualifying_iv_count'], 2)
+        self.assertEqual(resumed['new_battles'], 1)
+
+    def test_cross_species_partial_evidence_cannot_be_combined_into_one_role(self):
+        """Two builds each clearing a different matchup are not substitutable."""
+        payload = case()
+        alternate = battle_spec(left=0, right=3)['combatants'][1]
+        payload['scenarios'].append({
+            'opponent': {k: v for k, v in alternate.items() if k != 'initial'},
+            'shields': [1, 1],
+            'energy': 0,
+            'requirement': {'minimum': {'fast_damage': 0}},
+        })
+        status, planned = self.compare(payload)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(planned['candidates']), 2)
+        for index, candidate in enumerate(planned['candidates']):
+            spec = candidate['conditions'][index]['spec']
+            status, battle = server.post(self.server, '/api/battles/simulate', spec)
+            self.assertEqual(status, 200)
+            self.assertEqual(battle['status'], 'complete')
+        status, report = self.compare(payload)
+        self.assertEqual(status, 200)
+        self.assertEqual(report['state'], 'evidence_pending')
+        self.assertEqual([candidate['status'] for candidate in report['candidates']],
+                         ['pending', 'pending'])
+        self.assertEqual(report['candidates'][1]['comparison'], 'cross_species')
+        self.assertTrue(all(candidate['party_substitution'] == 'pending'
+                            for candidate in report['candidates']))
+
+    def test_opponent_boundary_preview_is_read_only_scope_bound_and_static(self):
+        status, comparison = self.compare(case())
+        self.assertEqual(status, 200)
+        reference = comparison['reference']['build_id']
+        first = comparison['candidates'][0]['conditions'][0]['battle_key']
+        request = {'action': 'opponent_boundaries',
+                   'evaluation_id': comparison['evaluation_id'],
+                   'build_id': reference, 'battle_key': first,
+                   'iv_floors': [15, 15, 15]}
+        with patch.object(server.web.BattleService, 'simulate',
+                          side_effect=AssertionError('Must not run PvPoke battle')):
+            status, report = self.compare(request)
+        self.assertEqual(status, 200)
+        self.assertEqual(report['eligible_iv_count'], 1)
+        self.assertEqual(report['native_battles_run'], 0)
+        self.assertFalse(report['battle_outcomes_verified'])
+        self.assertEqual(self.compare({**request, 'battle_key': '0' * 64})[0], 400)
+        self.assertEqual(self.compare({**request, 'owner_scope': 'other'})[0], 400)
+        self.assertEqual(self.compare({**request, 'iv_floors': [True, 15, 15]})[0], 400)
 
     def test_nonneutral_setup_produces_conditional_role_alternative(self):
         payload = case(energy=20)

@@ -35,7 +35,7 @@ input,select,button{font:inherit;color:inherit;min-height:44px;border:1px solid 
 <section class="stack"><div><h2>比較する個体</h2><p class="intro">同じポケモンの別個体や、別のポケモンを最大7体追加できます。手持ちの確認は結果から行えます。</p></div><div id="alternatives" class="stack"></div><div class="actions"><button id="add-alternative" type="button" class="quiet" data-action>比較する個体を追加</button></div></section>
 <div class="actions"><button id="evaluate" class="primary" data-action>保存済みの対面結果を照合</button></div>
 </form>
-<section id="tactic-evidence-panel" class="results stack" hidden><h2>Sandbox戦術の根拠</h2>
+<section id="tactic-evidence-panel" data-observed-search="0" class="results stack" hidden><h2>Sandbox戦術の根拠</h2>
 <p>標準計算と指定戦術は別の結果です。実戦再現性は未検証で、所持・役割の判定は変更しません。</p>
 <div class="actions"><button id="tactic-evidence-read" type="button" data-action>保存済み戦術を不足分析と照合</button></div>
 <div id="tactic-evidence-results" class="stack"></div></section>
@@ -279,7 +279,7 @@ function renderMatch(parent,condition,current,result,request){
  }
  if(result.can_sandbox&&condition.spec){
   const actions=node('div',null,body,'actions');
-  button(actions,'Sandboxで対面を開く',()=>{
+  const openSandbox=observed=>{
    try{
     sessionStorage.setItem('pokemoniv:sandbox-input-v1',JSON.stringify(condition.spec));
     let old=null;try{old=JSON.parse(sessionStorage.getItem(tacticLinkKey)||'null');}catch{}
@@ -287,9 +287,12 @@ function renderMatch(parent,condition,current,result,request){
       ?old.search_ids.filter(id=>/^[a-f0-9]{64}$/.test(id)).slice(-6):[];
     sessionStorage.setItem(tacticLinkKey,JSON.stringify({evaluation_id:result.evaluation_id,
       build_id:current.build_id,search_ids}));
-    location.assign('/app/sandbox');
+    location.assign(observed?'/app/sandbox?observed=1':'/app/sandbox');
    }catch(error){announce('対戦条件を一時保存できませんでした。',true);}
-  },'quiet');
+  };
+  button(actions,'Sandboxで対面を開く',()=>openSandbox(false),'quiet');
+  if($('tactic-evidence-panel').dataset.observedSearch==='1')
+   button(actions,'観測履歴で検証（試験版）',()=>openSandbox(true),'quiet');
  }
  const peers=result.candidates.filter(candidate=>candidate.build_id!==current.build_id);
  if(peers.length){
@@ -351,19 +354,59 @@ function renderInventory(parent,candidate,request){
  }
  registerInventory(box,candidate,request);
 }
+function renderOpponentBoundaries(panel,result){
+ if(!result.can_calculate)return;
+ const candidate=result.candidates.find(row=>row.build_id===result.reference.build_id);
+ const conditions=(candidate?.conditions||[]).filter(row=>row.battle_key);
+ if(!conditions.length)return;
+ const area=node('div',null,panel,'stack');
+ node('p','相手の攻撃・防御・HP個体値について、CMPと技ダメージの静的な境界を探します。対戦勝敗・実戦での役割は未検証です。',area,'muted');
+ const selector=node('select',null,area);selector.setAttribute('aria-label','相手IV境界を調べる対面');
+ for(const [i,row] of conditions.entries()){
+  const choice=node('option','対面'+(i+1)+'：'+name(row.opponent.species_id),selector);
+  choice.value=row.battle_key;
+ }
+ const report=node('p',null,area,'break');
+ const preview=node('p',null,area,'break');
+ const labels={hp:'HP',cmp:'CMP',breakpoint:'通常技与ダメージ',bulkpoint:'通常技被ダメージ',
+  charged_1:'ゲージ1与ダメージ',charged_2:'ゲージ2与ダメージ',
+  incoming_charged_1:'ゲージ1被ダメージ',incoming_charged_2:'ゲージ2被ダメージ'};
+ button(area,'相手IV境界を確認',()=>perform(async()=>{
+  const data=await api('missing-analysis',{action:'opponent_boundaries',
+   evaluation_id:result.evaluation_id,build_id:candidate.build_id,battle_key:selector.value});
+  report.textContent='静的境界のみ（勝敗未検証）：相手IV '+data.profiled_iv_count+' / '+data.raw_iv_count+
+   '通りを評価 ／ 静的プロファイル '+data.distinct_static_profile_count+
+   '種類 ／ '+Object.entries(data.boundary_counts).map(([kind,n])=>(labels[kind]||kind)+n+'件').join('・');
+  preview.textContent='代表例（最大32件・勝敗未検証）：'+data.representatives.map(
+   row=>row.attack+'/'+row.defense+'/'+row.hp).join('、');
+  announce('相手IVの静的な境界候補を表示しました。対戦勝敗は未検証です。');
+ }), 'quiet');
+}
 function renderExploration(parent,result){
  const panel=detail(parent,'重要IVを探索');
  const info=node('p','保存済みの対戦を照合し、役割の全条件を満たす個体値を確認します。',panel,'muted');
  const examples=node('p',null,panel,'break');
+ const interruption=node('p',null,panel,'muted');
  const actions=node('div',null,panel,'actions');
  async function read(budget){
   const data=await api('missing-analysis',{action:'explore',evaluation_id:result.evaluation_id,build_id:result.reference.build_id,budget});
-  info.textContent='全条件を計算済み '+data.completed_iv_count+' / '+data.eligible_iv_count+'通り ／ 条件達成 '+data.qualifying_count+'通り';
-  examples.textContent=data.qualifying.length?'達成したIV'+(data.qualifying_count>data.qualifying.length?'（一部）':'')+'　'+data.qualifying.map(ivText).join('、'):'';
-  announce(budget?'新規対戦 '+data.new_battles+'件。探索の進捗を更新しました。':'保存済みの探索範囲を確認しました。');
+  info.textContent='全条件を計算済み '+data.completed_iv_count+' / '+data.eligible_iv_count+'通り ／ 達成確認済み '+data.qualifying_count+'通り ／ 全条件を検証して未達成 '+data.fully_tested_nonqualifying_iv_count+'通り ／ 全条件の検証が未完了 '+data.not_fully_tested_iv_count+'通り';
+  examples.textContent=data.qualifying.length?'達成を確認したIV'+(data.qualifying_count>data.qualifying.length?'（一部）':'')+'　'+data.qualifying.map(ivText).join('、'):'';
+  interruption.textContent=data.retry_needed?'途中の対戦結果を確定できませんでした。検証済みの結果は保存されています。「追加検証」で再開できます。':'';
+  announce(interruption.textContent||(budget?'新規対戦 '+data.new_battles+'件。探索の進捗を更新しました。':'保存済みの探索範囲を確認しました。'));
  }
  button(actions,'探索範囲を確認',()=>perform(()=>read(0)),'quiet');
- if(result.can_calculate)button(actions,'1対面を追加検証',()=>perform(()=>read(1)),'quiet');
+ if(result.can_calculate){
+  // Explicit opt-in budget: never silently launch a 4096-IV background job.
+  const budgetSelect=node('select',null,actions);
+  budgetSelect.setAttribute('aria-label','追加検証数');
+  for(const count of [1,8,32]){
+   const option=node('option',count+'件',budgetSelect);
+   option.value=String(count);
+  }
+  button(actions,'追加検証',()=>perform(()=>read(Number(budgetSelect.value))),'quiet');
+ }
+ renderOpponentBoundaries(panel,result);
 }
 function renderResult(result,request,revision){
  const tree=$('result-tree');tree.replaceChildren();
@@ -453,10 +496,31 @@ async function compareSavedTactics(){
   for(const condition of build.conditions){
    const box=detail(group,'重要対面：検証 '+condition.tested_scripts+'／条件達成 '+condition.matching_scripts,'match');
    node('p','標準計算：'+(condition.standard.meets===true?'条件達成':condition.standard.meets===false?'条件未達':'証拠不足'),box);
+   for(const group of condition.response_sensitivity||[]){
+    const label='自分の固定行動「'+group.strategy+'」：保存済みシナリオ '+
+      group.tested_scenarios+'件 ／ 条件達成 '+group.matching_scenarios+
+      '件 ／ 未達 '+group.nonmatching_scenarios+
+      '件 ／ 判定保留 '+group.unverified_scenarios+'件。';
+    node('p',label+(group.observed_disagreement?'相手側の条件で結果が変わっています。':
+      '結果が変わらないと証明したものではありません。')+
+      ' 相手の全行動は未網羅、実戦再現性も未検証です。',box,'muted');
+   }
+   if(condition.response_sensitivity_truncated)node('p','固定行動別の概要は一部のみ表示しています。',box,'muted');
    for(const path of condition.paths){
     node('p',path.strategy+' ／ 相手の反応 '+path.opponent_response+' ／ '+
       (path.meets===true?'戦術で条件達成':path.meets===false?'条件未達':'未実行・未確定')+
       ' ／ 実戦再現性は未検証',box,'muted');
+    const assumptions=Array.isArray(path.information_assumptions)?path.information_assumptions:[];
+    const labels={
+     fixed_timed_self_actions:'自分の行動を事前に固定',
+     prespecified_opponent_actions:'相手の未来の行動を仮定',
+     unrevealed_opponent_charged_move_assumed:'未公開の相手ゲージ技を仮定',
+     assumed_opponent_shield_choice:'相手のシールド判断を仮定',
+     own_shield_before_opponent_move_reveal:'相手の技が分かる前にシールド判断'
+    };
+    if(assumptions.length)node('p','情報の前提：'+assumptions.map(
+     code=>labels[code]||'未分類の前提').join('・')+
+     '。実戦で選べる行動とは限りません。',box,'muted');
    }
    if(condition.truncated)node('p','表示は8件まで。件数は全件を集計しています。',box,'muted');
   }

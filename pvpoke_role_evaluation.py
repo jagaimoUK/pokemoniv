@@ -186,7 +186,7 @@ class RoleEvaluation:
         if len(data) > MAX_SNAPSHOT_BYTES:
             raise AnalysisUnavailable('Role evaluation exceeds snapshot size limit')
         try:
-            with self.store._writer() as db:
+            with self.store._writer(critical=True) as db:
                 db.execute('''CREATE TABLE IF NOT EXISTS missing_role_evaluations_v1 (
                     owner_scope TEXT NOT NULL, evaluation_id TEXT NOT NULL,
                     body BLOB NOT NULL, digest TEXT NOT NULL, created_at INTEGER NOT NULL,

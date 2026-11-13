@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from pvpoke_battle_service import BattleService
-from pvpoke_battle_store import BattleStore
+from pvpoke_battle_store import BattleStore, BattleStoreError
 from pvpoke_direct_backend import DirectMatrixClient
 from pvpoke_missing_analysis import AnalysisUnavailable, MissingAnalysis
 from pvpoke_ownership import Ownership, OwnershipConflict, OwnershipUnavailable
@@ -38,6 +38,136 @@ class OwnershipTests(unittest.TestCase):
     def evidence(self, plan, **kwargs):
         return self.analysis.evidence(plan, active_versions=self.service.versions,
                                       normalizer=self.service, **kwargs)
+
+    def test_inventory_events_commit_when_disposable_writes_are_paused(self):
+        with patch('pvpoke_battle_store.shutil.disk_usage') as disk:
+            disk.return_value.free = 0
+            with self.assertRaisesRegex(BattleStoreError, 'disk space'):
+                with self.store._writer() as db:
+                    db.execute('CREATE TABLE should_not_be_written (value INTEGER)')
+            self.inventory.register('critical-instance', self.observed)
+            confirmed = self.inventory.confirm('critical-event', 'critical-instance',
+                                               expected_revision=0, state='confirmed_owned')
+            self.assertEqual(confirmed['new_state'], 'confirmed_owned')
+            self.assertEqual(self.inventory.get('critical-instance')['state'], 'confirmed_owned')
+        with closing(sqlite3.connect(self.store.path)) as db:
+            self.assertIsNone(db.execute(
+                "SELECT 1 FROM sqlite_schema WHERE name='should_not_be_written'").fetchone())
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM ownership_events_v1').fetchone()[0], 1)
+
+    def test_disk_full_abort_is_atomic_for_owned_instance_history_and_revision(self):
+        """Inject an actual SQLite statement abort, in DELETE and external WAL modes.
+
+        A late append failure must roll back the earlier instance UPDATE and
+        ledger revision bump. Never mutate production data or require ENOSPC.
+        """
+        for journal_mode in ('delete', 'wal'):
+            with self.subTest(journal_mode=journal_mode):
+                isolated = BattleStore(self.root / f'injected-{journal_mode}.sqlite3')
+                owner = Ownership(isolated, species_ids=self.inventory.species_ids)
+                other = Ownership(BattleStore(isolated.path, owner_scope='other'),
+                                  species_ids=self.inventory.species_ids)
+                owner.register('subject', self.observed)
+                before = owner.get('subject')
+                before_revision = owner.revision()
+                with closing(sqlite3.connect(isolated.path)) as db:
+                    selected, = db.execute(f'PRAGMA journal_mode={journal_mode}').fetchone()
+                    self.assertEqual(selected, journal_mode)
+                    db.execute("""
+                        CREATE TRIGGER simulate_disk_full BEFORE INSERT
+                        ON ownership_events_v1 BEGIN
+                            SELECT RAISE(ABORT, 'database or disk is full');
+                        END
+                    """)
+                with self.assertRaisesRegex(sqlite3.DatabaseError, 'database or disk is full'):
+                    owner.confirm('confirmed-event', 'subject', expected_revision=0,
+                                  state='confirmed_owned')
+                self.assertEqual(owner.get('subject'), before)
+                self.assertEqual(owner.revision(), before_revision)
+                self.assertEqual(owner.history('subject'), [])
+                self.assertIsNone(other.get('subject'))
+                self.assertEqual(other.revision(), 0)
+                with closing(sqlite3.connect(isolated.path)) as db:
+                    self.assertEqual(db.execute(
+                        'SELECT COUNT(*) FROM ownership_events_v1').fetchone()[0], 0)
+                    db.execute('DROP TRIGGER simulate_disk_full')
+                event = owner.confirm('confirmed-event', 'subject', expected_revision=0,
+                                      state='confirmed_owned')
+                self.assertEqual(event['new_state'], 'confirmed_owned')
+                self.assertEqual(owner.get('subject')['state'], 'confirmed_owned')
+                self.assertEqual(owner.revision(), before_revision + 1)
+                self.assertEqual(len(owner.history('subject')), 1)
+                self.assertEqual(owner.confirm('confirmed-event', 'subject',
+                                               expected_revision=0,
+                                               state='confirmed_owned'), event)
+                self.assertIsNone(other.get('subject'))
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'Requires Linux RLIMIT_FSIZE')
+    def test_real_kernel_file_limit_rolls_back_owner_history_and_recovers(self):
+        """An OS-refused file write must preserve owner state and event history.
+
+        RLIMIT_FSIZE yields EFBIG / SQLite I/O errors, NOT filesystem ENOSPC.
+        The limit is process-local, applied only to a child and disposable DB.
+        """
+        script = """
+import resource, signal, sqlite3, sys
+from pathlib import Path
+from pvpoke_battle_store import BattleStore
+from pvpoke_ownership import Ownership
+
+signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+resource.setrlimit(resource.RLIMIT_FSIZE, (64 * 1024, 64 * 1024))
+owner = Ownership(BattleStore(Path(sys.argv[1])), species_ids={sys.argv[2]})
+try:
+    owner.confirm('kernel-limited-event', 'subject', expected_revision=0,
+                  state='confirmed_owned')
+except (sqlite3.DatabaseError, OSError):
+    sys.exit(21)
+sys.exit(22)
+"""
+        for journal_mode in ('delete', 'wal'):
+            with self.subTest(journal_mode=journal_mode):
+                store = BattleStore(self.root / f'kernel-limit-{journal_mode}.sqlite3')
+                owner = Ownership(store, species_ids=self.inventory.species_ids)
+                foreign = Ownership(BattleStore(store.path, owner_scope='foreign'),
+                                    species_ids=self.inventory.species_ids)
+                owner.register('subject', self.observed)
+                before = owner.get('subject')
+                before_revision = owner.revision()
+                with closing(sqlite3.connect(store.path)) as db, db:
+                    actual, = db.execute(f'PRAGMA journal_mode={journal_mode}').fetchone()
+                    self.assertEqual(actual, journal_mode)
+                    db.execute('CREATE TABLE ballast_for_fault (payload BLOB)')
+                    # Cause the late ownership event append to allocate OS-level
+                    # pages beyond the child's 64 KiB per-file limit.
+                    db.execute("""
+                        CREATE TRIGGER fault_large_event BEFORE INSERT
+                        ON ownership_events_v1 BEGIN
+                            INSERT INTO ballast_for_fault VALUES (zeroblob(262144));
+                        END
+                    """)
+                child = subprocess.run(
+                    [sys.executable, '-c', script, str(store.path), self.observed['species_id']],
+                    text=True, capture_output=True, timeout=15)
+                self.assertEqual(child.returncode, 21, child.stderr or child.stdout)
+                self.assertEqual(owner.get('subject'), before)
+                self.assertEqual(owner.revision(), before_revision)
+                self.assertEqual(owner.history('subject'), [])
+                self.assertIsNone(foreign.get('subject'))
+                with closing(sqlite3.connect(store.path)) as db, db:
+                    self.assertEqual(db.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+                    self.assertEqual(db.execute(
+                        'SELECT COUNT(*) FROM ballast_for_fault').fetchone()[0], 0)
+                    db.execute('DROP TRIGGER fault_large_event')
+                confirmed = owner.confirm('kernel-limited-event', 'subject',
+                                          expected_revision=0, state='confirmed_owned')
+                self.assertEqual(confirmed['new_state'], 'confirmed_owned')
+                self.assertEqual(owner.revision(), before_revision + 1)
+                self.assertEqual(len(owner.history('subject')), 1)
+                self.assertEqual(owner.confirm('kernel-limited-event', 'subject',
+                                               expected_revision=0,
+                                               state='confirmed_owned'), confirmed)
+                self.assertIsNone(foreign.get('subject'))
 
     def test_equal_ivs_keep_distinct_ids_and_only_confirmation_changes_ownership(self):
         result = self.service.simulate(self.spec)

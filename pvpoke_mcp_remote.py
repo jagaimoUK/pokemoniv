@@ -29,6 +29,7 @@ from pvpoke_missing_comparison import PAGE_PATH as MISSING_PAGE_PATH, MAX_REQUES
 from pvpoke_missing_comparison import enabled as missing_enabled
 from pvpoke_sandbox_workspace import APP_PATH as SANDBOX_APP_PATH, API_PATH as SANDBOX_API_PATH
 from pvpoke_sandbox_workspace import PAGE_PATH as SANDBOX_PAGE_PATH, enabled as sandbox_enabled
+from pvpoke_sandbox_workspace import OBSERVED_ACTIONS, observed_enabled
 from pvpoke_app_access import AppAccess, BrowserLogin
 from pvpoke_app_input import parse_import
 from pvpoke_score_search import search_low_scores
@@ -381,8 +382,10 @@ class Handler(BaseHTTPRequestHandler):
             if not missing_enabled():
                 return self.respond(404, {'error': 'Not found'})
             from pvpoke_missing_ui import HTML as missing_html
-            page = missing_html
-        elif self.path == SANDBOX_PAGE_PATH:
+            page = missing_html.replace('data-observed-search="0"',
+                                        'data-observed-search="1"' if sandbox_enabled() and observed_enabled()
+                                        else 'data-observed-search="0"')
+        elif self.path in (SANDBOX_PAGE_PATH, SANDBOX_PAGE_PATH + '?observed=1'):
             if not sandbox_enabled():
                 return self.respond(404, {'error': 'Not found'})
             from pvpoke_sandbox_ui import HTML as sandbox_html
@@ -391,6 +394,8 @@ class Handler(BaseHTTPRequestHandler):
             page = page.replace('data-tactic-search="0"',
                                 'data-tactic-search="1"' if os.environ.get('PVP_TACTIC_SEARCH_ENABLED') == '1'
                                 else 'data-tactic-search="0"')
+            if observed_enabled():
+                page = page.replace('data-observed-search="0"', 'data-observed-search="1"')
         elif self.path == '/app/migration':
             page = browser_migration.page()
         elif self.path == '/flashcards':
@@ -434,8 +439,11 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < size <= limit:
                 return self.respond(413, {'error': 'Invalid body size'})
             raw = self.read_body(size)
-            args = (json.loads(raw, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
-                    if workspace or battle else json.loads(raw))
+            # All app routes must interpret the same JSON identically.
+            # Duplicate keys and non-finite numbers cannot override state or
+            # produce ambiguous validation results on legacy endpoints.
+            args = json.loads(raw, object_pairs_hook=_unique_object,
+                              parse_constant=_reject_constant)
             if not isinstance(args, dict):
                 raise ValueError('入力はJSONオブジェクトで指定してください')
             if workspace:
@@ -443,9 +451,11 @@ class Handler(BaseHTTPRequestHandler):
                 if sandbox and args.get('action') in ('search_start', 'search_step') and os.environ.get(
                         'PVP_TACTIC_SEARCH_ENABLED') != '1':
                     return self.respond(503, {'error': 'Tactic search is disabled'})
+                if sandbox and args.get('action') in OBSERVED_ACTIONS and not observed_enabled():
+                    return self.respond(503, {'error': 'Observed search is disabled'})
                 if not (sandbox_enabled() if sandbox else missing_enabled()):
                     return self.respond(503, {'error': 'Analysis workspace is disabled'})
-                if sandbox and args.get('action') in ('simulate', 'standard', 'search_start', 'search_step') and not self.rate_allowed('compute-owner', 12, 60):
+                if sandbox and args.get('action') in ('simulate', 'standard', 'search_start', 'search_step', 'observed_start', 'observed_step') and not self.rate_allowed('compute-owner', 12, 60):
                     return
                 endpoint = SANDBOX_API_PATH if sandbox else MISSING_API_PATH
                 try:
@@ -551,10 +561,24 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(200, result)
         except RecursionError:
             self.respond(400, {'error': 'Request JSON is too deeply nested'})
-        except (ValueError, TypeError, KeyError, backend.BridgeError) as exc:
+        except backend.BridgeError as exc:
+            # The upstream message can contain internal hostnames, paths,
+            # response bodies, or credentials. Never serialize it to a browser.
+            # Preserve useful, explicitly recognized client-error status codes.
+            upstream = re.match(r'^ローカルアプリ HTTP (400|404|409|413|422):', str(exc))
+            status = int(upstream.group(1)) if upstream else 503
+            message = ('入力内容または保存状態を確認してください' if upstream
+                       else '内部計算サービスに接続できません。再試行してください')
+            self.respond(status, {'error': message})
+        except ValueError as exc:
+            # Existing explicit input validation remains useful to the user.
             self.respond(400, {'error': str(exc)})
-        except Exception:
-            logging.exception('App request failed')
+        except (TypeError, KeyError):
+            # These may originate from internal code or data structures.
+            self.respond(400, {'error': '入力形式が正しくありません'})
+        except Exception as exc:
+            # Exception messages/tracebacks may contain upstream secrets or data.
+            logging.error('App request failed: %s', type(exc).__name__)
             self.respond(500, {'error': 'アプリの処理に失敗しました'})
 
     def visual_backup_request(self):
@@ -582,7 +606,8 @@ class Handler(BaseHTTPRequestHandler):
             size=int(self.headers.get('Content-Length','0'))
             if not 0 < size <= limit:
                 return self.respond(413, {'error':'バックアップの容量上限を超えています'})
-            args=json.loads(self.read_body(size))
+            args=json.loads(self.read_body(size), object_pairs_hook=_unique_object,
+                            parse_constant=_reject_constant)
             if not isinstance(args,dict):
                 raise ValueError()
             if self.path.endswith('/status'):
@@ -616,7 +641,8 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        if self.path in ('/flashcards', '/app/party', '/app/migration', MISSING_PAGE_PATH, SANDBOX_PAGE_PATH):
+        if self.path in ('/flashcards', '/app/party', '/app/migration', MISSING_PAGE_PATH, SANDBOX_PAGE_PATH,
+                         SANDBOX_PAGE_PATH + '?observed=1'):
             return self.app_page()
         # This one read-only route contains only global, fixed PvP rankings
         # transformed into GO search terms. Do not expose private app APIs,
@@ -626,8 +652,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, cached_reader_cleanup())
             except ValueError as exc:
                 return self.respond(503, {'error': str(exc)})
-            except Exception:
-                logging.exception('Reader cleanup response unavailable')
+            except Exception as exc:
+                logging.error('Reader cleanup response unavailable: %s', type(exc).__name__)
                 return self.respond(503, {'error': '検索式を生成できませんでした'})
         if self.path == '/reader-backup':
             data=BACKUP_HTML.encode('utf-8')
@@ -719,7 +745,9 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < size <= 1_000_000:
                 self.respond(413, {'error': 'Invalid body size'})
                 return
-            data = json.loads(self.read_body(size))
+            data = json.loads(self.read_body(size),
+                              object_pairs_hook=_unique_object,
+                              parse_constant=_reject_constant)
             if not isinstance(data, dict) or data.get('jsonrpc') != '2.0' or not isinstance(data.get('method'), str):
                 self.respond(400, {'jsonrpc':'2.0','id':data.get('id') if isinstance(data,dict) else None,
                                    'error':{'code':-32600,'message':'Invalid Request'}})
@@ -750,17 +778,25 @@ class Handler(BaseHTTPRequestHandler):
                     output = call_tool(name, params.get('arguments') or {})
                     result = {'content':[{'type':'text','text':json.dumps(output,ensure_ascii=False,separators=(',',':'))}],
                               'isError':False}
-                except Exception as e:
-                    result = {'content':[{'type':'text','text':f'{type(e).__name__}: {e}'}],
+                except ValueError as exc:
+                    # User-input validation stays actionable without exposing
+                    # unexpected infrastructure exceptions.
+                    result = {'content':[{'type':'text','text':str(exc)}],
+                              'isError':True}
+                except Exception as exc:
+                    logging.warning('MCP tool request failed: %s', type(exc).__name__)
+                    result = {'content':[{'type':'text',
+                                          'text':'処理に失敗しました。入力と接続状況を確認してください'}],
                               'isError':True}
             else:
                 self.respond(200, {'jsonrpc':'2.0','id':id_,
                                    'error':{'code':-32601,'message':'Method not found'}})
                 return
             self.respond(200, {'jsonrpc':'2.0','id':id_,'result':result})
-        except Exception as e:
+        except Exception as exc:
+            logging.warning('MCP request rejected: %s', type(exc).__name__)
             self.respond(400, {'jsonrpc':'2.0','id':None,
-                               'error':{'code':-32700,'message':f'Parse error: {str(e)[:200]}'}})
+                               'error':{'code':-32700,'message':'Invalid JSON-RPC request'}})
 
 if __name__ == '__main__':
     print(f'Local MCP test server: http://{HOST}:{PORT}/mcp', flush=True)

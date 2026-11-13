@@ -115,7 +115,7 @@ def _comparison(service, payload):
 def _explore(service, payload):
     _object(payload, 'IV exploration request', ('action', 'evaluation_id', 'build_id', 'budget'))
     selected = _hash(payload['build_id'])
-    budget = _integer(payload['budget'], 'IV exploration budget', 0, 1)
+    budget = _integer(payload['budget'], 'IV exploration budget', 0, 32)
     if budget and not _can_calculate():
         raise AnalysisUnavailable('New battle calculation is disabled')
     history = RoleEvaluation(service.store).history(payload['evaluation_id'])
@@ -144,10 +144,46 @@ def _explore(service, payload):
         index = lsb.bit_length() - 1
         examples.append({'attack': index >> 8, 'defense': (index >> 4) & 15, 'hp': index & 15})
         bits ^= lsb
+    completed = coverage['all_completed_iv_count']
     return {'state': step['state'], 'new_battles': step['new_battles'],
+            'retry_needed': any(status != 'complete' and attempts > 0
+                                for status, attempts in step['attempt_outcomes'].items()),
             'eligible_iv_count': coverage['eligible_iv_count'], 'qualifying_count': count,
-            'completed_iv_count': coverage['all_completed_iv_count'], 'qualifying': examples,
-            'can_calculate': _can_calculate()}
+            'completed_iv_count': completed,
+            'fully_tested_nonqualifying_iv_count': completed - count,
+            # Every IV lacking at least one required matchup is still not fully
+            # tested. This can include known failures; it is *not* a count of
+            # possible wins and must never be merged into qualifying_count.
+            'not_fully_tested_iv_count': (
+                coverage['eligible_iv_count'] - completed),
+            'qualifying': examples, 'can_calculate': _can_calculate()}
+
+
+def _opponent_boundaries(service, payload):
+    """Restrict static opponent profiling to one saved, same-owner matchup."""
+    _object(payload, 'opponent IV boundaries', (
+        'action', 'evaluation_id', 'build_id', 'battle_key'), ('iv_floors',))
+    if not _can_calculate():
+        raise AnalysisUnavailable('Opponent IV profiling is disabled')
+    build = _hash(payload['build_id'])
+    battle_key = _hash(payload['battle_key'])
+    history = RoleEvaluation(service.store).history(payload['evaluation_id'])
+    if (history is None or history['active_versions'] != service.versions
+            or history['plan_versions'] != service.versions):
+        raise ValueError('Saved role evaluation is unavailable for the active game data')
+    evidence = MissingAnalysis(service.store).evidence(
+        history['analysis_id'], active_versions=service.versions, normalizer=service)
+    if evidence is None or evidence['versions'] != service.versions:
+        raise ValueError('Saved matchup evidence is unavailable')
+    candidate = next((cell for cell in evidence['cells']
+                      if cell['build_id'] == build and cell['battle_key'] == battle_key
+                      and cell.get('starts_at_full_hp') and
+                      condition_id(cell['spec'], full_hp=True)
+                      in history['definition']['requirements']), None)
+    if candidate is None:
+        raise ValueError('Opponent boundary matchup is not part of this saved role')
+    return IVSearch(service).opponent_boundaries(
+        candidate['spec'], iv_floors=payload.get('iv_floors', (0, 0, 0)))
 
 
 def app_operation(service, payload):
@@ -156,6 +192,8 @@ def app_operation(service, payload):
         return _comparison(service, payload)
     if action == 'explore':
         return _explore(service, payload)
+    if action == 'opponent_boundaries':
+        return _opponent_boundaries(service, payload)
     if action == 'tactic_evidence':
         _object(payload, 'tactic evidence', ('action', 'evaluation_id', 'search_ids'))
         if not sandbox_enabled() or not search_enabled():

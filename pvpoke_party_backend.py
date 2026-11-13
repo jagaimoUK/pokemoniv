@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import math
 import re
 import os
@@ -235,7 +236,18 @@ class PartyBuilder:
             self._record(jid, "done", {"progress": 100, "result": result})
         except Exception as exc:
             status = "cancelled" if str(exc) == "cancelled" else "error"
-            self._record(jid, status, {"message": str(exc)[:400], "progress": 0})
+            # Background exceptions can contain internal file paths, SQL
+            # details or subprocess output. Do not persist them in a status
+            # record readable through the authenticated browser API.
+            if status == "cancelled":
+                message = "cancelled"
+            elif isinstance(exc, ValueError):
+                # Keep established, actionable input-validation feedback.
+                message = str(exc)[:400]
+            else:
+                logging.warning("Party worker failed: %s", type(exc).__name__)
+                message = "パーティ計算に失敗しました。再試行してください"
+            self._record(jid, status, {"message": message, "progress": 0})
         finally:
             # Always acquire the shared web lock before this worker lock.
             # The reverse order could deadlock with a concurrent start request.

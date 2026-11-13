@@ -191,7 +191,7 @@ class Ownership:
         """Register an observed individual with no ownership confirmation."""
         _id(instance_id)
         fields = self._observation(observation)
-        with self.store._writer() as db:
+        with self.store._writer(critical=True) as db:
             self._ensure_tables(db)
             old = self._instance(db, instance_id)
             if old is not None:
@@ -234,7 +234,7 @@ class Ownership:
                 raise ValueError('A new instance requires an explicit owned observation')
             identity.append('register')
         request_hash = _json_hash(identity)
-        with self.store._writer() as db:
+        with self.store._writer(critical=True) as db:
             self._ensure_tables(db)
             replay = self._replay(db, event_id, request_hash)
             if replay is not None:
@@ -280,7 +280,7 @@ class Ownership:
         scope = {'species_id': species_id, 'search': search, 'box_range': [first, last]}
         target = _json_hash(scope)
         request_hash = _json_hash(['scope', self.actor, scope, expected_ledger_revision, complete, absence_confirmed])
-        with self.store._writer() as db:
+        with self.store._writer(critical=True) as db:
             self._ensure_tables(db)
             replay = self._replay(db, event_id, request_hash)
             if replay is not None:

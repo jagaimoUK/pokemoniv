@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 import time
 
@@ -16,6 +17,12 @@ from pvpoke_battle_service import _canonical_json, validate_complete_result
 SCHEMA_VERSION = 1
 APPLICATION_ID = 0x50564252  # PVBR
 MAX_DB_BYTES = 32 * 1024 * 1024
+# Keep headroom for explicit ownership and other user-authored records.
+RESERVED_DB_PAGE_FRACTION = 8
+NONCRITICAL_DISK_RESERVE_BYTES = 8 * 1024 * 1024
+# Leave additional space for SQLite journals/WAL and bounded cache payloads.
+# This is headroom, not a promise against concurrent external volume writers.
+NONCRITICAL_WRITE_HEADROOM_BYTES = 2 * 1024 * 1024
 MAX_RESULT_BYTES = 512 * 1024
 COMPLETENESS = 'standard-summary-v1'
 SINGLE_OWNER = 'local-owner'
@@ -95,25 +102,93 @@ class BattleStore:
 
     @contextmanager
     def _reader(self):
-        with closing(sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True, timeout=0.25)) as db, db:
-            db.execute('BEGIN')
-            if self._version(db) != (APPLICATION_ID, SCHEMA_VERSION):
-                raise BattleStoreError('Unrecognized battle database version')
+        """Read without writes; recover only a known hot rollback journal.
+
+        A physical ENOSPC during a DELETE-mode transaction may leave a hot
+        journal. SQLite cannot replay it through mode=ro and reports
+        SQLITE_READONLY_ROLLBACK. A single bounded writable connection lets
+        SQLite perform its own atomic rollback after capacity is restored.
+        Never delete a journal, rebuild a DB or repeat recovery indefinitely.
+        """
+        def open_verified_reader():
+            db = sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro',
+                                 uri=True, timeout=0.25)
+            try:
+                db.execute('BEGIN')
+                if self._version(db) != (APPLICATION_ID, SCHEMA_VERSION):
+                    raise BattleStoreError('Unrecognized battle database version')
+                return db
+            except BaseException:
+                db.close()
+                raise
+
+        try:
+            db = open_verified_reader()
+        except sqlite3.OperationalError as exc:
+            readonly_recovery = (
+                sqlite3.SQLITE_READONLY_ROLLBACK,
+                sqlite3.SQLITE_READONLY_RECOVERY,
+            )
+            if getattr(exc, 'sqlite_errorcode', None) not in readonly_recovery:
+                raise
+            # Never attempt recovery while the failed read transaction still
+            # holds a lock. Only a trusted server-owned DB path is used.
+            with closing(sqlite3.connect(self.path, timeout=2.0)) as recovering:
+                if recovering.execute('PRAGMA quick_check(1)').fetchone()[0] != 'ok':
+                    raise BattleStoreError('SQLite recovery integrity check failed')
+            db = open_verified_reader()
+        with closing(db), db:
             yield db
 
     @contextmanager
-    def _writer(self):
+    def _writer(self, *, critical=False):
+        """Keep a SQLite quota and disk reserve for important user records.
+
+        Recalculable writes cannot consume the last 1/8 of SQLite pages
+        or the last 8 MiB of disk free space. Critical writes may use this
+        reserve. Other processes can still exhaust the filesystem; nothing
+        here deletes existing data.
+        """
+        if type(critical) is not bool:
+            raise ValueError('Invalid battle writer priority')
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(sqlite3.connect(self.path, timeout=0.25)) as db, db:
-            pages = self.max_bytes // db.execute('PRAGMA page_size').fetchone()[0]
-            if pages < 2:
+        if not critical:
+            if (shutil.disk_usage(self.path.parent).free <=
+                    NONCRITICAL_DISK_RESERVE_BYTES + NONCRITICAL_WRITE_HEADROOM_BYTES):
+                raise BattleStoreError('Noncritical battle writes paused to protect disk space')
+            # An externally enabled WAL can exceed the main DB page quota even
+            # while its page_count is tiny. Stop expendable cache writes, never
+            # delete or truncate another process's WAL or user records.
+            try:
+                wal_bytes = self.path.with_name(self.path.name + '-wal').stat().st_size
+            except FileNotFoundError:
+                wal_bytes = 0
+            if wal_bytes > self.max_bytes:
+                raise BattleStoreError('Noncritical battle writes paused: oversized SQLite WAL')
+        # Critical owner-authored writes get a bounded lock wait; transient
+        # contention must not make a valid confirmation look unavailable.
+        # Disposable cache writes retain their fast 250 ms failure budget.
+        wait = 2.0 if critical else 0.25
+        with closing(sqlite3.connect(self.path, timeout=wait)) as db, db:
+            total_pages = self.max_bytes // db.execute('PRAGMA page_size').fetchone()[0]
+            if total_pages < 2:
                 raise BattleStoreError('Battle database size limit is too small')
+            reserve = total_pages // RESERVED_DB_PAGE_FRACTION if total_pages >= 16 else 0
+            pages = total_pages if critical else total_pages - reserve
             db.execute(f'PRAGMA max_page_count = {pages}')
+            # SQLite cannot reduce max_page_count below an already allocated DB.
+            if db.execute('PRAGMA page_count').fetchone()[0] > pages:
+                raise BattleStoreError('Battle database reserved capacity is exhausted')
             db.execute('BEGIN IMMEDIATE')
             self._migrate(db)
             yield db
+            # In WAL mode, pages written during the transaction can consume
+            # free disk while the main DB remains small. If the reserve was
+            # consumed, abort this transaction rather than commit it.
+            if not critical and shutil.disk_usage(self.path.parent).free <= NONCRITICAL_DISK_RESERVE_BYTES:
+                raise BattleStoreError('Noncritical battle write rolled back to protect disk space')
             if db.execute('PRAGMA page_count').fetchone()[0] > pages:
-                raise BattleStoreError('Battle database exceeds the size limit')
+                raise BattleStoreError('Battle database exceeds its write quota')
 
     def get(self, key, spec, versions, *, completeness=COMPLETENESS):
         """Return a validated summary, or None when this owner has no matching row."""

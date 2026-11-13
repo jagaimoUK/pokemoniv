@@ -18,7 +18,7 @@ os.environ.setdefault('PVP_API_KEY', 'test-' + 'x' * 32)
 import pvpoke_mcp_remote as remote
 from pvpoke_app_access import BrowserLogin
 from pvpoke_auth_store import CredentialStore
-from pvpoke_child_env import child_environment
+from pvpoke_child_env import child_environment, iv_worker_environment
 from pvpoke_http_security import BoundedHTTPServer, RateBudget
 from visual_backup import BackupTokens
 
@@ -76,6 +76,150 @@ class GatewaySecurityTests(unittest.TestCase):
             status, _, body = self.request('/app-api/meta-status', cookie=cookie)
             self.assertEqual(status, 503)
             self.assertNotIn(b'private-db-details', body)
+
+
+    def test_authenticated_bridge_failures_never_expose_private_upstream_details(self):
+        """No internal URL, backend response body or fake secret in app JSON."""
+        marker = 'TEST_PRIVATE_ENDPOINT_127.0.0.1:8765_TOKEN_NOT_REAL'
+        key = 'Bearer ' + remote.API_KEY
+        with patch.object(remote.backend, 'meta_status', side_effect=remote.backend.BridgeError(
+                'ローカルアプリに接続できません: http://127.0.0.1:8765/' + marker)) as backend:
+            status, _, data = self.request('/app-api/meta-status')
+            self.assertEqual(status, 401)
+            backend.assert_not_called()
+            status, _, data = self.request('/app-api/meta-status', key)
+            self.assertEqual(status, 503)
+            self.assertNotIn(marker.encode(), data)
+            self.assertNotIn(b'127.0.0.1', data)
+            self.assertIn('error', json.loads(data))
+
+        # A remembered app cookie may access app endpoints, but it should
+        # never reveal the backend's private HTTP error response body.
+        cookie = remote.BROWSER_LOGIN.issue().split(';', 1)[0]
+        with patch.object(remote.backend, 'meta_presets', side_effect=remote.backend.BridgeError(
+                'ローカルアプリ HTTP 400: {"error":"' + marker + '"}')):
+            status, _, data = self.request('/app-api/meta-presets', cookie=cookie)
+            self.assertEqual(status, 400)
+            self.assertNotIn(marker.encode(), data)
+            self.assertNotIn(b'127.0.0.1', data)
+            self.assertIn('error', json.loads(data))
+
+
+    def test_unexpected_app_and_public_cleanup_errors_do_not_log_private_details(self):
+        marker = 'SYNTHETIC_PRIVATE_EXCEPTION_PAYLOAD'
+        cases = (
+            ('/app-api/meta-status', remote.backend, 'meta_status', False),
+            ('/reader-api/v1/cleanup', remote, 'cached_reader_cleanup', True),
+        )
+        for path, target, method, public in cases:
+            with self.subTest(path=path), patch.object(
+                    target, method, side_effect=RuntimeError(marker)), self.assertLogs(level='ERROR') as logs:
+                status, _, body = self.request(
+                    path, auth=None if public else 'Bearer ' + remote.API_KEY, get=public)
+                self.assertEqual(status, 503 if public else 500)
+                self.assertNotIn(marker.encode(), body)
+            self.assertNotIn(marker, '\n'.join(logs.output))
+            self.assertTrue(all(record.exc_info is None for record in logs.records))
+
+
+    def test_all_authenticated_json_routes_reject_duplicate_and_nonfinite_fields(self):
+        """Ambiguous payloads never reach app, backup or MCP dispatch."""
+        key = 'Bearer ' + remote.API_KEY
+        backup_token = 'Bearer ' + remote.BACKUP_TOKENS.issue()
+        cases = (
+            ('/app-api/meta-status', key,
+             (b'{"x":1,"x":2}', b'{"x":{"nested":1,"nested":2}}', b'{"x":NaN}')),
+            ('/visual-backup/v1/status', backup_token,
+             (b'{"action":"status","action":"upload"}', b'{"x":Infinity}')),
+            ('/mcp', key,
+             (b'{"jsonrpc":"2.0","id":3,"method":"ping","method":"tools/call"}',
+              b'{"jsonrpc":"2.0","id":3,"method":"ping","params":{"x":-Infinity}}')),
+        )
+        with patch.object(remote.backend, 'meta_status') as app, \
+             patch.object(remote.VISUAL_BACKUP, 'head') as backup, \
+             patch.object(remote, 'call_tool') as dispatch:
+            for path, credential, payloads in cases:
+                for body in payloads:
+                    with self.subTest(path=path, body=body[:40]):
+                        connection = http.client.HTTPConnection(*self.server.server_address,
+                                                                timeout=4)
+                        try:
+                            connection.request('POST', path, body, {
+                                'Content-Type': 'application/json',
+                                'Authorization': credential})
+                            response = connection.getresponse()
+                            result = response.read()
+                            self.assertEqual(response.status, 400, result)
+                            self.assertIn('error', json.loads(result))
+                        finally:
+                            connection.close()
+            app.assert_not_called()
+            backup.assert_not_called()
+            dispatch.assert_not_called()
+
+    def test_mcp_unexpected_errors_and_protocol_rejections_hide_details(self):
+        """Authenticated tools must not return backend paths in error text."""
+        secret = 'TEST_PRIVATE_BACKEND_PATH_TOKEN_NOT_REAL'
+        headers = {'Content-Type': 'application/json',
+                   'Authorization': 'Bearer ' + remote.API_KEY}
+        payload = {'jsonrpc': '2.0', 'id': 7, 'method': 'tools/call',
+                   'params': {'name': remote.TOOLS[0]['name'], 'arguments': {}}}
+
+        for failure in (RuntimeError(secret), remote.backend.BridgeError(secret),
+                        KeyError(secret)):
+            with self.subTest(error=type(failure).__name__), patch.object(
+                    remote, 'call_tool', side_effect=failure):
+                status, _, body = self.request('/mcp', auth=headers['Authorization'],
+                                                payload=payload)
+                self.assertEqual(status, 200)
+                self.assertTrue(json.loads(body)['result']['isError'])
+                self.assertNotIn(secret.encode(), body)
+
+        with patch.object(remote, 'call_tool', side_effect=ValueError(
+                'invalid candidate inputs')):
+            status, _, body = self.request('/mcp', auth=headers['Authorization'],
+                                            payload=payload)
+            self.assertEqual(status, 200)
+            self.assertIn(b'invalid candidate inputs', body)
+
+        with patch.object(remote.Handler, 'read_body', side_effect=RuntimeError(secret)):
+            status, _, body = self.request('/mcp', auth=headers['Authorization'],
+                                            payload=payload)
+            self.assertEqual(status, 400)
+            self.assertNotIn(secret.encode(), body)
+            self.assertEqual(json.loads(body)['error']['code'], -32700)
+
+    def test_app_unexpected_key_errors_do_not_echo_private_fields(self):
+        secret = 'TEST_PRIVATE_FIELD_TOKEN_NOT_REAL'
+        with patch.object(remote.backend, 'meta_status', side_effect=KeyError(secret)):
+            status, _, body = self.request('/app-api/meta-status',
+                                            auth='Bearer ' + remote.API_KEY)
+            self.assertEqual(status, 400)
+            self.assertNotIn(secret.encode(), body)
+
+    def test_unauthed_public_shells_and_private_operations_under_feature_flags(self):
+        """Public pages have no root credential, and APIs reject before dispatch."""
+        flags = {'PVP_SANDBOX_ENABLED': '1',
+                 'PVP_MISSING_ANALYSIS_ENABLED': '1',
+                 'PVP_TACTIC_SEARCH_ENABLED': '1'}
+        with patch.dict(os.environ, flags), patch.object(
+                remote.backend, '_request', side_effect=AssertionError(
+                    'anonymous access reached a private backend')) as backend:
+            for path in ('/app', '/app/party', '/app/missing', '/app/sandbox',
+                         '/app/migration'):
+                with self.subTest(page=path):
+                    status, _, body = self.request(path, get=True)
+                    self.assertEqual(status, 200)
+                    self.assertNotIn(remote.API_KEY.encode(), body)
+            for path in ('/app-api/catalog', '/app-api/party/list',
+                         '/app-api/missing-analysis', '/app-api/sandbox',
+                         '/app-api/battles/simulate', '/app-api/meta-presets',
+                         '/app-api/visual-backup-connections'):
+                with self.subTest(api=path):
+                    status, _, body = self.request(path)
+                    self.assertEqual(status, 401)
+                    self.assertNotIn(remote.API_KEY.encode(), body)
+            backend.assert_not_called()
 
     def test_backup_store_failure_returns_503(self):
         token = remote.BACKUP_TOKENS.issue()
@@ -204,6 +348,46 @@ class EngineSecurityTests(unittest.TestCase):
         self.assertNotIn('PVP_API_KEY', env)
         self.assertNotIn('AWS_SECRET_ACCESS_KEY', env)
         self.assertNotIn('VISUAL_BACKUP_S3_SECRET_ACCESS_KEY', env)
+
+
+    def test_iv_worker_environment_drops_server_secrets_and_keeps_runtime_settings(self):
+        import pvpoke_web as local
+        fake = {
+            'PVP_API_KEY': 'FAKE_PRIVATE_ROOT_KEY_NOT_REAL',
+            'AUTH0_CLIENT_SECRET': 'FAKE_PRIVATE_OAUTH_SECRET_NOT_REAL',
+            'VISUAL_BACKUP_S3_SECRET_ACCESS_KEY': 'FAKE_PRIVATE_S3_KEY_NOT_REAL',
+            'AWS_SECRET_ACCESS_KEY': 'FAKE_PRIVATE_AWS_KEY_NOT_REAL',
+            'PVP_MCP_URL': 'https://private-gateway.invalid/mcp',
+            'PVP_ENGINE': 'direct',
+            'PVP_ARCHIVE_DIR': '/tmp/test-only-archives',
+            'RAILWAY_VOLUME_MOUNT_PATH': '/tmp/test-only-volume',
+            'PVP_CAND_CHUNK': '5',
+            'PVP_RESULT_CACHE': '0',
+            'PVP_CACHE_EPOCH': 'test-cache-epoch',
+            'PVP_FORCE_RECALCULATE': '0',
+        }
+        with patch.dict(os.environ, fake):
+            for force, expected in ((False, '0'), (True, '1')):
+                with self.subTest(force=force):
+                    env = iv_worker_environment(force=force)
+                    self.assertEqual(env['PVP_FORCE_RECALCULATE'], expected)
+                    self.assertEqual(env['PVP_ENGINE'], 'direct')
+                    self.assertEqual(env['PVP_ARCHIVE_DIR'], '/tmp/test-only-archives')
+                    self.assertEqual(env['RAILWAY_VOLUME_MOUNT_PATH'],
+                                     '/tmp/test-only-volume')
+                    self.assertEqual(env['PVP_RESULT_CACHE'], '0')
+                    self.assertEqual(env['PVP_CAND_CHUNK'], '5')
+                    self.assertEqual(env['PVP_CACHE_EPOCH'], 'test-cache-epoch')
+                    for name in ('PVP_API_KEY', 'AUTH0_CLIENT_SECRET',
+                                 'VISUAL_BACKUP_S3_SECRET_ACCESS_KEY',
+                                 'AWS_SECRET_ACCESS_KEY', 'PVP_MCP_URL'):
+                        self.assertNotIn(name, env)
+                    # Exercise the exact Popen call site, not only the helper.
+                    with patch.object(local, 'CANCEL_REQUESTED', False), patch.object(
+                            local.subprocess, 'Popen', side_effect=OSError(
+                                'fake child start failure')) as started:
+                        local.background_run('all', force=force)
+                    self.assertEqual(started.call_args.kwargs['env'], env)
 
     def test_browser_disabled_before_connecting_to_existing_debugger(self):
         import pvpoke_batch_v2 as engine

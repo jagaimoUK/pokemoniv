@@ -10,7 +10,8 @@ process.env.PVP_PVPOKE_SOURCE = path.resolve(__dirname, '../vendor/pvpoke');
 const {runSandbox} = require('../pvpoke_sandbox_runner.js');
 const gamemasterPath = path.join(__dirname, 'fixtures/strategy_gamemaster.json');
 const html = fs.readFileSync('pvpoke_sandbox_ui.py', 'utf8').split("HTML = r'''")[1].split("'''")[0];
-const searchHtml = html.replace('data-tactic-search="0"','data-tactic-search="1"');
+const searchHtml = html.replace('data-tactic-search="0"','data-tactic-search="1"')
+  .replace('data-observed-search="0"', 'data-observed-search="1"');
 const digest = tag => crypto.createHash('sha256').update(html.split('<' + tag + '>')[1].split('</' + tag + '>')[0]).digest('base64');
 const csp = "default-src 'none'; connect-src 'self'; script-src 'sha256-" + digest('script') + "'; style-src 'sha256-" + digest('style') + "'";
 const origin = 'http://127.0.0.1:9877';
@@ -56,6 +57,7 @@ async function checkWidth(browser, width) {
   const requests = [];
   const tactics = new Map();
   let failNext = false;
+  let observedJob;
   page.on('pageerror', error => errors.push(error.message));
   try {
     await page.addInitScript(({key, spec}) => {
@@ -92,6 +94,33 @@ async function checkWidth(browser, width) {
         assert.equal(payload.spec.shield_decisions, undefined);
         assert.equal(payload.spec.combatants[0].initial.energy, 100);
         return route.fulfill({json: fixtureResult(payload.spec).summary});
+      }
+      if (payload.action.startsWith('observed_')) {
+        if (payload.action === 'observed_start') {
+          assert.equal(payload.worlds.length, 2);
+          assert.equal(payload.worlds[1].combatants[1].initial.energy, 42);
+          assert.equal(payload.roles[0].minimum.shields, 1);
+          observedJob = {search_id: 'd'.repeat(64), work: 0, scenario_count: 2, role: null,
+            paused: false, status: 'pending', roles: payload.roles,
+            worlds: sideRows.map(() => ({opponent: sideRows[1]})),
+            scenario_worlds: [1, 2], evaluations: [], comparisons: [], policy_numbers: []};
+        } else {
+          assert.equal(payload.search_id, observedJob.search_id);
+          if (payload.action === 'observed_stop') {
+            Object.assign(observedJob, {paused: true, status: 'stopped'});
+          }
+          if (payload.action === 'observed_resume') {
+            Object.assign(observedJob, {paused: false, status: 'pending'});
+          }
+          if (payload.action === 'observed_step') {
+            assert.equal(payload.expected_work, observedJob.work);
+            observedJob.work++;
+            observedJob.active_coverage = {outcomes: ['self_ko_win'], roles: [
+              {id: 'role_1', meets: false, passed: 0, failed: 1, unknown: 1, scenario_meets: [false]},
+            ]};
+          }
+        }
+        return route.fulfill({json: observedJob});
       }
       if (payload.action === 'search_start') {
         assert.equal(payload.spec.mode, 'sandbox');
@@ -227,6 +256,32 @@ async function checkWidth(browser, width) {
     await page.locator('#simulate').click();
     await page.locator('#script-status').filter({hasText: /^入力エラー$/}).waitFor();
     assert.equal(await page.locator('#initial').isHidden(), true);
+    await page.locator('#observed-details > summary').click();
+    await page.locator('#observed-add').click();
+    await page.locator('#observed-add').click();
+    await page.locator('#observed-opponents').getByRole('button', {name: 'この候補を削除'}).last().click();
+    const alternative = page.locator('#observed-opponents');
+    await alternative.locator('.conditions > summary').click();
+    await alternative.getByLabel('開始ゲージ').fill('42');
+    await page.locator('#observed-add-role').click();
+    await page.locator('#observed-roles').getByLabel('最低シールド').fill('1');
+    await page.locator('#observed-start').click();
+    await page.locator('#observed-status').getByText(/再生 0 回/).waitFor();
+    await page.locator('#observed-step').click();
+    await page.locator('#observed-status').getByText(/再生 1 回/).waitFor();
+    await page.locator('#observed-stop').click();
+    await page.locator('#observed-status').getByText(/一時停止中/).waitFor();
+    await page.reload();
+    await page.locator('#observed-details > summary').click();
+    await page.locator('#observed-get').click();
+    await page.locator('#observed-status').getByText(/一時停止中/).waitFor();
+    await page.locator('#observed-resume').click();
+    await page.locator('#observed-status').getByText(/検証を続けられます/).waitFor();
+    await page.locator('#observed-step').click();
+    await page.locator('#observed-status').getByText(/再生 2 回/).waitFor();
+    await page.locator('#observed-results').getByText('現在の検証途中').click();
+    await page.locator('#observed-results').getByText(/条件未達/).waitFor();
+    await page.locator('#observed-results').getByText(/未探索/).waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
     assert.deepEqual(errors, []);
   } finally {

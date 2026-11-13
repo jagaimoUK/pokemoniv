@@ -14,6 +14,7 @@ from collections import deque
 from datetime import datetime
 import io
 import json
+import logging
 import os
 import signal
 import sqlite3
@@ -48,6 +49,7 @@ from pvpoke_tactic_search import TacticSearchError
 from pvpoke_tactic_evidence import TacticEvidenceUnavailable
 from pvpoke_sandbox_workspace import app_operation as sandbox_operation, enabled as sandbox_enabled, list_operation as list_tactics
 from pvpoke_direct_backend import DirectMatrixClient
+from pvpoke_child_env import iv_worker_environment
 from pvpoke_app_input import app_presets
 from pvpoke_app_catalog import enrich_catalog
 from pvpoke_flashcards import public_catalog
@@ -141,8 +143,10 @@ def load_catalog():
                             'presets': presets, 'timestamp': gm.get('timestamp')})
         meta_variants.start(WORK, LOCK, STATUS, battle_busy=lambda: BATTLE_RUNNING)
     except Exception as exc:
+        logging.warning('Game catalog initialization failed: %s', type(exc).__name__)
         with LOCK:
-            CATALOG.update({'ready': False, 'error': str(exc)})
+            CATALOG.update({'ready': False,
+                            'error': 'ゲームデータの読み込みに失敗しました。再試行してください'})
 
 
 def parse_ivs(raw):
@@ -380,7 +384,7 @@ def background_run(shields, batch24=False, batch_mode='simple', meta_file=None, 
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              text=True, bufsize=1, cwd=str(HOME),
                              start_new_session=(os.name == 'posix'),
-                             env={**os.environ, **({"PVP_FORCE_RECALCULATE":"1"} if force else {})})
+                             env=iv_worker_environment(force=force))
         with LOCK:
             ACTIVE_PROCESS = process
             stop_now = CANCEL_REQUESTED
@@ -421,10 +425,15 @@ def background_run(shields, batch24=False, batch_mode='simple', meta_file=None, 
                                  'ZIPが完成しました' if STATUS['state']=='done' else
                                  '計算が中断されました。ログを確認してね')
     except Exception as exc:
+        # STATUS is exposed by local /api/status and can be relayed by
+        # authenticated app job polling. Never store unexpected exception
+        # text, which may include backend filesystem paths or secrets.
+        logging.warning('Background IV calculation failed: %s', type(exc).__name__)
         with LOCK:
-            STATUS['logs'].append(f'ERROR: {exc}')
+            STATUS['logs'].append('ERROR: 計算処理の内部エラー')
             STATUS['state'] = 'cancelled' if CANCEL_REQUESTED else 'error'
-            STATUS['message'] = '計算を中止しました' if CANCEL_REQUESTED else str(exc)
+            STATUS['message'] = ('計算を中止しました' if CANCEL_REQUESTED else
+                                 '計算処理に失敗しました。再試行してください')
             STATUS['finished_at'] = datetime.now().isoformat(timespec='microseconds')
     finally:
         with LOCK:
@@ -568,7 +577,20 @@ class Handler(BaseHTTPRequestHandler):
         except BrokenPipeError:
             pass
 
+    def _trusted_local_host(self):
+        """Reject DNS-rebinding Host values on this loopback-only service.
+
+        A browser cannot freely set the Host header. The public gateway
+        remains responsible for user authentication and authorization.
+        """
+        names = self.headers.get_all('Host', [])
+        port = self.server.server_address[1]
+        return (len(names) == 1 and
+                names[0].strip().lower() in (f'127.0.0.1:{port}', f'localhost:{port}'))
+
     def do_GET(self):
+        if not self._trusted_local_host():
+            return self.respond(403, {'error': 'Local host required'})
         path = urlparse(self.path).path
         if path == '/':
             self.respond(200, HTML.replace('__TOKEN__', TOKEN), 'text/html; charset=utf-8')
@@ -643,6 +665,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         global CANCEL_REQUESTED, BATTLE_RUNNING
+        if not self._trusted_local_host():
+            return self.respond(403, {'error': 'Local host required'})
         path = urlparse(self.path).path
         if path not in ('/api/prepare','/api/run','/api/prepare24','/api/run24','/api/cancel','/api/meta/sync','/api/meta/preview','/api/meta/presets',
                         '/api/party/list','/api/party/get','/api/party/save',
@@ -655,10 +679,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(403, {'error':'ローカル画面以外からは操作できません'})
         if self.headers.get('X-PvPoke-Token') != TOKEN:
             return self.respond(403, {'error':'この画面を再読み込みしてください'})
+        # Never accept disguised types such as text/plain;application/json.
+        # Both the app and the internal bridge send application/json.
         content_type = self.headers.get('Content-Type', '')
-        if ('application/json' not in content_type or
-                path in (MISSING_API_PATH, SANDBOX_API_PATH) and
-                content_type.split(';')[0].strip().lower() != 'application/json'):
+        if content_type.split(';', 1)[0].strip().lower() != 'application/json':
             return self.respond(415, {'error':'JSONで送信してください'})
         workspace_route = path in (MISSING_API_PATH, SANDBOX_API_PATH)
         common_battle = workspace_route or path == '/api/battles/simulate'
@@ -669,8 +693,8 @@ class Handler(BaseHTTPRequestHandler):
             if n < 2 or n > limit:
                 raise ValueError('入力が大きすぎるか空です')
             raw = self.rfile.read(n)
-            payload = (json.loads(raw, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
-                       if common_battle else json.loads(raw))
+            payload = json.loads(raw, object_pairs_hook=_unique_object,
+                                 parse_constant=_reject_constant)
             if not isinstance(payload, dict):
                 raise ValueError('入力はJSONオブジェクトで指定してください')
             if common_battle:
@@ -902,7 +926,11 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             self.respond(400, {'error': str(exc)})
         except Exception as exc:
-            self.respond(500, {'error': '内部エラー: '+str(exc)})
+            # Even a loopback-only endpoint can be called through an internal
+            # bridge. Do not echo filesystem paths or dependency exceptions.
+            import logging
+            logging.error('Local request failed: %s', type(exc).__name__)
+            self.respond(500, {'error': '内部処理に失敗しました'})
 
 
 def main():
