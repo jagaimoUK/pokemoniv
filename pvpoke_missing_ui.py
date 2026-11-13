@@ -66,6 +66,7 @@ let reference;
 const alternatives=[],scenarios=[];
 const tacticLinkKey='pokemoniv:tactic-evidence-link-v1';
 const observedLinkKey='pokemoniv:observed-evidence-link-v1';
+const missingFormKey='pokemoniv:missing-analysis-form-v1';
 
 function node(tag,text,parent,cls){
  const el=document.createElement(tag);
@@ -195,9 +196,10 @@ function addAlternative(){
  const editor=buildEditor($('alternatives'),'比較個体',{open:true,initial:candidate,removable:el=>removeEditor(alternatives,el)});
  alternatives.push(editor);markEdited();setBusy(false);editor.species.focus();
 }
-function addScenario(focus){
+function addScenario(focus,initial=null){
  if(scenarios.length>=maxScenarios)return;
- const editor=buildEditor($('scenarios'),'対面の相手',{open:true,removable:el=>removeEditor(scenarios,el)});
+ const editor=buildEditor($('scenarios'),'対面の相手',{open:true,initial:initial?.opponent,
+  removable:el=>removeEditor(scenarios,el)});
  const grid=node('div',null,editor.body,'grid');
  const shields=[[0,'0枚'],[1,'1枚'],[2,'2枚']];
  const selfShield=select(grid,'自分のシールド',shields);
@@ -223,6 +225,19 @@ function addScenario(focus){
   if(metric.value)requirement.minimum={[metric.value]:minimum.valueAsNumber};
   return {opponent:editor.read(),shields:[Number(selfShield.value),Number(opponentShield.value)],energy:energy.valueAsNumber,requirement};
  };
+ if(initial){
+  selfShield.value=String(initial.shields[0]);
+  opponentShield.value=String(initial.shields[1]);
+  energy.value=String(initial.energy??0);
+  const r=initial.requirement||{};
+  if(r.outcomes?.includes('simultaneous_ko'))result.value='win_or_tie';
+  else if(!r.outcomes?.length)result.value='minimum';
+  else result.value='win';
+  const first=Object.entries(r.minimum||{})[0];
+  if(first){metric.value=first[0];minimum.value=first[1];}
+  validateMinimum();
+  advanced.open=Number(energy.value)!==0||Boolean(first);
+ }
  scenarios.push(editor);
  if(focus){markEdited();editor.species.focus();}
  setBusy(false);
@@ -451,6 +466,7 @@ async function evaluate(request,revision){
  const result=await api('missing-analysis',request);
  if(!result.reference||!Array.isArray(result.candidates))throw Error('分析結果を読み取れませんでした。');
  renderResult(result,request,revision);
+ try{sessionStorage.setItem(missingFormKey,JSON.stringify(request));}catch{}
 }
 function simulate(condition,request){
  const revision=displayed.revision;
@@ -600,7 +616,29 @@ async function connect(manual){
   if(!data.ready||!data.species)throw Error(data.error||'ポケモンの一覧を準備中です。');
   moves=data.moves||{};speciesList(data.species);
   $('credential').value='';$('login').hidden=true;$('workspace').hidden=false;
-  reference=buildEditor($('reference'),'基準個体',{open:true});addScenario(false);
+  let savedForm=null;
+  try{
+   const raw=sessionStorage.getItem(missingFormKey);
+   if(raw&&raw.length<=32768){
+    const candidate=JSON.parse(raw);
+    if(candidate?.action==='evaluate'&&Array.isArray(candidate.candidates)&&
+       candidate.candidates.length>=1&&candidate.candidates.length<=8&&
+       Array.isArray(candidate.scenarios)&&candidate.scenarios.length>=1&&
+       candidate.scenarios.length<=6)savedForm=candidate;
+   }
+  }catch{}
+  reference=buildEditor($('reference'),'基準個体',{open:true,
+   initial:savedForm?.candidates[0]});
+  if(savedForm){
+   for(const condition of savedForm.scenarios)addScenario(false,condition);
+   for(const [index,candidate] of savedForm.candidates.slice(1).entries()){
+    const editor=buildEditor($('alternatives'),'比較個体',{initial:candidate,
+     removable:el=>removeEditor(alternatives,el)});
+    alternatives.push(editor);
+   }
+   if(roles[savedForm.role?.role_id])$('role').value=savedForm.role.role_id;
+   if(priorities[savedForm.role?.priority])$('priority').value=String(savedForm.role.priority);
+  }else addScenario(false);
    const linked=linkedTactics();
    const observed=$('tactic-evidence-panel').dataset.observedSearch==='1';
    $('tactic-evidence-panel').hidden=!linked&&!observed;
@@ -612,7 +650,8 @@ async function connect(manual){
      if(/^[a-f0-9]{64}$/.test(link?.search_id))$('observed-search-id').value=link.search_id;
     }catch{}
    }
-  announce('基準個体と対面を入力してください。');
+  announce(savedForm?'前回の比較条件を復元しました。保存済み結果を照合してください。':
+   '基準個体と対面を入力してください。');
  }catch(error){
   credential='';$('login').hidden=false;
   if(error.status===401)announce(manual?'接続キーを確認してください。':'接続キーを入力してください。',manual);
