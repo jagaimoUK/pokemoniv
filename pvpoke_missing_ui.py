@@ -38,7 +38,13 @@ input,select,button{font:inherit;color:inherit;min-height:44px;border:1px solid 
 <section id="tactic-evidence-panel" data-observed-search="0" class="results stack" hidden><h2>Sandbox戦術の根拠</h2>
 <p>標準計算と指定戦術は別の結果です。実戦再現性は未検証で、所持・役割の判定は変更しません。</p>
 <div class="actions"><button id="tactic-evidence-read" type="button" data-action>保存済み戦術を不足分析と照合</button></div>
-<div id="tactic-evidence-results" class="stack"></div></section>
+<div id="tactic-evidence-results" class="stack"></div>
+<div id="observed-evidence-controls" class="stack" hidden>
+<h3>観測履歴の共有方策（試験・参考）</h3>
+<p class="muted">宣言した有限の相手候補と操作条件だけを確認します。通常の判定やランキングは変えません。</p>
+<label>保存済み観測探索ID<input id="observed-search-id" type="text" maxlength="64" pattern="[0-9a-f]{64}" autocomplete="off" spellcheck="false" placeholder="Sandboxから戻ると自動入力"></label>
+<p class="muted">下の個体カードから照合できます。個体・技・開始条件・相手対面が一致しなければ拒否します。</p>
+</div></section>
 <section id="results" class="results stack" aria-labelledby="results-heading" hidden><h2 id="results-heading" tabindex="-1">不足分析の結果</h2><p id="edited" class="muted" hidden>入力が変更されました。表示中の結果は前回の条件です。</p><div id="result-tree"></div></section>
 </div>
 <datalist id="pokemon-list"></datalist>
@@ -59,6 +65,7 @@ let credential='',catalog=Object.create(null),moves={},speciesNames=new Map(),bu
 let reference;
 const alternatives=[],scenarios=[];
 const tacticLinkKey='pokemoniv:tactic-evidence-link-v1';
+const observedLinkKey='pokemoniv:observed-evidence-link-v1';
 
 function node(tag,text,parent,cls){
  const el=document.createElement(tag);
@@ -427,11 +434,18 @@ function renderResult(result,request,revision){
   tag(tags,...(badges[candidate.status]||badges.pending));
   if(candidate.party_substitution==='pending')tag(tags,'パーティでの入替は未評価','wait');
   node('p','技構成　'+moveText(candidate),body,'muted');
+  if($('tactic-evidence-panel').dataset.observedSearch==='1'){
+   const observed=detail(body,'観測戦術の参考結果を確認','match');
+   const controls=node('div',null,observed,'stack');
+   const content=node('div',null,controls,'stack');
+   button(controls,'この個体の保存結果を照合',()=>perform(()=>
+    compareSavedObserved(result.evaluation_id,candidate.build_id,content)),'quiet');
+  }
   node('h3','対面ごとの結果',body);
   for(const condition of candidate.conditions)renderMatch(body,condition,candidate,result,request);
   renderInventory(body,candidate,request);
  }
- displayed={revision};$('edited').hidden=editRevision===revision;$('results').hidden=false;
+ displayed={revision,evaluation_id:result.evaluation_id};$('edited').hidden=editRevision===revision;$('results').hidden=false;
 }
 async function evaluate(request,revision){
  const result=await api('missing-analysis',request);
@@ -527,6 +541,57 @@ async function compareSavedTactics(){
  }
  announce('標準対戦・保有状態を変更せず、保存済み戦術を照合しました。');
 }
+async function compareSavedObserved(evaluationId,buildId,parent){
+ if(!displayed||displayed.evaluation_id!==evaluationId)
+  throw Error('対面条件が変わっています。不足分析をもう一度照合してください。');
+ const id=$('observed-search-id').value.trim();
+ if(!/^[a-f0-9]{64}$/.test(id))throw Error('保存済みの観測探索IDを確認してください。');
+ const result=await api('missing-analysis',{action:'observed_evidence',
+  evaluation_id:evaluationId,search_ids:[id]});
+ if(result.schema!=='missing-observed-evidence-v1'||result.new_battles!==0||
+    result.standard_assessment_unchanged!==true||
+    result.information_fairness!=='not_established'||
+    result.live_reproducibility!=='not_verified'||
+    result.practical_role_covered!==false)
+  throw Error('保存済みの観測証拠を検証できませんでした。');
+ const links=result.links.filter(link=>link.build_id===buildId);
+ if(!links.length)throw Error('この個体と一致する観測戦術が保存されていません。');
+ parent.replaceChildren();
+ for(const link of links){
+  tag(node('div',null,parent,'tags'),'有限シナリオの参考結果','wait');
+  node('p','一致する相手候補 '+link.matching_worlds+'件 ／ 分析外の追加候補 '+
+   link.additional_worlds+'件 ／ 宣言シナリオ '+link.scenario_count+'件 ／ 検証再生 '+link.work+'回',parent,'muted');
+  node('p','情報の公平性・実戦再現性は未検証。相手の全行動を網羅した結果ではありません。',parent,'muted');
+  if(link.policy_scope_truncated||link.stop_reason==='policy_limit'||link.stop_reason==='work_limit')
+   node('p','探索の上限に達しました。未探索の勝ち筋の不存在は証明できません。',parent,'muted');
+  if(link.observed_status==='pending')
+   node('p','探索は途中です。未確認の条件は不明のままです。',parent,'muted');
+  for(const condition of link.conditions){
+   const box=detail(parent,'対面 '+condition.opponent.species_id+' · 盾 '+
+    condition.shields.join(' / '),'match');
+   node('p','通常計算：'+(condition.standard_meets===true?'条件達成':
+    condition.standard_meets===false?'条件未達':'未計算・証拠不足'),box);
+   node('p',condition.aligned_role_ids.length?
+    '同じ役割条件で比べられる観測役割：'+condition.aligned_role_ids.join('、'):
+    '通常評価と観測役割の条件が異なります。直接の勝敗比較は保留です。',box,'muted');
+  }
+  for(const [index,policy] of link.policies.slice(0,8).entries()){
+   const box=detail(parent,'共有方策 '+(index+1)+' · '+
+    (policy.role===true?'宣言範囲で成立':policy.role===false?'条件未達':'未確定'),'match');
+   node('p','検証 '+policy.tested+'件 ／ 未達 '+policy.failed+'件 ／ 不明 '+policy.unknown+'件',box,'muted');
+   for(const role of policy.roles){
+    const floor=role.resource_floor;
+    node('p','役割 '+role.id+'：'+(role.meets===true?'有限範囲で成立':
+     role.meets===false?'条件未達':'判定保留')+
+     ' ／ 成立 '+role.passed+'・未達 '+role.failed+'・不明 '+role.unknown+
+     (floor?' ／ 最低残量HP '+floor.hp+'・盾 '+floor.shields+'・ゲージ '+floor.energy:''),box);
+   }
+  }
+  if(link.evaluation_count>link.policies.length)node('p','表示している方策は一部です。',parent,'muted');
+  node('p','通常ランキング・保有判定・博士送り候補は変更されません。',parent,'muted');
+ }
+ announce('保存済み観測戦術を新規対戦計算なしで照合しました。');
+}
 async function connect(manual){
  if(manual)credential=$('credential').value.trim();
  announce('ポケモンと技の一覧を読み込んでいます。');
@@ -536,7 +601,17 @@ async function connect(manual){
   moves=data.moves||{};speciesList(data.species);
   $('credential').value='';$('login').hidden=true;$('workspace').hidden=false;
   reference=buildEditor($('reference'),'基準個体',{open:true});addScenario(false);
-   $('tactic-evidence-panel').hidden=!linkedTactics();
+   const linked=linkedTactics();
+   const observed=$('tactic-evidence-panel').dataset.observedSearch==='1';
+   $('tactic-evidence-panel').hidden=!linked&&!observed;
+   $('tactic-evidence-read').hidden=!linked;
+   $('observed-evidence-controls').hidden=!observed;
+   if(observed){
+    try{
+     const link=JSON.parse(sessionStorage.getItem(observedLinkKey)||'null');
+     if(/^[a-f0-9]{64}$/.test(link?.search_id))$('observed-search-id').value=link.search_id;
+    }catch{}
+   }
   announce('基準個体と対面を入力してください。');
  }catch(error){
   credential='';$('login').hidden=false;
