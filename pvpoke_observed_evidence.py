@@ -72,6 +72,35 @@ def _policy_condition(policy, scenario_indices, aligned_role_ids):
             "aligned_roles": matches}
 
 
+def _check_receipt_budget(db, owner, search_ids):
+    """Fail before replaying large stored histories; caller owns one DB snapshot."""
+    if not db.execute("SELECT 1 FROM sqlite_schema WHERE name='observed_jobs_v2'").fetchone():
+        raise ValueError("Observed search unavailable for this owner")
+    work_total, bytes_total = 0, 0
+    for search_id in search_ids:
+        row = db.execute(
+            "SELECT cursor FROM observed_jobs_v2 WHERE owner=? AND id=?",
+            (owner, search_id)).fetchone()
+        if row is None:
+            raise ValueError("Observed search unavailable for this owner")
+        cursor = row[0]
+        if type(cursor) is not int or cursor < 0:
+            raise ValueError("Invalid observed search cursor")
+        work_total += cursor
+        if work_total > MAX_COMPARE_RECEIPTS:
+            raise ValueError("Observed evidence too large for one comparison; inspect in Sandbox")
+        receipt_bytes = db.execute(
+            "SELECT COALESCE(SUM(LENGTH(receipt)),0) FROM observed_work_v2 "
+            "WHERE owner=? AND id=?", (owner, search_id)
+        ).fetchone()[0]
+        if type(receipt_bytes) is not int or receipt_bytes < 0:
+            raise ValueError("Invalid observed receipt size")
+        bytes_total += receipt_bytes
+        if bytes_total > MAX_COMPARE_RECEIPT_BYTES:
+            raise ValueError("Observed evidence too large for one comparison; inspect in Sandbox")
+    return work_total, bytes_total
+
+
 def compare_observed(service, evaluation_id, search_ids):
     """Return only stored, exactly matched candidate/scenario evidence."""
     _hash(evaluation_id)
@@ -91,37 +120,21 @@ def compare_observed(service, evaluation_id, search_ids):
             _json_hash(evidence["cells"]) != role["evidence_digest"]):
         raise ValueError("Saved role evidence changed; evaluate it again")
 
-    # A replay cursor can legitimately reach 4096 and each receipt can be
-    # 512 KiB. Check the entire owner-scoped selection using cheap SQLite
-    # aggregates *before* any O(cursor) receipt verification.
-    with service.store._reader() as db:
-        if not db.execute("SELECT 1 FROM sqlite_schema WHERE name='observed_jobs_v2'").fetchone():
-            raise ValueError("Observed search unavailable for this owner")
-        work_total, bytes_total = 0, 0
-        for search_id in search_ids:
-            row = db.execute(
-                "SELECT cursor FROM observed_jobs_v2 WHERE owner=? AND id=?",
-                (service.store.owner_scope, search_id)).fetchone()
-            if row is None:
-                raise ValueError("Observed search unavailable for this owner")
-            cursor = row[0]
-            if type(cursor) is not int or cursor < 0:
-                raise ValueError("Invalid observed search cursor")
-            work_total += cursor
-            if work_total > MAX_COMPARE_RECEIPTS:
-                raise ValueError("Observed evidence too large for one comparison; inspect in Sandbox")
-            receipt_bytes = db.execute(
-                "SELECT COALESCE(SUM(LENGTH(receipt)),0) FROM observed_work_v2 "
-                "WHERE owner=? AND id=?", (service.store.owner_scope, search_id)
-            ).fetchone()[0]
-            if type(receipt_bytes) is not int or receipt_bytes < 0:
-                raise ValueError("Invalid observed receipt size")
-            bytes_total += receipt_bytes
-            if bytes_total > MAX_COMPARE_RECEIPT_BYTES:
-                raise ValueError("Observed evidence too large for one comparison; inspect in Sandbox")
-
     sandbox = SandboxService(service)
     observed = ObservedSearch(sandbox)
+    # The preflight and replay must use one immutable SQLite read snapshot.
+    # Otherwise a concurrent step could append receipts between two readers.
+    with service.store._reader() as db:
+        _check_receipt_budget(db, service.store.owner_scope, search_ids)
+        loaded_jobs = {}
+        for search_id in search_ids:
+            loaded = observed._read(db, search_id)
+            if loaded is None:
+                raise ValueError("Observed search unavailable for this owner")
+            if loaded.get("stale"):
+                raise ValueError("Observed search is stale")
+            loaded_jobs[search_id] = loaded
+
     requirements = role["definition"]["requirements"]
     index = {}
     normalized_by_battle = {}
@@ -156,13 +169,8 @@ def compare_observed(service, evaluation_id, search_ids):
 
     links = []
     for search_id in search_ids:
-        with service.store._reader() as db:
-            loaded = observed._read(db, search_id)
-            if loaded is None:
-                raise ValueError("Observed search unavailable for this owner")
-            if loaded.get("stale"):
-                raise ValueError("Observed search is stale")
-            summary = observed._summary(search_id, loaded)
+        loaded = loaded_jobs[search_id]
+        summary = observed._summary(search_id, loaded)
         keys = {_world_key(entry["battle"]) for entry in loaded["plan"]["manifest"].values()}
         by_condition = {(item["build_id"], item["condition_id"]): item
                         for key in keys for item in index.get(key, [])}

@@ -1,6 +1,8 @@
 """Stage-5 read-only observed-policy integration, entirely synthetic fixtures."""
 import copy
 import hashlib
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import tempfile
 import unittest
@@ -10,7 +12,7 @@ from pvpoke_battle_service import BattleService
 from pvpoke_battle_store import BattleStore
 from pvpoke_direct_backend import DirectMatrixClient
 from pvpoke_missing_analysis import MissingAnalysis
-from pvpoke_observed_evidence import compare_observed, _policy_condition
+from pvpoke_observed_evidence import compare_observed, _policy_condition, _check_receipt_budget
 from pvpoke_observed_search import ObservedSearch
 from pvpoke_role_evaluation import RoleEvaluation, condition_id
 from pvpoke_sandbox import SandboxService
@@ -145,6 +147,59 @@ class MissingObservedEvidenceTests(unittest.TestCase):
                 compare_observed(self.service, role["evaluation_id"], [search_id])
         # A rejected advisory lookup must not delete or alter its saved job.
         self.assertEqual(observed.get(search_id)["work"], 1)
+
+    def test_preflight_boundary_is_inclusive_but_rejects_either_excess(self):
+        # All receipts are synthetic blobs. Only the cheap SQL preflight runs;
+        # opaque bytes are never represented as valid replay results.
+        with sqlite3.connect(":memory:") as db:
+            db.execute("CREATE TABLE observed_jobs_v2(owner TEXT,id TEXT,cursor INTEGER)")
+            db.execute("CREATE TABLE observed_work_v2(owner TEXT,id TEXT,receipt BLOB)")
+            owner, sid = "synthetic-owner", "b" * 64
+            db.execute("INSERT INTO observed_jobs_v2 VALUES (?,?,?)", (owner, sid, 1024))
+            db.executemany("INSERT INTO observed_work_v2 VALUES (?,?,?)",
+                           ((owner, sid, b"x" * 16384) for _ in range(1024)))
+            self.assertEqual(_check_receipt_budget(db, owner, [sid]),
+                             (1024, 16 * 1024 * 1024))
+            with self.assertRaisesRegex(ValueError, "unavailable for this owner"):
+                _check_receipt_budget(db, "another-owner", [sid])
+            db.execute("UPDATE observed_jobs_v2 SET cursor=1025")
+            with self.assertRaisesRegex(ValueError, "too large"):
+                _check_receipt_budget(db, owner, [sid])
+            db.execute("UPDATE observed_jobs_v2 SET cursor=1024")
+            db.execute("UPDATE observed_work_v2 SET receipt=? WHERE rowid=1",
+                       (b"x" * 16385,))
+            with self.assertRaisesRegex(ValueError, "too large"):
+                _check_receipt_budget(db, owner, [sid])
+
+    def test_preflight_and_replay_share_one_sqlite_snapshot(self):
+        role = self.evaluation()
+        sid = self.observed()
+        import pvpoke_observed_evidence as module
+        original_check = module._check_receipt_budget
+        original_read = ObservedSearch._read
+        snapshot = []
+
+        def preflight(db, owner, ids):
+            snapshot.append(db)
+            return original_check(db, owner, ids)
+
+        def load(search, db, search_id):
+            self.assertIs(db, snapshot[0])
+            return original_read(search, db, search_id)
+
+        with patch.object(module, "_check_receipt_budget", side_effect=preflight):
+            with patch.object(ObservedSearch, "_read", autospec=True, side_effect=load):
+                result = compare_observed(self.service, role["evaluation_id"], [sid])
+        self.assertEqual(result["links"][0]["search_id"], sid)
+
+    def test_parallel_readers_return_same_owner_scoped_result(self):
+        role = self.evaluation()
+        sid = self.observed()
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(
+                lambda _: compare_observed(self.service, role["evaluation_id"], [sid]),
+                range(12)))
+        self.assertTrue(all(row == results[0] for row in results))
 
     def test_multiple_saved_jobs_do_not_merge_policies(self):
         role = self.evaluation()
