@@ -129,6 +129,23 @@ class MissingObservedEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "stale"):
                 compare_observed(self.service, role["evaluation_id"], [search_id])
 
+    def test_large_saved_replay_is_rejected_before_deep_verification(self):
+        """One bounded comparison never consumes unrestricted saved receipts."""
+        role = self.evaluation()
+        search_id = self.observed()
+        observed = ObservedSearch(self.sandbox)
+        observed.step(search_id, 0, 1)
+        with patch("pvpoke_observed_evidence.MAX_COMPARE_RECEIPTS", 0):
+            with patch.object(observed, "_read",
+                              side_effect=AssertionError("expensive read must not start")):
+                with self.assertRaisesRegex(ValueError, "too large"):
+                    compare_observed(self.service, role["evaluation_id"], [search_id])
+        with patch("pvpoke_observed_evidence.MAX_COMPARE_RECEIPT_BYTES", 1):
+            with self.assertRaisesRegex(ValueError, "too large"):
+                compare_observed(self.service, role["evaluation_id"], [search_id])
+        # A rejected advisory lookup must not delete or alter its saved job.
+        self.assertEqual(observed.get(search_id)["work"], 1)
+
     def test_multiple_saved_jobs_do_not_merge_policies(self):
         role = self.evaluation()
         ids = [self.observed(horizon=horizon) for horizon in (1, 2)]

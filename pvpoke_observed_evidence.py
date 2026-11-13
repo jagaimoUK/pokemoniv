@@ -13,6 +13,10 @@ from pvpoke_role_evaluation import RoleEvaluation, _hash, condition_id
 from pvpoke_sandbox import SandboxService
 
 SCHEMA = "missing-observed-evidence-v1"
+# This display-only endpoint must not rehydrate multiple large replay ledgers
+# in one authenticated HTTP request. Full histories remain in Sandbox.
+MAX_COMPARE_RECEIPTS = 1024
+MAX_COMPARE_RECEIPT_BYTES = 16 * 1024 * 1024
 OUTCOMES = {"self_win": "self_ko_win", "opponent_win": "opponent_ko_win",
             "simultaneous_ko": "simultaneous_ko"}
 RESOURCES = {"hp": "hp", "energy": "energy", "shields_remaining": "shields"}
@@ -87,10 +91,40 @@ def compare_observed(service, evaluation_id, search_ids):
             _json_hash(evidence["cells"]) != role["evidence_digest"]):
         raise ValueError("Saved role evidence changed; evaluate it again")
 
+    # A replay cursor can legitimately reach 4096 and each receipt can be
+    # 512 KiB. Check the entire owner-scoped selection using cheap SQLite
+    # aggregates *before* any O(cursor) receipt verification.
+    with service.store._reader() as db:
+        if not db.execute("SELECT 1 FROM sqlite_schema WHERE name='observed_jobs_v2'").fetchone():
+            raise ValueError("Observed search unavailable for this owner")
+        work_total, bytes_total = 0, 0
+        for search_id in search_ids:
+            row = db.execute(
+                "SELECT cursor FROM observed_jobs_v2 WHERE owner=? AND id=?",
+                (service.store.owner_scope, search_id)).fetchone()
+            if row is None:
+                raise ValueError("Observed search unavailable for this owner")
+            cursor = row[0]
+            if type(cursor) is not int or cursor < 0:
+                raise ValueError("Invalid observed search cursor")
+            work_total += cursor
+            if work_total > MAX_COMPARE_RECEIPTS:
+                raise ValueError("Observed evidence too large for one comparison; inspect in Sandbox")
+            receipt_bytes = db.execute(
+                "SELECT COALESCE(SUM(LENGTH(receipt)),0) FROM observed_work_v2 "
+                "WHERE owner=? AND id=?", (service.store.owner_scope, search_id)
+            ).fetchone()[0]
+            if type(receipt_bytes) is not int or receipt_bytes < 0:
+                raise ValueError("Invalid observed receipt size")
+            bytes_total += receipt_bytes
+            if bytes_total > MAX_COMPARE_RECEIPT_BYTES:
+                raise ValueError("Observed evidence too large for one comparison; inspect in Sandbox")
+
     sandbox = SandboxService(service)
     observed = ObservedSearch(sandbox)
     requirements = role["definition"]["requirements"]
     index = {}
+    normalized_by_battle = {}
     for cell in evidence["cells"]:
         slots = [condition_id(cell["spec"])]
         if cell.get("starts_at_full_hp"):
@@ -99,14 +133,17 @@ def compare_observed(service, evaluation_id, search_ids):
             if slot not in requirements:
                 continue
             spec = cell["spec"]
-            try:
-                _, payload = sandbox.prepare({"schema": spec["schema"], "mode": "sandbox",
-                                              "rules": spec["rules"], "combatants": spec["combatants"]})
-            except UnsupportedBattle:
-                # Standard matchups can include forms the experimental Sandbox
-                # explicitly does not support. Do not hide valid other matches.
+            if cell["battle_key"] not in normalized_by_battle:
+                try:
+                    _, payload = sandbox.prepare({"schema": spec["schema"], "mode": "sandbox",
+                                                  "rules": spec["rules"], "combatants": spec["combatants"]})
+                    normalized_by_battle[cell["battle_key"]] = _world_key(payload)
+                except UnsupportedBattle:
+                    # A valid standard matchup may lack Sandbox support.
+                    normalized_by_battle[cell["battle_key"]] = None
+            key = normalized_by_battle[cell["battle_key"]]
+            if key is None:
                 continue
-            key = _world_key(payload)
             check = next((candidate["checks"].get(slot) for candidate in role["candidates"]
                           if candidate["build_id"] == cell["build_id"]), None)
             index.setdefault(key, []).append({
