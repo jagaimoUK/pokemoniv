@@ -139,3 +139,66 @@ class ObservedSearchTests(unittest.TestCase):
                     break
         with self.assertRaisesRegex(ValueError, "differs from native move ledger"):
             service.get(search_id)
+
+    def test_extended_job_survives_backup_restore_and_sqlite_full(self):
+        from contextlib import contextmanager
+        import sqlite3
+        from unittest.mock import patch
+        from pvpoke_battle_store import BattleStore
+        from pvpoke_observed_search import ObservedSearch
+        from test_observed_native_runner import NativeObservedMultiTurnTests
+        from test_sandbox import scripted_spec
+        from tools.cloud_migration_backup import backup, restore
+
+        fixture = NativeObservedMultiTurnTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        root = fixture.sandbox.store.path.parent
+        volume = root / "observed-volume"
+        service = ObservedSearch(fixture.sandbox)
+        service.store = BattleStore(volume / "battle_analysis.sqlite3")
+        spec = scripted_spec(energy=100, shield=0)
+        spec.update(actions=[], shield_decisions=[])
+        spec["combatants"][1]["initial"]["hp"] = 1
+        controllers = [{"attack": "charge_if_ready", "shield": "never"}]
+        branches = [{"fast_delay": 0, "miss_first_fast": False, "reverse_fast_batch": False}]
+        roles = [{"id": "win_with_reserve", "priority": 1,
+                  "outcomes": ["self_ko_win"], "minimum": {"energy": 60}}]
+        legacy = service.start([spec], controllers, branches, 1)
+        self.assertEqual(service.start([spec], controllers, branches, 1)["search_id"], legacy["search_id"])
+        job = service.start([spec], controllers, branches, 1, roles)
+        self.assertNotEqual(job["search_id"], legacy["search_id"])
+        before = service.step(job["search_id"], 0, 3)
+        self.assertGreater(before["evaluation_count"], 0)
+        bundle, restored = root / "observed-backup", root / "observed-restored"
+        backup({"volume": volume}, bundle)
+        restore(bundle, restored)
+        service.store = BattleStore(restored / "volume" / service.store.path.name)
+        self.assertEqual(service.get(job["search_id"]), before)
+        writer = service.store._writer
+
+        @contextmanager
+        def full_writer():
+            with writer() as db:
+                db.execute("PRAGMA max_page_count = " + str(db.execute("PRAGMA page_count").fetchone()[0]))
+                db.execute("""CREATE TEMP TRIGGER force_full AFTER INSERT ON observed_work_v2
+                              BEGIN UPDATE observed_jobs_v2 SET plan=randomblob(1048576); END""")
+                yield db
+
+        with patch.object(service.store, "_writer", full_writer):
+            with self.assertRaises(sqlite3.OperationalError) as error:
+                service.step(job["search_id"], before["work"], 1)
+        self.assertEqual(error.exception.sqlite_errorcode, sqlite3.SQLITE_FULL)
+        self.assertEqual(service.get(job["search_id"]), before)
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(2) as pool:
+            results = list(pool.map(lambda _: service.step(job["search_id"], before["work"], 1), range(2)))
+        self.assertEqual([r["work"] for r in results], [before["work"] + 1] * 2)
+        with patch("pvpoke_observed_search.native_replay",
+                   return_value=({"status": "unknown", "reason": "runner_unavailable"}, 0)):
+            failed = service.step(job["search_id"], before["work"] + 1, 1)
+        self.assertIs(failed["role"], True)
+        self.assertTrue(any("runner_unavailable" in row["outcomes"] for row in failed["evaluations"]))
+        done = service.get(job["search_id"])
+        self.assertIs(done["role"], True)
+        self.assertGreater(done["work"], before["work"])

@@ -160,8 +160,8 @@ def app_operation(service, payload):
         from pvpoke_observed_search import ObservedSearch
         search = ObservedSearch(sandbox)
         if action == 'observed_start':
-            _object(payload, 'start observed search', ('action', 'worlds', 'controllers', 'branches', 'horizon'))
-            return search.start(*(payload[k] for k in ('worlds', 'controllers', 'branches', 'horizon')))
+            _object(payload, 'start observed search', ('action', 'worlds', 'controllers', 'branches', 'horizon'), ('roles',))
+            return search.start(*(payload[k] for k in ('worlds', 'controllers', 'branches', 'horizon')), roles=payload.get('roles'))
         required = ('action', 'search_id')
         if action == 'observed_step':
             _object(payload, 'advance observed search', (*required, 'expected_work', 'budget'))

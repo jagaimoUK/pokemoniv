@@ -138,7 +138,14 @@ th{color:var(--text-muted);font-weight:600}
 <section id="observed-panel" class="panel stack" data-observed-search="0" hidden>
 <details class="stack tight" id="observed-details">
 <summary>観測履歴で戦術を探索（試験版）</summary>
-<p class="muted">現在の相手設定に対し、即時観測と通常技の通知が遅れる条件で、同じ方策を検証します。実機での再現性は未確認です。不足分析の判定には反映しません。</p>
+<p class="muted">同じ種族・フォルムと開始シールド枚数の相手候補を、同じ方策で検証します。実機での再現性は未確認です。不足分析の判定には反映しません。</p>
+<div class="row">
+<button id="observed-add" type="button" data-request>現在の相手を候補に追加</button>
+</div>
+<div id="observed-opponents" class="stack tight"></div>
+<label>検証ターン上限<input id="observed-horizon" type="number" min="1" max="500" value="500" required></label>
+<div class="row"><button id="observed-add-role" type="button" data-request>役割条件を追加</button></div>
+<div id="observed-roles" class="stack tight"></div>
 <div class="row">
 <button id="observed-start" type="button" data-request>現在の条件で開始</button>
 <button id="observed-step" type="button" data-request>最大8回を検証</button>
@@ -146,6 +153,7 @@ th{color:var(--text-muted);font-weight:600}
 <button id="observed-resume" type="button" data-request>再開</button>
 <button id="observed-get" type="button" data-request>前回の探索を取得</button>
 </div>
+<div id="observed-results" class="stack tight"></div>
 <p id="observed-status" class="notice" role="status" aria-live="polite">探索を開始してください。</p>
 </details>
 </section>
@@ -313,11 +321,11 @@ function fromSpec(spec,tacticId=newId(),historicalRevision=null){
   actions:spec.mode==='sandbox'?clone(spec.actions||[]):[],shield_decisions:spec.mode==='sandbox'?clone(spec.shield_decisions||[]):[]
  };
 }
-function makeBuildEditor(parent,i){
- const initial=draft.combatants[i];
+function makeBuildEditor(parent,i,alternative=null){
+ const initial=alternative||draft.combatants[i];
  const details=node('details',null,parent,'inset side-'+i);
  details.open=!initial.species;
- const heading=node('summary',buildHeading(i),details,'side-title');
+ const heading=node('summary',alternative?'追加の相手候補':buildHeading(i),details,'side-title');
  const fields=node('fieldset',null,details,'stack tight');
  const species=input(fields,'ポケモン・フォルム',{type:'text',required:true,autocomplete:'off',value:initial.species,placeholder:'例：マリルリ'});
  species.setAttribute('list','species-list');
@@ -368,13 +376,14 @@ function makeBuildEditor(parent,i){
    initial:{hp:hp.value,energy:energy.value,shields:shields.value,stages:stages.map(field=>field.value)}};
  }
  function summarize(){
-  heading.textContent=buildHeading(i);
+  heading.textContent=alternative?'追加候補 · '+(species.value||'未指定')+' · ゲージ '+energy.value:buildHeading(i);
   conditionHeading.textContent='開始条件 · HP '+(hp.value||'満タン')+' · ゲージ '+energy.value+
    ' · シールド '+shields.value+' · 攻防 '+stages.map(field=>field.value).join('/');
  }
  species.addEventListener('input',()=>{renderMoves(null,true);validate();});
  fields.addEventListener('change',()=>{
   renderMoves(null,true);validate();
+  if(alternative){summarize();return;}
   const next={...draft,combatants:draft.combatants.map((side,n)=>n===i?read():side)};
   if(commitDraft(next)){
    summarize();
@@ -384,7 +393,7 @@ function makeBuildEditor(parent,i){
  renderMoves(initial.moves,false);
  validate();
  summarize();
- return {details,validate};
+ return {details,validate,read,fields};
 }
 function renderSetup(preserveOpen=true){
  const open=setupEditors.map(editor=>editor.details.open);
@@ -392,14 +401,17 @@ function renderSetup(preserveOpen=true){
  setupEditors=sides.map((_,i)=>makeBuildEditor($('setup'),i));
  if(preserveOpen)setupEditors.forEach((editor,i)=>{editor.details.open=open[i]??editor.details.open;});
 }
-function buildSpec(mode){
- for(const editor of setupEditors)editor.validate();
- if(!$('setup').reportValidity())return null;
- const spec={schema:'battle-spec-v1',rules:clone(draft.rules),mode,combatants:draft.combatants.map(side=>({
+function battleSide(side){
+ return {
   species_id:speciesId(side.species),ivs:Object.fromEntries(Object.entries(side.ivs).map(([key,value])=>[key,Number(value)])),
   level:Number(side.level),moves:clone(side.moves),initial:{hp:side.initial.hp===''?'full':Number(side.initial.hp),
    energy:Number(side.initial.energy),shields:Number(side.initial.shields),stages:side.initial.stages.map(Number)}
- }))};
+ };
+}
+function buildSpec(mode){
+ for(const editor of setupEditors)editor.validate();
+ if(!$('setup').reportValidity())return null;
+ const spec={schema:'battle-spec-v1',rules:clone(draft.rules),mode,combatants:draft.combatants.map(battleSide)};
  if(mode==='sandbox'){
   const incompatible=draft.actions.find(action=>action.kind!=='wait'&&
    (action.kind==='fast'?action.move_id!==spec.combatants[action.actor].moves.fast:!spec.combatants[action.actor].moves.charged.includes(action.move_id)));
@@ -779,6 +791,91 @@ function showTacticProgress(data){
 }
 const observedStorage='pokemoniv:observed-search-v2';
 let observedJob=null;
+const observedOpponents=[],observedRoles=[];
+let roleNumber=0;
+const observedOutcomes={self_ko_win:'勝利',opponent_ko_win:'敗北',simultaneous_ko:'同時KO',timeout:'時間切れ'};
+function addObservedOpponent(){
+ if(observedOpponents.length>=31)throw Error('相手候補は合計32件までです。');
+ const editor=makeBuildEditor($('observed-opponents'),1,clone(draft.combatants[1]));
+ observedOpponents.push(editor);
+ editor.details.open=true;
+ const remove=node('button','この候補を削除',editor.details);
+ remove.type='button';
+ remove.addEventListener('click',()=>{observedOpponents.splice(observedOpponents.indexOf(editor),1);editor.details.remove();});
+}
+function addObservedRole(){
+ if(observedRoles.length>=8)throw Error('役割は8件までです。');
+ const id='role_'+(++roleNumber);
+ const details=node('details',null,$('observed-roles'),'inset');
+ node('summary','役割 '+roleNumber,details);
+ details.open=true;
+ const priority=input(details,'優先度',{type:'number',min:0,max:1000,value:1,required:true});
+ const checks=Object.entries(observedOutcomes).map(([value,label])=>{
+  const checkbox=input(details,label,{type:'checkbox'});
+  checkbox.checked=value==='self_ko_win';
+  return [value,checkbox];
+ });
+ const minima=Object.entries({hp:['最低HP',10000],shields:['最低シールド',2],energy:['最低ゲージ',100]})
+  .map(([key,[label,max]])=>[key,input(details,label,{type:'number',min:0,max,value:0,required:true})]);
+ const role={read(){
+  if(![priority,...minima.map(([,field])=>field)].every(field=>field.reportValidity()))
+   throw Error('役割の数値を確認してください。');
+  const outcomes=checks.filter(([,checkbox])=>checkbox.checked).map(([value])=>value);
+  if(!outcomes.length)throw Error('役割ごとに許容する対戦結果を選択してください。');
+  return {id,priority:priority.valueAsNumber,outcomes,
+   minimum:Object.fromEntries(minima.map(([key,field])=>[key,field.valueAsNumber]))};
+ }};
+ observedRoles.push(role);
+ const remove=node('button','この役割を削除',details);
+ remove.type='button';
+ remove.addEventListener('click',()=>{observedRoles.splice(observedRoles.indexOf(role),1);details.remove();});
+}
+function showObservedResults(data){
+ const root=$('observed-results');
+ root.replaceChildren();
+ if(!data.roles)return;
+ for(const [i,world] of data.worlds.entries()){
+  const opponent=world.opponent;
+  node('p','候補 '+(i+1)+' · '+name(opponent.species)+' · 個体値 '+[opponent.atk,opponent.def,opponent.hp].join('/'),root,'muted');
+ }
+ const cards=[...data.evaluations];
+ if(data.active_coverage)cards.push(data.active_coverage);
+ for(const [i,policy] of cards.entries()){
+  const details=node('details',null,root,'inset');
+  const number=data.policy_numbers[i];
+  node('summary',number?'方策 '+number:'現在の検証途中',details);
+  for(const role of policy.roles){
+   const label=role.meets===true?'成立':role.meets===false?'未達を確認':'未確定';
+   const floor=role.resource_floor;
+   node('p',role.id+' · '+label+' · 成立 '+role.passed+' / 未達 '+role.failed+' / 未確認 '+role.unknown+
+    (role.worst_outcome?' · 最悪結果 '+observedOutcomes[role.worst_outcome]:'')+
+    (floor?' · 最低残量 HP '+floor.hp+' / 盾 '+floor.shields+' / ゲージ '+floor.energy:''),details);
+  }
+  data.worlds.forEach((_,world)=>{
+   const outcomes=data.scenario_worlds.flatMap((number,index)=>number===world+1?[policy.outcomes[index]]:[]);
+   const counts={};
+   for(const outcome of outcomes){
+    const limited=['wall_limit','memory_limit','history_limit'].includes(outcome);
+    const label=observedOutcomes[outcome]||(limited?'計算上限で未完了':outcome?'未対応・再生失敗':
+     ['policy_limit','work_limit'].includes(data.stop_reason)?'探索上限で未探索':'未探索');
+    counts[label]=(counts[label]||0)+1;
+   }
+   node('p','候補 '+(world+1)+' · '+Object.entries(counts).map(([label,n])=>label+' '+n).join(' / '),details,'muted');
+   for(const role of policy.roles){
+    const matches=data.scenario_worlds.flatMap((number,index)=>number===world+1?[role.scenario_meets[index]]:[]);
+    const failed=matches.filter(result=>result===false).length;
+    const pending=matches.filter(result=>result==null).length;
+    node('p',role.id+' · '+(failed?'条件未達 '+failed+'件':pending?'未確定':'全条件で成立'),details,'muted');
+   }
+  });
+ }
+ if(data.comparisons.length){
+  const details=node('details',null,root,'inset');
+  node('summary','表示中の方策を比較',details);
+  const labels={better:'左が優位',worse:'右が優位',equal:'同等',incomparable:'優劣保留'};
+  for(const pair of data.comparisons)node('p','方策 '+pair.left+' と '+pair.right+' · '+labels[pair.order],details);
+ }
+}
 function renderObserved(data){
  observedJob=data;
  const reason={policy_limit:'方策数の上限',work_limit:'再生回数の上限',
@@ -790,11 +887,25 @@ function renderObserved(data){
   role+' · 再生 '+data.work+' 回 · '+data.scenario_count+' シナリオ'+
   (data.paused?' · 一時停止中':data.stop_reason?' · '+(reason[data.stop_reason]||'停止'):' · 検証を続けられます');
  $('observed-status').textContent=status;
+ showObservedResults(data);
  try{sessionStorage.setItem(observedStorage,data.search_id);}catch{}
 }
 async function beginObserved(spec){
  const {actions,shield_decisions,policies,...battle}=spec;
- const data=await api('sandbox',{action:'observed_start',worlds:[battle],horizon:500,
+ const horizon=$('observed-horizon');
+ if(!horizon.reportValidity())return;
+ const worlds=[battle];
+ for(const editor of observedOpponents){
+  editor.validate();
+  if(!editor.fields.reportValidity()){editor.details.open=true;return;}
+  const opponent=battleSide(editor.read());
+  if(opponent.species_id!==battle.combatants[1].species_id||opponent.initial.shields!==battle.combatants[1].initial.shields)
+   throw Error('追加候補は現在の相手と同じ種族・フォルム・開始シールド枚数を指定してください。');
+  worlds.push({...battle,combatants:[battle.combatants[0],opponent]});
+ }
+ const roles=observedRoles.length?observedRoles.map(role=>role.read()):
+  [{id:'win',priority:1,outcomes:['self_ko_win'],minimum:{}}];
+ const data=await api('sandbox',{action:'observed_start',worlds,roles,horizon:horizon.valueAsNumber,
   controllers:[{attack:'standard',shield:'standard'},{attack:'charge_if_ready',shield:'never'}],
   branches:[{fast_delay:0,miss_first_fast:false,reverse_fast_batch:false},
    {fast_delay:1,miss_first_fast:true,reverse_fast_batch:false}]});
@@ -941,6 +1052,8 @@ $('action-form').addEventListener('submit',editAction);
 $('remove-action').addEventListener('click',removeAction);
 $('simulate').addEventListener('click',()=>withSpec('sandbox',simulate));
 $('standard').addEventListener('click',()=>withSpec('standard',simulateStandard));
+$('observed-add').addEventListener('click',()=>perform(addObservedOpponent));
+$('observed-add-role').addEventListener('click',()=>perform(addObservedRole));
 $('observed-start').addEventListener('click',()=>withSpec('standard',spec=>beginObserved({...spec,mode:'sandbox'})));
 for(const operation of ['step','stop','resume','get']){
  $('observed-'+operation).addEventListener('click',()=>perform(()=>observedOperation('observed_'+operation)));

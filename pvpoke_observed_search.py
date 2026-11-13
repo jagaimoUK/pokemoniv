@@ -14,6 +14,11 @@ from pvpoke_child_env import child_environment
 from pvpoke_observed_audit import audit_v2
 from pvpoke_observed_observation import Context, FLAGS, MODEL, ObservationV2, canonical, digest, integer
 
+from pvpoke_observed_roles import KNOWN, VERSION as ROLE_VERSION, compare, evaluate_roles, normalize_roles
+
+# The prior search module is part of existing persisted plan identities.
+LEGACY_SEARCH_HASH = "1e31f67621e7f18430059a92f701eaed2822e98b0b4c55c45071c94fa9a56340"
+
 RUNNER = Path(__file__).with_name("pvpoke_observed_native_runner.js")
 MAX_WORK = 4096
 MAX_POLICIES = 64
@@ -33,8 +38,9 @@ def initial_state():
 
 
 class Search:
-    def __init__(self, context, scenarios):
+    def __init__(self, context, scenarios, roles=None):
         self.context = context
+        self.roles = roles
         self.scenarios = tuple(sorted(scenarios))
         if (not 1 <= len(self.scenarios) <= 32 * 8 * 4
                 or len(set(self.scenarios)) != len(self.scenarios)):
@@ -84,14 +90,19 @@ class Search:
 
     def evaluate(self, item):
         cells = item["cells"]
-        known = [c for c in cells if c["outcome"] in OUTCOMES]
+        known = [c for c in cells if c["outcome"] in (KNOWN if self.roles else OUTCOMES)]
         unknown = len(cells) - len(known) + len(self.scenarios) - len(cells)
-        failed = sum(c["outcome"] != "self_ko_win" for c in known)
+        roles = evaluate_roles(self.roles, cells, len(self.scenarios)) if self.roles else None
+        failed = (sum(any(role["scenario_meets"][i] is False for role in roles)
+                      for i in range(len(cells))) if roles else
+                  sum(c["outcome"] != "self_ko_win" for c in known))
         return {
+            **({"roles": roles} if roles else {}),
             "policy_hash": digest([self.context.key, item["table"]]),
             "policy": item["table"], "tested": len(known), "failed": failed, "unknown": unknown,
-            "role": False if failed else None if unknown else True,
-            "worst_outcome": None if unknown else min((c["outcome"] for c in known), key=OUTCOMES.index),
+            "role": (False if any(r["meets"] is False for r in roles) else
+                     None if unknown else True) if roles else (False if failed else None if unknown else True),
+            "worst_outcome": roles[0]["worst_outcome"] if roles else None if unknown else min((c["outcome"] for c in known), key=OUTCOMES.index),
             "resources": [c["terminal"][0] for c in known],
             "outcomes": [c["outcome"] for c in cells],
             "expected_value": None, "scope_complete": not unknown,
@@ -223,7 +234,7 @@ def _move_data(sandbox):
     return {row["moveId"]: row for row in gm["moves"]}
 
 
-def prepare(sandbox, worlds, controllers, branches, horizon):
+def prepare(sandbox, worlds, controllers, branches, horizon, roles=None):
     """Normalize all declared worlds through the existing Sandbox contract."""
     if (type(worlds) is not list or not 1 <= len(worlds) <= 32
             or type(controllers) is not list or not 1 <= len(controllers) <= 8
@@ -263,17 +274,25 @@ def prepare(sandbox, worlds, controllers, branches, horizon):
                         or any(type(branch[k]) is not bool for k in ("miss_first_fast", "reverse_fast_batch"))):
                     raise ValueError("Invalid observation branch")
                 entry = {"battle": payload, "controller": controller, "branch": branch}
+                if roles is not None:
+                    entry["world_id"] = digest(payload)
                 manifest[digest(entry)] = entry
-    return context, {"schema": SCHEMA, "versions": versions(sandbox), "context": asdict(context),
+    return context, {"schema": SCHEMA, "versions": versions(sandbox, roles is not None),
+                     **({"roles": normalize_roles(roles)} if roles is not None else {}), "context": asdict(context),
                      "manifest": manifest, "horizon": horizon}
 
 
-def versions(sandbox):
+def versions(sandbox, extended=False):
     sandbox._check_inputs()
-    return {**sandbox.versions, "observation_model": MODEL, "role": "self_ko_win-v1",
-                "adapter": digest([content_hash(path) for path in
-                    (RUNNER, Path(__file__), Path(__file__).with_name("pvpoke_observed_audit.py"),
-                     Path(__file__).with_name("pvpoke_observed_observation.py"))])}
+    paths = (RUNNER, Path(__file__), Path(__file__).with_name("pvpoke_observed_audit.py"),
+             Path(__file__).with_name("pvpoke_observed_observation.py"))
+    hashes = [content_hash(path) for path in paths]
+    if extended:
+        hashes.append(content_hash(Path(__file__).with_name("pvpoke_observed_roles.py")))
+    else:
+        hashes[1] = LEGACY_SEARCH_HASH
+    return {**sandbox.versions, "observation_model": MODEL,
+            "role": ROLE_VERSION if extended else "self_ko_win-v1", "adapter": digest(hashes)}
 
 
 def replay(sandbox, context, plan, scenario, item, timeout):
@@ -313,8 +332,8 @@ class ObservedSearch:
         self.sandbox = sandbox
         self.store = sandbox.store
 
-    def start(self, worlds, controllers, branches, horizon):
-        _, plan = prepare(self.sandbox, worlds, controllers, branches, horizon)
+    def start(self, worlds, controllers, branches, horizon, roles=None):
+        _, plan = prepare(self.sandbox, worlds, controllers, branches, horizon, roles)
         body = canonical(plan)
         if len(body) > 1024 * 1024:
             raise ValueError("Observed plan exceeds storage limit")
@@ -348,12 +367,12 @@ class ObservedSearch:
         plan = json.loads(body)
         if digest(plan) != search_id or plan.get("schema") != SCHEMA:
             raise BattleStoreError("Invalid observed plan")
-        if plan["versions"] != versions(self.sandbox):
+        if plan["versions"] != versions(self.sandbox, "roles" in plan):
             return {"stale": True}
         data = plan["context"]
         context = Context(**{**data, "costs": tuple(data["costs"]),
                              "initial_shields": tuple(data["initial_shields"])})
-        search = Search(context, plan["manifest"])
+        search = Search(context, plan["manifest"], normalize_roles(plan["roles"]) if "roles" in plan else None)
         state = initial_state()
         move_data = None
         rows = db.execute("""SELECT position,work_id,receipt,digest,rss FROM observed_work_v2
@@ -392,7 +411,28 @@ class ObservedSearch:
         evaluations = state["evaluations"]
         role = True if any(e["role"] is True for e in evaluations) else (
             False if state["stop_reason"] == "no_policy_in_declared_class" else None)
-        return {"search_id": search_id, "schema": SCHEMA, "work": state["work"],
+        extra = {}
+        if loaded["search"].roles:
+            candidates = []
+            for index, candidate in enumerate(evaluations):
+                if not any(compare(other, candidate) == "better" for other in evaluations if other is not candidate):
+                    candidates.append(index)
+            ordered = candidates + [i for i in range(len(evaluations)) if i not in candidates]
+            manifest = loaded["plan"]["manifest"]
+            world_ids = sorted({entry["world_id"] for entry in manifest.values()})
+            representatives = {entry["world_id"]: entry["battle"]["opponent"] for entry in manifest.values()}
+            world_numbers = {wid: i for i, wid in enumerate(world_ids, 1)}
+            extra = {"roles": loaded["search"].roles,
+                     "worlds": [{"id": wid, "opponent": representatives[wid]} for wid in world_ids],
+                     "scenario_worlds": [world_numbers[manifest[key]["world_id"]]
+                                         for key in loaded["search"].scenarios],
+                     "active_coverage": (loaded["search"].evaluate(state["frontier"][-1])
+                                         if state["frontier"] else None), "undominated_count": len(candidates),
+                     "comparisons": [{"left": i + 1, "right": j + 1, "order": compare(evaluations[i], evaluations[j])}
+                                     for n, i in enumerate(ordered[:8]) for j in ordered[:8][n+1:]],
+                     "policy_numbers": [i + 1 for i in ordered[:8]]}
+            evaluations = [evaluations[i] for i in ordered]
+        return {**extra, "search_id": search_id, "schema": SCHEMA, "work": state["work"],
                 "scenario_count": len(loaded["search"].scenarios), "paused": loaded["paused"],
                 "stop_reason": state["stop_reason"], "role": role, "expected_value": None,
                 "evaluations": evaluations[:8], "evaluation_count": len(evaluations),
