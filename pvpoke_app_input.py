@@ -248,8 +248,10 @@ def parse_import(text: str, catalog: dict, current: dict | None = None,
             if moves is None:
                 # An explicit form choice takes precedence only for unnamed input.
                 # Named species use their saved enabled movesets before a catalog default.
-                registered = selected_registered(sid)
-                if part['species'] is None and sid == current.get('species') and all(current.get(k) for k in FIELDS[1:]):
+                use_current = (part['species'] is None and sid == current.get('species')
+                               and all(current.get(k) for k in FIELDS[1:]))
+                registered = [] if use_current else selected_registered(sid)
+                if use_current:
                     moves = tuple(current[k].upper() for k in FIELDS[1:])
                     source = '現在フォームの技構成'
                 elif registered:
