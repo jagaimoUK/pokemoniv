@@ -92,8 +92,8 @@ class AppInputTests(unittest.TestCase):
              'charged1': 'DARK_PULSE', 'charged2': 'CRUNCH', 'enabled': True},
         ]}
         with self.assertRaisesRegex(ValueError, '検証済みの推奨技がありません'):
-            parse_import('個体値厳選\\n# モノズ\\n0,11,12', catalog)
-        result = parse_import('個体値厳選\\n# モノズ\\n0,11,12', catalog,
+            parse_import('個体値厳選\n# モノズ\n0,11,12', catalog)
+        result = parse_import('個体値厳選\n# モノズ\n0,11,12', catalog,
                               registered_movesets=registered)
         self.assertEqual(result['candidate'], {
             'species': 'deino', 'fast': 'DRAGON_BREATH',
@@ -105,7 +105,7 @@ class AppInputTests(unittest.TestCase):
         preferred = {**catalog, 'species': {'deino': {
             **deino, 'default_moves': {'fast': 'DRAGON_BREATH',
                                       'charged1': 'BODY_SLAM', 'charged2': 'DARK_PULSE'}}}}
-        selected = parse_import('# モノズ\\n0,11,12', preferred,
+        selected = parse_import('# モノズ\n0,11,12', preferred,
                                 registered_movesets=registered)
         self.assertEqual(selected['candidate']['charged2'], 'CRUNCH')
 
@@ -116,12 +116,12 @@ class AppInputTests(unittest.TestCase):
         catalog = {'species': {'deino': deino}, 'presets': []}
         selected = {'deino': [{'species': 'deino', 'fast': 'DRAGON_BREATH',
                                'charged1': 'BODY_SLAM', 'charged2': 'CRUNCH'}]}
-        explicit = parse_import('# モノズ\\nDRAGON_BREATH,BODY_SLAM,DARK_PULSE\\n0,11,12',
+        explicit = parse_import('# モノズ\nDRAGON_BREATH,BODY_SLAM,DARK_PULSE\n0,11,12',
                                 catalog, registered_movesets=selected)
         self.assertEqual(explicit['candidate']['charged2'], 'DARK_PULSE')
         # Disabled configurations do not bypass missing recommendations.
         with self.assertRaisesRegex(ValueError, '検証済みの推奨技がありません'):
-            parse_import('# モノズ\\n0,11,12', catalog,
+            parse_import('# モノズ\n0,11,12', catalog,
                          registered_movesets={'deino': [{**selected['deino'][0], 'enabled': False}]})
         for invalid in (
             {'deino': [{**selected['deino'][0], 'fast': 'NOT_A_MOVE'}]},
@@ -129,9 +129,9 @@ class AppInputTests(unittest.TestCase):
             {'deino': 'not-a-list'},
         ):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, '登録技構成'):
-                parse_import('# モノズ\\n0,11,12', catalog, registered_movesets=invalid)
+                parse_import('# モノズ\n0,11,12', catalog, registered_movesets=invalid)
         with self.assertRaisesRegex(ValueError, '登録技構成'):
-            parse_import('# モノズ\\n0,11,12', catalog, registered_movesets=['bad'])
+            parse_import('# モノズ\n0,11,12', catalog, registered_movesets=['bad'])
 
     def test_saved_movesets_preserve_mixed_species_separation(self):
         species = {'quagsire': SPECIES['quagsire'],
@@ -139,7 +139,7 @@ class AppInputTests(unittest.TestCase):
                              'fastMoves': ['DRAGON_BREATH'], 'chargedMoves': ['BODY_SLAM', 'CRUNCH']}}
         chosen = {'deino': [{'species': 'deino', 'fast': 'DRAGON_BREATH',
                              'charged1': 'BODY_SLAM', 'charged2': 'CRUNCH'}]}
-        result = parse_import('# モノズ\\n0,11,12\\n# quagsire\\n2,13,14',
+        result = parse_import('# モノズ\n0,11,12\n# quagsire\n2,13,14',
                               {'species': species, 'presets': [CANDIDATE]},
                               registered_movesets=chosen)
         self.assertEqual(result['group_count'], 2)
