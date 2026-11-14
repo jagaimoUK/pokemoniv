@@ -8,7 +8,7 @@ steps. Cloud Run PR #88 remains independent of this migration branch.
 
 Select the new personal Google Cloud project with the available trial credit.
 Create VM `pokemoniv-web` in Tokyo (`asia-northeast1-a`), initially `e2-medium`
-(4 GiB), Ubuntu 24.04 LTS, 40 GiB standard persistent boot disk, Spot off,
+(4 GiB), Debian 13 (Trixie), 40 GiB standard persistent boot disk, Spot off,
 deletion protection on; disable automatic boot disk deletion if available.
 Do **not** check public HTTP/HTTPS firewall options or expose port 8787.
 Review default SSH firewall exposure; prefer IAP and OS Login. Google Cloud
@@ -19,7 +19,7 @@ Verify the price estimate before creating resources.
 
 ```sh
 sudo apt-get update
-sudo apt-get install -y docker.io docker-compose-v2 git openssl
+sudo apt-get install -y docker.io docker-compose git openssl
 sudo systemctl enable --now docker
 sudo docker compose version
 
