@@ -1,3 +1,54 @@
+## 2026-11-14 JST 第8段階継続：Gitleaks誤検出の特定・解消および停止・再開仕様の最終確定（Flash Medium）
+
+作業起点：Draft PR #113（`feature/missing-observed-integration-20261113`）、直前HEAD `6a561f5ee52a192aea5c4928125183baf772d10b`。CI 9件中8件成功、1件失敗（`Security and regression` / `security-regression` ジョブの `Secret scan of reachable Git history` ステップにて `leaks found: 1`）。
+
+### 1. Gitleaks検出の調査結果・原因特定・解消
+
+- **検知対象と原因**:
+  - Gitleaks v8.30.1 のデフォルトルール `generic-api-key` が発報。
+  - 対象ファイル：`tests/test_observed_search.py`
+  - 該当コード：`from pvpoke_observed_observation import history_key` と `ObservationV2` の同一行インポート記述
+  - マッチの機構：
+    - `generic-api-key` は `(?i)[\w.-]{0,50}?(?:access|auth|api|credential|creds|key|...)(?:[ \t\w.-]{0,20})[\s'"]{0,3}(?:=|>|:{1,3}=|\|\||:|=>|\?=|,)[\x60'"\s=]{0,5}([\w.=-]{10,150}...)` に合致し、シャノンエントロピーが 3.5 を超える文字列を API キーとして検出する。
+    - 単語 `history_key` が末尾の `key` に一致し、Python の複数 import を区切る `, ` が区切り記号としてマッチ、続くクラス名 `ObservationV2`（13文字、シャノンエントロピー 3.70 > 3.5、ストップワード非該当）がシークレット値として判定された。
+    - Gitleaks は JS/TS の import 構文（`import { ... } from '...'`）の除外ルールを持つが、Python の複数 import（`from ... import a, B`）の除外ルールを持たないため生じた**完全な偽陽性（False Positive）**。
+- **対応方針**:
+  - 本物の機密情報は一切含まれておらず、テストコードのインポート文による誤検出であることを確認。
+  - Gitleaks 全体の無効化や広範な allowlist 追加は一切行わず、テストコード内のインポート文を単独インポート（`from pvpoke_observed_observation import ObservationV2`。なお `history_key` は同テストファイル上部でインポート済み）に整理することでシグネチャを完全に回避。
+  - `gitleaks.toml` 全222ルールを用いた差分シミュレーションスキャンを実施し、検出件数 0 件（誤検出完全解消）を確認。
+
+### 2. 停止・再開仕様の最終確定
+
+1. **計算中の停止と再開の競合**:
+   - **仕様**: 「停止指示時点で未コミットの計算は破棄するが、コミット前に再開された場合は有効な計算として受け入れる（決定論的コミット許容）」。
+   - **根拠**:
+     - 停止指示が維持されている間（`paused=1`）に完了した計算は、OCC CAS 条件（`current_paused == 0` および `UPDATE ... WHERE paused=0`）により厳密に破棄される（未コミットレシート破棄保証）。
+     - コミット前に再開（`paused=0`）された場合、入力カーソルに対する計算結果は完全決定論的（deterministic）かつ冪等（idempotent）であるため、同一カーソルに対する状態分岐やデータ不整合は一切生じない。再開意図に従い先行完了した有効な結果を受け入れることで、CPU資源の無駄遣い（再計算）を防止する。
+2. **`pause()` の戻り値の一貫性**:
+   - **仕様**:
+     - `pause(paused=True)`（停止時）：`_writer()` 内で `paused=1` がコミットされた直後、並行ワーカーによる `step()` コミットは OCC 条件で100%遮断される。そのため、`return self.get(search_id)` は停止時点の厳密なスナップショット（`status="stopped"`、停止時点の確定 `work`）を確実に返す。
+     - `pause(paused=False)`（再開時）：`paused=0` に復帰した後はワーカーの前進が許可されるため、`get()` 呼び出しまでの間に並行ワーカーが進行した場合、戻り値は「再開後の最新の確定進捗」を反映する。これは REST/RPC 操作後の read-after-write として自然かつ標準的な振る舞いであり、内部状態の一貫性は完全に維持される。
+
+### 3. 回帰検証結果
+
+- `tests/test_observed_search.py`（12テスト）: **全件成功**（OK）
+- `test_observed_*.py`（57テスト）: **全件成功**（OK）
+- 全JavaScriptテスト（31テストスイート）: **全件成功**（PASS）
+- 構文検証（`python3 -m compileall -q .`, `node --check *.js`, `sh -n start.sh`）: **エラーなし**
+- Gitleaks シミュレーションスキャン: **0 leaks found**
+
+### 4. 安全制約と公開判定
+
+- **PR状態**: PR #113 は **Draft・未マージ** を維持。`main`・本番環境・機能フラグ（`PVP_OBSERVED_SEARCH_ENABLED=0`）は未変更。
+- **限定試験判定**: **A（限定試験開始不可）** を厳格に維持。
+  - 残存25 HIGH CVE（Dockerイメージ）
+  - 独立第三者セキュリティレビュー未完了
+  - 隔離された管理者限定試験環境の未構築
+  - バックアップ・復元および実運用監視の未整備
+  - クライアントHTTP切断時のバックエンド計算即時中断の未実装
+
+---
+
 ## 2026-11-13 JST 第8段階継続：残存SQLiteロック（pause）・停止再開競合の最終検証と最小修正（Flash Medium）
 
 作業起点：Draft PR #113（`feature/missing-observed-integration-20261113`）、コミット `f5d810d71aff59fa11ca4211976309577b914898`（CI全9件成功確認済み）。前回のP1修正3件を引き継ぎ、`ObservedSearch.pause()` の残存ロック検証と解消、停止・再開競合の網羅検証、およびHTTP計算制限（Gateway vs Backend）の最終確認を実施した。

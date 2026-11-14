@@ -478,7 +478,7 @@ class ObservedSearchTests(unittest.TestCase):
         from pvpoke_direct_backend import DirectMatrixClient
         from pvpoke_sandbox import SandboxService
         from pvpoke_observed_search import ObservedSearch, Search, canonical, digest, _move_data
-        from pvpoke_observed_observation import history_key, ObservationV2
+        from pvpoke_observed_observation import ObservationV2
 
         world = scripted_spec(energy=100, shield=1)
         world["combatants"][0]["initial"]["energy"] = 100
