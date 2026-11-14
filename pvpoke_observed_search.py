@@ -490,13 +490,28 @@ class ObservedSearch:
     def pause(self, search_id, *, paused=True):
         if type(paused) is not bool:
             raise ValueError("Invalid pause value")
+        if type(search_id) is not str or not re.fullmatch(r"[a-f0-9]{64}", search_id):
+            raise ValueError("Invalid observed search ID")
+        if not self.store.path.exists():
+            return None
         with self.store._writer() as db:
-            loaded = self._read(db, search_id)
-            if loaded and not loaded.get("stale"):
-                db.execute("UPDATE observed_jobs_v2 SET paused=? WHERE owner=? AND id=?",
-                           (paused, self.store.owner_scope, search_id))
-                loaded["paused"] = paused
-            return self._summary(search_id, loaded)
+            if not db.execute("SELECT 1 FROM sqlite_schema WHERE name='observed_jobs_v2'").fetchone():
+                return None
+            job = db.execute("SELECT plan FROM observed_jobs_v2 WHERE owner=? AND id=?",
+                             (self.store.owner_scope, search_id)).fetchone()
+            if job is None:
+                return None
+            body = job[0]
+            if len(body) > 1024 * 1024:
+                raise BattleStoreError("Invalid observed checkpoint")
+            plan = json.loads(body)
+            if digest(plan) != search_id or plan.get("schema") != SCHEMA:
+                raise BattleStoreError("Invalid observed plan")
+            if plan["versions"] != versions(self.sandbox, "roles" in plan):
+                return self._summary(search_id, {"stale": True})
+            db.execute("UPDATE observed_jobs_v2 SET paused=? WHERE owner=? AND id=?",
+                       (paused, self.store.owner_scope, search_id))
+        return self.get(search_id)
 
     def step(self, search_id, expected_work, budget):
         if type(search_id) is not str or not re.fullmatch(r"[a-f0-9]{64}", search_id):

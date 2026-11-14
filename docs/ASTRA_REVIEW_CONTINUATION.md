@@ -1,3 +1,74 @@
+## 2026-11-13 JST 第8段階継続：残存SQLiteロック（pause）・停止再開競合の最終検証と最小修正（Flash Medium）
+
+作業起点：Draft PR #113（`feature/missing-observed-integration-20261113`）、コミット `f5d810d71aff59fa11ca4211976309577b914898`（CI全9件成功確認済み）。前回のP1修正3件を引き継ぎ、`ObservedSearch.pause()` の残存ロック検証と解消、停止・再開競合の網羅検証、およびHTTP計算制限（Gateway vs Backend）の最終確認を実施した。
+
+### 1. 残存ロック（`ObservedSearch.pause()`）の再現結果と測定値
+
+- **問題の所在**: `ObservedSearch.pause()` が `with self.store._writer() as db:`（EXCLUSIVEロック）内で `_read()`（`_fetch`＋全行 `_replay`：JSON解析・検証・状態復元）および `_summary()`（Pareto比較等）を実行していたため、履歴数に比例して書込ロックが長時間保持されていた。
+- **実測値（修正前）**:
+  - 履歴0件: 停止 `24.9ms`（ロック保持 `18.3ms`）/ 再開 `24.6ms`（ロック保持 `17.4ms`）
+  - 履歴1024件: 停止 `60.2ms`（ロック保持 `53.9ms`）/ 再開 `59.5ms`（ロック保持 `53.1ms`）
+  - 履歴4096件: 停止 `163.9ms`（ロック保持 **`157.6ms`**）/ 再開 `166.2ms`（ロック保持 **`158.4ms`**）
+  - *並行影響*: 4096件の停止処理中、別ジョブのwriterが250msタイムアウトで `OperationalError: database is locked` となり失敗（実測 `0.252s` で失敗）。DELETE/WAL両モードでwriter競合を確認（readerはWALモードではブロックされず成功）。
+- **最小修正（実装完了）**:
+  `_writer()` 内の処理を、テーブル確認・ジョブ存在確認・plan JSONスキーマ/versions検証・`UPDATE observed_jobs_v2 SET paused=?` のみに限定。重い全行フェッチ・`_replay()`・`_summary()` をロック外へ移動し、ロック解放後に `return self.get(search_id)`（スナップショット取得・インメモリ再生）を呼ぶ構成へリファクタリング。
+- **実測値（修正後）**:
+  - 履歴0件: ロック保持 `17.0ms`
+  - 履歴1024件: ロック保持 `19.4ms`（約64%削減）
+  - 履歴4096件: ロック保持 **`17.1ms`**（約**89%削減**）
+  - *並行性改善*: 4096件の停止処理中、別ジョブの並行writerが `0.035s` で**即時成功**（DELETE/WAL両モードで実証）。
+
+### 2. 停止・再開と計算確定の競合検証（全6シナリオ）
+
+1. **Node計算中に停止した場合**:
+   Node実行中に `pause(True)` された場合、ステップ完了後のOCCコミットで `curr_paused == 1`（または `UPDATE ... WHERE paused=0`）により衝突が検知され、未コミットレシートは破棄される（`work=0`, `paused=1`, `status="stopped"` を確認）。
+2. **計算中に停止し、保存前に再開した場合**:
+   Node実行中に `pause(True)` され、コミット前に `pause(False)` された場合、入力カーソルの決定論的計算結果が安全にコミットされる（`cursor=1`, `paused=0`, `work=1`）。他者の更新がない限りデータ破損・不整合は生じない。
+3. **停止操作とチェックポイント更新が競合した場合**:
+   OCCにより、ステップコミットが先行して確定した後に停止されるか（`work=1`, `status="stopped"`）、停止が先行してステップが拒否されるか（`work=0`, `status="stopped"`）のいずれかに線形化され、原子性が維持される。
+4. **別プロセスから同じカーソルを計算した場合**:
+   同一カーソルに対する並行コミットは、OCC CAS（`UPDATE ... WHERE cursor=0 AND paused=0`）により**厳密に1プロセスのみがコミット成功**し、他方は衝突検知（`conflict` または `IntegrityError`）となり、重複行はゼロ（`COUNT(*)=1`）。
+5. **再試行でレシートが重複しないこと**:
+   `PRIMARY KEY (owner, id, position)` 制約により、同一カーソルの再試行や重複要求で同一ポジションのレシートが二重保存されることはない。
+6. **既存の保存済み履歴を壊さないこと**:
+   3サイクルの停止・再開を繰り返しても、過去の全ポジション・ダイジェスト・カーソル整合性が完全に維持される。
+- **更新世代（generation）に関する判断**:
+  既存の `cursor` と `paused`（および `PRIMARY KEY` と OCC 条件）のみで、停止中のコミット拒否・重複排除・再開後の整合性が数学的に保証されており、**スキーマ変更（世代カラム追加等）は不要**であると判断。既存DB互換性およびデータ保護を維持。
+
+### 3. HTTP計算制限の最終確認（Gateway 4スロット vs Backend 1ジョブ排他）
+
+- **Gateway層（`APP_REQUEST_SLOTS` = 4並列、`compute-owner` = 12回/60秒）**:
+  Gatewayハンドラ内で現在処理中・待機中（ロングポーリング含む）のHTTP接続数を最大4並列に制限。
+- **Backend層（`BATTLE_RUNNING`、`STATUS['state']` = 厳格な単一ジョブ排他）**:
+  Backendは最大1ジョブのみ実行を許可し、ジョブ実行中に別リクエストが到達した場合は **HTTP 409 Conflict** を返却。
+- **非同期バックグラウンド計算の影響**:
+  `start_battle` や `start_24_conditions` はバックグラウンドスレッドを起動して直ちに200/202応答するため、Gatewayの `APP_REQUEST_SLOTS` は応答時点で解放される。しかし、Backend側では `BATTLE_RUNNING = True` が維持されるため、計算完了まで新規ジョブは 409 で拒否される。一方、`run_iv_selection` はロングポーリング（デフォルト12秒）の間Gatewayスロットを保持する。
+- **結論**:
+  Gatewayスロット（接続数制限）とBackend排他（実計算数制限）の多層防御が成立しており、レート制限を変更する必要はない。
+
+### 4. 実施した修正と回帰テスト
+
+- **変更ファイル**:
+  - `pvpoke_observed_search.py`: `pause()` の書込ロック短縮（`_load_snapshot` / `_summary` をロック外へ分離）。
+  - `tests/test_observed_search.py`: `test_pause_releases_writer_lock_allowing_concurrent_writers_and_readers` および `test_pause_resume_race_conditions_and_occ_scenarios` を追加。
+  - `docs/ASTRA_REVIEW_CONTINUATION.md`: 本検証記録を追記。
+- **回帰テスト結果**:
+  - `python3 -m unittest discover -s tests -p 'test*.py'`: **668件中660件成功（8件スキップ）**、エラー0件。
+  - 全JSテスト（31ファイル）: 全件成功。
+  - 構文チェック（`node --check`, `sh -n`）および `git diff --check`: エラーなし。
+
+### 5. 安全制約と公開判定
+
+- **PR状態**: PR #113 は **Draft・未マージ** を維持。`main`・本番環境・機能フラグ（`PVP_OBSERVED_SEARCH_ENABLED=0`）は未変更。
+- **限定試験判定**: **A（限定試験開始不可）** を厳格に維持。
+  - 残存25 HIGH CVE（Dockerイメージ）
+  - 独立第三者セキュリティレビュー未完了
+  - 隔離された管理者限定試験環境の未構築
+  - バックアップ・復元および実運用監視の未整備
+  - クライアントHTTP切断時のバックエンド計算即時中断の未実装
+
+---
+
 ## 2026-11-13 JST 第8段階（P1根本修正・回帰検証）：計算制限統合とSQLiteロック競合解消（Hydrogen High）
 
 作業起点：Draft PR #113（`feature/missing-observed-integration-20261113`）、ベースHEAD `53b24519e0a6d7cc0000bc45d9f70b2213100907`。直前のFlash Medium検証（下記の訂正およびP1問題1〜4の実証記録）をそのまま引き継ぎ・保持し、以下の3件のP1問題を修正した（新機能追加・一般公開なし、本コミットのSHAは `git log -1 --format=%H -- docs/ASTRA_REVIEW_CONTINUATION.md` で確認し、新SHAに対するGitHub Actions CIはpush後に確認する）。

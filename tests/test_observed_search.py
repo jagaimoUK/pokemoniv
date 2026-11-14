@@ -1,4 +1,9 @@
+import copy
+from pathlib import Path
+import tempfile
+import threading
 import unittest
+from unittest.mock import patch
 
 from pvpoke_observed_observation import Context, history_key
 from pvpoke_observed_search import Search, initial_state
@@ -463,3 +468,236 @@ class ObservedSearchTests(unittest.TestCase):
             res_stale = service.step(sid_active, 0, 1)
         self.assertEqual(res_stale["status"], "stale")
         self.assertEqual(service.get(sid_active)["work"], 0)
+
+    def test_pause_releases_writer_lock_allowing_concurrent_writers_and_readers(self):
+        """ObservedSearch.pause() must release writer lock before snapshot replay/summary."""
+        from test_sandbox import scripted_spec
+        from test_battle_service import FIXTURES
+        from pvpoke_battle_store import BattleStore
+        from pvpoke_battle_service import BattleService
+        from pvpoke_direct_backend import DirectMatrixClient
+        from pvpoke_sandbox import SandboxService
+        from pvpoke_observed_search import ObservedSearch, Search, canonical, digest, _move_data
+        from pvpoke_observed_observation import history_key, ObservationV2
+
+        world = scripted_spec(energy=100, shield=1)
+        world["combatants"][0]["initial"]["energy"] = 100
+        world["actions"] = []
+        world["shield_decisions"] = []
+        controllers = [
+            {"attack": atk, "shield": shd}
+            for atk in ("standard", "charge_if_ready")
+            for shd in ("standard", "always", "never", "first")
+        ]
+        branches = [
+            {"fast_delay": d, "miss_first_fast": m, "reverse_fast_batch": False}
+            for d in (0, 1) for m in (False, True)
+        ]
+        worlds = []
+        for energy in range(32):
+            w = copy.deepcopy(world)
+            w["combatants"][1]["initial"]["energy"] = energy
+            worlds.append(w)
+        roles = [{"id": "win", "priority": 3, "outcomes": ["self_ko_win"],
+                  "minimum": {"hp": 0, "energy": 0, "shields": 0}}]
+
+        for mode in ("DELETE", "WAL"):
+            with self.subTest(journal_mode=mode):
+                root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+                store = BattleStore(root / f"test_{mode}.sqlite3")
+                with store._writer() as db:
+                    db.execute(f"PRAGMA journal_mode={mode}")
+                client = DirectMatrixClient(gamemaster=FIXTURES / "strategy_gamemaster.json", log_dir=root)
+                self.addCleanup(client.close)
+                service = BattleService(client, store=store)
+                sandbox = SandboxService(service)
+                observed = ObservedSearch(sandbox)
+
+                sid = observed.start(worlds, controllers, branches, 2, roles=roles)["search_id"]
+                sid2 = observed.start(worlds[:1], controllers[:1], branches[:1], 1, roles=roles)["search_id"]
+
+                # Seed 1024 receipts
+                with store._reader() as db:
+                    snap = observed._fetch(db, sid)
+                loaded = observed._replay(snap)
+                search, state = loaded["search"], loaded["state"]
+                move_data = _move_data(sandbox)
+                events = [{"seq": 1, "observed_time_range": [1, 1], "kind": "window"}]
+                fkey = history_key(search.context, events)
+
+                def next_row(pos):
+                    item = state["frontier"][-1]
+                    scenario = search.scenarios[item["index"]]
+                    wid = observed._work_id(sid, search, state)
+                    if fkey not in item["table"]:
+                        view = ObservationV2.read(search.context, events)
+                        receipt = {"status": "frontier", "key": fkey, "events": events,
+                                   "legal": list(view.legal)}
+                    else:
+                        battle = loaded["plan"]["manifest"][scenario]["battle"]
+                        init_state = [
+                            [battle["initial"][s].get("hp_points", 100),
+                             battle["initial"][s].get("energy_points", 0),
+                             battle["shields"][s]]
+                            for s in (0, 1)
+                        ]
+                        fast_id = battle["self"]["fast"]
+                        egain = int(move_data[fast_id]["energyGain"])
+                        receipt = {
+                            "status": "complete", "outcome": "self_ko_win", "initial": init_state,
+                            "moves": [{"actor": 0, "move": fast_id, "kind": "fast", "window": 1,
+                                       "damage": init_state[1][0], "shielded": False}],
+                            "terminal": [[init_state[0][0], min(100, init_state[0][1] + egain), init_state[0][2]],
+                                         [0, init_state[1][1], init_state[1][2]]],
+                        }
+                    search.advance(state, receipt)
+                    return (store.owner_scope, sid, pos, wid,
+                            canonical(receipt), digest([wid, receipt, 1024]), 1024)
+
+                for start_idx in range(0, 1024, 512):
+                    end_idx = start_idx + 512
+                    batch = [next_row(pos) for pos in range(start_idx, end_idx)]
+                    with store._writer() as db:
+                        db.executemany("INSERT INTO observed_work_v2 VALUES (?,?,?,?,?,?,?)", batch)
+                        db.execute("UPDATE observed_jobs_v2 SET cursor=? WHERE owner=? AND id=?",
+                                   (end_idx, store.owner_scope, sid))
+
+                # Test concurrent writer during pause
+                writer_success = threading.Event()
+                writer_error = []
+
+                orig_replay = observed._replay
+                def slow_replay(snapshot):
+                    # Simulate replay taking long enough that old lock would have caused timeout
+                    try:
+                        with store._writer(critical=False) as db:
+                            db.execute("UPDATE observed_jobs_v2 SET cursor=0 WHERE id=?", (sid2,))
+                        writer_success.set()
+                    except Exception as exc:
+                        writer_error.append(exc)
+                    return orig_replay(snapshot)
+
+                with patch.object(observed, "_replay", slow_replay):
+                    res_p = observed.pause(sid, paused=True)
+                    self.assertEqual(res_p["status"], "stopped")
+                    self.assertEqual(res_p["work"], 1024)
+                    self.assertTrue(writer_success.is_set())
+                    self.assertEqual(writer_error, [])
+
+                # Verify resume works cleanly
+                res_r = observed.pause(sid, paused=False)
+                self.assertEqual(res_r["status"], "pending")
+                self.assertEqual(res_r["work"], 1024)
+
+                # Validation checks on pause
+                with self.assertRaises(ValueError):
+                    observed.pause(sid, paused="not-a-bool")
+                with self.assertRaises(ValueError):
+                    observed.pause("invalid-sid", paused=True)
+                self.assertIsNone(observed.pause("a" * 64, paused=True))
+
+    def test_pause_resume_race_conditions_and_occ_scenarios(self):
+        """ObservedSearch.step() OCC correctly handles pause during Node execution and resume."""
+        from test_sandbox import scripted_spec
+        from test_battle_service import FIXTURES
+        from pvpoke_battle_store import BattleStore
+        from pvpoke_battle_service import BattleService
+        from pvpoke_direct_backend import DirectMatrixClient
+        from pvpoke_sandbox import SandboxService
+        from pvpoke_observed_search import ObservedSearch
+        world = scripted_spec(energy=0, shield=1)
+        world["actions"] = []
+        world["shield_decisions"] = []
+        controllers = [{"attack": "standard", "shield": "never"}]
+        branches = [{"fast_delay": 0, "miss_first_fast": False, "reverse_fast_batch": False}]
+        roles = [{"id": "win", "priority": 3, "outcomes": ["self_ko_win"],
+                  "minimum": {"hp": 0, "energy": 0, "shields": 0}}]
+
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        store = BattleStore(root / "test_occ.sqlite3")
+        client = DirectMatrixClient(gamemaster=FIXTURES / "strategy_gamemaster.json", log_dir=root)
+        self.addCleanup(client.close)
+        service = BattleService(client, store=store)
+        sandbox = SandboxService(service)
+        observed = ObservedSearch(sandbox)
+
+        # 1. Pause during Node execution -> discard uncommitted receipt
+        w1 = [copy.deepcopy(world)]
+        w1[0]["combatants"][1]["initial"]["energy"] = 10
+        sid1 = observed.start(w1, controllers, branches, 2, roles=roles)["search_id"]
+        node_started = threading.Event()
+        pause_done = threading.Event()
+
+        import pvpoke_observed_search
+        orig_replay = pvpoke_observed_search.replay
+        def slow_replay(sandbox_arg, context_arg, plan_arg, scenario_key, item, remaining):
+            node_started.set()
+            pause_done.wait(timeout=5.0)
+            return orig_replay(sandbox_arg, context_arg, plan_arg, scenario_key, item, remaining)
+
+        def pause_worker():
+            node_started.wait(timeout=5.0)
+            observed.pause(sid1, paused=True)
+            pause_done.set()
+
+        t_pause = threading.Thread(target=pause_worker)
+        with patch.object(pvpoke_observed_search, "replay", slow_replay):
+            t_pause.start()
+            s1 = observed.step(sid1, 0, 1)
+            t_pause.join(timeout=5.0)
+
+        self.assertEqual(s1["status"], "stopped")
+        self.assertEqual(s1["work"], 0)
+        with store._reader() as db:
+            c1, p1 = db.execute("SELECT cursor, paused FROM observed_jobs_v2 WHERE id=?", (sid1,)).fetchone()
+            w1_count = db.execute("SELECT COUNT(*) FROM observed_work_v2 WHERE id=?", (sid1,)).fetchone()[0]
+        self.assertEqual(c1, 0)
+        self.assertEqual(p1, 1)
+        self.assertEqual(w1_count, 0)
+
+        # 2. Pause then resume during Node execution -> valid commit succeeds
+        w2 = [copy.deepcopy(world)]
+        w2[0]["combatants"][1]["initial"]["energy"] = 20
+        sid2 = observed.start(w2, controllers, branches, 2, roles=roles)["search_id"]
+        node_started2 = threading.Event()
+        resume_done = threading.Event()
+
+        def slow_replay2(sandbox_arg, context_arg, plan_arg, scenario_key, item, remaining):
+            node_started2.set()
+            resume_done.wait(timeout=5.0)
+            return orig_replay(sandbox_arg, context_arg, plan_arg, scenario_key, item, remaining)
+
+        def pause_resume_worker():
+            node_started2.wait(timeout=5.0)
+            observed.pause(sid2, paused=True)
+            observed.pause(sid2, paused=False)
+            resume_done.set()
+
+        t_pr = threading.Thread(target=pause_resume_worker)
+        with patch.object(pvpoke_observed_search, "replay", slow_replay2):
+            t_pr.start()
+            s2 = observed.step(sid2, 0, 1)
+            t_pr.join(timeout=5.0)
+
+        self.assertEqual(s2["work"], 1)
+        with store._reader() as db:
+            c2, p2 = db.execute("SELECT cursor, paused FROM observed_jobs_v2 WHERE id=?", (sid2,)).fetchone()
+            w2_count = db.execute("SELECT COUNT(*) FROM observed_work_v2 WHERE id=?", (sid2,)).fetchone()[0]
+        self.assertEqual(c2, 1)
+        self.assertEqual(p2, 0)
+        self.assertEqual(w2_count, 1)
+
+        # 3. Multiple pause/resume cycles preserve historical integrity
+        w3 = [copy.deepcopy(world)]
+        w3[0]["combatants"][1]["initial"]["energy"] = 30
+        sid3 = observed.start(w3, controllers, branches, 2, roles=roles)["search_id"]
+        for step_idx in range(2):
+            observed.step(sid3, step_idx, 1)
+            observed.pause(sid3, paused=True)
+            self.assertEqual(observed.get(sid3)["status"], "stopped")
+            observed.pause(sid3, paused=False)
+            self.assertEqual(observed.get(sid3)["status"], "pending")
+        self.assertEqual(observed.get(sid3)["work"], 2)
+        with store._reader() as db:
+            rows = db.execute("SELECT position FROM observed_work_v2 WHERE id=? ORDER BY position", (sid3,)).fetchall()
+        self.assertEqual([r[0] for r in rows], [0, 1])
