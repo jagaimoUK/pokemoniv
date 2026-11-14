@@ -10,7 +10,7 @@ import time
 
 from pvpoke_battle_service import _canonical_json, _json_hash
 from pvpoke_battle_store import BattleStore, BattleStoreError, COMPLETENESS
-from pvpoke_ownership import Ownership, build_id
+from pvpoke_ownership import Ownership, _iv_index, build_id
 
 MAX_MATCHUPS = 128
 MAX_PLAN_BYTES = 512 * 1024
@@ -107,56 +107,91 @@ class MissingAnalysis:
                 if type(payload) is not bytes or len(payload) > MAX_PLAN_BYTES:
                     raise ValueError('Invalid plan payload')
                 plan = json.loads(payload)
-                if _json_hash(plan) != analysis_id or plan['schema'] != PLAN_SCHEMA:
+                if type(plan) is not dict or plan.get('schema') != PLAN_SCHEMA:
                     raise ValueError('Invalid plan checksum or schema')
+                specs = plan.get('specs')
+                if type(specs) is not dict or not 1 <= len(specs) <= MAX_MATCHUPS:
+                    raise ValueError('Invalid plan specs')
                 versions = _versions(plan['versions'])
-                cells = []
-                completed = 0
                 inventory = Ownership(self.store)
-                has_inventory = inventory._exists(db)
+                has_inventory = bool(inventory._exists(db))
                 ledger_revision = inventory._revision(db) if has_inventory else 0
-                matches_by_build = {}
-                max_hp_by_build = {}
-                for key, spec in plan['specs'].items():
-                    combatant = spec['combatants'][0]
-                    build = build_id(combatant)
-                    cell = {'battle_key': key, 'build_id': build, 'spec': spec,
-                            'state': 'unknown', 'facts': None, 'ownership': 'unknown',
-                            'inventory_matches': [], 'recommendation': 'unreviewed',
-                            'gap_state': 'evidence_pending'}
-                    if normalizer is not None and versions == current:
-                        if build not in max_hp_by_build:
-                            full = {**combatant, 'initial': {**combatant['initial'], 'hp': 'full'}}
-                            normalized, row = normalizer._combatant(full)
-                            max_hp_by_build[build] = (normalized['initial']['hp'], row['cp'])
-                        max_hp, cp = max_hp_by_build[build]
-                        cell['starts_at_full_hp'] = combatant['initial']['hp'] == max_hp
-                    else:
-                        cp = None
-                    if has_inventory and versions == current:
-                        if build not in matches_by_build:
-                            matches_by_build[build] = inventory._matches(db, combatant, cp)
-                        cell['inventory_matches'] = matches_by_build[build]
-                        if any(match['state'] == 'confirmed_owned' and match['build_match'] == 'exact'
-                               for match in cell['inventory_matches']):
-                            cell['ownership'] = 'confirmed_owned'
-                    if versions != current:
-                        cell['state'] = 'stale'
-                    else:
-                        saved = self.store._row(db, key)
-                        if saved is not None:
-                            try:
-                                result = self.store._decode(saved, key, spec, versions)
-                            except BattleStoreError:
-                                cell['evidence_error'] = 'invalid_saved_result'
-                            else:
-                                cell['state'] = 'complete'
-                                cell['completeness'] = COMPLETENESS
-                                cell['facts'] = battle_facts(result)
-                                completed += 1
-                                if cell['ownership'] == 'unknown':
-                                    cell['gap_state'] = 'ownership_confirmation_needed'
-                    cells.append(cell)
+                owner_rows_by_key = {}
+                saved_rows = {}
+                if versions == current:
+                    battle_keys = list(specs.keys())
+                    if any(type(key) is not str for key in battle_keys):
+                        raise ValueError('Invalid battle key in plan')
+                    if has_inventory:
+                        seen_owner_keys = set()
+                        for spec in specs.values():
+                            combatant = spec['combatants'][0]
+                            owner_key = (combatant['species_id'], _iv_index(combatant['ivs']))
+                            if owner_key not in seen_owner_keys:
+                                seen_owner_keys.add(owner_key)
+                                owner_rows_by_key[owner_key] = db.execute(
+                                    '''SELECT body, digest FROM owned_instances_v1
+                                       WHERE owner_scope=? AND species_id=? AND iv_index=? ORDER BY instance_id''',
+                                    (self.store.owner_scope, *owner_key),
+                                ).fetchall()
+                    placeholders = ','.join('?' for _ in battle_keys)
+                    saved_rows = {
+                        battle_key: (result_json, result_sha256)
+                        for battle_key, result_json, result_sha256 in db.execute(
+                            f'''SELECT battle_key, result_json, result_sha256 FROM battle_results
+                                WHERE owner_scope = ? AND completeness = ? AND battle_key IN ({placeholders})''',
+                            (self.store.owner_scope, COMPLETENESS, *battle_keys),
+                        )
+                    }
+
+            if _json_hash(plan) != analysis_id:
+                raise ValueError('Invalid plan checksum or schema')
+            cells = []
+            completed = 0
+            matches_by_build = {}
+            max_hp_by_build = {}
+            for key, spec in specs.items():
+                combatant = spec['combatants'][0]
+                build = build_id(combatant)
+                cell = {'battle_key': key, 'build_id': build, 'spec': spec,
+                        'state': 'unknown', 'facts': None, 'ownership': 'unknown',
+                        'inventory_matches': [], 'recommendation': 'unreviewed',
+                        'gap_state': 'evidence_pending'}
+                if normalizer is not None and versions == current:
+                    if build not in max_hp_by_build:
+                        full = {**combatant, 'initial': {**combatant['initial'], 'hp': 'full'}}
+                        normalized, row = normalizer._combatant(full)
+                        max_hp_by_build[build] = (normalized['initial']['hp'], row['cp'])
+                    max_hp, cp = max_hp_by_build[build]
+                    cell['starts_at_full_hp'] = combatant['initial']['hp'] == max_hp
+                else:
+                    cp = None
+                if has_inventory and versions == current:
+                    if build not in matches_by_build:
+                        owner_key = (combatant['species_id'], _iv_index(combatant['ivs']))
+                        matches_by_build[build] = Ownership._match_rows(
+                            owner_rows_by_key.get(owner_key, ()), combatant, cp)
+                    cell['inventory_matches'] = matches_by_build[build]
+                    if any(match['state'] == 'confirmed_owned' and match['build_match'] == 'exact'
+                           for match in cell['inventory_matches']):
+                        cell['ownership'] = 'confirmed_owned'
+                if versions != current:
+                    cell['state'] = 'stale'
+                else:
+                    saved = saved_rows.get(key)
+                    if saved is not None:
+                        try:
+                            result = self.store._decode(saved, key, spec, versions)
+                        except BattleStoreError:
+                            cell['evidence_error'] = 'invalid_saved_result'
+                        else:
+                            cell['state'] = 'complete'
+                            cell['completeness'] = COMPLETENESS
+                            cell['facts'] = battle_facts(result)
+                            completed += 1
+                            if cell['ownership'] == 'unknown':
+                                cell['gap_state'] = 'ownership_confirmation_needed'
+                cells.append(cell)
         except (sqlite3.Error, OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
             raise AnalysisUnavailable('Could not read analysis evidence') from exc
         state = ('stale' if versions != current else 'complete' if completed == len(cells)

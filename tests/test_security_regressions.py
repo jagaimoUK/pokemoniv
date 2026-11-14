@@ -339,6 +339,237 @@ class GatewaySecurityTests(unittest.TestCase):
                 for c in clients:
                     c.close()
 
+    def test_mcp_compute_tools_share_compute_owner_budget_without_double_charge(self):
+        auth = 'Bearer ' + remote.API_KEY
+        # /app-api/run calls call_tool('run_iv_selection', ...) internally;
+        # 12 calls must consume 12 tokens (no double charge) and the 13th hits 429.
+        with patch.object(remote.backend, 'meta_status', return_value={'sha256': '0' * 64}), \
+             patch.object(remote, 'call_tool', return_value={'state': 'done'}):
+            for i in range(12):
+                status, _, _ = self.request('/app-api/run', auth, payload={'candidate': {}, 'ivs': '0,15,15'})
+                self.assertEqual(status, 200, f'/app-api/run {i + 1}th call should succeed')
+            status, headers, _ = self.request('/app-api/run', auth, payload={'candidate': {}, 'ivs': '0,15,15'})
+            self.assertEqual(status, 429)
+            self.assertIn('Retry-After', headers)
+            # Exhausted compute-owner budget must also block MCP compute-starting tools.
+            for tool_name in ('start_battle', 'start_24_conditions', 'run_iv_selection'):
+                with self.subTest(tool=tool_name):
+                    status, headers, _ = self.request('/mcp', auth, payload={
+                        'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                        'params': {'name': tool_name, 'arguments': {}},
+                    })
+                    self.assertEqual(status, 429)
+                    self.assertIn('Retry-After', headers)
+            # Lightweight status/read MCP tools must remain available.
+            for tool_name in ('get_status', 'get_catalog', 'prepare_battle', 'get_results'):
+                with self.subTest(light_tool=tool_name):
+                    status, _, body = self.request('/mcp', auth, payload={
+                        'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call',
+                        'params': {'name': tool_name, 'arguments': {}},
+                    })
+                    self.assertEqual(status, 200)
+                    self.assertFalse(json.loads(body)['result']['isError'])
+
+        # Mixed consumption: 10 via /mcp compute tools + 2 via /app-api/run -> 13th blocked on both.
+        with patch.object(remote, 'RATE_BUDGET', RateBudget()), \
+             patch.object(remote.backend, 'meta_status', return_value={'sha256': '0' * 64}), \
+             patch.object(remote, 'call_tool', return_value={'ok': True}):
+            for i in range(10):
+                status, _, _ = self.request('/mcp', auth, payload={
+                    'jsonrpc': '2.0', 'id': i + 10, 'method': 'tools/call',
+                    'params': {'name': 'run_iv_selection', 'arguments': {}},
+                })
+                self.assertEqual(status, 200)
+            for _ in range(2):
+                status, _, _ = self.request('/app-api/run', auth, payload={'candidate': {}, 'ivs': '0,15,15'})
+                self.assertEqual(status, 200)
+            self.assertEqual(self.request('/mcp', auth, payload={
+                'jsonrpc': '2.0', 'id': 99, 'method': 'tools/call',
+                'params': {'name': 'start_battle', 'arguments': {}},
+            })[0], 429)
+            self.assertEqual(self.request('/app-api/run', auth, payload={'candidate': {}, 'ivs': '0,15,15'})[0], 429)
+
+    def test_mcp_compute_tools_share_app_slots_and_release_on_error_or_disconnect(self):
+        auth = 'Bearer ' + remote.API_KEY
+        server = BoundedHTTPServer(('127.0.0.1', 0), remote.Handler,
+                                    socket_timeout=2, request_timeout=5, max_workers=8)
+        thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': 0.02}, daemon=True)
+        thread.start()
+        self.addCleanup(lambda: (server.shutdown(), server.server_close(), thread.join(timeout=2)))
+
+        entered = threading.Event()
+        release = threading.Event()
+        in_flight = 0
+        lock = threading.Lock()
+
+        def slow_call(name, args):
+            nonlocal in_flight
+            with lock:
+                in_flight += 1
+                if in_flight == 4:
+                    entered.set()
+            release.wait(timeout=3)
+            return {'ok': True}
+
+        def post_srv(path, payload):
+            c = http.client.HTTPConnection(*server.server_address, timeout=4)
+            try:
+                c.request('POST', path, json.dumps(payload), {
+                    'Content-Type': 'application/json',
+                    'Authorization': auth,
+                })
+                r = c.getresponse()
+                return r.status, r.read()
+            finally:
+                c.close()
+
+        from concurrent.futures import ThreadPoolExecutor
+        # Saturate all 4 APP_REQUEST_SLOTS with real concurrent /mcp compute requests.
+        with patch.object(remote, 'call_tool', side_effect=slow_call), \
+             patch.object(remote, 'RATE_BUDGET', RateBudget()):
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                futures = [
+                    pool.submit(post_srv, '/mcp', {
+                        'jsonrpc': '2.0', 'id': i, 'method': 'tools/call',
+                        'params': {'name': 'run_iv_selection', 'arguments': {}},
+                    })
+                    for i in range(4)
+                ]
+                self.assertTrue(entered.wait(timeout=2))
+                try:
+                    # 5th compute request via /mcp OR /app-api gets 503.
+                    for name in ('start_battle', 'start_24_conditions', 'run_iv_selection'):
+                        self.assertEqual(post_srv('/mcp', {
+                            'jsonrpc': '2.0', 'id': 10, 'method': 'tools/call',
+                            'params': {'name': name, 'arguments': {}},
+                        })[0], 503)
+                    self.assertEqual(post_srv('/app-api/catalog', {})[0], 503)
+                    # Lightweight /mcp status check remains unblocked even when 4 compute slots are full.
+                    with patch.object(remote.backend, 'status', return_value={'state': 'running'}):
+                        code, body = post_srv('/mcp', {
+                            'jsonrpc': '2.0', 'id': 11, 'method': 'tools/call',
+                            'params': {'name': 'get_status', 'arguments': {}},
+                        })
+                        self.assertEqual(code, 200)
+                        self.assertFalse(json.loads(body)['result']['isError'])
+                finally:
+                    release.set()
+                for f in futures:
+                    self.assertEqual(f.result()[0], 200)
+
+        # Verify slots recover cleanly after ValueError, RuntimeError, and client disconnect.
+        with patch.object(remote, 'RATE_BUDGET', RateBudget()):
+            for exc in (ValueError('bad input'), RuntimeError('boom')):
+                with patch.object(remote, 'call_tool', side_effect=exc):
+                    code, body = post_srv('/mcp', {
+                        'jsonrpc': '2.0', 'id': 20, 'method': 'tools/call',
+                        'params': {'name': 'start_battle', 'arguments': {}},
+                    })
+                    self.assertEqual(code, 200)
+                    self.assertTrue(json.loads(body)['result']['isError'])
+
+            # Simulate client disconnecting before response finishes.
+            disconn_entered = threading.Event()
+            disconn_release = threading.Event()
+
+            def slow_disconnect(name, args):
+                disconn_entered.set()
+                disconn_release.wait(timeout=2)
+                return {'ok': True}
+
+            with patch.object(remote, 'call_tool', side_effect=slow_disconnect):
+                sock = socket.create_connection(server.server_address, timeout=2)
+                req_body = json.dumps({
+                    'jsonrpc': '2.0', 'id': 21, 'method': 'tools/call',
+                    'params': {'name': 'run_iv_selection', 'arguments': {}},
+                }).encode()
+                sock.sendall(
+                    b'POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n'
+                    b'Content-Type: application/json\r\n'
+                    b'Authorization: ' + auth.encode() + b'\r\n'
+                    b'Content-Length: ' + str(len(req_body)).encode() + b'\r\n\r\n' + req_body
+                )
+                self.assertTrue(disconn_entered.wait(timeout=2))
+                sock.close()
+                disconn_release.set()
+                time.sleep(0.1)
+
+            # All 4 slots must be available after errors and client disconnect.
+            for _ in range(4):
+                self.assertTrue(remote.APP_REQUEST_SLOTS.acquire(blocking=False))
+            for _ in range(4):
+                remote.APP_REQUEST_SLOTS.release()
+
+    def test_gateway_4_slots_vs_backend_single_active_job_409(self):
+        """Real Gateway->Backend HTTP call: Backend enforces 1 active job (HTTP 409) within Gateway's 4 slots."""
+        import pvpoke_web as web
+        import urllib.request
+        import urllib.error
+        backend_srv = BoundedHTTPServer(('127.0.0.1', 0), web.Handler,
+                                        socket_timeout=2, request_timeout=5, max_workers=8)
+        b_thread = threading.Thread(target=backend_srv.serve_forever, kwargs={'poll_interval': 0.02}, daemon=True)
+        b_thread.start()
+        self.addCleanup(lambda: (backend_srv.shutdown(), backend_srv.server_close(), b_thread.join(timeout=2)))
+
+        gw_srv = BoundedHTTPServer(('127.0.0.1', 0), remote.Handler,
+                                   socket_timeout=2, request_timeout=5, max_workers=8)
+        g_thread = threading.Thread(target=gw_srv.serve_forever, kwargs={'poll_interval': 0.02}, daemon=True)
+        g_thread.start()
+        self.addCleanup(lambda: (gw_srv.shutdown(), gw_srv.server_close(), g_thread.join(timeout=2)))
+
+        b_port = backend_srv.server_port
+        in_backend = threading.Event()
+        release_backend = threading.Event()
+
+        def forward_to_real_backend(path, payload=None, *, headers=None, timeout=65):
+            req_headers = {'Content-Type': 'application/json', **(headers or {})}
+            data = b'{}' if payload is None else json.dumps(payload).encode()
+            req = urllib.request.Request(f'http://127.0.0.1:{b_port}{path}', data=data,
+                                         headers=req_headers, method='POST')
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    return json.loads(resp.read())
+            except urllib.error.HTTPError as exc:
+                raise remote.backend.BridgeError(f'ローカルアプリ HTTP {exc.code}: {exc.read().decode("utf-8", "ignore")}')
+
+        def slow_sim(service, payload):
+            in_backend.set()
+            release_backend.wait(timeout=3)
+            return {'status': 'complete'}
+
+        with patch.dict(os.environ, {'PVP_SANDBOX_ENABLED': '1'}), \
+             patch.dict(web.CATALOG, {'ready': True}), \
+             patch.dict(web.STATUS, {'state': 'idle'}), \
+             patch.object(web, 'DirectMatrixClient'), \
+             patch.object(web, 'BattleService'), \
+             patch.object(web.BattleStore, 'from_volume', return_value=None), \
+             patch.object(web, 'sandbox_operation', side_effect=slow_sim), \
+             patch.object(remote.backend, '_token', return_value=web.TOKEN), \
+             patch.object(remote.backend, '_request', side_effect=forward_to_real_backend):
+            def send_sandbox():
+                c = http.client.HTTPConnection(*gw_srv.server_address, timeout=4)
+                try:
+                    c.request('POST', '/app-api/sandbox', json.dumps({'action': 'simulate', 'spec': {}}), {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + remote.API_KEY,
+                    })
+                    r = c.getresponse()
+                    r.read()
+                    return r.status
+                finally:
+                    c.close()
+
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                f1 = pool.submit(send_sandbox)
+                self.assertTrue(in_backend.wait(timeout=2))
+                try:
+                    # 2nd concurrent job acquires a Gateway APP_REQUEST_SLOT, hits real Backend, and receives 409.
+                    self.assertEqual(send_sandbox(), 409)
+                finally:
+                    release_backend.set()
+                self.assertEqual(f1.result(), 200)
+
 
 class EngineSecurityTests(unittest.TestCase):
     def test_child_environment_excludes_every_secret(self):

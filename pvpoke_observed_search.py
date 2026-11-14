@@ -1,4 +1,6 @@
 """Bounded offline search for one shared policy over declared scenarios."""
+from contextlib import contextmanager
+import copy
 from dataclasses import asdict
 import json
 from pathlib import Path
@@ -325,6 +327,29 @@ def replay(sandbox, context, plan, scenario, item, timeout):
     return {key: result[key] for key in ("status", "outcome", "terminal", "initial", "moves")}, rss
 
 
+_STEP_LOCKS_GUARD = threading.Lock()
+_STEP_LOCKS = {}
+
+
+@contextmanager
+def _job_step_lock(key):
+    """Serialize in-process step() calls per (store, owner, search_id) without holding SQLite locks."""
+    with _STEP_LOCKS_GUARD:
+        entry = _STEP_LOCKS.get(key)
+        if entry is None:
+            entry = [threading.Lock(), 0]
+            _STEP_LOCKS[key] = entry
+        entry[1] += 1
+    try:
+        with entry[0]:
+            yield
+    finally:
+        with _STEP_LOCKS_GUARD:
+            entry[1] -= 1
+            if entry[1] == 0:
+                _STEP_LOCKS.pop(key, None)
+
+
 class ObservedSearch:
     """Owner-scoped append-only receipts. A receipt and its cursor commit together."""
 
@@ -452,12 +477,15 @@ class ObservedSearch:
                 "status": "stopped" if state["stop_reason"] or loaded["paused"] else "pending",
                 **FLAGS}
 
-    def get(self, search_id):
+    def _load_snapshot(self, search_id):
         if not self.store.path.exists():
             return None
         with self.store._reader() as db:
             snapshot = self._fetch(db, search_id)
-        return self._summary(search_id, self._replay(snapshot))
+        return self._replay(snapshot)
+
+    def get(self, search_id):
+        return self._summary(search_id, self._load_snapshot(search_id))
 
     def pause(self, search_id, *, paused=True):
         if type(paused) is not bool:
@@ -471,25 +499,22 @@ class ObservedSearch:
             return self._summary(search_id, loaded)
 
     def step(self, search_id, expected_work, budget):
+        if type(search_id) is not str or not re.fullmatch(r"[a-f0-9]{64}", search_id):
+            raise ValueError("Invalid observed search ID")
         if not integer(expected_work, 0, MAX_WORK) or not integer(budget, 1, MAX_STEP):
             raise ValueError("Invalid observed step budget")
         deadline = time.monotonic() + STEP_SECONDS
-        # Serialize a bounded step across processes. The transaction rolls
-        # back both the cursor and receipts on write failure or interruption.
         loaded = None
-        for offset in range(budget):
-            with self.store._writer() as db:
+        lock_key = (str(self.store.path.resolve()), self.store.owner_scope, search_id)
+        with _job_step_lock(lock_key):
+            for offset in range(budget):
                 if loaded is None:
-                    loaded = self._read(db, search_id)
+                    loaded = self._load_snapshot(search_id)
                 if not loaded or loaded.get("stale"):
                     break
                 search, state, plan = (loaded[k] for k in ("search", "state", "plan"))
-                cursor, paused = db.execute(
-                    "SELECT cursor,paused FROM observed_jobs_v2 WHERE owner=? AND id=?",
-                    (self.store.owner_scope, search_id)).fetchone()
-                if cursor != expected_work + offset or paused or state["stop_reason"]:
-                    # Another request may have advanced or paused this job.
-                    loaded = self._read(db, search_id)
+                if loaded["paused"] or state["stop_reason"] or state["work"] != expected_work + offset:
+                    # Another request may have advanced, stopped, or paused this job.
                     break
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -497,13 +522,54 @@ class ObservedSearch:
                 item = state["frontier"][-1]
                 position = state["work"]
                 work_id = self._work_id(search_id, search, state)
+                # Execute Node replay and verification strictly outside SQLite locks.
                 receipt, rss = replay(self.sandbox, search.context, plan,
                                       search.scenarios[item["index"]], item, remaining)
-                search.advance(state, receipt)
-                state["peak_rss_kib"] = max(state["peak_rss_kib"], rss)
-                db.execute("INSERT INTO observed_work_v2 VALUES (?,?,?,?,?,?,?)",
-                           (self.store.owner_scope, search_id, position, work_id, canonical(receipt),
-                            digest([work_id, receipt, rss]), rss))
-                db.execute("UPDATE observed_jobs_v2 SET cursor=? WHERE owner=? AND id=?",
-                           (state["work"], self.store.owner_scope, search_id))
+                next_state = copy.deepcopy(state)
+                search.advance(next_state, receipt)
+                next_state["peak_rss_kib"] = max(next_state["peak_rss_kib"], rss)
+                receipt_json = canonical(receipt)
+                receipt_digest = digest([work_id, receipt, rss])
+                commit_outcome = "committed"
+                with self.store._writer() as db:
+                    has_table = db.execute(
+                        "SELECT 1 FROM sqlite_schema WHERE name='observed_jobs_v2'"
+                    ).fetchone()
+                    job = db.execute(
+                        "SELECT cursor,paused FROM observed_jobs_v2 WHERE owner=? AND id=?",
+                        (self.store.owner_scope, search_id),
+                    ).fetchone() if has_table else None
+                    if job is None:
+                        commit_outcome = "missing"
+                    else:
+                        current_cursor, current_paused = job
+                        if not integer(current_cursor, 0, MAX_WORK) or current_paused not in (0, 1):
+                            raise BattleStoreError("Invalid observed checkpoint")
+                        if current_cursor != position or current_paused:
+                            commit_outcome = "conflict"
+                        elif plan["versions"] != versions(self.sandbox, "roles" in plan):
+                            commit_outcome = "stale"
+                        else:
+                            db.execute(
+                                "INSERT INTO observed_work_v2 VALUES (?,?,?,?,?,?,?)",
+                                (self.store.owner_scope, search_id, position, work_id,
+                                 receipt_json, receipt_digest, rss),
+                            )
+                            updated = db.execute(
+                                "UPDATE observed_jobs_v2 SET cursor=? "
+                                "WHERE owner=? AND id=? AND cursor=? AND paused=0",
+                                (next_state["work"], self.store.owner_scope, search_id, position),
+                            )
+                            if updated.rowcount != 1:
+                                raise BattleStoreError("Observed checkpoint conflict")
+                if commit_outcome == "missing":
+                    loaded = None
+                    break
+                if commit_outcome == "stale":
+                    loaded = {"stale": True}
+                    break
+                if commit_outcome == "conflict":
+                    loaded = self._load_snapshot(search_id)
+                    break
+                loaded["state"] = next_state
         return self._summary(search_id, loaded)
