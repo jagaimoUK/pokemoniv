@@ -1,3 +1,249 @@
+## 2026-11-13 JST 第8段階継続：残存SQLiteロック（pause）・停止再開競合の最終検証と最小修正（Flash Medium）
+
+作業起点：Draft PR #113（`feature/missing-observed-integration-20261113`）、コミット `f5d810d71aff59fa11ca4211976309577b914898`（CI全9件成功確認済み）。前回のP1修正3件を引き継ぎ、`ObservedSearch.pause()` の残存ロック検証と解消、停止・再開競合の網羅検証、およびHTTP計算制限（Gateway vs Backend）の最終確認を実施した。
+
+### 1. 残存ロック（`ObservedSearch.pause()`）の再現結果と測定値
+
+- **問題の所在**: `ObservedSearch.pause()` が `with self.store._writer() as db:`（EXCLUSIVEロック）内で `_read()`（`_fetch`＋全行 `_replay`：JSON解析・検証・状態復元）および `_summary()`（Pareto比較等）を実行していたため、履歴数に比例して書込ロックが長時間保持されていた。
+- **実測値（修正前）**:
+  - 履歴0件: 停止 `24.9ms`（ロック保持 `18.3ms`）/ 再開 `24.6ms`（ロック保持 `17.4ms`）
+  - 履歴1024件: 停止 `60.2ms`（ロック保持 `53.9ms`）/ 再開 `59.5ms`（ロック保持 `53.1ms`）
+  - 履歴4096件: 停止 `163.9ms`（ロック保持 **`157.6ms`**）/ 再開 `166.2ms`（ロック保持 **`158.4ms`**）
+  - *並行影響*: 4096件の停止処理中、別ジョブのwriterが250msタイムアウトで `OperationalError: database is locked` となり失敗（実測 `0.252s` で失敗）。DELETE/WAL両モードでwriter競合を確認（readerはWALモードではブロックされず成功）。
+- **最小修正（実装完了）**:
+  `_writer()` 内の処理を、テーブル確認・ジョブ存在確認・plan JSONスキーマ/versions検証・`UPDATE observed_jobs_v2 SET paused=?` のみに限定。重い全行フェッチ・`_replay()`・`_summary()` をロック外へ移動し、ロック解放後に `return self.get(search_id)`（スナップショット取得・インメモリ再生）を呼ぶ構成へリファクタリング。
+- **実測値（修正後）**:
+  - 履歴0件: ロック保持 `17.0ms`
+  - 履歴1024件: ロック保持 `19.4ms`（約64%削減）
+  - 履歴4096件: ロック保持 **`17.1ms`**（約**89%削減**）
+  - *並行性改善*: 4096件の停止処理中、別ジョブの並行writerが `0.035s` で**即時成功**（DELETE/WAL両モードで実証）。
+
+### 2. 停止・再開と計算確定の競合検証（全6シナリオ）
+
+1. **Node計算中に停止した場合**:
+   Node実行中に `pause(True)` された場合、ステップ完了後のOCCコミットで `curr_paused == 1`（または `UPDATE ... WHERE paused=0`）により衝突が検知され、未コミットレシートは破棄される（`work=0`, `paused=1`, `status="stopped"` を確認）。
+2. **計算中に停止し、保存前に再開した場合**:
+   Node実行中に `pause(True)` され、コミット前に `pause(False)` された場合、入力カーソルの決定論的計算結果が安全にコミットされる（`cursor=1`, `paused=0`, `work=1`）。他者の更新がない限りデータ破損・不整合は生じない。
+3. **停止操作とチェックポイント更新が競合した場合**:
+   OCCにより、ステップコミットが先行して確定した後に停止されるか（`work=1`, `status="stopped"`）、停止が先行してステップが拒否されるか（`work=0`, `status="stopped"`）のいずれかに線形化され、原子性が維持される。
+4. **別プロセスから同じカーソルを計算した場合**:
+   同一カーソルに対する並行コミットは、OCC CAS（`UPDATE ... WHERE cursor=0 AND paused=0`）により**厳密に1プロセスのみがコミット成功**し、他方は衝突検知（`conflict` または `IntegrityError`）となり、重複行はゼロ（`COUNT(*)=1`）。
+5. **再試行でレシートが重複しないこと**:
+   `PRIMARY KEY (owner, id, position)` 制約により、同一カーソルの再試行や重複要求で同一ポジションのレシートが二重保存されることはない。
+6. **既存の保存済み履歴を壊さないこと**:
+   3サイクルの停止・再開を繰り返しても、過去の全ポジション・ダイジェスト・カーソル整合性が完全に維持される。
+- **更新世代（generation）に関する判断**:
+  既存の `cursor` と `paused`（および `PRIMARY KEY` と OCC 条件）のみで、停止中のコミット拒否・重複排除・再開後の整合性が数学的に保証されており、**スキーマ変更（世代カラム追加等）は不要**であると判断。既存DB互換性およびデータ保護を維持。
+
+### 3. HTTP計算制限の最終確認（Gateway 4スロット vs Backend 1ジョブ排他）
+
+- **Gateway層（`APP_REQUEST_SLOTS` = 4並列、`compute-owner` = 12回/60秒）**:
+  Gatewayハンドラ内で現在処理中・待機中（ロングポーリング含む）のHTTP接続数を最大4並列に制限。
+- **Backend層（`BATTLE_RUNNING`、`STATUS['state']` = 厳格な単一ジョブ排他）**:
+  Backendは最大1ジョブのみ実行を許可し、ジョブ実行中に別リクエストが到達した場合は **HTTP 409 Conflict** を返却。
+- **非同期バックグラウンド計算の影響**:
+  `start_battle` や `start_24_conditions` はバックグラウンドスレッドを起動して直ちに200/202応答するため、Gatewayの `APP_REQUEST_SLOTS` は応答時点で解放される。しかし、Backend側では `BATTLE_RUNNING = True` が維持されるため、計算完了まで新規ジョブは 409 で拒否される。一方、`run_iv_selection` はロングポーリング（デフォルト12秒）の間Gatewayスロットを保持する。
+- **結論**:
+  Gatewayスロット（接続数制限）とBackend排他（実計算数制限）の多層防御が成立しており、レート制限を変更する必要はない。
+
+### 4. 実施した修正と回帰テスト
+
+- **変更ファイル**:
+  - `pvpoke_observed_search.py`: `pause()` の書込ロック短縮（`_load_snapshot` / `_summary` をロック外へ分離）。
+  - `tests/test_observed_search.py`: `test_pause_releases_writer_lock_allowing_concurrent_writers_and_readers` および `test_pause_resume_race_conditions_and_occ_scenarios` を追加。
+  - `docs/ASTRA_REVIEW_CONTINUATION.md`: 本検証記録を追記。
+- **回帰テスト結果**:
+  - `python3 -m unittest discover -s tests -p 'test*.py'`: **668件中660件成功（8件スキップ）**、エラー0件。
+  - 全JSテスト（31ファイル）: 全件成功。
+  - 構文チェック（`node --check`, `sh -n`）および `git diff --check`: エラーなし。
+
+### 5. 安全制約と公開判定
+
+- **PR状態**: PR #113 は **Draft・未マージ** を維持。`main`・本番環境・機能フラグ（`PVP_OBSERVED_SEARCH_ENABLED=0`）は未変更。
+- **限定試験判定**: **A（限定試験開始不可）** を厳格に維持。
+  - 残存25 HIGH CVE（Dockerイメージ）
+  - 独立第三者セキュリティレビュー未完了
+  - 隔離された管理者限定試験環境の未構築
+  - バックアップ・復元および実運用監視の未整備
+  - クライアントHTTP切断時のバックエンド計算即時中断の未実装
+
+---
+
+## 2026-11-13 JST 第8段階（P1根本修正・回帰検証）：計算制限統合とSQLiteロック競合解消（Hydrogen High）
+
+作業起点：Draft PR #113（`feature/missing-observed-integration-20261113`）、ベースHEAD `53b24519e0a6d7cc0000bc45d9f70b2213100907`。直前のFlash Medium検証（下記の訂正およびP1問題1〜4の実証記録）をそのまま引き継ぎ・保持し、以下の3件のP1問題を修正した（新機能追加・一般公開なし、本コミットのSHAは `git log -1 --format=%H -- docs/ASTRA_REVIEW_CONTINUATION.md` で確認し、新SHAに対するGitHub Actions CIはpush後に確認する）。
+
+### 1. 確認済みP1原因と根本修正
+
+1. **P1-1：`/app-api` と `/mcp` 間の計算制限・並行スロット不整合（`pvpoke_mcp_remote.py`）**
+   - *原因*：`/app-api` の計算経路のみが `compute-owner`（12回/60秒）と `APP_REQUEST_SLOTS`（4並列）を通過し、`/mcp` の `tools/call` は認証済みであれば `entry`（300回/60秒）のみで最大24ワーカーまで同時計算を起動可能だった。
+   - *修正*：`MCP_COMPUTE_TOOLS = frozenset({'start_battle', 'start_24_conditions', 'run_iv_selection'})` を定義し、`Handler.do_POST` の `/mcp` `tools/call` 分岐で対象ツールに対して `self.rate_allowed('compute-owner', 12, 60)`（超過時429 + `Retry-After: 10`）および `APP_REQUEST_SLOTS.acquire(blocking=False)`（満杯時503、`finally` で確実解放）を適用。軽量/参照系ツール（`get_status`・`get_catalog`・`prepare_battle`・`get_results` 等）は制限対象外とし、`/app-api/run` は二重課金せずに `call_tool('run_iv_selection', ...)` を呼び出す構成とした。
+   - *補足*：Gatewayの `APP_REQUEST_SLOTS`（4並列）とBackendの単一ジョブ排他（`BATTLE_RUNNING` / HTTP 409）は層が異なるため、`test_gateway_4_slots_vs_backend_single_active_job_409` で実Gateway→実Backend経路の409挙動も回帰確認済み。
+
+2. **P1-2：`MissingAnalysis.evidence()` のSQLite読取ロック内CPU処理（`pvpoke_missing_analysis.py`、`pvpoke_ownership.py`）**
+   - *原因*：`evidence()` が `store._reader()`（SHAREDロック）を保持したまま、プランJSON検証、正規化、`Ownership` 照合、`BattleStore._decode`、`battle_facts` を実行しており、最大128マッチアップ処理中に並行writerが250msタイムアウトで `database is locked` となっていた。
+   - *修正*：`Ownership._match_rows(rows, combatant, cp)` を静的メソッドとして抽出し、`MissingAnalysis.evidence()` 内の `with self.store._reader() as db:` をテーブル存在確認、`plan_json`・`has_inventory`・`ledger_revision`、対象最大128件の `battle_results`（パラメータ化 `IN` 句）、対象 `(species_id, iv_index)` の `owned_instances_v1` 行フェッチのみに限定。ロック解放後にインメモリでハッシュ検証、正規化、所有照合、デコード、事実構築を実行する。
+
+3. **P1-3：`ObservedSearch.step()` のSQLite書込ロック内Node実行（`pvpoke_observed_search.py`）**
+   - *原因*：`step()` が各ステップの `with self.store._writer() as db:`（EXCLUSIVEロック）内で `replay()`（Node.js子プロセス起動・完了待機）を実行し、全reader/writerを停止させていた。
+   - *修正*：参照カウント付きプロセス内アドバイザリロック `_job_step_lock`（キー `(resolved_path, owner_scope, search_id)`）で同一ジョブの重複Node起動を防ぎつつ、初期スナップショット取得（`_load_snapshot`：`store._reader()` + ロック外 `_replay()`）、`copy.deepcopy(state)` 上での `replay()`・`Search.advance()` を全てSQLiteロック外へ移動。最後に `store._writer()` 内で厳密なOCC CAS（`cursor == position and not paused`、`plan["versions"] == versions(...)`、`INSERT INTO observed_work_v2`、`UPDATE observed_jobs_v2 SET cursor=? WHERE owner=? AND id=? AND cursor=? AND paused=0` の `rowcount == 1`）で原子的コミットを行う。競合や実行中pause発生時は未コミットレシートを破棄し最新状態を再取得する。
+
+### 2. テスト内容・件数・結果（修正後フル回帰）
+
+- **修正箇所別の個別検証テスト**:
+  - `tests/test_security_regressions.py`: 29/29 PASS（`test_mcp_compute_tools_share_compute_owner_budget_without_double_charge`、`test_mcp_compute_tools_share_app_slots_and_release_on_error_or_disconnect`、`test_gateway_4_slots_vs_backend_single_active_job_409` を追加）
+  - `tests/test_missing_analysis.py`: 8/8 PASS（128マッチアップ + 遅延 `_decode` 中のDELETEモード並行writer成功、DELETE/WAL両モードのスナップショット分離、プラン改ざん・インベントリ異常時のロック解放を追加）
+  - `tests/test_observed_search.py`: 10/10 PASS（Node実行中の他writer/reader/別ジョブ並行成功、プロセス内重複排除とクロスプロセスOCC競合、replay中pauseでの未コミット破棄・再開、不正入力・他owner・stale版・replay失敗を追加）
+  - 既存の切断・レート制限合成テスト `test_disconnect_and_rate_limit.py`（スクラッチ）: 6/6 PASS（前回Flash Mediumの12件の修正前検証テストと異なり、実Gateway/実SQLite/実Node経路の恒久回帰テストとして本体へ統合）
+- **CI同等フル回帰（ローカル実行・全件成功）**:
+  - `python3 -m compileall -q .`: PASS
+  - `PYTHONPATH=<scratch>/py_stubs:. python3 -m unittest discover -s tests -p 'test*.py'`: **666件実行（成功658・スキップ8）**
+  - `for f in tests/test*.js tests/test*.cjs; do node "$f" || exit 1; done`: 全JSテストファイル PASS
+  - `for source in *.js; do node --check "$source" || exit 1; done && sh -n start.sh`: PASS
+
+### 3. 実測値と未実証事項の明確な区別
+
+- **実測値（ローカルVM）**:
+  - `MissingAnalysis.evidence(128)`（128マッチアップ）: `total = 50.15 ms`、`_reader()` ロック保持時間 `3.18 ms`。
+  - `ObservedSearch.step(1)`（Nodeネイティブ再生込み）: `total = 62.14 ms`、`reader_lock = 0.33 ms`、`writer_lock = 8.00 ms`（Node `native_replay` 自体はSQLiteロック外で実行）。
+  - ※ローカルVM環境には `PyJWT` パッケージが未導入のため、ローカル回帰ではスクラッチ用スタブ `scratch/py_stubs/jwt.py` を `PYTHONPATH` 経由で使用（リポジトリ本体へは未配置）。本物の `PyJWT`・Dockerイメージビルド・Nginx結合・物理ENOSPC・モバイルChromiumはGitHub Actions CIで検証する。
+- **未実証・残存前提**:
+  - Railway本番Edge・実トラフィック負荷・実ネットワーク遅延下での切断伝播タイミング。
+  - クライアントHTTP切断直後のバックエンド計算・Node子プロセスの即時停止（依然として未実装であり、スロット満了/完了待ちとなる）。
+
+### 4. 実施した修正と残存リスク・前提条件
+
+- **解消済みP1**: `/mcp` 計算ツールと `/app-api` 間の計算レート/同時実行制限の統一、および `MissingAnalysis.evidence()` / `ObservedSearch.step()` のSQLite長時間ロック保持の解消。
+- **残存リスク（公開前ゲート）**:
+  1. HTTP切断時に計算中ワーカー・Node子プロセスが即座には中断されない（4スロット・12回/60s・wall timeout・Backend単一ジョブ排他により上限管理されるが、切断連打による完了までのCPU消費自体は残る）。
+  2. Dockerイメージ監査で検出されている25ユニークHIGH CVE。
+  3. 独立した第三者セキュリティレビューの署名、隔離された管理者限定試験環境、バックアップ・復旧および運用監視の整備が未完了。
+
+### 5. 既存機能・データ整合性への影響
+
+- DBスキーマ、所有者スコープ分離、`APP_REQUEST_SLOTS` 上限、通常の役割評価、および `extended=False` の従来探索ハッシュ（`LEGACY_SEARCH_HASH`）は変更なし。
+- `pvpoke_observed_search.py` の変更により、`extended=True`（第4段階以降の拡張観測探索）では `versions()` 内の `content_hash(Path(__file__))` が更新されるため、修正前に保存された未完了の拡張観測計画は再開時に仕様通り `stale` として扱われる（`PVP_OBSERVED_SEARCH_ENABLED` は引き続き既定OFF=`0`）。
+
+### 6. 変更ファイルと公開判定
+
+- **変更ファイル**: `pvpoke_mcp_remote.py`, `pvpoke_ownership.py`, `pvpoke_missing_analysis.py`, `pvpoke_observed_search.py`, `tests/test_security_regressions.py`, `tests/test_missing_analysis.py`, `tests/test_observed_search.py`, `docs/ASTRA_REVIEW_CONTINUATION.md`
+- **PR状態**: PR #113 は **Draft・未マージ** を維持。`main`・本番環境・機能フラグは未変更。
+- **限定試験判定**: **A（限定試験開始不可：独立セキュリティレビュー未完了・残存25 HIGH CVE・隔離試験環境/実Edge検証未完了、および切断時即時計算停止未実装のため）** を維持する。
+
+---
+
+## 2026-11-13 JST 第8段階：SQLite読取ロック解放とreader/writer競合解消（CI全5件成功）
+
+作業開始時確認：GitHub PR #111(`bbc0619f`)、#112(`a9d6ee55`)、#113(`a721cd844ad5ed7e6b13c17716667e4471f1bf13`) は全てDraft・未マージ。直前HEAD `a721cd8` に対する5 CIは成功済み。
+
+今回の差分：
+- 根本原因：SQLite DELETEモードにおいて、`compare_observed()` および `ObservedSearch.get()` が `store._reader()` のSHAREDロックを保持したまま全レシートの `json.loads`、`validate_damage`、`Search.advance` などの重いCPU処理を実行し、並行writerが250msタイムアウトで `sqlite3.OperationalError: database is locked` となる問題を解消。
+- 修正内容：`pvpoke_observed_search.py` の `_read` を SQL行データ一括フェッチ（`_fetch`）とインメモリ検証・探索状態復元（`_replay`）に分離。`compare_observed()` および `ObservedSearch.get()` において、同一読取スナップショット内で `_check_receipt_budget` と `_fetch` を実行後、直ちに `_reader()` を抜けてSQLiteロックを解放（ロック保持時間は1024件レシートで約39msから実測約2.37msへ短縮）。ロック解放後にメモリ上のデータに対して `_replay` を実行し、並行writerの即時成功を保証。
+- 整合性維持：同一DBスナップショットからの取得（TOCTOU防止）、1024件/16MiB既存上限、他ownerデータの完全除外、異常系での確実な接続・ロック解放を維持。
+- 回帰・検証テスト：`tests/test_missing_observed_evidence.py` を拡充し、DELETEモード下での並行writer成功検証、スナップショット分離（再生中の並行step追加が混入しないこと）、フェッチ/再生失敗時のロック解放、1024件合法レシート完全再生および1025件目のSQL事前拒否を追加（14/14 PASS）。観測系テスト全体（51/51 PASS）、ストレージ系（18/18 PASS）、バックアップ・合成負荷（31/31 PASS）ローカル確認済み。
+- コミットとCI：最新HEAD `4b57ea094643c03efefbd06066406db3f8bdb59c` に対し、GitHub Actions全5ワークフロー（IV text contract, Meta preset/image, 24-mode, Recommendation performance, Security and regression）が全て SUCCESS で完了。
+
+- HTTP切断・タイムアウトおよびレート制限の検証（安全性評価の訂正）：
+  - 経路確認：Client -> Nginx (80/443, proxy_http_version 1.0) -> Gateway (8788, BoundedHTTPServer max 24) -> urllib.request (8765, timeout 65s) -> Engine (Python/Node)。
+  - 切断・タイムアウト挙動の実測範囲：特定条件下の合成テスト（単一エンドポイントでのTCP RST切断、スローロリス監視、Token Bucket枯渇、4スロット飽和）において、正常終了後のスロット復帰（4スロット/24スロット）および 429/503 応答コードを確認。
+  - 【安全性評価の訂正・未証明事項】：
+    - クライアント切断後もバックエンドのCPU計算（Node子プロセス/Pythonループ）は中断されず最後まで継続するため、切断後の即時計算停止は未実装。
+    - Gatewayの `APP_REQUEST_SLOTS.release()` は `finally` で復帰するが、バックエンドプロセス・スレッド・Node子プロセスの異常停止時や複数リクエスト並行切断時の全処理経路におけるリソースリーク非発生は未証明。
+    - `/app-api` と `/mcp` 間で計算予算（`compute-owner`）や並行スロット（`APP_REQUEST_SLOTS`）の適用差異が存在し、全処理経路での負荷上限や実運用での資源枯渇（DoS）防止は証明されていない。
+    - したがって、「限定試験のP1安全要件を満たしている」との前回の断定を撤回・訂正する。
+
+### P1継続検証結果：入口間計算予算差異、切断・タイムアウト耐性、追加SQLite競合（実証完了・修正前停止）
+
+1. **確認済みの問題と再現条件**:
+   - **問題1（計算予算の入口間差異・バイパス）**:
+     `/app-api` 経由の計算リクエストは `compute-owner`（12回/60秒）および `APP_REQUEST_SLOTS`（4並列）で制限されているが、`/mcp` の `tools/call` は `is_app` が偽のため `APP_REQUEST_SLOTS` を獲得せず、`compute-owner` もチェックされない。認証済み利用者が `/mcp` を使用した場合、300回/60秒の `entry` 制限のみで動作し、4並列を超えて最大24ワーカーまで同時計算を起動可能であることを確認。
+     *再現テスト*: `test_mcp_bypasses_compute_owner_budget`（予算枯渇後も `/mcp` が200成功）、`test_mcp_bypasses_app_request_slots_concurrency`（4スロット飽和後も `/mcp` が200成功）。
+   - **問題2（HTTP切断・タイムアウト時の資源継続消費）**:
+     同期HTTPモデルのため、クライアント切断後もバックエンド（`pvpoke_web.py`）のCPU計算およびNode子プロセスは即時停止せず、完了またはwall timeoutまでCPU・メモリを消費し続ける。内部通信タイムアウト（urllib 65秒）でGatewayが503を返却しても、Backend側スレッド・プロセスは自律停止しない。
+   - **問題3（追加SQLite競合：`MissingAnalysis.evidence()` の読取ロック内CPU処理）**:
+     `MissingAnalysis.evidence()` が `store._reader()`（SHAREDロック）を保持したまま最大128件のマッチアップの正規化、JSONデコード、`validate_complete_result`、`battle_facts` 計算を実行。処理中に並行writerが来ると、250msタイムアウトで `sqlite3.OperationalError: database is locked` が発生する。
+     *再現テスト*: `test_writer_blocked_by_long_reader_decoding`（実測約0.251秒でwriterが失敗）。
+   - **問題4（追加SQLite競合：`ObservedSearch.step()` の書込ロック内Node子プロセス実行）**:
+     `ObservedSearch.step()` が各オフセットの `with self.store._writer() as db:`（EXCLUSIVEロック）内で `replay()` を呼び出し、Node.js子プロセスの `subprocess.Popen` 起動と `process.communicate()` 完了待機を実行している。Node実行中、DBの全readerおよびwriterが完全にブロックされ、並行アクセス時に250msタイムアウトで `database is locked` が頻発する。
+     *再現テスト*: `test_writer_blocked_by_long_writer_holding_node_execution`（実測約0.251秒で並行writerが失敗）。
+
+2. **テスト内容・件数・結果**:
+   - 入口間差異検証: `test_mcp_app_budget_discrepancy.py`（2/2 PASS）
+   - 追加SQLite競合検証: `test_additional_sqlite_concurrency.py`（4/4 PASS、静的コード検証2件＋実SQLite DELETEモード競合2件）
+   - HTTP切断・レート制限検証: `test_disconnect_and_rate_limit.py`（6/6 PASS）
+   - 合計12件の検証テストが全件正常終了。
+
+3. **実測値と推測の区別**:
+   - *実測値*:
+     - `/mcp` 経由での `compute-owner` および `APP_REQUEST_SLOTS` の非適用（HTTP 200成功 vs 429/503拒否）
+     - SQLite DELETEモード下での並行writerタイムアウト時間（実測0.251秒での `database is locked` 発生）
+     - 切断時の `ConnectionResetError` 発生と `finally` 経由でのスロット復帰
+   - *推測・未実証事項*:
+     - 実運用・複数ユーザー環境下での累積切断トラフィックによるCPU/メモリ枯渇耐性
+     - Railway本番Edge環境における切断検知・伝播タイミング
+     - 高負荷時におけるNode子プロセスの回収漏れ・ゾンビプロセス発生の有無
+
+4. **実施した修正と未修正事項**:
+   - *実施済み*: `docs/ASTRA_REVIEW_CONTINUATION.md` の過剰主張の訂正、再現テストの実装と実証。
+   - *未修正（安全のため停止）*:
+     - `ObservedSearch.step()` のSQLiteトランザクション境界変更（Node実行をwriteロック外に切り出し、楽観的チェックポイント更新へ分離）
+     - `MissingAnalysis.evidence()` の読取トランザクション短縮（行データ一括フェッチとインメモリ計算の分離）
+     - `pvpoke_mcp_remote.py` の `/mcp` ツール呼び出しに対する `compute-owner` および `APP_REQUEST_SLOTS` 適用
+     ※上記は「SQLiteトランザクション境界の変更」「並行処理・所有者分離に影響する変更」に該当するため、ルールに従い実装直前で停止しHydrogen Highへの切り替えを案内する。
+
+5. **残存するセキュリティ・性能リスク**:
+   - `/mcp` 経由の大量計算リクエストによるワーカースレッド（最大24）枯渇リスク
+   - Node実行中のSQLite独占による他リクエストの `database is locked` 失敗リスク
+   - クライアント切断後もバックエンド計算が完走することによるCPU浪費リスク
+   - 実Dockerイメージ監査で判明している25種類のHIGH CVE
+   - 独立セキュリティレビュー未実施、管理者限定試験環境の未隔離
+
+6. **既存機能・データ整合性への影響**:
+   - プロダクションコードは変更しておらず、既存機能、データ形式、所有者分離、API互換性は完全に維持されている。
+
+安全制約と公開判定：
+- PR #111〜#113はDraftを維持。main・本番・機能フラグ（`PVP_OBSERVED_SEARCH_ENABLED=0`）は未変更。ChatGPT接続PvPoke MCP使用なし。
+- 限定試験判定は **A（限定試験開始不可：切断時計算継続、入口間計算予算差異、SQLite競合、残存CVE、実Edge挙動未確認）** を厳格に維持。
+
+---
+
+## 2026-11-13 JST 第7段階：隔離試験の実行準備・合成負荷計測（CI前の保存）
+
+作業開始時確認：GitHub PR #111(`bbc0619f`)、#112(`a9d6ee55`)、#113(`c4739336380c22e54ce4f8eb93335e6abf056dc7`) は全てDraft・未マージ。#113の正本ブランチにGitHub上の未保存差分はなく、ローカルWork別環境の未コミット変更はGitHubだけから確認できない。既存第6段階の5 CIは成功。
+
+今回の差分：`tests/test_stage7_observed_load.py`（実APIの小規模21回・4並列の測定、合成1024件のSQL事前チェックと1025件拒否）、`tests/stage7_container_smoke.py`（隔離コンテナでuid/capability/no-new-privs/ネットワーク遮断/合成認証/短時間HTTP計測）、`.github/workflows/security-regression.yml`（追加ビルドなしでDocker imageに対するnonroot/cap-drop/CPU・memory/PID・ネットワークなし起動）、`docs/STAGE7_TRIAL_ENVIRONMENT_20261113.md`（本番分離案と運用ゲート）。既存資料を消さない。
+
+安全制約：DockerコマンドはGitHub Actions上の**合成・公開ポートなしの使い捨てコンテナのみ**。本番・Railway・Cloud Runへのデプロイ、フラグON、実データ転送はしない。独立のセキュリティレビュー（別人・別モデルによる署名）は**未実施**である。CI結果・実測数値は最新HEADのジョブログを確認してからPRコメントで追記する。
+
+---
+
+## 2026-11-13 JST 第6段階：セキュリティ到達性と限定試験ゲート（CI実行前）
+
+PR #113の現行ブランチに、`docs/STAGE6_SECURITY_RELEASE_GATE_20261113.md` を追加。対象HEAD `87562be7779a626dd06da1984228042fa09976b0` の実イメージ監査artifact（CI run 43368355869、artifact 14012015457）でHIGH103行/25ユニークCVEを確認。分類・修正版記載・実コードへの到達性と、管理者限定試験の条件を同文書に記録。観測照合の累積receipt事前上限（1024件/16MiB）および同一対戦の重複正規化削減を実装。テストとCIの最終結果はPR #113コメントに追記する。現時点は公開/試験とも未実施、環境フラグ既定OFF、変更前に戻す場合はこのcommitをrevertできる。旧記録は以下の通り保持。
+
+---
+
+## 2026-11-13 JST 第5段階：不足分析への観測戦術リンクとモバイルUI（CI確認前）
+
+対象：Draft PR #113、ブランチ `feature/missing-observed-integration-20261113`。第4段階の正本は `a9d6ee55a2b7745e8d82c28426d0feb2269feed1`、PR #111/#112はDraft・未マージ。GitHub上の修正ブランチで作業し、他の未コミット変更は確認できない。前回Work内の非永続な差分は回収していない。
+
+| 工程 | 状態 | 確認済み | 残作業 |
+|---|---|---|---|
+| 現行ソース・PR・設計確認 | 完了 | #112 HEADと観測設計、欠損比較API、Sandbox画面を確認 | なし |
+| 不足分析と観測結果の照合 | 実装済み・CI再検証中 | `pvpoke_observed_evidence.py`、`pvpoke_missing_comparison.py`。既存評価・保有者・版・ビルド・相手・初期状態の一致を確認。未対応Sandboxフォームは他の適用可能な一致を妨げない | CI全件、追加異常系 |
+| モバイル操作・結果の分類 | 実装済み・CI再検証中 | `pvpoke_missing_ui.py` の候補別参考表示、固定戦術の横並び概要、フォームのセッション復元。Sandbox画面から観測IDを安全に引き継ぐ | 320/390px Chromium、実機未実施 |
+| セキュリティ・保全 | 実装済み・CI再検証中 | ownerに束縛された認証API内の読み取り専用照合。通常の役割評価・所有状態・ランキングを変更せず、新規対戦計算0件。ユーザーデータを外部へ転送しない | 実容量・電源断、実機 |
+| テスト | CI再検証中 | `tests/test_missing_observed_evidence.py` と `tests/browser_missing_analysis.cjs` を追加・更新。初回Python616件中1失敗・1スキップ。失敗原因は対戦上限を超える不正な合成IVで、合法な別IVケースへ修正済み | 最新コミットのCI確認 |
+| 公開判断 | 未着手 | Draft PRのみ。main・本番・既存フラグは変更していない | 重大な問題がないか確認し、試験公開可否を判断 |
+
+通常の固定戦術・観測方策・標準対戦は別証拠であり、後者2つで前者の判定を自動変更しない。同じBuildでもシールドや初期ゲージ・相手IVが異なれば別条件。通常役割と観測役割は勝敗・HP・ゲージ・残盾が同義のときに限って対応づける。観測方策の共有成功も宣言済み世界・controller・観測枝に限り、実戦保証ではない。
+
+`information_fairness=not_established`、`live_reproducibility=not_verified`、`practical_role_covered=false` を維持。実機観測時刻・同値CMP・確率効果の実機検証は今回延期。性能p50/p95新規比較は未測定。ユーザー承認までPRをマージ・デプロイ・フラグ有効化しない。ChatGPT接続PvPoke MCP使用なし。
+
+**次の操作**：PR #113の最新HEADに対するGitHub Actionsとブラウザ検証を確認する。失敗時はジョブログの原因だけを修正して回帰を再実行し、Draft維持。完了後この節に対する追記はPRコメントで行い、無駄なCI再実行を避ける。
+
+---
+
 ## 2026-11-13 JST 第4段階：役割条件・相手候補・保存復旧
 
 起点は `b06d3e0de9204105332cc40bdb7c2651fe995533`、CI 12/12 成功。PR #111/#112 はDraft。本節のSHAは `git log -1 --format=%H -- docs/ASTRA_REVIEW_CONTINUATION.md`、CIはPR #112のChecksで確認。

@@ -43,6 +43,7 @@ IV_RUNNER = IVWorkflow(backend)
 RATE_BUDGET = RateBudget()
 BACKUP_SLOTS = threading.BoundedSemaphore(1)
 APP_REQUEST_SLOTS = threading.BoundedSemaphore(4)
+MCP_COMPUTE_TOOLS = frozenset({'start_battle', 'start_24_conditions', 'run_iv_selection'})
 
 HOST, PORT = os.environ.get('PVP_BIND_HOST', '0.0.0.0'), int(os.environ.get('PORT', '8787'))
 API_KEY = os.environ.get('PVP_API_KEY', '')
@@ -774,20 +775,34 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(200, {'jsonrpc':'2.0','id':id_,
                                        'error':{'code':-32602, 'message':'Unknown tool'}})
                     return
+                acquired_slot = False
+                if name in MCP_COMPUTE_TOOLS:
+                    if not self.rate_allowed('compute-owner', 12, 60):
+                        return
+                    if not APP_REQUEST_SLOTS.acquire(blocking=False):
+                        self.respond(503, {'error': '処理中です。少し待って再試行してください'})
+                        return
+                    acquired_slot = True
                 try:
-                    output = call_tool(name, params.get('arguments') or {})
-                    result = {'content':[{'type':'text','text':json.dumps(output,ensure_ascii=False,separators=(',',':'))}],
-                              'isError':False}
-                except ValueError as exc:
-                    # User-input validation stays actionable without exposing
-                    # unexpected infrastructure exceptions.
-                    result = {'content':[{'type':'text','text':str(exc)}],
-                              'isError':True}
-                except Exception as exc:
-                    logging.warning('MCP tool request failed: %s', type(exc).__name__)
-                    result = {'content':[{'type':'text',
-                                          'text':'処理に失敗しました。入力と接続状況を確認してください'}],
-                              'isError':True}
+                    try:
+                        output = call_tool(name, params.get('arguments') or {})
+                        result = {'content':[{'type':'text','text':json.dumps(output,ensure_ascii=False,separators=(',',':'))}],
+                                  'isError':False}
+                    except ValueError as exc:
+                        # User-input validation stays actionable without exposing
+                        # unexpected infrastructure exceptions.
+                        result = {'content':[{'type':'text','text':str(exc)}],
+                                  'isError':True}
+                    except Exception as exc:
+                        logging.warning('MCP tool request failed: %s', type(exc).__name__)
+                        result = {'content':[{'type':'text',
+                                              'text':'処理に失敗しました。入力と接続状況を確認してください'}],
+                                  'isError':True}
+                    self.respond(200, {'jsonrpc':'2.0','id':id_,'result':result})
+                finally:
+                    if acquired_slot:
+                        APP_REQUEST_SLOTS.release()
+                return
             else:
                 self.respond(200, {'jsonrpc':'2.0','id':id_,
                                    'error':{'code':-32601,'message':'Method not found'}})

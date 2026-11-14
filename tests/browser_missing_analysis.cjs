@@ -5,7 +5,8 @@ const fs = require('node:fs');
 const {chromium} = require('playwright');
 const rows = require('./fixtures/strategy_rows.json');
 
-const html = fs.readFileSync('pvpoke_missing_ui.py', 'utf8').split("HTML = r'''")[1].split("'''")[0];
+const html = fs.readFileSync('pvpoke_missing_ui.py', 'utf8').split("HTML = r'''")[1].split("'''")[0]
+  .replace('data-observed-search="0"', 'data-observed-search="1"');
 const digest = text => crypto.createHash('sha256').update(text).digest('base64');
 const inline = tag => digest(html.split('<' + tag + '>')[1].split('</' + tag + '>')[0]);
 const csp = "default-src 'none'; connect-src 'self'; script-src 'sha256-" + inline('script')
@@ -31,8 +32,12 @@ async function checkWidth(browser, width) {
   const requests = [];
   page.on('pageerror', error => errors.push(error.message));
   try {
-    await page.addInitScript(() => sessionStorage.setItem('pokemoniv:tactic-evidence-link-v1',
-      JSON.stringify({evaluation_id:'e'.repeat(64),build_id:'b'.repeat(64),search_ids:['f'.repeat(64)]})));
+    await page.addInitScript(() => {
+      sessionStorage.setItem('pokemoniv:tactic-evidence-link-v1',
+        JSON.stringify({evaluation_id:'e'.repeat(64),build_id:'b'.repeat(64),search_ids:['f'.repeat(64)]}));
+      sessionStorage.setItem('pokemoniv:observed-evidence-link-v1',
+        JSON.stringify({evaluation_id:'e'.repeat(64),build_id:'b'.repeat(64),search_id:'d'.repeat(64)}));
+    });
     await page.route('http://127.0.0.1:9876/**', async route => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
@@ -75,6 +80,28 @@ async function checkWidth(browser, width) {
           observation_conditioned:false,information_assumptions:[
             'fixed_timed_self_actions','prespecified_opponent_actions',
             'unrevealed_opponent_charged_move_assumed']}]}]}]}});
+      }
+      if (payload.action === 'observed_evidence') {
+        assert.equal(payload.evaluation_id, 'e'.repeat(64));
+        assert.deepEqual(payload.search_ids, ['d'.repeat(64)]);
+        return route.fulfill({json: {
+          schema:'missing-observed-evidence-v1', evaluation_id:payload.evaluation_id,
+          new_battles:0, standard_assessment_unchanged:true,
+          information_fairness:'not_established', live_reproducibility:'not_verified',
+          practical_role_covered:false, links:[{
+            search_id:'d'.repeat(64), build_id:'b'.repeat(64), matching_worlds:1,
+            additional_worlds:1, scenario_count:2, work:4, observed_status:'stopped',
+            stop_reason:'policy_found', policy_scope_truncated:false, evaluation_count:1,
+            conditions:[{opponent:{species_id:rows[2].species},shields:[1,1],
+              standard_meets:null,aligned_role_ids:['win'],scenario_count:2,
+              policy_scenarios:[{scenario_count:2,outcomes:{
+                self_ko_win:1,opponent_ko_win:0,simultaneous_ko:0,timeout:0,unknown:1
+              },aligned_roles:[{id:'win',passed:1,failed:0,unknown:1,meets:null}]}]}],
+            policies:[{role:true, tested:2, failed:0, unknown:0,
+              roles:[{id:'win',meets:true,passed:2,failed:0,unknown:0,
+                resource_floor:{hp:3,energy:9,shields:0}}]}]
+          }]
+        }});
       }
       if (payload.action === 'explore') {
         assert.ok([0,32].includes(payload.budget));
@@ -137,10 +164,22 @@ async function checkWidth(browser, width) {
     await page.getByText(/相手の未来の行動を仮定/).waitFor();
     await page.getByText(/相手側の条件で結果が変わっています/).waitFor();
     await page.getByText(/代替の実用性：未検証/).waitFor();
+    await page.locator('summary').filter({hasText:'観測戦術の参考結果を確認'}).click();
+    await page.getByRole('button', {name:'この個体の保存結果を照合'}).click();
+    await page.getByText('有限シナリオの参考結果').waitFor();
+    await page.getByText(/分析外の追加候補 1件/).waitFor();
+    await page.getByText(/実戦再現性は未検証/).first().waitFor();
+    // The observed-policy box nests a matchup detail. Open the inner detail,
+    // not the already-open outer summary, before asserting its visible contents.
+    await page.locator('#results details.match summary')
+      .filter({hasText:/^対面 /}).first().click();
+    await page.getByText(/同じ役割条件で比べられる観測役割：win/).waitFor();
+    await page.getByText(/方策 1：この対面の有限条件 2件/).waitFor();
+    await page.getByText(/条件 win：未確認が残る/).waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
     assert.deepEqual(errors, []);
     // The optional 32-battle click at 390px is exactly one extra API call.
-    assert.equal(requests.length, width > 320 ? 6 : 4);
+    assert.equal(requests.length, width > 320 ? 7 : 5);
   } finally {
     await page.close();
   }

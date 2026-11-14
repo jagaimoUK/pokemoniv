@@ -38,7 +38,13 @@ input,select,button{font:inherit;color:inherit;min-height:44px;border:1px solid 
 <section id="tactic-evidence-panel" data-observed-search="0" class="results stack" hidden><h2>Sandbox戦術の根拠</h2>
 <p>標準計算と指定戦術は別の結果です。実戦再現性は未検証で、所持・役割の判定は変更しません。</p>
 <div class="actions"><button id="tactic-evidence-read" type="button" data-action>保存済み戦術を不足分析と照合</button></div>
-<div id="tactic-evidence-results" class="stack"></div></section>
+<div id="tactic-evidence-results" class="stack"></div>
+<div id="observed-evidence-controls" class="stack" hidden>
+<h3>観測履歴の共有方策（試験・参考）</h3>
+<p class="muted">宣言した有限の相手候補と操作条件だけを確認します。通常の判定やランキングは変えません。</p>
+<label>保存済み観測探索ID<input id="observed-search-id" type="text" maxlength="64" pattern="[0-9a-f]{64}" autocomplete="off" spellcheck="false" placeholder="Sandboxから戻ると自動入力"></label>
+<p class="muted">下の個体カードから照合できます。個体・技・開始条件・相手対面が一致しなければ拒否します。</p>
+</div></section>
 <section id="results" class="results stack" aria-labelledby="results-heading" hidden><h2 id="results-heading" tabindex="-1">不足分析の結果</h2><p id="edited" class="muted" hidden>入力が変更されました。表示中の結果は前回の条件です。</p><div id="result-tree"></div></section>
 </div>
 <datalist id="pokemon-list"></datalist>
@@ -59,6 +65,9 @@ let credential='',catalog=Object.create(null),moves={},speciesNames=new Map(),bu
 let reference;
 const alternatives=[],scenarios=[];
 const tacticLinkKey='pokemoniv:tactic-evidence-link-v1';
+const observedLinkKey='pokemoniv:observed-evidence-link-v1';
+const fixedEvidenceTargets=new Map();
+const missingFormKey='pokemoniv:missing-analysis-form-v1';
 
 function node(tag,text,parent,cls){
  const el=document.createElement(tag);
@@ -188,9 +197,10 @@ function addAlternative(){
  const editor=buildEditor($('alternatives'),'比較個体',{open:true,initial:candidate,removable:el=>removeEditor(alternatives,el)});
  alternatives.push(editor);markEdited();setBusy(false);editor.species.focus();
 }
-function addScenario(focus){
+function addScenario(focus,initial=null){
  if(scenarios.length>=maxScenarios)return;
- const editor=buildEditor($('scenarios'),'対面の相手',{open:true,removable:el=>removeEditor(scenarios,el)});
+ const editor=buildEditor($('scenarios'),'対面の相手',{open:true,initial:initial?.opponent,
+  removable:el=>removeEditor(scenarios,el)});
  const grid=node('div',null,editor.body,'grid');
  const shields=[[0,'0枚'],[1,'1枚'],[2,'2枚']];
  const selfShield=select(grid,'自分のシールド',shields);
@@ -216,6 +226,19 @@ function addScenario(focus){
   if(metric.value)requirement.minimum={[metric.value]:minimum.valueAsNumber};
   return {opponent:editor.read(),shields:[Number(selfShield.value),Number(opponentShield.value)],energy:energy.valueAsNumber,requirement};
  };
+ if(initial){
+  selfShield.value=String(initial.shields[0]);
+  opponentShield.value=String(initial.shields[1]);
+  energy.value=String(initial.energy??0);
+  const r=initial.requirement||{};
+  if(r.outcomes?.includes('simultaneous_ko'))result.value='win_or_tie';
+  else if(!r.outcomes?.length)result.value='minimum';
+  else result.value='win';
+  const first=Object.entries(r.minimum||{})[0];
+  if(first){metric.value=first[0];minimum.value=first[1];}
+  validateMinimum();
+  advanced.open=Number(energy.value)!==0||Boolean(first);
+ }
  scenarios.push(editor);
  if(focus){markEdited();editor.species.focus();}
  setBusy(false);
@@ -410,6 +433,7 @@ function renderExploration(parent,result){
 }
 function renderResult(result,request,revision){
  const tree=$('result-tree');tree.replaceChildren();
+ fixedEvidenceTargets.clear();$('tactic-evidence-results').replaceChildren();
  const species=detail(tree,name(result.reference.species_id),'edit',true);
  const role=detail(species,roles[result.role.role_id]||result.role.role_id,'role',true);
  const cards=node('div',null,role,'stack');
@@ -427,16 +451,28 @@ function renderResult(result,request,revision){
   tag(tags,...(badges[candidate.status]||badges.pending));
   if(candidate.party_substitution==='pending')tag(tags,'パーティでの入替は未評価','wait');
   node('p','技構成　'+moveText(candidate),body,'muted');
+  if(result.can_sandbox){
+   fixedEvidenceTargets.set(candidate.build_id,
+    node('p','固定戦術：保存済みの根拠は上のパネルから照合できます。',body,'muted'));
+  }
+  if($('tactic-evidence-panel').dataset.observedSearch==='1'){
+   const observed=detail(body,'観測戦術の参考結果を確認','match');
+   const controls=node('div',null,observed,'stack');
+   const content=node('div',null,controls,'stack');
+   button(controls,'この個体の保存結果を照合',()=>perform(()=>
+    compareSavedObserved(result.evaluation_id,candidate.build_id,content)),'quiet');
+  }
   node('h3','対面ごとの結果',body);
   for(const condition of candidate.conditions)renderMatch(body,condition,candidate,result,request);
   renderInventory(body,candidate,request);
  }
- displayed={revision};$('edited').hidden=editRevision===revision;$('results').hidden=false;
+ displayed={revision,evaluation_id:result.evaluation_id};$('edited').hidden=editRevision===revision;$('results').hidden=false;
 }
 async function evaluate(request,revision){
  const result=await api('missing-analysis',request);
  if(!result.reference||!Array.isArray(result.candidates))throw Error('分析結果を読み取れませんでした。');
  renderResult(result,request,revision);
+ try{sessionStorage.setItem(missingFormKey,JSON.stringify(request));}catch{}
 }
 function simulate(condition,request){
  const revision=displayed.revision;
@@ -468,6 +504,8 @@ function linkedTactics(){
 }
 async function compareSavedTactics(){
  const link=linkedTactics();if(!link)throw Error('保存済みの戦術探索が見つかりません。');
+ if(!displayed||displayed.evaluation_id!==link.evaluation_id)
+  throw Error('比較条件が変更されています。不足分析をもう一度照合してください。');
  const data=await api('missing-analysis',{action:'tactic_evidence',
   evaluation_id:link.evaluation_id,search_ids:link.search_ids});
  if(data.schema!=='missing-tactic-evidence-v1'||!Array.isArray(data.builds))
@@ -479,6 +517,12 @@ async function compareSavedTactics(){
  node('p','以下は保存済み戦術だけの参考順です。既存の推薦順・所持判定・不足判定は変更しません。',root,'muted');
  for(const build of [...data.builds].sort((a,b)=>
   (a.advisory?.evidence_order??999)-(b.advisory?.evidence_order??999))){
+  const target=fixedEvidenceTargets.get(build.build_id);
+  if(target&&build.advisory){
+   target.textContent='固定戦術（参考）：宣言した'+build.advisory.required_conditions+
+    '条件中 '+build.advisory.theoretical_supported_conditions+
+    '条件で理論上の成立例を保存。観測情報に基づく実戦再現性は未検証。';
+  }
   if(!build.conditions.length)continue;
   const advisory=build.advisory;
   const group=detail(root,(advisory?'参考'+advisory.evidence_order+'位 · ':'')+
@@ -527,6 +571,71 @@ async function compareSavedTactics(){
  }
  announce('標準対戦・保有状態を変更せず、保存済み戦術を照合しました。');
 }
+async function compareSavedObserved(evaluationId,buildId,parent){
+ if(!displayed||displayed.evaluation_id!==evaluationId)
+  throw Error('対面条件が変わっています。不足分析をもう一度照合してください。');
+ const id=$('observed-search-id').value.trim();
+ if(!/^[a-f0-9]{64}$/.test(id))throw Error('保存済みの観測探索IDを確認してください。');
+ const result=await api('missing-analysis',{action:'observed_evidence',
+  evaluation_id:evaluationId,search_ids:[id]});
+ if(result.schema!=='missing-observed-evidence-v1'||result.new_battles!==0||
+    result.standard_assessment_unchanged!==true||
+    result.information_fairness!=='not_established'||
+    result.live_reproducibility!=='not_verified'||
+    result.practical_role_covered!==false)
+  throw Error('保存済みの観測証拠を検証できませんでした。');
+ const links=result.links.filter(link=>link.build_id===buildId);
+ if(!links.length)throw Error('この個体と一致する観測戦術が保存されていません。');
+ parent.replaceChildren();
+ for(const link of links){
+  tag(node('div',null,parent,'tags'),'有限シナリオの参考結果','wait');
+  node('p','一致する相手候補 '+link.matching_worlds+'件 ／ 分析外の追加候補 '+
+   link.additional_worlds+'件 ／ 宣言シナリオ '+link.scenario_count+'件 ／ 検証再生 '+link.work+'回',parent,'muted');
+  node('p','情報の公平性・実戦再現性は未検証。相手の全行動を網羅した結果ではありません。',parent,'muted');
+  if(link.policy_scope_truncated||link.stop_reason==='policy_limit'||link.stop_reason==='work_limit')
+   node('p','探索の上限に達しました。未探索の勝ち筋の不存在は証明できません。',parent,'muted');
+  if(link.observed_status==='pending')
+   node('p','探索は途中です。未確認の条件は不明のままです。',parent,'muted');
+  for(const condition of link.conditions){
+   const box=detail(parent,'対面 '+condition.opponent.species_id+' · 盾 '+
+    condition.shields.join(' / '),'match');
+   node('p','通常計算：'+(condition.standard_meets===true?'条件達成':
+    condition.standard_meets===false?'条件未達':'未計算・証拠不足'),box);
+   node('p',condition.aligned_role_ids.length?
+    '同じ役割条件で比べられる観測役割：'+condition.aligned_role_ids.join('、'):
+    '通常評価と観測役割の条件が異なります。直接の勝敗比較は保留です。',box,'muted');
+   for(const [i,summary] of (condition.policy_scenarios||[]).entries()){
+    const values=summary.outcomes||{};
+    node('p','方策 '+(i+1)+'：この対面の有限条件 '+summary.scenario_count+
+     '件 · 勝ち '+(values.self_ko_win||0)+' / 負け '+(values.opponent_ko_win||0)+
+     ' / 同時KO '+(values.simultaneous_ko||0)+' / 時間切れ '+(values.timeout||0)+
+     ' / 不明 '+(values.unknown||0),box,'muted');
+    for(const role of summary.aligned_roles||[]){
+     node('p','条件 '+role.id+'：'+(role.meets===true?'宣言したこの対面の範囲で成立':
+      role.meets===false?'未達のケースあり':'未確認が残る')+
+      ' · 成立 '+role.passed+' / 未達 '+role.failed+' / 不明 '+role.unknown,box,'muted');
+     if(condition.standard_meets===false&&role.meets===true)
+      node('p','通常計算で未達の対面に、観測方策による理論上の改善可能性があります。実戦再現性は未検証です。',box,'muted');
+    }
+   }
+  }
+  for(const [index,policy] of link.policies.slice(0,8).entries()){
+   const box=detail(parent,'共有方策 '+(index+1)+' · '+
+    (policy.role===true?'宣言範囲で成立':policy.role===false?'条件未達':'未確定'),'match');
+   node('p','検証 '+policy.tested+'件 ／ 未達 '+policy.failed+'件 ／ 不明 '+policy.unknown+'件',box,'muted');
+   for(const role of policy.roles){
+    const floor=role.resource_floor;
+    node('p','役割 '+role.id+'：'+(role.meets===true?'有限範囲で成立':
+     role.meets===false?'条件未達':'判定保留')+
+     ' ／ 成立 '+role.passed+'・未達 '+role.failed+'・不明 '+role.unknown+
+     (floor?' ／ 最低残量HP '+floor.hp+'・盾 '+floor.shields+'・ゲージ '+floor.energy:''),box);
+   }
+  }
+  if(link.evaluation_count>link.policies.length)node('p','表示している方策は一部です。',parent,'muted');
+  node('p','通常ランキング・保有判定・博士送り候補は変更されません。',parent,'muted');
+ }
+ announce('保存済み観測戦術を新規対戦計算なしで照合しました。');
+}
 async function connect(manual){
  if(manual)credential=$('credential').value.trim();
  announce('ポケモンと技の一覧を読み込んでいます。');
@@ -535,9 +644,42 @@ async function connect(manual){
   if(!data.ready||!data.species)throw Error(data.error||'ポケモンの一覧を準備中です。');
   moves=data.moves||{};speciesList(data.species);
   $('credential').value='';$('login').hidden=true;$('workspace').hidden=false;
-  reference=buildEditor($('reference'),'基準個体',{open:true});addScenario(false);
-   $('tactic-evidence-panel').hidden=!linkedTactics();
-  announce('基準個体と対面を入力してください。');
+  let savedForm=null;
+  try{
+   const raw=sessionStorage.getItem(missingFormKey);
+   if(raw&&raw.length<=32768){
+    const candidate=JSON.parse(raw);
+    if(candidate?.action==='evaluate'&&Array.isArray(candidate.candidates)&&
+       candidate.candidates.length>=1&&candidate.candidates.length<=8&&
+       Array.isArray(candidate.scenarios)&&candidate.scenarios.length>=1&&
+       candidate.scenarios.length<=6)savedForm=candidate;
+   }
+  }catch{}
+  reference=buildEditor($('reference'),'基準個体',{open:true,
+   initial:savedForm?.candidates[0]});
+  if(savedForm){
+   for(const condition of savedForm.scenarios)addScenario(false,condition);
+   for(const [index,candidate] of savedForm.candidates.slice(1).entries()){
+    const editor=buildEditor($('alternatives'),'比較個体',{initial:candidate,
+     removable:el=>removeEditor(alternatives,el)});
+    alternatives.push(editor);
+   }
+   if(roles[savedForm.role?.role_id])$('role').value=savedForm.role.role_id;
+   if(priorities[savedForm.role?.priority])$('priority').value=String(savedForm.role.priority);
+  }else addScenario(false);
+   const linked=linkedTactics();
+   const observed=$('tactic-evidence-panel').dataset.observedSearch==='1';
+   $('tactic-evidence-panel').hidden=!linked&&!observed;
+   $('tactic-evidence-read').hidden=!linked;
+   $('observed-evidence-controls').hidden=!observed;
+   if(observed){
+    try{
+     const link=JSON.parse(sessionStorage.getItem(observedLinkKey)||'null');
+     if(/^[a-f0-9]{64}$/.test(link?.search_id))$('observed-search-id').value=link.search_id;
+    }catch{}
+   }
+  announce(savedForm?'前回の比較条件を復元しました。保存済み結果を照合してください。':
+   '基準個体と対面を入力してください。');
  }catch(error){
   credential='';$('login').hidden=false;
   if(error.status===401)announce(manual?'接続キーを確認してください。':'接続キーを入力してください。',manual);

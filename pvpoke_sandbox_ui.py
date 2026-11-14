@@ -155,6 +155,7 @@ th{color:var(--text-muted);font-weight:600}
 </div>
 <div id="observed-results" class="stack tight"></div>
 <p id="observed-status" class="notice" role="status" aria-live="polite">探索を開始してください。</p>
+<a id="observed-to-missing" href="/app/missing" hidden>不足分析へ戻って観測戦術の証拠を照合</a>
 </details>
 </section>
 <section class="panel stack">
@@ -185,6 +186,7 @@ const reasons={
 };
 const importKey='pokemoniv:sandbox-input-v1';
 const tacticLinkKey='pokemoniv:tactic-evidence-link-v1';
+const observedLinkKey='pokemoniv:observed-evidence-link-v1';
 const defaultRules={league:'great',cp_cap:1500,max_level:50,cup_id:'all'};
 const clone=value=>JSON.parse(JSON.stringify(value));
 const normalize=value=>String(value).normalize('NFKC').trim().toLowerCase();
@@ -888,7 +890,20 @@ function renderObserved(data){
   (data.paused?' · 一時停止中':data.stop_reason?' · '+(reason[data.stop_reason]||'停止'):' · 検証を続けられます');
  $('observed-status').textContent=status;
  showObservedResults(data);
- try{sessionStorage.setItem(observedStorage,data.search_id);}catch{}
+ try{
+  sessionStorage.setItem(observedStorage,data.search_id);
+  const previous=JSON.parse(sessionStorage.getItem(tacticLinkKey)||'null');
+  if(/^[a-f0-9]{64}$/.test(data.search_id)&&
+     /^[a-f0-9]{64}$/.test(previous?.evaluation_id)&&
+     /^[a-f0-9]{64}$/.test(previous?.build_id)){
+   sessionStorage.setItem(observedLinkKey,JSON.stringify({
+    search_id:data.search_id,evaluation_id:previous.evaluation_id,build_id:previous.build_id}));
+   $('observed-to-missing').hidden=false;
+  }else{
+   const stored=JSON.parse(sessionStorage.getItem(observedLinkKey)||'null');
+   $('observed-to-missing').hidden=stored?.search_id!==data.search_id;
+  }
+ }catch{}
 }
 async function beginObserved(spec){
  const {actions,shield_decisions,policies,...battle}=spec;
