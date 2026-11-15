@@ -1,0 +1,37 @@
+name: Durable IV selection batch checks
+on:
+  pull_request:
+    paths:
+      - 'pvpoke_app_batch.py'
+      - 'pvpoke_app_ui.py'
+      - 'pvpoke_mcp_remote.py'
+      - 'tests/test_durable_selection_batch.py'
+      - 'tests/test_app_background_notify.cjs'
+      - '.github/workflows/durable-selection-batch.yml'
+  push:
+    branches: [feature/durable-selection-batches-notifications-20261115]
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  batch-unit-and-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Python syntax and durable batch tests
+        run: |
+          python -m py_compile pvpoke_app_batch.py pvpoke_mcp_remote.py pvpoke_app_ui.py
+          python -m unittest discover -s tests -p test_durable_selection_batch.py -v
+      - name: Browser notification, reconnection and backward compatibility
+        run: |
+          node tests/test_app_background_notify.cjs
+          node tests/test_app_network_recovery.js
