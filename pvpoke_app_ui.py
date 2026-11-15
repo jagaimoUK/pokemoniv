@@ -1338,7 +1338,7 @@ async function restoreServerBatch(){
  let id=batchState?.batch_id||localRead(SERVER_BATCH_KEY);
  if(!id){
   try{const last=await api('batch-latest');if(last?.batch_id&&
-   (last.state==='running'||last.state==='paused'||last.state==='done'))id=last.batch_id;}catch{return false;}
+   (last.state==='running'||last.state==='paused'))id=last.batch_id;}catch{return false;}
  }
  if(!/^[0-9a-f]{32}$/.test(id||''))return false;
  try{
