@@ -1437,6 +1437,17 @@ async function autoImportReader(){
 el('importInput').onclick=importInput;
 el('evaluation').onchange=()=>{el('evaluation').value='app';el('run').textContent='計算して結果を表示';};
 function handleCalculationError(e){
+ if(batchState?.batch_id){
+  if(e.cancelConfirmed){
+   localDelete(SERVER_BATCH_KEY);sessionStorage.removeItem('pvpoke-app-batch');
+   batchState=null;runRef=null;el('resume').hidden=true;
+   message('サーバーで計算を中止しました。完了した結果は保存されています。');
+  }else{
+   message((e.message||'通信エラー')+'。サーバー上の計算・完了済み結果は保持されています。再接続して確認できます。',true);
+   el('resume').hidden=false;
+  }
+  return;
+ }
  if(stopRequested&&!stopError){
   batchState=null;runRef=null;
   sessionStorage.removeItem('pvpoke-app-run');sessionStorage.removeItem('pvpoke-app-batch');
@@ -1454,6 +1465,12 @@ el('cancelRun').onclick=async()=>{
  if(!active||!calculating||stopRequested)return;
  stopRequested=true;el('cancelRun').disabled=true;
  message('中止を要求しました。処理終了を確認中です。');
+ if(batchState?.batch_id){
+  try{await api('batch-cancel',{batch_id:batchState.batch_id});
+   message('サーバーへ停止を要求しました。結果の安全な保存を確認中です。');}
+  catch(e){message('停止要求の送信を確認できませんでした: '+e.message,true);}
+  return;
+ }
  if(runRef){
   try{await stopActiveRun();}catch(e){
    message('サーバー側の停止を確認できませんでした: '+e.message,true);
@@ -1463,6 +1480,7 @@ el('cancelRun').onclick=async()=>{
 async function startSelection(){
  el('evaluation').value='app';
  if(active||metaWorking||metaDraft)return;
+ if(batchState?.batch_id){message('前の計算が残っています。再開または中止してください。',true);return;}
  if(!chosenMeta()){message('メタプリセットを選択してください。',true);return;}
  calculating=true;stopRequested=false;stopPromise=null;stopError=null;
  setBusy(true);el('results').hidden=true;
@@ -1492,7 +1510,10 @@ el('resume').onclick=async()=>{
  if(active||!(runRef||batchState))return;
  calculating=true;stopRequested=false;stopPromise=null;stopError=null;setBusy(true);
  try{
-  if(batchState){await executeBatch();}
+  if(batchState){
+   if(batchState.batch_id&&batchState.server_state==='paused')await api('batch-resume',{batch_id:batchState.batch_id});
+   await executeBatch();
+  }
   else{const result=await finish(await api('result',{run_ref:runRef,wait_seconds:2}));renderSelectionResults([result]);runRef=null;sessionStorage.removeItem('pvpoke-app-run');el('resume').hidden=true;message('計算と結果の確認が完了しました。');}
  }catch(e){handleCalculationError(e);}finally{calculating=false;setBusy(false);}
 };
