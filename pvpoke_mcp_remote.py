@@ -25,6 +25,11 @@ from pvpoke_app_batch import DurableSelectionBatch
 from pvpoke_archive import archive_dir
 from pathlib import Path
 from pvpoke_app_ui import HTML as APP_HTML
+NOTIFICATION_SW = b"""self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  event.waitUntil(clients.openWindow('/app'));
+});
+"""
 from pvpoke_party_ui import HTML as PARTY_HTML
 from pvpoke_app_access import AppAccess, BrowserLogin
 from pvpoke_app_input import parse_import
@@ -318,7 +323,7 @@ class Handler(BaseHTTPRequestHandler):
         hashes = ' '.join("'sha256-" + base64.b64encode(hashlib.sha256(x).digest()).decode() + "'" for x in scripts)
         self.send_header('Content-Security-Policy',
                          "default-src 'none'; script-src " + (hashes or "'none'") +
-                         "; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; "
+                         "; style-src 'unsafe-inline'; connect-src 'self'; worker-src 'self'; img-src 'self' data:; "
                          "base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'")
 
     def rate_allowed(self, name, count, seconds):
@@ -560,6 +565,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             for name, value in [('Content-Type', 'application/json; charset=utf-8'), ('Content-Length', str(len(data))), ('ETag', tag), ('Cache-Control', 'public, max-age=86400'), ('X-Content-Type-Options', 'nosniff')]:
                 self.send_header(name, value)
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if self.path == '/app-notifications-sw.js':
+            data = NOTIFICATION_SW
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/javascript; charset=utf-8')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Service-Worker-Allowed', '/app')
+            self.send_header('Content-Length', str(len(data)))
             self.end_headers()
             self.wfile.write(data)
             return
