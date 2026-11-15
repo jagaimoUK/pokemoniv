@@ -935,6 +935,13 @@ function movesetKey(c){return [c.species,c.fast,...[c.charged1,c.charged2].sort(
 function validMoveset(c){const p=catalog[c?.species];return !!p&&p.fastMoves.includes(c.fast)&&c.charged1!==c.charged2&&[c.charged1,c.charged2].every(x=>p.chargedMoves.includes(x));}
 function registeredMovesets(sid){return Array.isArray(savedMovesets[sid])?savedMovesets[sid].filter(c=>c&&c.species===sid):[];}
 function enabledMovesets(sid){return registeredMovesets(sid).filter(c=>c.enabled!==false);}
+// Browser settings are per origin. The importer must receive enabled entries
+// before attempting a server-side catalog fallback for unranked species.
+function importRegisteredMovesets(){
+ return Object.fromEntries(Object.keys(savedMovesets)
+  .map(sid=>[sid,enabledMovesets(sid)])
+  .filter(([,rows])=>rows.length));
+}
 function saveSpeciesMovesets(sid,rows,status){
  const next={...savedMovesets,[sid]:rows};
  try{localStorage.setItem(MOVESET_STORAGE,JSON.stringify(next));}
@@ -1298,7 +1305,7 @@ async function importInput(){
  if(active)return false;
  setBusy(true);
  try{
-  const parsed=await api('import',{text:el('importText').value,current:currentCandidate()});
+  const parsed=await api('import',{text:el('importText').value,current:currentCandidate(),registered_movesets:importRegisteredMovesets()});
   const jobs=parsed.jobs||[parsed];
   if(!jobs.length)throw Error('取り込む個体値がありません');
   setCandidate(jobs[0].candidate);el('ivs').value=jobs[0].ivs;
