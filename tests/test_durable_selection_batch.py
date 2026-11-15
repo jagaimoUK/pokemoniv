@@ -129,6 +129,26 @@ class DurableBatchTests(unittest.TestCase):
         self.assertLessEqual(done["index"], 1)
         self.assertLessEqual(len(worker.calls), 1)
 
+    def test_mismatched_meta_pauses_without_checkpoint(self):
+        class WrongMeta(Runner):
+            def run(self, **kwargs):
+                response = super().run(**kwargs)
+                response["meta_sha256"] = "c" * 64
+                return response
+        app = DurableSelectionBatch(WrongMeta(), self.path, retry_delay=0)
+        bid = app.start(plan(2))["batch_id"]
+        state = self.settled(app, bid, "paused")
+        self.assertEqual(state["index"], 0)
+        self.assertEqual(state["results"], [])
+
+    def test_requires_frozen_meta_before_creating_job(self):
+        app = DurableSelectionBatch(Runner(), self.path, retry_delay=0)
+        missing = plan()
+        del missing["meta_sha256"]
+        with self.assertRaisesRegex(ValueError, "SHA256"):
+            app.start(missing)
+        self.assertIsNone(app.latest()["batch_id"])
+
     def test_reject_invalid_inputs_without_overwriting_saved_data(self):
         app = DurableSelectionBatch(Runner(), self.path, retry_delay=0)
         bid = app.start(plan())["batch_id"]
