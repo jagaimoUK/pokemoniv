@@ -35,3 +35,7 @@ jobs:
         run: |
           node tests/test_app_background_notify.cjs
           node tests/test_app_network_recovery.js
+          node tests/test_app_ui_share.js
+          node tests/test_app_ui_queue.js
+          node tests/test_app_ui_labels.js
+          node tests/test_app_meta_ui.js
