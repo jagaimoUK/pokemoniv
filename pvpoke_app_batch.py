@@ -7,6 +7,7 @@ No PvPoke ChatGPT connector or external notification service is involved.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -45,12 +46,14 @@ class DurableSelectionBatch:
         with self._db():
             pass
 
+    @contextmanager
     def _db(self):
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         db = sqlite3.connect(self.path, timeout=8)
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA busy_timeout=8000")
-        db.execute("""CREATE TABLE IF NOT EXISTS batches(
+        try:
+            db.row_factory = sqlite3.Row
+            db.execute("PRAGMA busy_timeout=8000")
+            db.execute("""CREATE TABLE IF NOT EXISTS batches(
             id TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE,
             request_hash TEXT NOT NULL, payload TEXT NOT NULL,
             state TEXT NOT NULL, idx INTEGER NOT NULL DEFAULT 0,
@@ -62,7 +65,10 @@ class DurableSelectionBatch:
             batch_id TEXT NOT NULL, idx INTEGER NOT NULL, content BLOB NOT NULL,
             PRIMARY KEY(batch_id,idx),
             FOREIGN KEY(batch_id) REFERENCES batches(id))""")
-        return db
+            with db:
+                yield db
+        finally:
+            db.close()
 
     @staticmethod
     def _validate(payload):
@@ -326,8 +332,12 @@ class DurableSelectionBatch:
                     return
                 try:
                     self._one(bid, row, plan)
-                except Exception:
+                except Exception as exc:
+                    # Invalid inputs and calculation-version conflicts cannot be repaired
+                    # by repeating an expensive battle; preserve checkpoints and pause.
                     attempts = self._failed_attempt(bid)
+                    if isinstance(exc, ValueError):
+                        attempts = 3
                     if attempts >= 3:
                         self._mark(bid, "paused",
                                    "計算エンジンの処理に失敗しました。完了分は保存済みです。再開できます")
