@@ -187,6 +187,13 @@ class DurableSelectionBatch:
                 result["results"] = [json.loads(zlib.decompress(x["content"])) for x in results]
             return result
 
+    def latest(self):
+        with self._db() as db:
+            row = db.execute("SELECT id,state,updated FROM batches ORDER BY created DESC LIMIT 1").fetchone()
+        return {"batch_id": row["id"] if row else None,
+                "state": row["state"] if row else None,
+                "updated_at": row["updated"] if row else None}
+
     def cancel(self, batch_id):
         bid = self._valid_id(batch_id)
         with self._lock, self._db() as db:

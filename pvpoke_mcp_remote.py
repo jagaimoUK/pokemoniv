@@ -395,7 +395,8 @@ class Handler(BaseHTTPRequestHandler):
                              '/app-api/party/list', '/app-api/party/get', '/app-api/party/save',
                              '/app-api/party/start', '/app-api/party/status', '/app-api/party/cancel',
                              '/app-api/party/meta-weights', '/app-api/batch-start',
-                             '/app-api/batch-status', '/app-api/batch-cancel', '/app-api/batch-resume'):
+                             '/app-api/batch-status', '/app-api/batch-cancel', '/app-api/batch-resume',
+                             '/app-api/batch-latest'):
             return self.respond(404, {'error': 'Not found'})
         origin = self.headers.get('Origin')
         if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'):
@@ -418,6 +419,8 @@ class Handler(BaseHTTPRequestHandler):
                     if 'HTTP 409:' in str(exc):
                         return self.respond(409, {'error': '保存競合、または他の計算中です'})
                     raise
+            if self.path == '/app-api/batch-latest':
+                return self.respond(200, BATCH_RUNNER.latest())
             if self.path == '/app-api/batch-start':
                 return self.respond(200, BATCH_RUNNER.start(args))
             if self.path == '/app-api/batch-status':
