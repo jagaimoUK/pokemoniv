@@ -61,10 +61,10 @@ class DurableSelectionBatch:
             error TEXT, cancel_requested INTEGER NOT NULL DEFAULT 0,
             lease_owner TEXT, lease_until REAL NOT NULL DEFAULT 0,
             created INTEGER NOT NULL, updated INTEGER NOT NULL)""")
-        db.execute("""CREATE TABLE IF NOT EXISTS batch_results(
-            batch_id TEXT NOT NULL, idx INTEGER NOT NULL, content BLOB NOT NULL,
-            PRIMARY KEY(batch_id,idx),
-            FOREIGN KEY(batch_id) REFERENCES batches(id))""")
+            db.execute("""CREATE TABLE IF NOT EXISTS batch_results(
+                batch_id TEXT NOT NULL, idx INTEGER NOT NULL, content BLOB NOT NULL,
+                PRIMARY KEY(batch_id,idx),
+                FOREIGN KEY(batch_id) REFERENCES batches(id))""")
             with db:
                 yield db
         finally:
