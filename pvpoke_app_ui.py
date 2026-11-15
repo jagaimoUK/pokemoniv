@@ -84,7 +84,11 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 </details>
 <details><summary>自動推薦の基準を調整</summary><label for="lead">勝ち方向で採用するRating差（既定20）</label><input id="lead" type="number" min="1" max="1000" step="1" value="20"><p class="note">500の境界を越える役割は差にかかわらず確認します。負けたままのRating差は自動推薦にしません。</p></details>
 <label class="checkline" for="forceRecalculate"><input type="checkbox" id="forceRecalculate"> 保存結果を使わず再計算</label><p class="note">同じ対戦条件では過去の結果を再利用します。ゲームデータ・計算コードの更新時は自動で再計算します。</p>
-<div class="actions"><button id="run">計算して推薦を表示</button><button id="cancelRun" class="secondary" type="button" hidden>計算を中止</button><button id="resume" class="secondary" hidden>前の計算を再開</button><button id="disconnect" class="secondary">接続を解除</button></div><p class="note">CP1500以下・最大Lv50。自分0/相手1、自分0/相手2、自分1/相手2も比較します。</p></section>
+<div class="actions"><button id="run">計算して推薦を表示</button><button id="cancelRun" class="secondary" type="button" hidden>計算を中止</button><button id="resume" class="secondary" hidden>前の計算を再開</button><button id="disconnect" class="secondary">接続を解除</button></div>
+<div class="actions"><button id="notifyEnable" class="secondary" type="button">計算完了の通知を許可</button>
+<label class="checkline" for="voiceNotify"><input type="checkbox" id="voiceNotify"> 短い音声でも知らせる</label></div>
+<p class="note">計算中も画面を切り替えられます。サーバーが休止した場合は復帰後に続行します。通知にはブラウザの許可が必要で、音声はページが動作している間だけ利用できます。</p>
+<p class="note">CP1500以下・最大Lv50。自分0/相手1、自分0/相手2、自分1/相手2も比較します。</p></section>
 <section class="card" id="results" tabindex="-1" hidden></section>
 <details class="card" id="metaManager">
 <summary>カスタムメタを追加</summary>
@@ -172,10 +176,10 @@ el('selectionSettings').oncancel=()=>{el('selectionSettings').hidden=true;el('se
 el('selectionModeFilter').oninput=()=>{selectionModeLimit=50;renderSelectionModes();};
 el('selectionModeMore').onclick=()=>{selectionModeLimit+=50;renderSelectionModes();};
 function calculationRequestId(){return 'web-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2)+'-'+Math.random().toString(36).slice(2);}
-const retryableReads=new Set(['catalog','result','meta-presets','meta-preset-export','meta-status','meta-preview','low-score','import']);
+const retryableReads=new Set(['catalog','result','batch-status','batch-latest','meta-presets','meta-preset-export','meta-status','meta-preview','low-score','import']);
 async function api(path,data={}){
  const payload=path==='run'?{...data,request_id:data.request_id||calculationRequestId()}:data;
- const safe=retryableReads.has(path)||(path==='run'&&!!payload.request_id);
+ const safe=retryableReads.has(path)||((path==='run'||path==='batch-start')&&!!payload.request_id);
  for(let attempt=0;;attempt++){
   const headers={'Content-Type':'application/json'};if(credential)headers.Authorization='Bearer '+credential;
   const controller=typeof AbortController!=='undefined'?new AbortController():null;
@@ -894,7 +898,7 @@ el('bulkStatusUndo').onclick=()=>{
  bulkStatusUndo=null;el('bulkStatusUndo').hidden=true;el('results').hidden=true;el('bulkStatusNote').textContent='直前の区分変更を元に戻しました。';message(el('bulkStatusNote').textContent);
 };
 
-function cacheBatch(){try{sessionStorage.setItem('pvpoke-app-batch',JSON.stringify(batchState));}catch{message('再開情報を保存できませんでした。計算が終わるまで画面を開いておいてください。',true);}}
+function cacheBatch(){try{const saved=batchState?.batch_id?{...batchState,results:[]}:batchState;sessionStorage.setItem('pvpoke-app-batch',JSON.stringify(saved));}catch{message('ブラウザの保存容量が不足しています。サーバー側の計算IDから再開できます。',true);}}
 function setImportedJobs(jobs){importedSingle=jobs?.length===1?jobs[0]:null;importedJobs=jobs&&jobs.length>1?jobs:null;el('queuePanel').hidden=!importedJobs;for(const id of ['preset','allSpecies','species','ivs'])el(id).disabled=!!importedJobs;el('inputMoves').hidden=!!importedJobs;refreshQueuePreview();}
 async function stopActiveRun(){
  if(!runRef)return;
@@ -1254,7 +1258,7 @@ function renderBatchResults(){
  renderSelectionResults(completed,pending);
 }
 
-async function executeBatch(){
+async function executeLegacyBatch(){
  for(;batchState.index<batchState.jobs.length;){
   await honorStop();
   const job=batchState.jobs[batchState.index];
@@ -1289,6 +1293,44 @@ async function executeBatch(){
  if(readerAutomation)returnReaderAutomation(batchState.results);
  sessionStorage.removeItem('pvpoke-app-batch');batchState=null;runRef=null;el('resume').hidden=true;
 }
+
+const SERVER_BATCH_KEY='pvpoke-app-server-batch-v1';
+const NOTIFIED_BATCH_KEY='pvpoke-app-notified-batch-v1';
+const VOICE_NOTIFY_KEY='pvpoke-app-notify-voice-v1';
+function localRead(k){try{return localStorage.getItem(k);}catch{return null;}}
+function localWrite(k,v){try{localStorage.setItem(k,v);}catch{}}
+function localDelete(k){try{localStorage.removeItem(k);}catch{}}
+el('voiceNotify').checked=localRead(VOICE_NOTIFY_KEY)==='true';
+el('voiceNotify').onchange=()=>localWrite(VOICE_NOTIFY_KEY,String(el('voiceNotify').checked));
+el('notifyEnable').onclick=async()=>{
+ if(typeof Notification==='undefined'||typeof navigator==='undefined'||!navigator.serviceWorker){
+  message('このブラウザでは通知を利用できません。結果はアプリで確認できます。',true);return;
+ }
+ try{
+  const permission=await Notification.requestPermission();
+  if(permission!=='granted'){message('通知が許可されませんでした。');return;}
+  await navigator.serviceWorker.register('/app-notifications-sw.js',{scope:'/app'});
+  el('notifyEnable').textContent='完了通知を許可済み';
+  message('完了時にブラウザ通知します。ブラウザ完全終了後のプッシュ通知には別の設定が必要です。');
+ }catch(e){message('通知の設定に失敗しました: '+e.message,true);}
+};
+async function notifyBatchDone(id){
+ if(localRead(NOTIFIED_BATCH_KEY)===id)return;
+ localWrite(NOTIFIED_BATCH_KEY,id);
+ if(typeof Notification!=='undefined'&&Notification.permission==='granted'&&
+    typeof navigator!=='undefined'&&navigator.serviceWorker){
+  try{const reg=await navigator.serviceWorker.getRegistration('/app')||
+    await navigator.serviceWorker.register('/app-notifications-sw.js',{scope:'/app'});
+    await reg.showNotification('個体値の計算が完了しました',{body:'結果を確認できます。',tag:'pokemoniv-'+id});
+  }catch{}
+ }
+ if(el('voiceNotify').checked&&typeof speechSynthesis!=='undefined'&&
+    typeof SpeechSynthesisUtterance!=='undefined'&&!document.hidden){
+  try{const v=new SpeechSynthesisUtterance('個体値の計算が完了しました');
+      v.lang='ja-JP';v.rate=1;speechSynthesis.speak(v);}catch{}
+ }
+}
+
 async function connect(auto=false){credential=auto?'':el('credential').value.trim();if(!auto&&!credential){message('接続キーを入力してください。',true);return;}el('connect').disabled=true;try{if(!auto&&el('remember').checked){try{await api('session');credential='';}catch(e){if(e.status!==401)throw e;el('remember').checked=false;}}const cat=await api('catalog');if(!cat.ready)throw Error(cat.error||'ゲームデータを読込中です。少し待って接続してください。');catalog=cat.species;moveCatalog=cat.moves||{};prepareLabels();presets=cat.app_presets||cat.presets;el('credential').value='';el('login').hidden=true;el('workspace').hidden=false;el('selectionSettingsOpen').hidden=false;updateLowScorePanelVisibility();const opts=el('preset');opts.replaceChildren();const custom=document.createElement('option');custom.value='';custom.textContent='直接指定・貼り付け';opts.append(custom);for(const p of presets){const o=document.createElement('option');o.value=presetKey(p);o.textContent=p.name+' / '+p.fast+' / '+p.charged1+' / '+p.charged2;opts.append(o);}el('presetHint').textContent='登録済みの技構成 '+presets.length+'件。プリセット外も、全ポケモンの選択・CSV貼り付けから計算できます。';const speciesOptions=Object.keys(catalog).sort((a,b)=>(catalog[a].name_ja||catalog[a].name||a).localeCompare(catalog[b].name_ja||catalog[b].name||b,'ja'));el('allSpecies').replaceChildren();el('speciesList').replaceChildren();for(const sid of speciesOptions){const label=(catalog[sid].name_ja||catalog[sid].name||sid)+' ('+sid+')';const o=document.createElement('option');o.value=sid;o.textContent=label;el('allSpecies').append(o);const hint=document.createElement('option');hint.value=sid;hint.label=label;el('speciesList').append(hint);}const preferred=presets.find(p=>p.species==='quagsire'&&p.charged2==='STONE_EDGE')||presets[0];if(preferred)setCandidate(preferred);runRef=sessionStorage.getItem('pvpoke-app-run');try{batchState=JSON.parse(sessionStorage.getItem('pvpoke-app-batch')||'null');}catch{batchState=null;}if(batchState?.jobs){const jobs=batchState.jobs.every(j=>j.moveset_group!==undefined)?batchState.jobs.filter((j,i,a)=>a.findIndex(x=>x.moveset_group===j.moveset_group)===i):batchState.jobs;setImportedJobs(jobs);if(batchState.auto_moves!==undefined)el('autoMoves').checked=batchState.auto_moves;if(batchState.move_threshold!==undefined)el('moveThreshold').value=batchState.move_threshold_setting??batchState.move_threshold;if(batchState.move_strategy)el('moveStrategy').value=batchState.move_strategy;}if(batchState?.results?.length)renderBatchResults();el('resume').hidden=!(runRef||batchState);message('接続できました。');if(new URLSearchParams(location.search||'').get('tool')==='low-score'){el('lowScorePanel').scrollIntoView?.();await loadLowScores();}await refreshMetaStatus(true);if(readerAutomation&&batchState&&batchState.reader_automation_digest!==readerAutomation.digest)throw Error('別の計算が残っています。既存の計算を完了または中止してください');await autoImportReader();if(readerAutomation&&batchState&&!active)Promise.resolve().then(()=>el('resume').onclick());}catch(e){credential='';if(!auto||e.status!==401)message(e.message,true);}finally{el('connect').disabled=false;}}
 el('connect').onclick=()=>connect(false);
 el('preset').onchange=()=>{bulkStatusUndo=null;el('bulkStatusUndo').hidden=true;setPreset();};el('species').onchange=()=>{inputPokemonStatus=null;bulkStatusUndo=null;el('bulkStatusUndo').hidden=true;resolveTypedSpecies();el('allSpecies').value=el('species').value;el('preset').value='';moves();};
