@@ -94,8 +94,8 @@ class DurableSelectionBatch:
             raise ValueError("重要な相手の設定が不正です")
         validate_policy(payload.get("policy"))
         meta = payload.get("meta_sha256")
-        if meta is not None and (not isinstance(meta, str) or not SHA256.fullmatch(meta)):
-            raise ValueError("メタのハッシュが不正です")
+        if not isinstance(meta, str) or not SHA256.fullmatch(meta):
+            raise ValueError("計算中のメタ固定に必要なSHA256がありません")
         preset = payload.get("meta_preset_id")
         if preset is not None and (not isinstance(preset, str) or len(preset) > 100):
             raise ValueError("メタプリセット指定が不正です")
@@ -266,6 +266,10 @@ class DurableSelectionBatch:
         if len(raw) > MAX_RESULT_BYTES or len(compressed) > MAX_RESULT_BYTES:
             raise ValueError("計算結果が保存可能な上限を超えました")
         revision = result.get("calculation_version")
+        if not isinstance(revision, str) or not SHA256.fullmatch(revision):
+            raise ValueError("計算の版を検証できません")
+        if self.path.stat().st_size + len(compressed) > MAX_DB_BYTES:
+            raise ValueError("保存容量の上限に達しました。計算結果を保護して一時停止しました")
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("""SELECT idx,revision,state,lease_owner FROM batches
@@ -312,6 +316,8 @@ class DurableSelectionBatch:
             return
         if response.get("state") != "done" or not response.get("complete"):
             raise RuntimeError("計算エンジンが完了できませんでした")
+        if response.get("meta_sha256") != plan["meta_sha256"]:
+            raise ValueError("計算結果のメタが指定条件と一致しません。結果の混在を防いで停止しました")
         for key, source in (("display_name", "name"), ("source_sections", "source_sections"),
                             ("source_records", "source_records"), ("pokemon_status", "pokemon_status"),
                             ("moveset_group", "moveset_group"), ("moveset_plan", "moveset_plan")):
