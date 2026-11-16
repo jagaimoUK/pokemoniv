@@ -22,6 +22,12 @@ import pvpoke_meta_live as live
 from pvpoke_direct_backend import DirectMatrixClient
 
 SHIELDS = ((0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2))
+MAX_WAIT_SECONDS = 120.0
+MAX_JOB_WALL_SECONDS = 300.0
+MAX_JOB_ATTEMPTS = 3
+MAX_PENDING_JOBS = 32
+DIRECT_TIMEOUT_SECONDS = 30.0
+
 _runtime = None
 _queue = queue.Queue()
 _queued = set()
@@ -41,19 +47,35 @@ def directory(work):
     return archives.archive_dir(work) / 'meta_variant_jobs'
 
 
-def start(work, lock, status, *, battle_busy=lambda: False):
+def start(work, lock, status, *, battle_busy=lambda: False, acquire_compute=None, release_compute=None):
     global _runtime
     if _runtime is not None or not (engine.DATA / 'gamemaster.json').is_file():
         return
-    _runtime = (Path(work), lock, status, battle_busy)
+    _runtime = (Path(work), lock, status, battle_busy, acquire_compute, release_compute)
     directory(work).mkdir(parents=True, exist_ok=True)
     for path in directory(work).glob('*.json'):
         try:
             job = json.loads(path.read_text())
-            if job['state'] in ('queued', 'running'):
+            if job.get('state') in ('queued', 'running'):
                 if job.get('minimal_policy') != 1:
-                    job['state'] = 'obsolete'; save(path, job)
+                    job['state'] = 'obsolete'
+                    save(path, job)
+                elif int(job.get('attempts', 0)) >= MAX_JOB_ATTEMPTS:
+                    job['state'] = 'failed'
+                    job['error'] = '再試行回数の上限に達しました'
+                    save(path, job)
                 else:
+                    # Verify preset still exists and matches
+                    try:
+                        entry = presets.resolve(work, job.get('id'))
+                        if entry.get('manual_only') or entry.get('sha256') != job.get('source_sha256'):
+                            job['state'] = 'obsolete'
+                            save(path, job)
+                            continue
+                    except Exception:
+                        job['state'] = 'obsolete'
+                        save(path, job)
+                        continue
                     enqueue(path)
         except (OSError, ValueError, KeyError):
             continue
@@ -69,6 +91,9 @@ def enqueue(path):
 def schedule(work, preset_id):
     if _runtime is None or Path(work) != _runtime[0] or not (engine.DATA / 'gamemaster.json').is_file():
         return {'state': 'unavailable'}
+    with _guard:
+        if len(_queued) >= MAX_PENDING_JOBS:
+            return {'state': 'deferred'}
     entry = presets.resolve(work, preset_id)
     if entry.get('manual_only'):
         return {'state': 'manual'}
@@ -78,7 +103,8 @@ def schedule(work, preset_id):
     if not path.exists():
         save(path, {'minimal_policy': 1, 'state': 'queued', 'id': preset_id, 'source_sha256': entry['sha256'],
                     'source_csv': entry.get('source_csv') or entry['csv'], 'gm_sha256': gm_sha, 'progress': 0,
-                    'policy': 'sampled coverage; >=2 new species with Rating>=550 vs manual<=500; max1/species,8/meta', 'created': time.time()})
+                    'policy': 'sampled coverage; >=2 new species with Rating>=550 vs manual<=500; max1/species,8/meta', 'created': time.time(),
+                    'attempts': 0})
     obj = json.loads(path.read_text())
     if obj['state'] == 'complete':
         # Reapply cached evidence after an explicit restore/update of the same
@@ -163,7 +189,10 @@ def shortlist(rows, pokemon, moves):
     return manual + selected
 
 
-def evaluate(job, client, species, cpms, lock, runtime_status, checkpoint, *, battle_busy=lambda: False):
+def evaluate(job, client, species, cpms, lock, runtime_status, checkpoint,
+             *, battle_busy=lambda: False, acquire_compute=None, release_compute=None,
+             max_wait_seconds=MAX_WAIT_SECONDS, max_job_wall_seconds=MAX_JOB_WALL_SECONDS):
+    job_started = time.monotonic()
     rows = trusted_rows(job['source_csv'])
     target_groups = {}
     for r in rows:
@@ -193,13 +222,37 @@ def evaluate(job, client, species, cpms, lock, runtime_status, checkpoint, *, ba
         candidates = prepared_rows(variants, species, cpms)
         if not candidates:
             raise ValueError(sid + ': 比較できる技構成がありません')
-        # Match the regular server's lock. Never overlap a user's calculation.
+
+        if time.monotonic() - job_started > max_job_wall_seconds:
+            raise TimeoutError('メタ自動補完の総実行時間制限を超過しました')
+
+        # Acquire compute slot, keeping LOCK retention minimal
+        wait_started = time.monotonic()
+        token = None
         while True:
-            with lock:
-                if runtime_status['state'] != 'running' and not battle_busy():
-                    matrices = [client.simulate(candidates, opponents, shields) for shields in SHIELDS]
+            if time.monotonic() - wait_started > max_wait_seconds:
+                raise TimeoutError('計算枠の待機期限を超過しました')
+            if acquire_compute is not None:
+                token = acquire_compute()
+                if token is not None:
                     break
-            threading.Event().wait(1)
+            else:
+                with lock:
+                    if runtime_status.get('state') not in ('running', 'cancelling') and not battle_busy():
+                        token = 'legacy'
+                        break
+            threading.Event().wait(0.2)
+
+        # Run client.simulate outside lock, protected by compute token
+        try:
+            matrices = [client.simulate(candidates, opponents, shields) for shields in SHIELDS]
+        finally:
+            if release_compute is not None and token is not None:
+                try:
+                    release_compute(token)
+                except Exception:
+                    pass
+
         chosen = choose_variants(candidates, matrices, len(set(fasts)), [r[0] for r in targets])
         extra.extend(chosen)
         item = {'species': sid, 'tested': len(candidates),
@@ -227,7 +280,9 @@ def apply(work, job, rows):
         presets._atomic_write(target, content)
     else:
         obj = presets._read(work)
-        entry = next(p for p in obj['items'] if p['id'] == job['id'])
+        entry = next((p for p in obj['items'] if p['id'] == job['id']), None)
+        if entry is None:
+            return False
         entry['source_csv'] = job['source_csv']
         entry['csv'] = content
         presets._write(work, obj)
@@ -235,30 +290,54 @@ def apply(work, job, rows):
 
 
 def worker():
-    work, lock, runtime_status, battle_busy = _runtime
+    work, lock, runtime_status, battle_busy, acquire_compute, release_compute = _runtime
     while True:
         path = _queue.get()
         job = None
         try:
-            job = json.loads(path.read_text()); job['state'] = 'running'; save(path, job)
+            job = json.loads(path.read_text())
+            job['state'] = 'running'
+            job['attempts'] = int(job.get('attempts', 0)) + 1
+            save(path, job)
+
             gm_file = engine.DATA / 'gamemaster.json'
             if hashlib.sha256(gm_file.read_bytes()).hexdigest() != job['gm_sha256']:
                 raise ValueError('ゲームデータが変わったため再保存して評価してください')
             _, cpms, species = engine.game_data()
-            client = DirectMatrixClient(gamemaster=gm_file, log_dir=directory(work))
+            client = DirectMatrixClient(gamemaster=gm_file, log_dir=directory(work), timeout_seconds=DIRECT_TIMEOUT_SECONDS)
             try:
-                rows, evidence, count = evaluate(job, client, species, cpms, lock, runtime_status, lambda j: save(path, j), battle_busy=battle_busy)
+                rows, evidence, count = evaluate(
+                    job, client, species, cpms, lock, runtime_status,
+                    lambda j: save(path, j),
+                    battle_busy=battle_busy,
+                    acquire_compute=acquire_compute,
+                    release_compute=release_compute
+                )
             finally:
                 client.close()
-            with lock:
-                while runtime_status['state'] == 'running' or battle_busy():
-                    lock.release(); threading.Event().wait(1); lock.acquire()
-                applied = apply(work, job, rows)
-                job.update(state='complete' if applied else 'obsolete', added=count, evidence=evidence)
-                save(path, job)
+
+            # Short LOCK apply phase with OCC
+            wait_apply_started = time.monotonic()
+            applied = False
+            while True:
+                if time.monotonic() - wait_apply_started > MAX_WAIT_SECONDS:
+                    break
+                with lock:
+                    busy = (runtime_status.get('state') in ('running', 'cancelling') or battle_busy())
+                    if not busy:
+                        applied = apply(work, job, rows)
+                        break
+                threading.Event().wait(0.2)
+
+            job.update(state='complete' if applied else 'obsolete', added=count, evidence=evidence)
+            save(path, job)
         except Exception as exc:
             if job is not None:
-                job.update(state='failed', error=str(exc)); save(path, job)
+                err = 'メタ自動補完に失敗しました'
+                if isinstance(exc, (ValueError, TimeoutError)):
+                    err = str(exc)[:200]
+                job.update(state='failed', error=err)
+                save(path, job)
         finally:
             with _guard:
                 _queued.discard(str(path))

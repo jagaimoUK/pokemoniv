@@ -89,6 +89,8 @@ class SandboxLocalTests(server.ServerFixture):
         self.enterContext(patch.object(server.web, 'WORK', self.root / 'work'))
         self.enterContext(patch.dict(server.web.CATALOG, {'ready': True}))
         self.enterContext(patch.dict(server.web.STATUS, {'state': 'idle'}))
+        self.enterContext(patch.object(server.web, 'COMPUTE_OWNER', None))
+        self.enterContext(patch.object(server.web, 'BATTLE_RUNNING', False))
         super().setUp()
 
     def call(self, payload):
