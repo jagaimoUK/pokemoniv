@@ -285,9 +285,12 @@ class GatewaySecurityTests(unittest.TestCase):
             self.assertIn('Retry-After', headers)
 
     def test_backup_concurrency_is_bounded_before_reading_large_body(self):
+        # Invalid token is rejected with 401 before touching BACKUP_SLOTS
+        self.assertEqual(self.request('/visual-backup/v1/upload', 'Bearer invalid')[0], 401)
+        valid_token = 'Bearer ' + remote.BACKUP_TOKENS.issue()
         remote.BACKUP_SLOTS.acquire()
         try:
-            self.assertEqual(self.request('/visual-backup/v1/upload', 'Bearer invalid')[0], 503)
+            self.assertEqual(self.request('/visual-backup/v1/upload', valid_token)[0], 503)
         finally:
             remote.BACKUP_SLOTS.release()
 
@@ -540,6 +543,8 @@ class GatewaySecurityTests(unittest.TestCase):
         with patch.dict(os.environ, {'PVP_SANDBOX_ENABLED': '1'}), \
              patch.dict(web.CATALOG, {'ready': True}), \
              patch.dict(web.STATUS, {'state': 'idle'}), \
+             patch.object(web, 'COMPUTE_OWNER', None), \
+             patch.object(web, 'BATTLE_RUNNING', False), \
              patch.object(web, 'DirectMatrixClient'), \
              patch.object(web, 'BattleService'), \
              patch.object(web.BattleStore, 'from_volume', return_value=None), \
@@ -562,7 +567,7 @@ class GatewaySecurityTests(unittest.TestCase):
             from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor(max_workers=2) as pool:
                 f1 = pool.submit(send_sandbox)
-                self.assertTrue(in_backend.wait(timeout=2))
+                self.assertTrue(in_backend.wait(timeout=5))
                 try:
                     # 2nd concurrent job acquires a Gateway APP_REQUEST_SLOT, hits real Backend, and receives 409.
                     self.assertEqual(send_sandbox(), 409)

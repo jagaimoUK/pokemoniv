@@ -16,8 +16,14 @@ import os
 import hmac
 from functools import lru_cache
 from urllib.parse import urlparse
-import jwt
-from jwt import PyJWKClient, InvalidTokenError
+try:
+    import jwt
+    from jwt import PyJWKClient, InvalidTokenError
+except ImportError:
+    jwt = None
+    PyJWKClient = None
+    class InvalidTokenError(Exception):
+        pass
 from http.server import BaseHTTPRequestHandler
 from pvpoke_http_security import BoundedHTTPServer, RateBudget, safe_equal
 import pvpoke_bridge_core as backend
@@ -76,13 +82,48 @@ if AUTH0_ENABLED:
         raise SystemExit('PVP_MCP_URL must use HTTPS')
     JWKS = PyJWKClient(AUTH0_ISSUER + '.well-known/jwks.json', cache_keys=True, timeout=5)
 
+_JWKS_KEY_CACHE = {}  # {kid: (key, expire_time)} max 16 items
+_JWKS_CACHE_LOCK = threading.Lock()
+JWKS_SLOTS = threading.BoundedSemaphore(2)
 
-def oauth_token_valid(raw):
-    if not AUTH0_ENABLED or not raw.startswith('Bearer '):
+
+def oauth_token_valid(raw, rate_checker=None):
+    if not AUTH0_ENABLED or jwt is None or not raw.startswith('Bearer '):
         return False
     token = raw[7:]
     try:
-        key = JWKS.get_signing_key_from_jwt(token)
+        header = jwt.get_unverified_header(token)
+        if header.get('alg') != 'RS256':
+            return False
+        kid = header.get('kid')
+        if not isinstance(kid, str) or not (1 <= len(kid) <= 128):
+            return False
+
+        key = None
+        now = time.monotonic()
+        with _JWKS_CACHE_LOCK:
+            if kid in _JWKS_KEY_CACHE:
+                cached_key, expire = _JWKS_KEY_CACHE[kid]
+                if expire > now:
+                    key = cached_key
+                else:
+                    del _JWKS_KEY_CACHE[kid]
+
+        if key is None:
+            if rate_checker is not None and not rate_checker('unauth-jwks', 10, 60):
+                return False
+            if not JWKS_SLOTS.acquire(blocking=False):
+                return False
+            try:
+                key = JWKS.get_signing_key_from_jwt(token)
+                with _JWKS_CACHE_LOCK:
+                    if len(_JWKS_KEY_CACHE) >= 16:
+                        oldest = min(_JWKS_KEY_CACHE.keys(), key=lambda k: _JWKS_KEY_CACHE[k][1])
+                        del _JWKS_KEY_CACHE[oldest]
+                    _JWKS_KEY_CACHE[kid] = (key, now + 300)
+            finally:
+                JWKS_SLOTS.release()
+
         claims = jwt.decode(token, key.key, algorithms=['RS256'],
                             audience=JWT_AUDIENCE, issuer=AUTH0_ISSUER,
                             options={'require': ['iss', 'aud', 'exp', 'sub']}, leeway=15)
@@ -583,50 +624,38 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(500, {'error': 'アプリの処理に失敗しました'})
 
     def visual_backup_request(self):
-        if not self.rate_allowed('backup-entry', 120, 60):
-            return
-        raw = self.headers.get('Authorization', '')
-        token = raw[7:] if raw.startswith('Bearer ') else ''
-        try:
-            token_ok = BACKUP_TOKENS.valid(token)
-        except (sqlite3.Error, OSError):
-            return self.respond(503, {'error': '認証の保存先に接続できません。少し待って再試行してください'})
-        if not token_ok:
-            return self.unauthorized()
-        if not self.rate_allowed('backup-owner', 12, 60):
-            return
-        origin=self.headers.get('Origin')
+        origin = self.headers.get('Origin')
         if origin and origin != APP_ORIGIN:
-            return self.respond(403, {'error':'Origin not allowed'})
-        if self.headers.get('Content-Type','').split(';')[0].strip().lower() != 'application/json':
-            return self.respond(415, {'error':'Content-Type must be application/json'})
+            return self.respond(403, {'error': 'Origin not allowed'})
+        if self.headers.get('Content-Type', '').split(';')[0].strip().lower() != 'application/json':
+            return self.respond(415, {'error': 'Content-Type must be application/json'})
         try:
-            if self.path not in ('/visual-backup/v1/status','/visual-backup/v1/upload','/visual-backup/v1/download'):
-                return self.respond(404, {'error':'Not found'})
-            limit=(MAX_ARCHIVE*4//3+4096) if self.path.endswith('/upload') else 4096
-            size=int(self.headers.get('Content-Length','0'))
+            if self.path not in ('/visual-backup/v1/status', '/visual-backup/v1/upload', '/visual-backup/v1/download'):
+                return self.respond(404, {'error': 'Not found'})
+            limit = (MAX_ARCHIVE * 4 // 3 + 4096) if self.path.endswith('/upload') else 4096
+            size = int(self.headers.get('Content-Length', '0'))
             if not 0 < size <= limit:
-                return self.respond(413, {'error':'バックアップの容量上限を超えています'})
-            args=json.loads(self.read_body(size), object_pairs_hook=_unique_object,
+                return self.respond(413, {'error': 'バックアップの容量上限を超えています'})
+            args = json.loads(self.read_body(size), object_pairs_hook=_unique_object,
                             parse_constant=_reject_constant)
-            if not isinstance(args,dict):
+            if not isinstance(args, dict):
                 raise ValueError()
             if self.path.endswith('/status'):
-                return self.respond(200,VISUAL_BACKUP.head())
+                return self.respond(200, VISUAL_BACKUP.head())
             if self.path.endswith('/download'):
-                return self.respond(200,VISUAL_BACKUP.download())
-            data=base64.b64decode(args.get('archive',''),validate=True)
-            return self.respond(200,VISUAL_BACKUP.upload(data,args.get('expectedEtag')))
+                return self.respond(200, VISUAL_BACKUP.download())
+            data = base64.b64decode(args.get('archive', ''), validate=True)
+            return self.respond(200, VISUAL_BACKUP.upload(data, args.get('expectedEtag')))
         except BackupError as exc:
-            return self.respond(exc.status, {'error':str(exc)})
-        except (ValueError,TypeError,KeyError):
-            return self.respond(400, {'error':'バックアップの入力が正しくありません'})
+            return self.respond(exc.status, {'error': str(exc)})
+        except (ValueError, TypeError, KeyError):
+            return self.respond(400, {'error': 'バックアップの入力が正しくありません'})
         except Exception as exc:
-            logging.warning('Visual backup request failed: %s',type(exc).__name__)
-            return self.respond(503, {'error':'保存先に接続できません。端末内の見本は残っています'})
+            logging.warning('Visual backup request failed: %s', type(exc).__name__)
+            return self.respond(503, {'error': '保存先に接続できません。端末内の見本は残っています'})
 
     def do_GET(self):
-        if self.path != '/health' and not self.rate_allowed('public', 300, 60):
+        if self.path != '/health' and not self.rate_allowed('public-get', 300, 60):
             return
         if self.path == '/reader-api/v1/flashcards':
             tag = flashcards.etag()
@@ -682,36 +711,62 @@ class Handler(BaseHTTPRequestHandler):
                               'visual_backup':{'enabled':VISUAL_BACKUP.enabled,'storage_probe':VISUAL_BACKUP.probe_ok}})
         else:
             self.respond(405, {'error': 'POST /mcp for MCP requests'})
+
     def do_POST(self):
-        if not self.rate_allowed('entry', 300, 60):
-            return
+        # Framing check first with zero budget cost
         if self.headers.get('Transfer-Encoding') or len(self.headers.get_all('Content-Length', [])) != 1:
             return self.respond(400, {'error': 'Invalid request framing'})
+
         if self.path.startswith('/visual-backup/v1/'):
+            raw = self.headers.get('Authorization', '')
+            token = raw[7:] if raw.startswith('Bearer ') else ''
+            try:
+                token_ok = BACKUP_TOKENS.valid(token)
+            except (sqlite3.Error, OSError):
+                return self.respond(503, {'error': '認証の保存先に接続できません。少し待って再試行してください'})
+            if not token_ok:
+                if not self.rate_allowed('unauth-backup', 60, 60):
+                    return
+                return self.unauthorized()
+            if not self.rate_allowed('backup-owner', 12, 60):
+                return
             if not BACKUP_SLOTS.acquire(blocking=False):
                 return self.respond(503, {'error': 'バックアップの処理中です。少し待って再試行してください'})
             try:
                 return self.visual_backup_request()
             finally:
                 BACKUP_SLOTS.release()
+
         token = self.headers.get('Authorization', '')
         is_api_key = safe_equal(token, 'Bearer ' + API_KEY)
         is_app = self.path.startswith('/app-api/')
         app_session = is_app and APP_ACCESS.valid(token)
-        oauth_ok = (not is_api_key and not app_session and len(token) <= 4096 and token.isascii() and oauth_token_valid(token))
+        cookie_ok = False
+        if is_app:
+            try:
+                cookie_ok = BROWSER_LOGIN.valid(self.headers.get('Cookie', ''))
+            except (sqlite3.Error, OSError):
+                return self.respond(503, {'error': '認証の保存先に接続できません。少し待って再試行してください'})
+
+        oauth_ok = False
+        if not (is_api_key or app_session or cookie_ok) and AUTH0_ENABLED and token.startswith('Bearer ') and len(token) <= 4096 and token.isascii():
+            oauth_ok = oauth_token_valid(token, rate_checker=self.rate_allowed)
+
         strong_auth = is_api_key or oauth_ok
         bearer_ok = strong_auth or app_session
-        try:
-            cookie_ok = is_app and BROWSER_LOGIN.valid(self.headers.get('Cookie', ''))
-        except (sqlite3.Error, OSError):
-            return self.respond(503, {'error': '認証の保存先に接続できません。少し待って再試行してください'})
-        if not (bearer_ok or cookie_ok):
-            self.unauthorized()
+        authenticated = bearer_ok or cookie_ok
+
+        if not authenticated:
+            if not self.rate_allowed('unauth-entry', 180, 60):
+                return
+            return self.unauthorized()
+
+        if not self.rate_allowed('owner-entry', 300, 60):
             return
+
         # A remembered cookie cannot mint a new one: relogin requires a real key.
         if self.path == '/app-api/session' and not strong_auth:
-            self.unauthorized()
-            return
+            return self.unauthorized()
         if self.path in ('/app-api/visual-backup-token', '/app-api/visual-backup-connections', '/app-api/visual-backup-revoke') and not (strong_auth or cookie_ok):
             return self.unauthorized()
         compute_route = (self.path in ('/app-api/run', '/app-api/party/start') or
@@ -731,7 +786,7 @@ class Handler(BaseHTTPRequestHandler):
                 APP_REQUEST_SLOTS.release()
             return
         if self.path != '/mcp':
-            self.respond(404, {'error': 'Not found'})
+            return self.respond(404, {'error': 'Not found'})
             return
         origin = self.headers.get('Origin')
         if origin and origin not in ALLOWED_ORIGINS:
@@ -816,7 +871,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     print(f'Local MCP test server: http://{HOST}:{PORT}/mcp', flush=True)
     print('Authenticated prototype server. HTTPS must be terminated by hosting platform.', flush=True)
-    BoundedHTTPServer((HOST, PORT), Handler).serve_forever()
+    BoundedHTTPServer((HOST, PORT), Handler, max_workers=32).serve_forever()
 
 
 

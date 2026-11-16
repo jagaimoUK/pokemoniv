@@ -9,7 +9,7 @@ import hmac
 import secrets
 import threading
 import time
-from http.cookies import SimpleCookie
+from http.cookies import SimpleCookie, CookieError
 from pvpoke_auth_store import CredentialStore
 
 
@@ -103,5 +103,5 @@ class BrowserLogin:
             payload = '.'.join(parts[:3])
             return (hmac.compare_digest(self._sign(payload), parts[3]) and
                     self.store.active(item.value, 'browser', expires))
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, CookieError):
             return False
