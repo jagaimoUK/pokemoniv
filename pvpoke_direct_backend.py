@@ -10,11 +10,23 @@ from __future__ import annotations
 import json
 import math
 import os
-import select
-import shutil
-import subprocess
-from pvpoke_child_env import child_environment
 from pathlib import Path
+import selectors
+import shutil
+import signal
+import subprocess
+import threading
+import time
+
+from pvpoke_child_env import child_environment
+
+MAX_REQUEST_BYTES = 4 * 1024 * 1024
+MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+MAX_TIMEOUT_SECONDS = 600.0
+
+
+def _reject_constant(value):
+    raise ValueError(f"Invalid JSON constant: {value}")
 
 
 class DirectMatrixError(RuntimeError):
@@ -42,8 +54,7 @@ def linux_process_rss_mb(pid: int) -> dict | None:
 
 def matrix_from_response(payload: dict, candidates: list, opponents: list) -> list[list]:
     if not isinstance(payload, dict) or payload.get("ok") is not True:
-        raise DirectMatrixError("PvPoke Node result failed: " +
-                                str(payload.get("error") if isinstance(payload, dict) else payload)[:800])
+        raise DirectMatrixError("PvPoke Node result failed")
     result = payload.get("result")
     rows = result.get("candidates") if isinstance(result, dict) else None
     if not isinstance(rows, list) or len(rows) != len(candidates):
@@ -111,11 +122,22 @@ def validate_minior_strategies(payload: dict, candidate_count: int, opponent_cou
 
 class DirectMatrixClient:
     def __init__(self, *, gamemaster: Path, log_dir: Path, source: Path | None = None,
-                 timeout_seconds: int = 120):
+                 timeout_seconds: int | float = 120,
+                 max_response_bytes: int = MAX_RESPONSE_BYTES):
+        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)) or not (0 < float(timeout_seconds) <= MAX_TIMEOUT_SECONDS):
+            raise ValueError("Invalid timeout_seconds")
+        if isinstance(max_response_bytes, bool) or not isinstance(max_response_bytes, int) or not (1024 <= max_response_bytes <= 64 * 1024 * 1024):
+            raise ValueError("Invalid max_response_bytes")
+
         self.gamemaster = Path(gamemaster).resolve()
         self.source = Path(source or os.environ.get("PVP_PVPOKE_SOURCE") or
                            (Path(__file__).resolve().parent / "vendor/pvpoke")).resolve()
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = float(timeout_seconds)
+        self.max_response_bytes = max_response_bytes
+        self._closed = False
+        self._poisoned = False
+        self._io_lock = threading.Lock()
+
         if not self.gamemaster.is_file():
             raise DirectMatrixError("GameMaster JSON is missing")
         if not (self.source / "src/js/battle/Battle.js").is_file():
@@ -135,15 +157,114 @@ class DirectMatrixClient:
                 [node, str(Path(__file__).resolve().parent / "pvpoke_node_matrix.js")],
                 cwd=str(Path(__file__).resolve().parent),
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=self._log_file, bufsize=1, text=True, encoding="utf-8",
+                stderr=self._log_file, bufsize=0,
+                start_new_session=(os.name == "posix"),
                 env=child_environment({"PVP_PVPOKE_SOURCE": str(self.source)})
             )
+            if self.proc.stdin is not None:
+                os.set_blocking(self.proc.stdin.fileno(), False)
+            if self.proc.stdout is not None:
+                os.set_blocking(self.proc.stdout.fileno(), False)
         except Exception:
             self.close()
             raise
 
+    def _fail_close(self, message: str) -> None:
+        self._poisoned = True
+        self.close()
+        raise DirectMatrixError(message)
+
+    def _exchange_frame(self, request: dict, *, timeout_message: str) -> dict:
+        with self._io_lock:
+            if self._closed or self._poisoned or self.proc is None or self.proc.poll() is not None:
+                raise DirectMatrixError("PvPoke Node process is not running")
+
+            try:
+                frame = json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
+            except Exception as exc:
+                self._fail_close(f"Failed to serialize request: {exc}")
+
+            if len(frame) > MAX_REQUEST_BYTES:
+                self._fail_close("PvPoke Node request exceeded frame limit")
+
+            deadline = time.monotonic() + self.timeout_seconds
+            stdin_fd = self.proc.stdin.fileno()
+            stdout_fd = self.proc.stdout.fileno()
+            sent = 0
+            view = memoryview(frame)
+            rx_buf = bytearray()
+            nl_index = -1
+
+            with selectors.DefaultSelector() as sel:
+                sel.register(stdout_fd, selectors.EVENT_READ)
+                if len(view) > 0:
+                    sel.register(stdin_fd, selectors.EVENT_WRITE)
+
+                while nl_index == -1:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        self._fail_close(timeout_message)
+
+                    events = sel.select(timeout=remaining)
+                    if not events:
+                        self._fail_close(timeout_message)
+
+                    for key, _ in events:
+                        if key.fd == stdin_fd:
+                            try:
+                                n = os.write(stdin_fd, view[sent:])
+                                sent += n
+                                if sent >= len(view):
+                                    sel.unregister(stdin_fd)
+                            except (BrokenPipeError, OSError) as exc:
+                                self._fail_close(f"PvPoke Node write failed: {exc}")
+                        elif key.fd == stdout_fd:
+                            while True:
+                                try:
+                                    chunk = os.read(stdout_fd, 65536)
+                                except BlockingIOError:
+                                    break
+                                except (OSError, BrokenPipeError) as exc:
+                                    self._fail_close(f"PvPoke Node read failed: {exc}")
+
+                                if chunk == b"":
+                                    if not rx_buf:
+                                        self._fail_close("PvPoke Node exited without a response")
+                                    self._fail_close("PvPoke Node exited with incomplete response")
+
+                                if len(rx_buf) + len(chunk) > self.max_response_bytes:
+                                    self._fail_close("PvPoke Node response exceeded frame limit")
+
+                                rx_buf.extend(chunk)
+                                pos = rx_buf.find(b"\n")
+                                if pos != -1:
+                                    trailing = rx_buf[pos + 1:]
+                                    if trailing:
+                                        self._fail_close("Unexpected trailing bytes in PvPoke Node response")
+                                    nl_index = pos
+                                    break
+
+            if sent < len(view):
+                self._fail_close("PvPoke Node responded before request completed")
+
+            line_bytes = bytes(rx_buf[:nl_index]).rstrip(b"\r")
+            try:
+                line_text = line_bytes.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                self._fail_close(f"PvPoke Node response decoding failed: {exc}")
+
+            try:
+                response = json.loads(line_text, parse_constant=_reject_constant)
+            except Exception as exc:
+                self._fail_close(f"PvPoke Node response parsing failed: {exc}")
+
+            if not isinstance(response, dict):
+                self._fail_close("Invalid PvPoke Node response")
+
+            return response
+
     def simulate(self, candidates: list, opponents: list, shields: tuple[int, int]) -> list[list]:
-        if self.proc is None or self.proc.poll() is not None:
+        if self._closed or self._poisoned or self.proc is None or self.proc.poll() is not None:
             raise DirectMatrixError("PvPoke Node process is not running")
         payload = {
             "gamemaster_path": str(self.gamemaster),
@@ -153,50 +274,44 @@ class DirectMatrixClient:
         }
         try:
             before = linux_process_rss_mb(self.proc.pid)
-            self.proc.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
-            self.proc.stdin.flush()
-            ready, _, _ = select.select([self.proc.stdout], [], [], self.timeout_seconds)
-            if not ready:
-                raise DirectMatrixError("PvPoke Node response timed out")
-            line = self.proc.stdout.readline()
-            if not line:
-                raise DirectMatrixError("PvPoke Node exited without a Matrix response")
-            response = json.loads(line)
+            response = self._exchange_frame(payload, timeout_message="PvPoke Node response timed out")
             matrix = matrix_from_response(response, candidates, opponents)
             self.last_minior_data = validate_minior_strategies(
                 response, len(candidates), len(opponents))
-            after = linux_process_rss_mb(self.proc.pid)
-            if before is not None and after is not None:
-                self.memory_samples.append({
-                    'candidates': len(candidates), 'opponents': len(opponents),
-                    'rss_before_mb': before['rss_mb'],
-                    'rss_after_mb': after['rss_mb'],
-                    'peak_rss_mb': after['peak_rss_mb'],
-                })
+            if self.proc is not None:
+                after = linux_process_rss_mb(self.proc.pid)
+                if before is not None and after is not None:
+                    self.memory_samples.append({
+                        'candidates': len(candidates), 'opponents': len(opponents),
+                        'rss_before_mb': before['rss_mb'],
+                        'rss_after_mb': after['rss_mb'],
+                        'peak_rss_mb': after['peak_rss_mb'],
+                    })
             return matrix
-        except (ValueError, OSError, BrokenPipeError) as exc:
+        except DirectMatrixError:
+            self._poisoned = True
+            self.close()
+            raise
+        except Exception as exc:
+            self._poisoned = True
+            self.close()
             raise DirectMatrixError(f"PvPoke Node protocol failed: {exc}") from exc
 
     def strategy(self, action: str, payload: dict, *, include_engine_sources: bool = False) -> dict:
         """Explicit detail protocol; never infer resources from a Rating."""
         if action not in ("detail", "switch_branch", "switch_prefix", "engine_identity"):
             raise DirectMatrixError("Unknown strategy action")
-        if self.proc is None or self.proc.poll() is not None:
+        if self._closed or self._poisoned or self.proc is None or self.proc.poll() is not None:
             raise DirectMatrixError("PvPoke Node process is not running")
         request = {"action": action, "gamemaster_path": str(self.gamemaster),
                    "battle" if action == "detail" else "branch": payload}
         if include_engine_sources:
             request["include_engine_sources"] = True
+
         try:
-            self.proc.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
-            self.proc.stdin.flush()
-            ready, _, _ = select.select([self.proc.stdout], [], [], self.timeout_seconds)
-            if not ready:
-                self.close()  # Do not let a late response contaminate the next request.
-                raise DirectMatrixError("Strategy response timed out")
-            response = json.loads(self.proc.stdout.readline())
+            response = self._exchange_frame(request, timeout_message="Strategy response timed out")
             if response.get("ok") is not True:
-                raise DirectMatrixError(str(response.get("error"))[:800])
+                raise DirectMatrixError("PvPoke strategy calculation failed")
             result = response.get("result")
             if not isinstance(result, dict) or result.get("status") not in ("calculated", "unknown"):
                 raise DirectMatrixError("Invalid strategy response")
@@ -208,29 +323,63 @@ class DirectMatrixClient:
                             0 <= state["energy_points"] <= 100 and
                             0 <= state["shields"] <= payload["shields"][i]):
                         raise DirectMatrixError("Invalid detailed resources")
-            sample = result.pop("node_memory", None) or linux_process_rss_mb(self.proc.pid)
-            if sample:
-                self.memory_samples.append(sample)
+            if self.proc is not None:
+                sample = result.pop("node_memory", None) or linux_process_rss_mb(self.proc.pid)
+                if sample:
+                    self.memory_samples.append(sample)
             return result
-        except (ValueError, OSError, BrokenPipeError, KeyError, TypeError) as exc:
+        except DirectMatrixError:
+            self._poisoned = True
+            self.close()
+            raise
+        except Exception as exc:
+            self._poisoned = True
             self.close()
             raise DirectMatrixError(f"PvPoke strategy protocol failed: {exc}") from exc
 
     def close(self):
-        if self.proc is not None:
+        self._closed = True
+        self._poisoned = True
+        proc = self.proc
+        self.proc = None
+        log_file = self._log_file
+        self._log_file = None
+
+        if proc is not None:
             try:
-                if self.proc.poll() is None:
-                    self.proc.terminate()
+                if proc.poll() is None:
+                    if os.name == "posix":
+                        try:
+                            os.killpg(proc.pid, signal.SIGTERM)
+                        except (ProcessLookupError, PermissionError):
+                            pass
+                    proc.terminate()
                     try:
-                        self.proc.wait(timeout=4)
+                        proc.wait(timeout=2.0)
                     except subprocess.TimeoutExpired:
-                        self.proc.kill()
-                        self.proc.wait(timeout=4)
+                        if os.name == "posix":
+                            try:
+                                os.killpg(proc.pid, signal.SIGKILL)
+                            except (ProcessLookupError, PermissionError):
+                                pass
+                        proc.kill()
+                        try:
+                            proc.wait(timeout=2.0)
+                        except subprocess.TimeoutExpired:
+                            pass
+            except Exception:
+                pass
             finally:
-                for stream in (self.proc.stdin, self.proc.stdout):
-                    if stream:
-                        stream.close()
-            self.proc = None
-        if self._log_file is not None:
-            self._log_file.close()
+                for stream in (proc.stdin, proc.stdout):
+                    if stream is not None:
+                        try:
+                            stream.close()
+                        except (OSError, BrokenPipeError):
+                            pass
+
+        if log_file is not None:
+            try:
+                log_file.close()
+            except (OSError, BrokenPipeError):
+                pass
             self._log_file = None

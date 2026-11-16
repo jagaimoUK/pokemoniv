@@ -589,7 +589,7 @@ def run(refresh=False, shield_set='all'):
             except (OSError, ValueError, RuntimeError) as error:
                 if minior_batch:
                     # Browser fallback lacks our Minior HP and charge policy hooks.
-                    raise RuntimeError(f'メテノ戦術比較失敗（通常PvPoke結果へフォールバックしません）: {error}') from error
+                    raise RuntimeError('メテノ戦術比較失敗（通常PvPoke結果へフォールバックしません）') from error
                 raise RuntimeError('Direct計算に失敗しました。安全のためブラウザーへ自動切替しません') from error
         identity = (tuple(tuple(r.get(k) for k in HEADER + ['level', 'cp']) for r in crows),
                     tuple(tuple(r.get(k) for k in HEADER + ['level', 'cp']) for r in orows))
