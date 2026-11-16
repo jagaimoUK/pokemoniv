@@ -307,6 +307,39 @@ class PhaseD4OAuthAndGatewayTests(unittest.TestCase):
         status, _, _ = self._post('/mcp', token='Bearer ' + app_tok)
         self.assertEqual(status, 401)
 
+    def test_new01_unsupported_post_routes_rejected_before_auth_work(self):
+        forged = 'Bearer ' + _make_fake_jwt('kid-1', 'forged')
+        with patch.object(remote, 'oauth_token_valid',
+                          side_effect=AssertionError('OAuth must not run')) as oauth_check:
+            with patch.object(remote.BROWSER_LOGIN, 'valid',
+                              side_effect=AssertionError('Cookie auth must not run')) as cookie_check:
+                for path in ('/health', '/app', '/api/status', '/reader-api/v1/cleanup'):
+                    with self.subTest(path=path):
+                        status, _, _ = self._post(path, token=forged)
+                        self.assertEqual(status, 404)
+            oauth_check.assert_not_called()
+            cookie_check.assert_not_called()
+        self.assertNotIn('unauth-entry', self.budget._buckets)
+
+    def test_new03_malformed_claims_are_invalid_not_auth_outage(self):
+        forged = 'Bearer ' + _make_fake_jwt('kid-1', 'forged')
+        for exception_type in (TypeError, RecursionError):
+            with self.subTest(exception=exception_type.__name__):
+                with patch.object(remote, '_unverified_claims_match',
+                                  side_effect=exception_type('malformed claims')):
+                    status, _, _ = self._post('/mcp', token=forged)
+                self.assertEqual(status, 401)
+
+        # Also exercise the real deeply nested JSON parsing path.
+        header = _b64url(json.dumps({'alg': 'RS256', 'kid': 'kid-1'}).encode('utf-8'))
+        nested = _b64url(b'[' * 1200 + b'0' + b']' * 1200)
+        malformed = f'Bearer {header}.{nested}.forged'
+        self.assertLess(len(malformed), 4096)
+        status, _, _ = self._post('/mcp', token=malformed)
+        self.assertEqual(status, 401)
+        self.assertIn('unauth-entry', self.budget._buckets)
+        self.assertLess(self.budget._buckets['unauth-entry'][0], 180)
+
     def test_nginx_template_enforces_limits_independent_of_untrusted_credentials(self):
         conf = render_nginx(8787)
         self.assertNotIn('$http_authorization', conf)
@@ -321,6 +354,9 @@ class PhaseD4OAuthAndGatewayTests(unittest.TestCase):
         self.assertIn('location ^~ /app/', conf)
         self.assertIn('limit_conn app_connections 8;', conf)
         self.assertIn('limit_conn public_connections 8;', conf)
+        health = conf.split('location = /health {', 1)[1].split('}', 1)[0]
+        self.assertIn('limit_conn public_connections 8;', health)
+        self.assertIn('limit_req zone=peer_requests burst=40 nodelay;', health)
 
 
 class PhaseD4ProcessAndConcurrencyTests(unittest.TestCase):

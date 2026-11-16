@@ -303,7 +303,7 @@ def _evaluate_oauth_token(raw, rate_checker=None):
                 return 'invalid'
         _cache_good_sig(token_digest, time.monotonic(), claims['exp'])
         return 'ok'
-    except (InvalidTokenError, ValueError, KeyError) as exc:
+    except (InvalidTokenError, ValueError, KeyError, TypeError, RecursionError) as exc:
         if ran_rsa:
             _cache_bad_sig(token_digest, time.monotonic())
             if can_peek:
@@ -909,6 +909,12 @@ class Handler(BaseHTTPRequestHandler):
         # Framing check first with zero budget cost
         if self.headers.get('Transfer-Encoding') or len(self.headers.get_all('Content-Length', [])) != 1:
             return self.respond(400, {'error': 'Invalid request framing'})
+
+        # Reject unknown POST paths before checking JWTs, cookies, or owner budgets.
+        # In particular, POST /health must never become a costly auth entry point.
+        if not (self.path == '/mcp' or self.path.startswith('/app-api/')
+                or self.path.startswith('/visual-backup/v1/')):
+            return self.respond(404, {'error': 'Not found'})
 
         if self.path.startswith('/visual-backup/v1/'):
             raw = self.headers.get('Authorization', '')
