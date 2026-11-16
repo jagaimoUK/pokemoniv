@@ -28,6 +28,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
+from pvpoke_http_security import BoundedHTTPServer
 import pvpoke_batch_v2 as engine
 import pvpoke_iv_modes as iv_modes
 import pvpoke_archive as archives
@@ -83,8 +84,40 @@ PRESETS = [
 TOKEN = secrets.token_urlsafe(32)
 LOCK = threading.RLock()
 BATTLE_RUNNING = False  # Shares LOCK with standard selection and party job admission.
+COMPUTE_OWNER = None  # None または {'token': str, 'kind': str, 'started_at': float}
 ACTIVE_PROCESS = None
 CANCEL_REQUESTED = False
+
+
+def _compute_busy_locked() -> bool:
+    return (COMPUTE_OWNER is not None or BATTLE_RUNNING or
+            STATUS.get('state') in ('running', 'cancelling') or PARTY.running)
+
+
+def try_reserve_compute(kind: str) -> str | None:
+    with LOCK:
+        if _compute_busy_locked():
+            return None
+        global COMPUTE_OWNER, BATTLE_RUNNING
+        token = secrets.token_hex(16)
+        COMPUTE_OWNER = {'token': token, 'kind': kind, 'started_at': time.monotonic()}
+        if kind == 'battle':
+            BATTLE_RUNNING = True
+        return token
+
+
+def release_compute(token: str | None) -> bool:
+    if token is None:
+        return False
+    with LOCK:
+        global COMPUTE_OWNER, BATTLE_RUNNING
+        if COMPUTE_OWNER is not None and COMPUTE_OWNER.get('token') == token:
+            kind = COMPUTE_OWNER.get('kind')
+            COMPUTE_OWNER = None
+            if kind == 'battle':
+                BATTLE_RUNNING = False
+            return True
+        return False
 STATUS = {
     'state': 'idle', 'message': '入力を準備してね', 'logs': deque(maxlen=120),
     'exit_code': None, 'started_at': None, 'finished_at': None, 'batch24': False,
@@ -141,7 +174,12 @@ def load_catalog():
                                 'name_ja': move_ja.get(m['moveId'], {}).get('ja')}
                                       for m in gm.get('moves', []) if m.get('moveId')},
                             'presets': presets, 'timestamp': gm.get('timestamp')})
-        meta_variants.start(WORK, LOCK, STATUS, battle_busy=lambda: BATTLE_RUNNING)
+        meta_variants.start(
+            WORK, LOCK, STATUS,
+            battle_busy=_compute_busy_locked,
+            acquire_compute=lambda: try_reserve_compute('meta_variants'),
+            release_compute=release_compute
+        )
     except Exception as exc:
         logging.warning('Game catalog initialization failed: %s', type(exc).__name__)
         with LOCK:
@@ -342,103 +380,132 @@ def worker(shields):
 
 def stop_process_group(process):
     """Terminate only this calculation's child process group, not the web service."""
+    pgid = None
+    pid = getattr(process, 'pid', None)
+    if os.name == 'posix' and isinstance(pid, int) and pid > 0:
+        try:
+            if pid != os.getpgrp():
+                pgid = pid
+        except OSError:
+            pgid = None
     if process.poll() is not None:
+        if pgid is not None:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
         return
     try:
-        if os.name == 'posix':
-            os.killpg(process.pid, signal.SIGTERM)
+        if pgid is not None:
+            os.killpg(pgid, signal.SIGTERM)
         else:
             process.terminate()
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
         return
 
     def force_stop():
         try:
             process.wait(timeout=3)
         except subprocess.TimeoutExpired:
-            try:
-                if os.name == 'posix':
-                    os.killpg(process.pid, signal.SIGKILL)
-                else:
-                    process.kill()
-            except ProcessLookupError:
-                pass
+            pass
+        try:
+            if pgid is not None:
+                os.killpg(pgid, signal.SIGKILL)
+            elif process.poll() is None:
+                process.kill()
+        except (ProcessLookupError, PermissionError):
+            pass
     threading.Thread(target=force_stop, daemon=True).start()
 
 
-def background_run(shields, batch24=False, batch_mode='simple', meta_file=None, cache_context=None, force=False):
+def background_run(shields, batch24=False, batch_mode='simple', meta_file=None, cache_context=None, force=False, *, owner_token=None):
     global ACTIVE_PROCESS
     process = None
-    with LOCK:
-        if CANCEL_REQUESTED:
-            STATUS.update({'state': 'cancelled', 'message': '計算を中止しました',
-                           'finished_at': datetime.now().isoformat(timespec='microseconds')})
-            return
-    if batch24:
-        command = [sys.executable, '-u', str(Path(__file__).resolve().parent / 'pvpoke_24_workflow.py'),
-                   '--run', '--config', str(BATCH_CONFIG), '--output', str(BATCH_OUTPUT),
-                   '--batch-mode', batch_mode, '--meta', str(meta_file or meta_live.active_path(WORK))]
-    else:
-        command = [sys.executable, str(Path(__file__).resolve()), '--worker', shields]
     try:
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             text=True, bufsize=1, cwd=str(HOME),
-                             start_new_session=(os.name == 'posix'),
-                             env=iv_worker_environment(force=force))
         with LOCK:
-            ACTIVE_PROCESS = process
-            stop_now = CANCEL_REQUESTED
-        if stop_now:
-            stop_process_group(process)
-        for line in process.stdout:
-            line = line.rstrip('\r\n')
-            if not line:
-                continue
+            if CANCEL_REQUESTED:
+                STATUS.update({'state': 'cancelled', 'message': '計算を中止しました',
+                               'finished_at': datetime.now().isoformat(timespec='microseconds')})
+                return
+        if batch24:
+            command = [sys.executable, '-u', str(Path(__file__).resolve().parent / 'pvpoke_24_workflow.py'),
+                       '--run', '--config', str(BATCH_CONFIG), '--output', str(BATCH_OUTPUT),
+                       '--batch-mode', batch_mode, '--meta', str(meta_file or meta_live.active_path(WORK))]
+        else:
+            command = [sys.executable, str(Path(__file__).resolve()), '--worker', shields]
+        try:
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 text=True, bufsize=1, cwd=str(HOME),
+                                 start_new_session=(os.name == 'posix'),
+                                 env=iv_worker_environment(force=force))
             with LOCK:
-                STATUS['logs'].append(line)
-                STATUS['message'] = line[-180:]
-        code = process.wait()
-        with LOCK:
-            cancelled = CANCEL_REQUESTED
-        if code == 0 and batch24 and not cancelled:
-            # Verify all 24 files and atomically save the final ZIP first.
-            # Only after durable save succeeds may we remove the temporary
-            # browser CSV chunks and extracted results.
-            archived = archives.preserve_and_cleanup(BATCH_OUTPUT, WORK)
-            # Cache storage is best-effort; a valid completed calculation stays valid.
-            if cache_context and calculation_version(engine.DATA) == cache_context['request']['calculation_version']:
-                try:
-                    saved = result_cache.ResultCache.configured(WORK)
-                    if saved is not None:
-                        saved.store(cache_context, archived)
-                except (OSError, ValueError, TypeError, KeyError, __import__('zipfile').BadZipFile) as exc:
-                    print(f'Result cache skipped: {exc}', flush=True)
-            BATCH_CONFIG.unlink(missing_ok=True)
-        result_zip = archives.archived_latest(WORK) if batch24 else LATEST_ZIP
-        with LOCK:
-            STATUS['exit_code'] = code
-            STATUS['batch24'] = bool(batch24)
-            STATUS['state'] = ('cancelled' if CANCEL_REQUESTED else
-                               'done' if code == 0 and result_zip is not None and result_zip.is_file() else 'error')
-            STATUS['finished_at'] = datetime.now().isoformat(timespec='microseconds')
-            STATUS['message'] = ('計算を中止しました' if CANCEL_REQUESTED else
-                                 'ZIPが完成しました' if STATUS['state']=='done' else
-                                 '計算が中断されました。ログを確認してね')
-    except Exception as exc:
-        # STATUS is exposed by local /api/status and can be relayed by
-        # authenticated app job polling. Never store unexpected exception
-        # text, which may include backend filesystem paths or secrets.
-        logging.warning('Background IV calculation failed: %s', type(exc).__name__)
-        with LOCK:
-            STATUS['logs'].append('ERROR: 計算処理の内部エラー')
-            STATUS['state'] = 'cancelled' if CANCEL_REQUESTED else 'error'
-            STATUS['message'] = ('計算を中止しました' if CANCEL_REQUESTED else
-                                 '計算処理に失敗しました。再試行してください')
-            STATUS['finished_at'] = datetime.now().isoformat(timespec='microseconds')
+                ACTIVE_PROCESS = process
+                stop_now = CANCEL_REQUESTED
+            if stop_now:
+                stop_process_group(process)
+            for line in process.stdout:
+                line = line.rstrip('\r\n')
+                if not line:
+                    continue
+                with LOCK:
+                    STATUS['logs'].append(line)
+                    STATUS['message'] = line[-180:]
+            code = process.wait()
+            with LOCK:
+                cancelled = CANCEL_REQUESTED
+            if code == 0 and batch24 and not cancelled:
+                # Verify all 24 files and atomically save the final ZIP first.
+                # Only after durable save succeeds may we remove the temporary
+                # browser CSV chunks and extracted results.
+                archived = archives.preserve_and_cleanup(BATCH_OUTPUT, WORK)
+                # Cache storage is best-effort; a valid completed calculation stays valid.
+                if cache_context and calculation_version(engine.DATA) == cache_context['request']['calculation_version']:
+                    try:
+                        saved = result_cache.ResultCache.configured(WORK)
+                        if saved is not None:
+                            saved.store(cache_context, archived)
+                    except (OSError, ValueError, TypeError, KeyError, __import__('zipfile').BadZipFile) as exc:
+                        print(f'Result cache skipped: {exc}', flush=True)
+                BATCH_CONFIG.unlink(missing_ok=True)
+            result_zip = archives.archived_latest(WORK) if batch24 else LATEST_ZIP
+            with LOCK:
+                STATUS['exit_code'] = code
+                STATUS['batch24'] = bool(batch24)
+                STATUS['state'] = ('cancelled' if CANCEL_REQUESTED else
+                                   'done' if code == 0 and result_zip is not None and result_zip.is_file() else 'error')
+                STATUS['finished_at'] = datetime.now().isoformat(timespec='microseconds')
+                STATUS['message'] = ('計算を中止しました' if CANCEL_REQUESTED else
+                                     'ZIPが完成しました' if STATUS['state']=='done' else
+                                     '計算が中断されました。ログを確認してね')
+        except Exception as exc:
+            # STATUS is exposed by local /api/status and can be relayed by
+            # authenticated app job polling. Never store unexpected exception
+            # text, which may include backend filesystem paths or secrets.
+            logging.warning('Background IV calculation failed: %s', type(exc).__name__)
+            with LOCK:
+                STATUS['logs'].append('ERROR: 計算処理の内部エラー')
+                STATUS['state'] = 'cancelled' if CANCEL_REQUESTED else 'error'
+                STATUS['message'] = ('計算を中止しました' if CANCEL_REQUESTED else
+                                     '計算処理に失敗しました。再試行してください')
+                STATUS['finished_at'] = datetime.now().isoformat(timespec='microseconds')
     finally:
+        if process is not None:
+            try:
+                stop_process_group(process)
+                if process.poll() is None:
+                    process.wait(timeout=4)
+            except Exception:
+                pass
+            if process.stdout is not None:
+                try:
+                    process.stdout.close()
+                except OSError:
+                    pass
         with LOCK:
             if ACTIVE_PROCESS is process:
                 ACTIVE_PROCESS = None
+            if owner_token is not None:
+                release_compute(owner_token)
 
 
 HTML = r'''<!DOCTYPE html>
@@ -709,15 +776,13 @@ class Handler(BaseHTTPRequestHandler):
                         return self.respond(503, {'error': 'Could not list saved tactics'})
                     except ValueError:
                         return self.respond(400, {'error': 'Invalid tactic list request'})
-                # Reserve the existing shared compute slot, then release LOCK
-                # before the potentially slow Node/SQLite work.
                 with LOCK:
-                    if (BATTLE_RUNNING or STATUS['state'] in ('running', 'cancelling')
-                            or PARTY.running):
-                        return self.respond(409, {'error': 'Another battle calculation is running'})
-                    if not CATALOG.get('ready'):
-                        return self.respond(503, {'error': 'Battle game data is not ready'})
-                    BATTLE_RUNNING = True
+                    catalog_ready = CATALOG.get('ready')
+                if not catalog_ready:
+                    return self.respond(503, {'error': 'Battle game data is not ready'})
+                token = try_reserve_compute('battle')
+                if token is None:
+                    return self.respond(409, {'error': 'Another battle calculation is running'})
                 client = None
                 result = {'status': 'failed'}
                 workspace_status = 503
@@ -755,8 +820,7 @@ class Handler(BaseHTTPRequestHandler):
                         result = {'status': 'failed'}
                         workspace_status = 503
                     finally:
-                        with LOCK:
-                            BATTLE_RUNNING = False
+                        release_compute(token)
                 if workspace_route:
                     return self.respond(workspace_status, result if workspace_status == 200 else {
                         'error': 'Analysis workspace request rejected or unavailable'})
@@ -803,21 +867,25 @@ class Handler(BaseHTTPRequestHandler):
                 if action == 'cancel':
                     return self.respond(200, PARTY.cancel(payload.get('job_id')))
                 if action == 'start':
-                    with LOCK:
-                        if BATTLE_RUNNING:
-                            return self.respond(409, {'error': 'Another battle calculation is running'})
-                        if not CATALOG.get('ready'):
-                            raise ValueError('ゲームデータを読み込み中です')
-                        _, cpms, full_species = engine.game_data()
-                        try:
-                            response = PARTY.start(payload, catalog=CATALOG['species'],
-                                species=full_species, cpms=cpms, engine=engine, work=WORK,
-                                global_lock=LOCK, global_status=STATUS)
-                        except RuntimeError as exc:
+                    if not CATALOG.get('ready'):
+                        raise ValueError('ゲームデータを読み込み中です')
+                    token = try_reserve_compute('party')
+                    if token is None:
+                        return self.respond(409, {'error': 'Another battle calculation is running'})
+                    _, cpms, full_species = engine.game_data()
+                    try:
+                        response = PARTY.start(payload, catalog=CATALOG['species'],
+                            species=full_species, cpms=cpms, engine=engine, work=WORK,
+                            global_lock=LOCK, global_status=STATUS,
+                            release_owner=lambda: release_compute(token))
+                    except Exception as exc:
+                        release_compute(token)
+                        if isinstance(exc, RuntimeError):
                             return self.respond(409, {'error': str(exc)})
+                        raise
                     return self.respond(200, response)
             with LOCK:
-                if STATUS['state'] in ('running', 'cancelling') or PARTY.running or BATTLE_RUNNING:
+                if _compute_busy_locked():
                     return self.respond(409, {'error':'計算中は入力を変更できません'})
                 if path == '/api/meta/presets':
                     if not CATALOG['ready']:
@@ -891,21 +959,31 @@ class Handler(BaseHTTPRequestHandler):
                             except (OSError, ValueError, TypeError, KeyError):
                                 cache_context = None  # Always allow a normal calculation.
                         preview['result_cache'] = reuse
-                        BATCH_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-                        temp = BATCH_CONFIG.with_suffix('.tmp')
-                        temp.write_text(json.dumps({
-                            'candidate': dict(zip(engine.HEADER[:4], cand_parts)),
-                            'ivs': '\n'.join(','.join(map(str, iv)) for iv in iv_list),
-                            'batch_mode': batch_mode,
-                        }, ensure_ascii=False), encoding='utf-8')
-                        temp.replace(BATCH_CONFIG)
-                        CANCEL_REQUESTED = False
-                        STATUS.update({'state':'running', 'message':'メタ比較を準備中',
-                                       'logs':deque(maxlen=120), 'exit_code':None,
-                                       'started_at':datetime.now().isoformat(timespec='microseconds'),
-                                       'finished_at':None, 'batch24':True, 'result_cache':reuse})
-                        threading.Thread(target=background_run, args=('all', True, batch_mode, meta_file, cache_context, force),
-                                         daemon=True).start()
+                        token = try_reserve_compute('iv')
+                        if token is None:
+                            return self.respond(409, {'error': '計算中は入力を変更できません'})
+                        try:
+                            BATCH_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+                            temp = BATCH_CONFIG.with_suffix('.tmp')
+                            temp.write_text(json.dumps({
+                                'candidate': dict(zip(engine.HEADER[:4], cand_parts)),
+                                'ivs': '\n'.join(','.join(map(str, iv)) for iv in iv_list),
+                                'batch_mode': batch_mode,
+                            }, ensure_ascii=False), encoding='utf-8')
+                            temp.replace(BATCH_CONFIG)
+                            CANCEL_REQUESTED = False
+                            STATUS.update({'state':'running', 'message':'メタ比較を準備中',
+                                           'logs':deque(maxlen=120), 'exit_code':None,
+                                           'started_at':datetime.now().isoformat(timespec='microseconds'),
+                                           'finished_at':None, 'batch24':True, 'result_cache':reuse})
+                            threading.Thread(target=background_run, args=('all', True, batch_mode, meta_file, cache_context, force),
+                                             kwargs={'owner_token': token},
+                                             daemon=True).start()
+                        except Exception:
+                            STATUS.update({'state': 'error', 'message': '計算スレッドの開始に失敗しました',
+                                           'finished_at': datetime.now().isoformat(timespec='microseconds')})
+                            release_compute(token)
+                            raise
                     return self.respond(200, {'ok':True,'preview':preview})
                 cleaned, crows, orows, preview = prepare_payload(payload)
                 save_input(cleaned, crows, orows)
@@ -913,13 +991,23 @@ class Handler(BaseHTTPRequestHandler):
                     STATUS.update({'state':'idle', 'message':'入力を確認できました。計算開始を押してください',
                                    'logs':deque(maxlen=120), 'exit_code':None})
                 if path == '/api/run':
-                    CANCEL_REQUESTED = False
-                    STATUS.update({'state':'running', 'message':'計算を準備中',
-                                   'logs':deque(maxlen=120), 'exit_code':None,
-                                   'started_at':datetime.now().isoformat(timespec='microseconds'),
-                                   'finished_at':None, 'batch24':False})
-                    threading.Thread(target=background_run, args=(cleaned['shields'],),
-                                     daemon=True).start()
+                    token = try_reserve_compute('iv')
+                    if token is None:
+                        return self.respond(409, {'error': '計算中は入力を変更できません'})
+                    try:
+                        CANCEL_REQUESTED = False
+                        STATUS.update({'state':'running', 'message':'計算を準備中',
+                                       'logs':deque(maxlen=120), 'exit_code':None,
+                                       'started_at':datetime.now().isoformat(timespec='microseconds'),
+                                       'finished_at':None, 'batch24':False})
+                        threading.Thread(target=background_run, args=(cleaned['shields'],),
+                                         kwargs={'owner_token': token},
+                                         daemon=True).start()
+                    except Exception:
+                        STATUS.update({'state': 'error', 'message': '計算スレッドの開始に失敗しました',
+                                       'finished_at': datetime.now().isoformat(timespec='microseconds')})
+                        release_compute(token)
+                        raise
             self.respond(200, {'ok':True,'preview':preview})
         except RecursionError:
             self.respond(400, {'error': 'Request JSON is too deeply nested'})
@@ -945,7 +1033,7 @@ def main():
         parser.error('このバージョンではセキュリティ上ポート8765固定です')
     configure_engine()
     threading.Thread(target=load_catalog, daemon=True).start()
-    httpd = ThreadingHTTPServer((HOST, PORT), Handler)
+    httpd = BoundedHTTPServer((HOST, PORT), Handler, max_workers=24, socket_timeout=15, request_timeout=90)
     print(f'\nPvPokeブラウザ操作画面: http://{HOST}:{PORT}', flush=True)
     print('AndroidのChromeでURLを開いてね。終了はTermuxでCtrl+C。', flush=True)
     httpd.serve_forever()

@@ -325,11 +325,8 @@ class Ownership:
                 WHERE owner_scope=? AND kind='instance' AND target=? ORDER BY sequence LIMIT ? OFFSET ?''',
                 (self.owner, instance_id, limit, after_revision))]
 
-    def _matches(self, db, combatant, cp):
-        """Show exact and uncertain candidates without converting absence into a build-wide fact."""
-        rows = db.execute('''SELECT body, digest FROM owned_instances_v1
-            WHERE owner_scope=? AND species_id=? AND iv_index=? ORDER BY instance_id''',
-            (self.owner, combatant['species_id'], _iv_index(combatant['ivs'])))
+    @staticmethod
+    def _match_rows(rows, combatant, cp):
         matches = []
         for row in rows:
             record = _unpack(row)
@@ -348,3 +345,10 @@ class Ownership:
             matches.append({'instance_id': record['instance_id'], 'state': record['state'],
                             'revision': record['revision'], 'build_match': match})
         return matches
+
+    def _matches(self, db, combatant, cp):
+        """Show exact and uncertain candidates without converting absence into a build-wide fact."""
+        rows = db.execute('''SELECT body, digest FROM owned_instances_v1
+            WHERE owner_scope=? AND species_id=? AND iv_index=? ORDER BY instance_id''',
+            (self.owner, combatant['species_id'], _iv_index(combatant['ivs']))).fetchall()
+        return self._match_rows(rows, combatant, cp)

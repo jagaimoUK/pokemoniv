@@ -149,6 +149,7 @@ class CacheHTTPTests(unittest.TestCase):
             try:
                 def request(**extra):
                     web.STATUS["state"]="idle"
+                    web.COMPUTE_OWNER = None
                     conn=http.client.HTTPConnection(*server.server_address)
                     conn.request("POST","/api/run24",json.dumps(dict(candidate=CANDIDATE,ivs=IVS,**extra)),
                                  {"Content-Type":"application/json","X-PvPoke-Token":web.TOKEN})
@@ -168,6 +169,7 @@ class CacheHTTPTests(unittest.TestCase):
                     worker.assert_called_once()
             finally:
                 server.shutdown(); server.server_close(); thread.join()
+                web.COMPUTE_OWNER = None
 
 
 class FreshAnalysisTests(unittest.TestCase):
