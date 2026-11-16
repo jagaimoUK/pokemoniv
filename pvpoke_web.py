@@ -173,7 +173,7 @@ def load_catalog():
                                 'name': m.get('name') or m['moveId'],
                                 'name_ja': move_ja.get(m['moveId'], {}).get('ja')}
                                       for m in gm.get('moves', []) if m.get('moveId')},
-                            'presets': presets, 'timestamp': datetime.now().isoformat()})
+                            'presets': presets, 'timestamp': gm.get('timestamp')})
         meta_variants.start(
             WORK, LOCK, STATUS,
             battle_busy=_compute_busy_locked,
@@ -380,27 +380,41 @@ def worker(shields):
 
 def stop_process_group(process):
     """Terminate only this calculation's child process group, not the web service."""
+    pgid = None
+    pid = getattr(process, 'pid', None)
+    if os.name == 'posix' and isinstance(pid, int) and pid > 0:
+        try:
+            if pid != os.getpgrp():
+                pgid = pid
+        except OSError:
+            pgid = None
     if process.poll() is not None:
+        if pgid is not None:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
         return
     try:
-        if os.name == 'posix':
-            os.killpg(process.pid, signal.SIGTERM)
+        if pgid is not None:
+            os.killpg(pgid, signal.SIGTERM)
         else:
             process.terminate()
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
         return
 
     def force_stop():
         try:
             process.wait(timeout=3)
         except subprocess.TimeoutExpired:
-            try:
-                if os.name == 'posix':
-                    os.killpg(process.pid, signal.SIGKILL)
-                else:
-                    process.kill()
-            except ProcessLookupError:
-                pass
+            pass
+        try:
+            if pgid is not None:
+                os.killpg(pgid, signal.SIGKILL)
+            elif process.poll() is None:
+                process.kill()
+        except (ProcessLookupError, PermissionError):
+            pass
     threading.Thread(target=force_stop, daemon=True).start()
 
 
@@ -475,6 +489,18 @@ def background_run(shields, batch24=False, batch_mode='simple', meta_file=None, 
                                      '計算処理に失敗しました。再試行してください')
                 STATUS['finished_at'] = datetime.now().isoformat(timespec='microseconds')
     finally:
+        if process is not None:
+            try:
+                stop_process_group(process)
+                if process.poll() is None:
+                    process.wait(timeout=4)
+            except Exception:
+                pass
+            if process.stdout is not None:
+                try:
+                    process.stdout.close()
+                except OSError:
+                    pass
         with LOCK:
             if ACTIVE_PROCESS is process:
                 ACTIVE_PROCESS = None
@@ -750,7 +776,9 @@ class Handler(BaseHTTPRequestHandler):
                         return self.respond(503, {'error': 'Could not list saved tactics'})
                     except ValueError:
                         return self.respond(400, {'error': 'Invalid tactic list request'})
-                if not CATALOG.get('ready'):
+                with LOCK:
+                    catalog_ready = CATALOG.get('ready')
+                if not catalog_ready:
                     return self.respond(503, {'error': 'Battle game data is not ready'})
                 token = try_reserve_compute('battle')
                 if token is None:
@@ -952,6 +980,8 @@ class Handler(BaseHTTPRequestHandler):
                                              kwargs={'owner_token': token},
                                              daemon=True).start()
                         except Exception:
+                            STATUS.update({'state': 'error', 'message': '計算スレッドの開始に失敗しました',
+                                           'finished_at': datetime.now().isoformat(timespec='microseconds')})
                             release_compute(token)
                             raise
                     return self.respond(200, {'ok':True,'preview':preview})
@@ -974,6 +1004,8 @@ class Handler(BaseHTTPRequestHandler):
                                          kwargs={'owner_token': token},
                                          daemon=True).start()
                     except Exception:
+                        STATUS.update({'state': 'error', 'message': '計算スレッドの開始に失敗しました',
+                                       'finished_at': datetime.now().isoformat(timespec='microseconds')})
                         release_compute(token)
                         raise
             self.respond(200, {'ok':True,'preview':preview})

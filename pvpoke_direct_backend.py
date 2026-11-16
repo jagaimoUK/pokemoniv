@@ -181,8 +181,8 @@ class DirectMatrixClient:
 
             try:
                 frame = json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
-            except Exception as exc:
-                self._fail_close(f"Failed to serialize request: {exc}")
+            except Exception:
+                self._fail_close("Failed to serialize request")
 
             if len(frame) > MAX_REQUEST_BYTES:
                 self._fail_close("PvPoke Node request exceeded frame limit")
@@ -216,16 +216,16 @@ class DirectMatrixClient:
                                 sent += n
                                 if sent >= len(view):
                                     sel.unregister(stdin_fd)
-                            except (BrokenPipeError, OSError) as exc:
-                                self._fail_close(f"PvPoke Node write failed: {exc}")
+                            except (BrokenPipeError, OSError):
+                                self._fail_close("PvPoke Node write failed")
                         elif key.fd == stdout_fd:
                             while True:
                                 try:
                                     chunk = os.read(stdout_fd, 65536)
                                 except BlockingIOError:
                                     break
-                                except (OSError, BrokenPipeError) as exc:
-                                    self._fail_close(f"PvPoke Node read failed: {exc}")
+                                except (OSError, BrokenPipeError):
+                                    self._fail_close("PvPoke Node read failed")
 
                                 if chunk == b"":
                                     if not rx_buf:
@@ -251,12 +251,12 @@ class DirectMatrixClient:
             try:
                 line_text = line_bytes.decode("utf-8")
             except UnicodeDecodeError as exc:
-                self._fail_close(f"PvPoke Node response decoding failed: {exc}")
+                self._fail_close("PvPoke Node response decoding failed")
 
             try:
                 response = json.loads(line_text, parse_constant=_reject_constant)
             except Exception as exc:
-                self._fail_close(f"PvPoke Node response parsing failed: {exc}")
+                self._fail_close("PvPoke Node response parsing failed")
 
             if not isinstance(response, dict):
                 self._fail_close("Invalid PvPoke Node response")
@@ -295,7 +295,7 @@ class DirectMatrixClient:
         except Exception as exc:
             self._poisoned = True
             self.close()
-            raise DirectMatrixError(f"PvPoke Node protocol failed: {exc}") from exc
+            raise DirectMatrixError("PvPoke Node protocol failed") from exc
 
     def strategy(self, action: str, payload: dict, *, include_engine_sources: bool = False) -> dict:
         """Explicit detail protocol; never infer resources from a Rating."""
@@ -335,7 +335,7 @@ class DirectMatrixClient:
         except Exception as exc:
             self._poisoned = True
             self.close()
-            raise DirectMatrixError(f"PvPoke strategy protocol failed: {exc}") from exc
+            raise DirectMatrixError("PvPoke strategy protocol failed") from exc
 
     def close(self):
         self._closed = True
@@ -347,26 +347,50 @@ class DirectMatrixClient:
 
         if proc is not None:
             try:
+                pgid = None
+                pid = getattr(proc, "pid", None)
+                if os.name == "posix" and isinstance(pid, int) and pid > 0:
+                    try:
+                        if pid != os.getpgrp():
+                            pgid = pid
+                    except OSError:
+                        pgid = None
                 if proc.poll() is None:
-                    if os.name == "posix":
+                    if pgid is not None:
                         try:
-                            os.killpg(proc.pid, signal.SIGTERM)
+                            os.killpg(pgid, signal.SIGTERM)
                         except (ProcessLookupError, PermissionError):
                             pass
-                    proc.terminate()
+                    try:
+                        proc.terminate()
+                    except (ProcessLookupError, PermissionError, OSError):
+                        pass
                     try:
                         proc.wait(timeout=2.0)
                     except subprocess.TimeoutExpired:
-                        if os.name == "posix":
+                        if pgid is not None:
                             try:
-                                os.killpg(proc.pid, signal.SIGKILL)
+                                os.killpg(pgid, signal.SIGKILL)
                             except (ProcessLookupError, PermissionError):
                                 pass
-                        proc.kill()
+                        try:
+                            proc.kill()
+                        except (ProcessLookupError, PermissionError, OSError):
+                            pass
                         try:
                             proc.wait(timeout=2.0)
                         except subprocess.TimeoutExpired:
                             pass
+                if pgid is not None:
+                    try:
+                        os.killpg(pgid, signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                if proc.poll() is None:
+                    try:
+                        proc.wait(timeout=0.5)
+                    except (subprocess.TimeoutExpired, OSError):
+                        pass
             except Exception:
                 pass
             finally:

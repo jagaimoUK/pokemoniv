@@ -210,15 +210,23 @@ class PartyBuilder:
             if self._active is not None or global_status.get("state") in ("running", "cancelling"):
                 raise RuntimeError("他の計算中です。完了後に開始してください")
             jid = uuid.uuid4().hex
+            prev_global = (global_status, global_lock, dict(global_status))
             self._active = jid
             self._cancel = False
-            self._record(jid, "queued", {"message": "準備しています", "progress": 0})
-            self._previous_global = (global_status, global_lock, dict(global_status))
-            global_status["state"] = "running"
-            global_status["message"] = "パーティ作成の計算中"
-            task = threading.Thread(target=self._worker, args=(
-                jid, args, catalog, species, cpms, engine, work, global_lock, release_owner), daemon=True)
-            task.start()
+            self._previous_global = prev_global
+            try:
+                self._record(jid, "queued", {"message": "準備しています", "progress": 0})
+                global_status["state"] = "running"
+                global_status["message"] = "パーティ作成の計算中"
+                task = threading.Thread(target=self._worker, args=(
+                    jid, args, catalog, species, cpms, engine, work, global_lock, release_owner), daemon=True)
+                task.start()
+            except Exception:
+                self._active = None
+                self._previous_global = None
+                global_status["state"] = prev_global[2].get("state", "idle")
+                global_status["message"] = prev_global[2].get("message", "")
+                raise
         return {"job_id": jid, "status": "queued"}
 
     def cancel(self, jid):

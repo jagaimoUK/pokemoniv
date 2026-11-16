@@ -11,10 +11,16 @@ http {
     fastcgi_temp_path /tmp/pokemoniv-nginx/fastcgi;
     uwsgi_temp_path /tmp/pokemoniv-nginx/uwsgi;
     scgi_temp_path /tmp/pokemoniv-nginx/scgi;
+    # Client-supplied Bearer tokens/cookies are not proof of authentication.
+    # Apply the same edge limits to all API traffic; auth is verified upstream.
     limit_conn_zone $server_name zone=public_connections:64k;
+    limit_conn_zone $server_name zone=app_connections:64k;
     limit_conn_zone $server_name zone=api_connections:64k;
     # The edge peer is used; never trust client-supplied X-Forwarded-For.
     limit_req_zone $binary_remote_addr zone=peer_requests:64k rate=10r/s;
+    limit_req_zone $binary_remote_addr zone=app_page_requests:64k rate=10r/s;
+    limit_req_zone $binary_remote_addr zone=api_requests:64k rate=5r/s;
+    limit_req_zone $server_name zone=api_global_requests:64k rate=10r/s;
     limit_req_status 429;
     limit_conn_status 503;
     server {
@@ -45,18 +51,34 @@ http {
         location = /health { proxy_pass http://127.0.0.1:8788; }
         location = /mcp {
             limit_conn api_connections 24;
+            limit_req zone=api_requests burst=20 nodelay;
+            limit_req zone=api_global_requests burst=40 nodelay;
             proxy_pass http://127.0.0.1:8788;
         }
         location ^~ /app-api/ {
             limit_conn api_connections 24;
+            limit_req zone=api_requests burst=20 nodelay;
+            limit_req zone=api_global_requests burst=40 nodelay;
             proxy_pass http://127.0.0.1:8788;
         }
         location ^~ /visual-backup/v1/ {
             limit_conn api_connections 24;
+            limit_req zone=api_requests burst=20 nodelay;
+            limit_req zone=api_global_requests burst=40 nodelay;
+            proxy_pass http://127.0.0.1:8788;
+        }
+        location = /app {
+            limit_conn app_connections 8;
+            limit_req zone=app_page_requests burst=40 nodelay;
+            proxy_pass http://127.0.0.1:8788;
+        }
+        location ^~ /app/ {
+            limit_conn app_connections 8;
+            limit_req zone=app_page_requests burst=40 nodelay;
             proxy_pass http://127.0.0.1:8788;
         }
         location / {
-            limit_conn public_connections 16;
+            limit_conn public_connections 8;
             limit_req zone=peer_requests burst=40 nodelay;
             proxy_pass http://127.0.0.1:8788;
         }
