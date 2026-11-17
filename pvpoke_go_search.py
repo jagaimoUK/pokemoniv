@@ -6,7 +6,15 @@ from pvpoke_app_sizes import pumpkin_search
 
 
 def species_search_term(name: str, species_id: str | None = None) -> str:
-    """Use the English species name in Pokémon GO searches, not the Pokédex number."""
+    """Use the English species name in Pokémon GO searches, not the Pokédex number.
+
+    Normalize the known Flabébé aliases, including legacy Japanese input.
+    """
+    root = re.split(r"[_-]", (species_id or "").casefold())[0]
+    plain = "".join(c for c in unicodedata.normalize("NFD", name)
+                    if not unicodedata.combining(c)).casefold().strip()
+    if root == "flabebe" or plain == "flabebe" or name.strip() == "フラベベ":
+        return "Flabébé"
     return name
 
 
