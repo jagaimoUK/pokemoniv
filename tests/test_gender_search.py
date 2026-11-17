@@ -12,6 +12,9 @@ class GenderSearchTests(unittest.TestCase):
   self.assertTrue(q.endswith('&shadow'))
   self.assertNotIn('!xxl',q)
 
+ def test_flabebe_uses_english_name_not_dex_number(self):
+  self.assertEqual(search_string('Flabébé','0/15/15',False,'flabebe'), 'Flabébé&0attack&4defense&4hp')
+
  def test_low_score_queries_also_keep_gender_as_a_filter(self):
   from pvpoke_score_search import _search_term
   value,error=_search_term({'name':'ニドラン♀','dex':29},{},'Nidoran♀')
