@@ -40,15 +40,15 @@ class CandidateComparisonTests(unittest.TestCase):
                 expected[iv] = (max(others, default=None), any(r <= 500 for r in others))
             self.assertEqual(rival_summaries(scores), expected)
 
-    def test_flabebe_uses_exact_dex_and_preserves_query_filters(self):
+    def test_flabebe_uses_english_name_and_preserves_query_filters(self):
         for name in ('Flabébé', 'Flabebe', 'Flabe\u0301be\u0301', 'FLABÉBÉ', 'フラベベ'):
-            self.assertEqual(search_string(name, '0/11/15'), '669&0attack&3defense&4hp')
+            self.assertEqual(search_string(name, '0/11/15'), 'Flabébé&0attack&3defense&4hp')
         self.assertEqual(search_string('Flabébé (Blue Flower) (Shadow)', '1/2/3', True, 'flabebe_shadow'),
-                         '669&1attack&1defense&1hp&shadow')
+                         'Flabébé&1attack&1defense&1hp&shadow')
         self.assertEqual(search_string('Floette', '0/11/15', species_id='floette'),
                          'Floette&0attack&3defense&4hp')
         self.assertEqual(_search_term({'name': 'フラベベ', 'dex': 669}, {}, 'Flabébé'),
-                         (('669', ('!shadow',)), None))
+                         (('Flabébé', ('!shadow',)), None))
 
 
 if __name__ == '__main__':
