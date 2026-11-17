@@ -30,6 +30,14 @@ Official guidance:
 - https://docs.cloud.google.com/compute/docs/access/service-accounts
 - https://docs.cloud.google.com/iap/docs/using-tcp-forwarding
 
+## Phase 0: WIF-only smoke check (no VM permissions)
+
+The workflow also supports `auth` / exact PR #118 comment `/gce auth`. This checks a short-lived federated token and the **public** `/health` URL. It does not log the token, connect to the VM, grant any SSH/OS Login permissions, modify a resource, or access stored records. The existing WIF service-account impersonation binding and the three GitHub Actions variables are sufficient; **no Compute Engine IAM role is needed for this test**.
+
+**Order:** review and merge the draft PR before invoking the workflow from `main`. When the repository owner invokes `auth`, expect a log entry `WIF_AUTH=PASS PUBLIC_HEALTH=PASS VM_SSH=NOT_ATTEMPTED`. If this fails, inspect the failed step once; do not grant Editor, VM SSH, or IAM Service Account User to fix an authentication-only test.
+
+**Current checked VM details:** public IP is present; project-attached default service account retains Editor but OAuth scopes are narrower (Cloud Storage read-only, Logging/Monitoring write, service management read-only, service control, trace append). Existing VM SSH remains unchanged. Before any SSH workflow, replace the broad attached account privileges only after verified dependency analysis and an approved migration plan. Remember the OAuth scope restriction does **not** cover every auth protocol.
+
 ## Security gates before any changes to Google Cloud
 
 1. Check existing **effective OS Login** settings in project and VM metadata. **Do not automatically enable OS Login.** Enabling it can disable access using existing SSH metadata keys and change the currently working browser SSH login.
