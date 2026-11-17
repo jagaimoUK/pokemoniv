@@ -12,6 +12,8 @@ on:
           - health
           - storage
           - missing
+  issue_comment:
+    types: [created]
 
 permissions: {}
 
@@ -21,7 +23,14 @@ concurrency:
 
 jobs:
   diagnose:
-    if: github.actor == 'jagaimoUK' && github.ref == 'refs/heads/main'
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.actor == 'jagaimoUK' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'issue_comment' && github.ref == 'refs/heads/main' &&
+       github.event.issue.number == 118 && github.event.issue.pull_request &&
+       github.event.comment.user.id == 121705998 &&
+       (github.event.comment.body == '/gce health' ||
+        github.event.comment.body == '/gce storage' ||
+        github.event.comment.body == '/gce missing'))
     runs-on: ubuntu-latest
     timeout-minutes: 8
     permissions:
@@ -31,13 +40,18 @@ jobs:
       - name: Validate inputs and configuration
         shell: bash
         env:
-          CHECK: ${{ inputs.diagnostic }}
+          REQUEST: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic || github.event.comment.body }}
           GCE_PROJECT_ID: ${{ vars.GCE_PROJECT_ID }}
           GCE_WIF_PROVIDER: ${{ vars.GCE_WIF_PROVIDER }}
           GCE_DIAG_SERVICE_ACCOUNT: ${{ vars.GCE_DIAG_SERVICE_ACCOUNT }}
         run: |
           set -euo pipefail
-          case "$CHECK" in health|storage|missing) ;; *) exit 2 ;; esac
+          case "$REQUEST" in
+            health|'/gce health') CHECK=health ;;
+            storage|'/gce storage') CHECK=storage ;;
+            missing|'/gce missing') CHECK=missing ;;
+            *) exit 2 ;;
+          esac
           test -n "$GCE_PROJECT_ID"
           test -n "$GCE_WIF_PROVIDER"
           test -n "$GCE_DIAG_SERVICE_ACCOUNT"
@@ -53,11 +67,16 @@ jobs:
       - name: Run one fixed VM diagnostic over IAP
         shell: bash
         env:
-          CHECK: ${{ inputs.diagnostic }}
+          REQUEST: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic || github.event.comment.body }}
           GCE_PROJECT_ID: ${{ vars.GCE_PROJECT_ID }}
         run: |
           set -euo pipefail
-          case "$CHECK" in health|storage|missing) ;; *) echo 'Unsupported diagnostic' >&2; exit 2 ;; esac
+          case "$REQUEST" in
+            health|'/gce health') CHECK=health ;;
+            storage|'/gce storage') CHECK=storage ;;
+            missing|'/gce missing') CHECK=missing ;;
+            *) echo 'Unsupported diagnostic' >&2; exit 2 ;;
+          esac
           timeout 150s gcloud compute ssh pokemoniv-web \
             --project "$GCE_PROJECT_ID" \
             --zone asia-northeast1-a \
