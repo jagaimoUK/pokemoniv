@@ -47,6 +47,7 @@ jobs:
           GCE_PROJECT_ID: ${{ vars.GCE_PROJECT_ID }}
           GCE_WIF_PROVIDER: ${{ vars.GCE_WIF_PROVIDER }}
           GCE_DIAG_SERVICE_ACCOUNT: ${{ vars.GCE_DIAG_SERVICE_ACCOUNT }}
+          GCE_SSH_DIAGNOSTICS_ENABLED: ${{ vars.GCE_SSH_DIAGNOSTICS_ENABLED }}
         run: |
           set -euo pipefail
           case "$REQUEST" in
@@ -59,6 +60,10 @@ jobs:
           test -n "$GCE_PROJECT_ID"
           test -n "$GCE_WIF_PROVIDER"
           test -n "$GCE_DIAG_SERVICE_ACCOUNT"
+          if [ "$CHECK" != auth ] && [ "$GCE_SSH_DIAGNOSTICS_ENABLED" != true ]; then
+            echo 'SSH diagnostics disabled: complete attached-account IAM and OS Login safety review first' >&2
+            exit 3
+          fi
           printf 'check=%s\n' "$CHECK" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Keyless authentication via Google Workload Identity Federation
