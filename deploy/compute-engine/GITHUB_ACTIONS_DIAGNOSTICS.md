@@ -10,6 +10,24 @@ GitHub's `main` branch is protected. Review this PR and merge before activation.
 
 **Connector limitation and fallback:** ChatGPT's installed GitHub connector has no workflow-dispatch action, but can add a PR comment. GitHub may trigger the workflow from a ChatGPT-posted exact PR #118 comment if the comment is attributed to the approved user account; this has not yet been validated. Otherwise invoke **Run workflow** manually. The PR-comment body is never executed as shell code; only the fixed allowlisted command is executed. Never broaden the author, issue number, or command filters without security review.
 
+## Critical production finding (2026-11-17)
+
+**HARD STOP: Do not grant SSH/OS Login access, `roles/iam.serviceAccountUser`, or project-level Compute Engine privileges to the diagnostics identity while the target VM is attached to `766401046555-compute@developer.gserviceaccount.com` with project-wide `roles/editor`.** A login can obtain the VM's attached service-account credentials through the metadata server, defeating the intended read-only boundary. The prior scope-limited sudoers design is **not sufficient** to prevent this cloud IAM privilege escalation.
+
+Evidence from owner's read-only Cloud Shell output:
+- Project: `pokemoniv-production` (`766401046555`); instance `pokemoniv-web` RUNNING.
+- Effective OS Login: not explicitly enabled at project or instance level.
+- Attached service account: `766401046555-compute@developer.gserviceaccount.com`; project IAM: `roles/editor`.
+- Effective firewall lists `default-allow-ssh` and `default-allow-rdp` allowing `0.0.0.0/0`; actual reachability still depends on target ports and public networking.
+- IAP API was not found in the enabled services list.
+
+Before any SSH integration, determine whether the VM actually depends on the attached account's permissions, evaluate least-privilege replacements (Policy Simulator), preserve console/SSH recovery, and then separately approve remediation. Do **not** blindly remove Editor or switch OS Login; either change can disrupt production. A safer alternative is a no-SSH design using sanitized Cloud Logging/Monitoring signals if full role remediation is not possible.
+
+Official guidance:
+- https://docs.cloud.google.com/compute/docs/connect/ssh-best-practices/login-access
+- https://docs.cloud.google.com/compute/docs/access/service-accounts
+- https://docs.cloud.google.com/iap/docs/using-tcp-forwarding
+
 ## Security gates before any changes to Google Cloud
 
 1. Check existing **effective OS Login** settings in project and VM metadata. **Do not automatically enable OS Login.** Enabling it can disable access using existing SSH metadata keys and change the currently working browser SSH login.
