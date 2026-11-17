@@ -6,16 +6,21 @@ from pvpoke_app_sizes import pumpkin_search
 
 
 def species_search_term(name: str, species_id: str | None = None) -> str:
-    """Flabébé uses its exact dex number to avoid accent/language ambiguity.
+    """Return the English species token used by Pokémon GO.
 
-    This is a GO query token, not the displayed English name. Other species
-    keep English names, and form/status filters remain separate.
+    Historical exports used Pokédex #669 for Flabébé. All new selections
+    instead use the canonical English spelling, including both accents.
+    Battle species IDs and other form/status filters remain unchanged.
     """
     root = re.split(r"[_-]", (species_id or "").casefold())[0]
     plain = "".join(c for c in unicodedata.normalize("NFD", name)
                     if not unicodedata.combining(c)).casefold().strip()
-    return "669" if (root == "flabebe" or plain == "flabebe"
-                     or unicodedata.normalize("NFKC", name).strip() == "フラベベ") else name
+    if (root == "flabebe" or plain == "flabebe"
+            or unicodedata.normalize("NFKC", name).strip() == "フラベベ"):
+        return "Flabébé"
+    if re.fullmatch(r"[0-9]{1,5}", name.strip()):
+        raise ValueError("Pokémon GO search requires an English species name, not a dex number")
+    return name
 
 
 # Pokémon GO searches by a region keyword, not the PvPoke display-name suffix.
