@@ -365,7 +365,7 @@ function normalizedRegionalSearch(search){
  if(typeof search!=='string')return search;
  const terms={alolan:'alola',galarian:'galar',hisuian:'hisui',paldean:'paldea'};
  search=search.replace(/^Nidoran\s*(?:\(\s*(Female|Male)\s*\)|([♀♂])|(?:_|\s+)(Female|Male))(?=&|$)/i,(_,a,b,c)=>'Nidoran&'+(['female','♀'].includes((a||b||c).toLowerCase())?'female':'male'));
- return search.replace(/^flab(?:é|e\u0301|e)b(?:é|e\u0301|e)(?=&|$)/i,'669').replace(/^(.+?)\s*\(\s*(Alolan|Galarian|Hisuian|Paldean)\s*\)(?:\s*\(\s*Shadow\s*\))?(?=&|$)/i,
+ return search.replace(/^(?:669|flab(?:é|e\u0301|e)b(?:é|e\u0301|e))(?=&|$)/i,'Flabébé').replace(/^(.+?)\s*\(\s*(Alolan|Galarian|Hisuian|Paldean)\s*\)(?:\s*\(\s*Shadow\s*\))?(?=&|$)/i,
   (_match,base,adjective)=>base.trim()+'&'+terms[adjective.toLowerCase()]);
 }
 function statusSearch(search,status){
