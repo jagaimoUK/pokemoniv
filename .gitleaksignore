@@ -1,0 +1,5 @@
+# Reviewed false positive in a historical test-only import statement.
+# Commit 6a561f5ee52a... tests/test_observed_search.py:481:
+# from pvpoke_observed_observation import history_key, ObservationV2
+# Not an API credential. Do not suppress other generic-api-key findings.
+6a561f5ee52a192aea5c4928125183baf772d10b:tests/test_observed_search.py:generic-api-key:481
