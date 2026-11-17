@@ -1,0 +1,68 @@
+name: GCE read-only diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      diagnostic:
+        description: Read-only check to run on pokemoniv-web
+        required: true
+        default: health
+        type: choice
+        options:
+          - health
+          - storage
+          - missing
+
+permissions: {}
+
+concurrency:
+  group: gce-readonly-diagnostics
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: github.actor == 'jagaimoUK' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Validate inputs and configuration
+        shell: bash
+        env:
+          CHECK: ${{ inputs.diagnostic }}
+          GCE_PROJECT_ID: ${{ vars.GCE_PROJECT_ID }}
+          GCE_WIF_PROVIDER: ${{ vars.GCE_WIF_PROVIDER }}
+          GCE_DIAG_SERVICE_ACCOUNT: ${{ vars.GCE_DIAG_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          case "$CHECK" in health|storage|missing) ;; *) exit 2 ;; esac
+          test -n "$GCE_PROJECT_ID"
+          test -n "$GCE_WIF_PROVIDER"
+          test -n "$GCE_DIAG_SERVICE_ACCOUNT"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Keyless authentication via Google Workload Identity Federation
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ vars.GCE_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCE_WIF_PROVIDER }}
+          service_account: ${{ vars.GCE_DIAG_SERVICE_ACCOUNT }}
+      - name: Install Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+      - name: Run one fixed VM diagnostic over IAP
+        shell: bash
+        env:
+          CHECK: ${{ inputs.diagnostic }}
+          GCE_PROJECT_ID: ${{ vars.GCE_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          case "$CHECK" in health|storage|missing) ;; *) echo 'Unsupported diagnostic' >&2; exit 2 ;; esac
+          timeout 150s gcloud compute ssh pokemoniv-web \
+            --project "$GCE_PROJECT_ID" \
+            --zone asia-northeast1-a \
+            --tunnel-through-iap \
+            --quiet \
+            --ssh-flag='-oBatchMode=yes' \
+            --ssh-flag='-oStrictHostKeyChecking=accept-new' \
+            --command "sudo -n /usr/local/sbin/pokemoniv-readonly-diagnostics $CHECK"
