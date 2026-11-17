@@ -768,7 +768,7 @@ class Handler(BaseHTTPRequestHandler):
                 cat = backend._request('/api/catalog')
                 if not cat.get('ready'):
                     raise ValueError('ゲームデータを読み込み中です。少し待ってください')
-                result = parse_import(args.get('text'), cat, args.get('current'))
+                result = parse_import(args.get('text'), cat, args.get('current'), args.get('registered_movesets'))
             elif self.path == '/app-api/cancel':
                 result = IV_RUNNER.cancel(args.get('run_ref'))
             elif self.path == '/app-api/run':
