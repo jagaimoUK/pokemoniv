@@ -9,6 +9,7 @@ on:
         default: health
         type: choice
         options:
+          - auth
           - health
           - storage
           - missing
@@ -28,7 +29,8 @@ jobs:
       (github.event_name == 'issue_comment' && github.ref == 'refs/heads/main' &&
        github.event.issue.number == 118 && github.event.issue.pull_request &&
        github.event.comment.user.id == 121705998 &&
-       (github.event.comment.body == '/gce health' ||
+       (github.event.comment.body == '/gce auth' ||
+        github.event.comment.body == '/gce health' ||
         github.event.comment.body == '/gce storage' ||
         github.event.comment.body == '/gce missing'))
     runs-on: ubuntu-latest
@@ -38,6 +40,7 @@ jobs:
       id-token: write
     steps:
       - name: Validate inputs and configuration
+        id: request
         shell: bash
         env:
           REQUEST: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic || github.event.comment.body }}
@@ -47,6 +50,7 @@ jobs:
         run: |
           set -euo pipefail
           case "$REQUEST" in
+            auth|'/gce auth') CHECK=auth ;;
             health|'/gce health') CHECK=health ;;
             storage|'/gce storage') CHECK=storage ;;
             missing|'/gce missing') CHECK=missing ;;
@@ -55,6 +59,7 @@ jobs:
           test -n "$GCE_PROJECT_ID"
           test -n "$GCE_WIF_PROVIDER"
           test -n "$GCE_DIAG_SERVICE_ACCOUNT"
+          printf 'check=%s\n' "$CHECK" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Keyless authentication via Google Workload Identity Federation
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
@@ -64,7 +69,16 @@ jobs:
           service_account: ${{ vars.GCE_DIAG_SERVICE_ACCOUNT }}
       - name: Install Google Cloud CLI
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+      - name: Verify keyless Google Cloud authentication (no VM access)
+        if: steps.request.outputs.check == 'auth'
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud auth print-access-token >/dev/null
+          curl --fail --silent --show-error --output /dev/null --max-time 15 https://pokemoniv-web.duckdns.org/health
+          echo 'WIF_AUTH=PASS PUBLIC_HEALTH=PASS VM_SSH=NOT_ATTEMPTED'
       - name: Run one fixed VM diagnostic over IAP
+        if: steps.request.outputs.check != 'auth'
         shell: bash
         env:
           REQUEST: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic || github.event.comment.body }}
