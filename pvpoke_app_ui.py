@@ -358,15 +358,43 @@ function nicknameFor(result,row,ivs=row.ivs){
  }
  return fallbackNickname(withMoves||best?.member||members[0],ivs);
 }
-// Source records describe the physical Pokemon before powering up/evolving.
-// Repair old saved selection results too, without changing the source CP or IV.
-// New server-generated searches already use &alola / &galar / &hisui / &paldea.
+// The original battle species ID is not the GO search species name.
+// Read old persisted numeric queries through the GameMaster's English catalog;
+// never guess a name or alter their CP / IV / shadow / form suffix.
+function englishSearchForDex(search){
+ const prefix=search.match(/^([0-9]{1,5})(?=&|$)/);
+ if(!prefix)return search;
+ const dex=Number(prefix[1]);
+ const names=new Set();
+ for(const entry of Object.values(catalog)){
+  if(!entry||entry.dex!==dex||typeof entry.name!=='string')continue;
+  const name=entry.name
+   .replace(/\s*\([^()]*\)\s*/g,' ')
+   .replace(/^(?:Alolan|Galarian|Hisuian|Paldean)\s+/i,'')
+   .replace(/\s+(?:Alolan|Galarian|Hisuian|Paldean)$/i,'').trim();
+  if(name&&!/^[0-9]+$/.test(name)&&!/[&,;|\r\n]/.test(name))names.add(name);
+ }
+ // The original special-case number 669 is known even in old offline archives.
+ if(dex===669&&!names.size)names.add('Flabébé');
+ if(names.size!==1)throw Error('図鑑番号 '+dex+' の英語名を一意に確認できません。図鑑を読み込み直してください。');
+ const name=[...names][0];
+ const rest=search.slice(prefix[1].length);
+ // Nidoran male/female are different National Dex species. Do not broaden
+ // a legacy number into both sexes when writing the human-readable GO query.
+ const sex=name.toLowerCase()==='nidoran'?(dex===29?'female':dex===32?'male':null):null;
+ return name+(sex&&!new RegExp('(?:^|&)(?:female|male)(?:&|$)','i').test(rest)?'&'+sex:'')+rest;
+}
+// Source records describe the original Pokémon before evolution, so use the
+// original query prefix, not the evolved battle candidate, to resolve names.
 function normalizedRegionalSearch(search){
  if(typeof search!=='string')return search;
  const terms={alolan:'alola',galarian:'galar',hisuian:'hisui',paldean:'paldea'};
- search=search.replace(/^Nidoran\s*(?:\(\s*(Female|Male)\s*\)|([♀♂])|(?:_|\s+)(Female|Male))(?=&|$)/i,(_,a,b,c)=>'Nidoran&'+(['female','♀'].includes((a||b||c).toLowerCase())?'female':'male'));
- return search.replace(/^flab(?:é|e\u0301|e)b(?:é|e\u0301|e)(?=&|$)/i,'669').replace(/^(.+?)\s*\(\s*(Alolan|Galarian|Hisuian|Paldean)\s*\)(?:\s*\(\s*Shadow\s*\))?(?=&|$)/i,
-  (_match,base,adjective)=>base.trim()+'&'+terms[adjective.toLowerCase()]);
+ search=englishSearchForDex(search);
+ search=search.replace(/^Nidoran\s*(?:\(\s*(Female|Male)\s*\)|([♀♂])|(?:_|\s+)(Female|Male))(?=&|$)/i,
+  (_,a,b,c)=>'Nidoran&'+(['female','♀'].includes((a||b||c).toLowerCase())?'female':'male'));
+ return search.replace(/^flab(?:é|e\u0301|e)b(?:é|e\u0301|e)(?=&|$)/i,'Flabébé')
+  .replace(/^(.+?)\s*\(\s*(Alolan|Galarian|Hisuian|Paldean)\s*\)(?:\s*\(\s*Shadow\s*\))?(?=&|$)/i,
+   (_match,base,adjective)=>base.trim()+'&'+terms[adjective.toLowerCase()]);
 }
 function statusSearch(search,status){
  if(!status)return normalizedRegionalSearch(search);
