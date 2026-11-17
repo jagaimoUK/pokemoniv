@@ -4,11 +4,11 @@
 
 **Proposal only. No VM, GCP IAM, running container, database or feature flag has been changed by this PR.**
 
-The existing Google Cloud Compute Engine VM is `pokemoniv-web` in `asia-northeast1-a`. The workflow can run exactly one of `health`, `storage`, or `missing` through IAP and a fixed root-owned VM-side diagnostic helper. The workflow **cannot** accept arbitrary commands, perform deployment, edit files or change databases.
+The existing Google Cloud Compute Engine VM is `pokemoniv-web` in `asia-northeast1-a`. The workflow can run exactly one of `health`, `storage`, or `missing` through IAP and a fixed root-owned VM-side diagnostic helper. The workflow **cannot** accept arbitrary commands, perform deployment, edit files or change databases. It accepts either a manual Run workflow action or one of three exact owner-authored PR #118 comments: `/gce health`, `/gce storage`, `/gce missing`.
 
-GitHub's `main` branch is protected. Review this PR and merge before attempting `workflow_dispatch`; the job requires `github.actor == 'jagaimoUK'` and `github.ref == 'refs/heads/main'`. It uses a dedicated WIF service account with no JSON keys and pinned actions. Authentication to Google Cloud **and** VM-side sudoers are separate one-time setups.
+GitHub's `main` branch is protected. Review this PR and merge before activation. Manual dispatch requires `github.actor == 'jagaimoUK'`. The comment trigger is limited to PR #118, exact command bodies, and immutable comment author ID `121705998`. Both require `github.ref == 'refs/heads/main'`. It uses a dedicated WIF service account with no JSON keys and pinned actions. Authentication to Google Cloud **and** VM-side sudoers are separate one-time setups.
 
-**Current connector limitation:** ChatGPT's installed GitHub connector can write code and read Actions job logs, but has no workflow-dispatch action. The initial workflow is invoked via the GitHub Actions **Run workflow** UI, not directly from a ChatGPT message. Do not enable issue-comment-triggered privileged workflows without a separate security review.
+**Connector limitation and fallback:** ChatGPT's installed GitHub connector has no workflow-dispatch action, but can add a PR comment. GitHub may trigger the workflow from a ChatGPT-posted exact PR #118 comment if the comment is attributed to the approved user account; this has not yet been validated. Otherwise invoke **Run workflow** manually. The PR-comment body is never executed as shell code; only the fixed allowlisted command is executed. Never broaden the author, issue number, or command filters without security review.
 
 ## Security gates before any changes to Google Cloud
 
@@ -35,7 +35,7 @@ gcloud iam workload-identity-pools providers create-oidc "$PROVIDER_ID" \
   --project="$PROJECT_ID" --location=global --workload-identity-pool="$POOL_ID" \
   --issuer-uri='https://token.actions.githubusercontent.com/' \
   --attribute-mapping='google.subject=assertion.sub,attribute.repository_id=assertion.repository_id' \
-  --attribute-condition="assertion.repository_id=='1415557002' && assertion.repository_owner_id=='121705998' && assertion.ref=='refs/heads/main' && assertion.workflow_ref=='jagaimoUK/pokemoniv/.github/workflows/gce-readonly-diagnostics.yml@refs/heads/main' && assertion.event_name=='workflow_dispatch'"
+  --attribute-condition="assertion.repository_id=='1415557002' && assertion.repository_owner_id=='121705998' && assertion.ref=='refs/heads/main' && assertion.workflow_ref=='jagaimoUK/pokemoniv/.github/workflows/gce-readonly-diagnostics.yml@refs/heads/main' && (assertion.event_name=='workflow_dispatch' || assertion.event_name=='issue_comment')"
 
 gcloud iam service-accounts add-iam-policy-binding "$SA" \
   --project="$PROJECT_ID" --role='roles/iam.workloadIdentityUser' \
@@ -68,7 +68,7 @@ No wildcards, unrestricted sudo, or Docker group membership. Verify with `visudo
 
 ## Validation and rollback
 
-After setup: GitHub → Actions → **GCE read-only diagnostics** → **Run workflow** → `health`. Confirm HTTP 200, healthy container and approved image. Run `storage` to inspect mount paths, free space and database existence; `missing` checks the internal game-data catalog and feature switches without reading user records.
+After setup: add the exact comment `/gce health` to PR #118 using ChatGPT GitHub integration, **or** GitHub → Actions → **GCE read-only diagnostics** → **Run workflow** → `health`. Confirm that a new Actions run actually started; do not assume a PR comment triggers a run until observed. Confirm HTTP 200, healthy container and approved image. Run `storage` to inspect mount paths, free space and database existence; `missing` checks the internal game-data catalog and feature switches without reading user records.
 
 **Warning:** The GitHub repository is public. Actions logs must contain **no user IVs, credentials, database contents, arbitrary runtime logs or raw HTTP responses**. The helper intentionally emits limited metadata only.
 
