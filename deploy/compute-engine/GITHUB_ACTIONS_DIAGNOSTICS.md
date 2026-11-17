@@ -32,7 +32,7 @@ Official guidance:
 
 ## Phase 0: WIF-only smoke check (no VM permissions)
 
-The workflow also supports `auth` / exact PR #118 comment `/gce auth`. This checks a short-lived federated token and the **public** `/health` URL. It does not log the token, connect to the VM, grant any SSH/OS Login permissions, modify a resource, or access stored records. The existing WIF service-account impersonation binding and the three GitHub Actions variables are sufficient; **no Compute Engine IAM role is needed for this test**.
+The workflow also supports `auth` / exact PR #118 comment `/gce auth`. This checks a short-lived federated token and the **public** `/health` URL. It does not log the token, connect to the VM, grant any SSH/OS Login permissions, modify a resource, or access stored records. The existing WIF service-account impersonation binding and the three GitHub Actions variables are sufficient; **no Compute Engine IAM role is needed for this test**. The workflow **fails closed** for all VM/SSH diagnostics unless the additional repository variable `GCE_SSH_DIAGNOSTICS_ENABLED` is explicitly set to `true` after security review. Leave that variable **unset** during Phase 0.
 
 **Order:** review and merge the draft PR before invoking the workflow from `main`. When the repository owner invokes `auth`, expect a log entry `WIF_AUTH=PASS PUBLIC_HEALTH=PASS VM_SSH=NOT_ATTEMPTED`. If this fails, inspect the failed step once; do not grant Editor, VM SSH, or IAM Service Account User to fix an authentication-only test.
 
