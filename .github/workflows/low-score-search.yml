@@ -49,7 +49,13 @@ jobs:
           node-version: '22'
       - run: python -m unittest discover -s tests -p 'test_low_score_search.py' -v
       - run: python -m unittest discover -s tests -p 'test_reader_cleanup_contract.py' -v
-      - run: python -m py_compile pvpoke_mcp_remote.py pvpoke_app_ui.py pvpoke_score_search.py pvpoke_reader_cleanup.py
+      - name: English GO search and regular IV selection regressions
+        run: |
+          python -m unittest discover -s tests -p 'test_go_search_english.py' -v
+          python -m unittest discover -s tests -p 'test_app_selection.py' -v
+      - run: python -m py_compile pvpoke_go_search.py pvpoke_mcp_remote.py pvpoke_app_ui.py pvpoke_score_search.py pvpoke_reader_cleanup.py
+      - run: node tests/test_app_ui_flabebe.js
+      - run: node tests/test_app_ui_labels.js
       - run: node tests/test_app_ui_low_score.js
       - run: node tests/test_app_ui_low_score_visibility.js
       - run: node tests/test_app_ui_share.js
