@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import math
 import re
 import os
@@ -198,7 +199,7 @@ class PartyBuilder:
     def _unique(rows):
         return list({r["id"]: r for r in reversed(rows)}.values())[::-1]
 
-    def start(self, args, *, catalog, species, cpms, engine, work, global_lock, global_status):
+    def start(self, args, *, catalog, species, cpms, engine, work, global_lock, global_status, release_owner=None):
         if not isinstance(args, dict) or args.get("mode") not in ("analyze", "select", "build", "strategy"):
             raise ValueError("modeはanalyze/select/build/strategyのいずれかです")
         if args.get("ruleset", "cp1500-lv50") != "cp1500-lv50":
@@ -206,18 +207,26 @@ class PartyBuilder:
         if os.environ.get("PVP_ENGINE", "browser").lower() not in ("direct", "node"):
             raise ValueError("パーティ計算はDirectエンジンが必要です")
         with global_lock, self._lock:
-            if self._active is not None or global_status.get("state") == "running":
+            if self._active is not None or global_status.get("state") in ("running", "cancelling"):
                 raise RuntimeError("他の計算中です。完了後に開始してください")
             jid = uuid.uuid4().hex
+            prev_global = (global_status, global_lock, dict(global_status))
             self._active = jid
             self._cancel = False
-            self._record(jid, "queued", {"message": "準備しています", "progress": 0})
-            self._previous_global = (global_status, global_lock, dict(global_status))
-            global_status["state"] = "running"
-            global_status["message"] = "パーティ作成の計算中"
-            task = threading.Thread(target=self._worker, args=(
-                jid, args, catalog, species, cpms, engine, work, global_lock), daemon=True)
-            task.start()
+            self._previous_global = prev_global
+            try:
+                self._record(jid, "queued", {"message": "準備しています", "progress": 0})
+                global_status["state"] = "running"
+                global_status["message"] = "パーティ作成の計算中"
+                task = threading.Thread(target=self._worker, args=(
+                    jid, args, catalog, species, cpms, engine, work, global_lock, release_owner), daemon=True)
+                task.start()
+            except Exception:
+                self._active = None
+                self._previous_global = None
+                global_status["state"] = prev_global[2].get("state", "idle")
+                global_status["message"] = prev_global[2].get("message", "")
+                raise
         return {"job_id": jid, "status": "queued"}
 
     def cancel(self, jid):
@@ -227,7 +236,7 @@ class PartyBuilder:
             self._cancel = True
             return {"cancel_requested": True}
 
-    def _worker(self, jid, args, catalog, species, cpms, engine, work, global_lock):
+    def _worker(self, jid, args, catalog, species, cpms, engine, work, global_lock, release_owner=None):
         started = time.monotonic()
         try:
             result = self._compute(jid, args, catalog, species, cpms, engine, work)
@@ -235,7 +244,18 @@ class PartyBuilder:
             self._record(jid, "done", {"progress": 100, "result": result})
         except Exception as exc:
             status = "cancelled" if str(exc) == "cancelled" else "error"
-            self._record(jid, status, {"message": str(exc)[:400], "progress": 0})
+            # Background exceptions can contain internal file paths, SQL
+            # details or subprocess output. Do not persist them in a status
+            # record readable through the authenticated browser API.
+            if status == "cancelled":
+                message = "cancelled"
+            elif isinstance(exc, ValueError):
+                # Keep established, actionable input-validation feedback.
+                message = str(exc)[:400]
+            else:
+                logging.warning("Party worker failed: %s", type(exc).__name__)
+                message = "パーティ計算に失敗しました。再試行してください"
+            self._record(jid, status, {"message": message, "progress": 0})
         finally:
             # Always acquire the shared web lock before this worker lock.
             # The reverse order could deadlock with a concurrent start request.
@@ -247,6 +267,11 @@ class PartyBuilder:
                         status.clear()
                         status.update(previous)
                         self._previous_global = None
+                    if release_owner is not None:
+                        try:
+                            release_owner()
+                        except Exception:
+                            pass
 
     def _compute(self, jid, args, catalog, species, cpms, engine, work):
         if args["mode"] == "strategy":

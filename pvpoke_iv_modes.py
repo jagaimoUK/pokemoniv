@@ -27,6 +27,27 @@ def _cp(base, cpm, atk, defense, hp):
     ))
 
 
+def species_iv_floor(pokemon, moves=()):
+    """Return the existing PvPoke catalogue/moveset floor, preserving precedence.
+
+    Pokemon.generateIVCombinations applies RETURN after untradeable/shadow
+    rules. Keep that ordering; explicit search filters are combined separately.
+    """
+    tags = set(pokemon.get("tags") or ())
+    floor = 0
+    if ("legendary" in tags or "ultrabeast" in tags) and "wildlegendary" not in tags:
+        floor = 1
+    if ("legendary" in tags or "ultrabeast" in tags) and (
+        "shadow" in tags or pokemon["speciesId"].endswith("_shadow")
+    ):
+        floor = 6
+    if "untradeable" in tags:
+        floor = 10
+    if "RETURN" in moves:
+        floor = 2
+    return floor
+
+
 def select_opponent_ivs(pokemon, cpms, mode, moves=(), cp_cap=1500, level_cap=50):
     """Return (attack_iv, defense_iv, hp_iv, level_override).
 
@@ -53,18 +74,7 @@ def select_opponent_ivs(pokemon, cpms, mode, moves=(), cp_cap=1500, level_cap=50
             raise ValueError(f'{pokemon["speciesId"]}: デフォルトCPが{cp_cap}を超えています')
         return (*ivs, level)
 
-    tags = set(pokemon.get("tags") or ())
-    floor = 0
-    if ("legendary" in tags or "ultrabeast" in tags) and "wildlegendary" not in tags:
-        floor = 1
-    if ("legendary" in tags or "ultrabeast" in tags) and (
-        "shadow" in tags or pokemon["speciesId"].endswith("_shadow")
-    ):
-        floor = 6
-    if "untradeable" in tags:
-        floor = 10
-    if "RETURN" in moves:
-        floor = 2
+    floor = species_iv_floor(pokemon, moves)
 
     best, best_score = None, -1.0
     # PvPoke enumerates HP, DEF and ATK in descending IV order.

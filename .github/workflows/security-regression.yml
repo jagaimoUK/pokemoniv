@@ -53,12 +53,57 @@ jobs:
           docker run --rm -v "$PWD:/work" -w /work --entrypoint python pokemoniv-security-ci -m unittest discover -s tests -p 'test*.py'
           docker run --rm --entrypoint python pokemoniv-security-ci -m pip inspect > python-packages.json
           docker run --rm --entrypoint dpkg-query pokemoniv-security-ci -W > os-packages.txt
+      - name: Stage 7 isolated non-root container and loopback security probe
+        run: |
+          set -eu
+          name=pokemoniv-stage7-ci
+          trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
+          # No published ports or external connectivity; no real keys/data.
+          docker run -d --name "$name" --network none --user 10001:10001 \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --pids-limit 128 --memory 768m --memory-swap 768m --cpus 1 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m,mode=1777 \
+            --tmpfs /data:rw,nosuid,nodev,size=48m,uid=10001,gid=10001,mode=0700 \
+            --mount type=bind,src="$PWD/tests",dst=/tests,readonly \
+            -e PVP_API_KEY=stage7-synthetic-only-000000000000000000000000 \
+            -e PVP_ARCHIVE_DIR=/data \
+            -e PVP_MCP_URL=https://stage7.invalid/mcp \
+            -e PVP_BATTLE_API_ENABLED=1 \
+            -e PVP_MISSING_ANALYSIS_ENABLED=1 \
+            -e PVP_SANDBOX_ENABLED=1 \
+            -e PVP_OBSERVED_SEARCH_ENABLED=0 \
+            --entrypoint /app/start.sh pokemoniv-security-ci
+          ready=0
+          for attempt in $(seq 1 50); do
+            if docker exec "$name" python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/health',timeout=1)" >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' "$name")" != true ]; then
+              echo 'Isolated container exited before health'
+              docker logs --tail 30 "$name"
+              exit 1
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          docker exec "$name" python /tests/stage7_container_smoke.py
+          docker stats --no-stream --format 'CPU {{.CPUPerc}} MEM {{.MemUsage}} PIDS {{.PIDs}}' "$name"
+      - name: Real ENOSPC and ownership rollback in disposable 2 MiB tmpfs
+        run: |
+          docker run --rm --user 10001:10001 \
+            --tmpfs /tmp/pvp-enospc:rw,size=2m,mode=1777 \
+            -e PYTHONPATH=/app -e PVP_REAL_ENOSPC_ROOT=/tmp/pvp-enospc \
+            -v "$PWD/tests:/tests:ro" --entrypoint python pokemoniv-security-ci \
+            -m unittest discover -s /tests -p test_real_enospc.py -v
       - name: Mobile browser initialization under CSP
         run: |
           docker build --target browser-check -t pokemoniv-browser-ci .
           npm install --no-save --no-package-lock playwright@1.57.0
           docker run --rm -v "$PWD:/work" -w /work -e STRATEGY_CHROMIUM_PATH=/usr/bin/chromium --entrypoint node pokemoniv-browser-ci tests/security_browser.cjs
           docker run --rm -v "$PWD:/work" -w /work -e CHROME_BIN=/usr/bin/chromium --entrypoint node pokemoniv-browser-ci tests/browser_meta_editor_smoke.cjs
+          docker run --rm -v "$PWD:/work" -w /work -e CHROME_BIN=/usr/bin/chromium --entrypoint node pokemoniv-browser-ci tests/browser_missing_analysis.cjs
+          docker run --rm -v "$PWD:/work" -w /work -e CHROME_BIN=/usr/bin/chromium --entrypoint node pokemoniv-browser-ci tests/browser_sandbox.cjs
       - name: Audit operating-system and application packages and create SBOM
         run: |
           curl -fsSL --connect-timeout 15 --max-time 120 --retry 2 https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz -o /tmp/trivy.tar.gz
