@@ -7,9 +7,11 @@ const context={document:{getElementById(id){return elements[id]??={value:'',hidd
 vm.createContext(context);vm.runInContext(script,context);
 for(const name of ['Flabébé','Flabebe','Flabe\u0301be\u0301','FLABÉBÉ']){
  context.query=name+'&0attack&3defense&4hp&cp500&shadow';
- assert.equal(vm.runInContext('statusSearch(query,null)',context),'669&0attack&3defense&4hp&cp500&shadow');
- assert.equal(vm.runInContext("statusSearch(query,'purified')",context),'669&0attack&3defense&4hp&cp500&purified');
+ assert.equal(vm.runInContext('statusSearch(query,null)',context),'Flabébé&0attack&3defense&4hp&cp500&shadow');
+ assert.equal(vm.runInContext("statusSearch(query,'purified')",context),'Flabébé&0attack&3defense&4hp&cp500&purified');
 }
+context.query='669&0attack&3defense&4hp&cp500';
+assert.equal(vm.runInContext('statusSearch(query,null)',context),'Flabébé&0attack&3defense&4hp&cp500');
 context.query='Floette&cp500';
 assert.equal(vm.runInContext('statusSearch(query,null)',context),'Floette&cp500');
 console.log('Flabébé saved-result searches: accents, CP, IVs, status and evolution names: PASS');
