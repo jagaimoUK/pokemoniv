@@ -1,0 +1,4 @@
+# Exact, reviewed historical false-positive fingerprints only.
+# Do not use broad regexes or disable secret scanning.
+6a561f5ee52a192aea5c4928125183baf772d10b:tests/test_observed_search.py:generic-api-key:481
+caea927ad3e4800e12e63713f84112aea9c40475:.gitleaksignore:generic-api-key:3
