@@ -14,6 +14,8 @@ GitHub's `main` branch is protected. Review this PR and merge before activation.
 
 **HARD STOP: Do not grant SSH/OS Login access, `roles/iam.serviceAccountUser`, or project-level Compute Engine privileges to the diagnostics identity while the target VM is attached to `766401046555-compute@developer.gserviceaccount.com` with project-wide `roles/editor`.** A login can obtain the VM's attached service-account credentials through the metadata server, defeating the intended read-only boundary. The prior scope-limited sudoers design is **not sufficient** to prevent this cloud IAM privilege escalation.
 
+Additional read-only checks on 2026-11-17 confirmed: the VM has a public external IP, the attached account's OAuth access scopes exclude `cloud-platform`, and include only `devstorage.read_only`, `logging.write`, `monitoring.write`, `service.management.readonly`, `servicecontrol`, and `trace.append`. For conventional OAuth-backed calls, these scopes **reduce** what can actually be done with the Editor IAM role; **do not assume full Editor operations are immediately available**. Scopes are not a universal least-privilege boundary (other authentication protocols may differ) and metadata-server credentials are still available to VM processes. Keep the SSH rollout blocked pending reduction of the attached account's permissions or a reviewed alternative.
+
 Evidence from owner's read-only Cloud Shell output:
 - Project: `pokemoniv-production` (`766401046555`); instance `pokemoniv-web` RUNNING.
 - Effective OS Login: not explicitly enabled at project or instance level.
