@@ -1,4 +1,7 @@
 """Minimal local JSON-lines/Python integration for native 1v1 stepping."""
+import os
+import subprocess
+import sys
 import unittest
 
 import test_observed_native_runner as fixtures
@@ -51,6 +54,19 @@ class NativeStepClientTests(unittest.TestCase):
             self.assertEqual(first["turn"], 1)
             view, _, _, _, _ = client.step("fast")
             self.assertEqual(view["turn"], 2)
+
+    def test_stalled_worker_input_has_a_bounded_timeout(self):
+        # The child deliberately never reads stdin. A 90 KB request exceeds
+        # typical Linux pipe capacity, so blocking writes could hang forever.
+        with NativeStepClient(self.fixture.client.source, timeout=0.3) as client:
+            client._proc = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(10)"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL)
+            os.set_blocking(client._proc.stdin.fileno(), False)
+            with self.assertRaisesRegex(NativeStepError, "timed out during input"):
+                client._rpc({"padding": "x" * 90_000})
+            self.assertIsNone(client._proc)
 
     def test_two_resets_follow_same_deterministic_first_steps(self):
         request = self.fixture.request(energy=0, shields=(0, 0))
