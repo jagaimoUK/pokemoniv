@@ -23,7 +23,10 @@ const battle = {self: prepared.self, opponent: prepared.opponent,
     attack_policies: ['fast_only', 'standard'],
     shield_policies: [{kind:'manual',decisions:Array(512).fill(false)},
                        {kind:'standard'}]};
-const session = createStatefulSession(prepared, {horizon: 500});
+let nativeAudit = null;
+const session = createStatefulSession(prepared, {
+  horizon: 500, _testTerminalAudit: record => { nativeAudit = record; },
+});
 const publicInitial = session.observe();
 let result = null, steps = 0, charged = false, chargedSeen = false;
 while (steps++ < 500) {
@@ -47,8 +50,11 @@ if (!input.attempt_charge) {
 }
 process.stdout.write(JSON.stringify({first:publicInitial, result,
   step_count:steps, charge_requested:charged, charge_seen:chargedSeen,
+  native_audit: nativeAudit,
   baseline:baseline && {outcome:baseline.outcome, turns:baseline.turns,
-     terminal:baseline.terminal}}));
+     terminal:baseline.terminal,
+     events:baseline.events.map(({turn,actor,kind,move_id,shielded}) =>
+       ({turn,actor,kind,move_id,shielded}))}}));
 """
 
 
@@ -59,9 +65,10 @@ class StatefulNativeTests(unittest.TestCase):
         self.addCleanup(fixture.doCleanups)
         self.fixture = fixture
 
-    def run_native(self, *, shields=(0, 0), energy=0, charge=False):
+    def run_native(self, *, shields=(0, 0), energy=0,
+                   enemy_energy=0, charge=False):
         prepared = self.fixture.request(
-            energy=energy, enemy_energy=0, shields=shields)
+            energy=energy, enemy_energy=enemy_energy, shields=shields)
         proc = subprocess.run(
             ["node", "-e", DRIVER],
             input=json.dumps({"prepared": prepared,
@@ -72,12 +79,24 @@ class StatefulNativeTests(unittest.TestCase):
         return json.loads(proc.stdout)
 
     def test_same_native_result_as_unmodified_fast_only(self):
-        for shields in ((0, 0), (1, 1)):
-            with self.subTest(shields=shields):
-                data = self.run_native(shields=shields)
+        scenarios = (
+            ((0, 0), 0, 0),
+            ((1, 1), 0, 0),
+            ((2, 0), 0, 100),
+            ((1, 2), 35, 50),
+        )
+        for shields, energy, enemy_energy in scenarios:
+            with self.subTest(shields=shields, energy=energy,
+                              enemy_energy=enemy_energy):
+                data = self.run_native(shields=shields, energy=energy,
+                                       enemy_energy=enemy_energy)
                 self.assertFalse(data["result"]["truncated"])
                 self.assertEqual(data["result"]["info"]["outcome"], data["baseline"]["outcome"])
                 self.assertEqual(data["result"]["info"]["turns"], data["baseline"]["turns"])
+                self.assertEqual(data["native_audit"]["terminal"],
+                                 data["baseline"]["terminal"])
+                self.assertEqual(data["native_audit"]["events"],
+                                 data["baseline"]["events"])
                 self.assertEqual(data["result"]["reward"],
                     1 if data["baseline"]["outcome"] == "self_ko_win" else
                     -1 if data["baseline"]["outcome"] == "opponent_ko_win" else 0)
