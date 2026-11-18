@@ -69,6 +69,23 @@ function createStatefulSession(prepared, options = {}) {
     history.push(Object.freeze({turn: battle.getTurns(), actor: actor.index,
       kind: move.category, move_id: move.moveId, shielded: Boolean(shielded)}));
   };
+  // Test-only callback, deliberately never forwarded by the Python/JSONL
+  // worker. The policy and public observation must not receive this data.
+  const testTerminalAudit = options._testTerminalAudit;
+  if (testTerminalAudit !== undefined && typeof testTerminalAudit !== "function") {
+    throw Error("Invalid private test audit callback");
+  }
+  function fullNativeState(p) {
+    return {
+      species: p.speciesId, form: p.activeFormId, hp: p.hp,
+      max_hp: p.stats.hp, energy_points: p.energy, shields: p.shields,
+      buffs: [...p.statBuffs], cooldown_ms: p.cooldown,
+      move_buff_meters: Object.fromEntries(
+        [p.fastMove, ...p.chargedMoves]
+          .filter(m => m.buffApplyMeter !== undefined)
+          .map(m => [m.moveId, m.buffApplyMeter]))
+    };
+  }
   let selected = "wait", done = false, lastCharged = false, thisTurnCharged = false;
   const oldProcess = battle.processAction.bind(battle);
   battle.processAction = (action, actor, defender) => {
@@ -120,6 +137,14 @@ function createStatefulSession(prepared, options = {}) {
     const truncated = !terminated && (battle.getTurns() - 1 >= horizon ||
       battle.getDuration() > 240000);
     done = terminated || truncated;
+    // Private debug snapshot is available exclusively to trusted in-process
+    // integration tests. Never include opponent private state in step()/info.
+    if (done && testTerminalAudit) {
+      testTerminalAudit({
+        terminal: pokemon.map(fullNativeState),
+        events: history.map(e => ({...e})),
+      });
+    }
     const reward = terminated ? (ownHp > 0 ? 1 : opponentHp > 0 ? -1 : 0) : 0;
     return {
       observation: done ? null : observation(), reward,
