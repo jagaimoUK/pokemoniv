@@ -60,6 +60,9 @@ class NativeStepClient:
                 stderr=subprocess.DEVNULL,
                 env=child_environment({"PVP_PVPOKE_SOURCE": str(self._source)}),
             )
+            # A blocking stdin write can hang before the response timeout starts.
+            # Use partial, nonblocking writes within the same RPC deadline.
+            os.set_blocking(self._proc.stdin.fileno(), False)
 
     def _rpc(self, payload):
         self._start()
@@ -69,9 +72,22 @@ class NativeStepClient:
                 raise NativeStepError("Worker request exceeds the input budget")
             if self._proc.poll() is not None:
                 raise NativeStepError("Native worker exited")
-            self._proc.stdin.write(wire)
-            self._proc.stdin.flush()
             deadline = monotonic() + self._timeout
+            written = 0
+            while written < len(wire):
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    raise NativeStepError("Native worker timed out during input")
+                _, writable, _ = select.select([], [self._proc.stdin], [], remaining)
+                if not writable:
+                    raise NativeStepError("Native worker timed out during input")
+                try:
+                    n = os.write(self._proc.stdin.fileno(), wire[written:])
+                except BlockingIOError:
+                    continue
+                if n <= 0:
+                    raise NativeStepError("Native worker closed its input")
+                written += n
             while b"\n" not in self._buffer:
                 remaining = deadline - monotonic()
                 if remaining <= 0:
