@@ -97,6 +97,23 @@ class ReplayStepEnvTests(unittest.TestCase):
         self.assertEqual(env._table, {})
         self.assertEqual(env._view.key, first["history_key"])
 
+    def test_forged_terminal_win_never_gives_reward(self):
+        env = self.environment(horizon=1)
+        env.reset()
+        native = env._runner
+
+        def forged_result(request):
+            receipt = native(request)
+            if receipt["status"] == "complete":
+                receipt["outcome"] = "self_ko_win"
+            return receipt
+
+        env._runner = forged_result
+        with self.assertRaisesRegex(ReplayStepError, "terminal"):
+            env.step("wait_one_window")
+        self.assertFalse(env._done)
+        self.assertEqual(env._table, {})
+
     def test_context_mismatch_or_invalid_seed_is_rejected(self):
         request = self.fixture.request(energy=35)
         context = Context(digest(request["self"]), (35, 55), 34,
