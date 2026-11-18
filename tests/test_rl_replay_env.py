@@ -35,7 +35,8 @@ class ReplayStepEnvTests(unittest.TestCase):
         self.assertIn("charge_0", obs_a["legal_actions"])
         self.assertNotIn("charge_1", obs_a["legal_actions"])
         self.assertNotIn("opponent_energy", obs_a)
-        self.assertNotIn("opponent", str(obs_a))
+        self.assertNotIn("opponent_private_energy", obs_a)
+        self.assertNotIn("opponent_ivs", obs_a)
         self.assertEqual(info["information_fairness"], "not_established")
         with self.assertRaises(ValueError):
             first.step("charge_1")
