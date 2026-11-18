@@ -42,6 +42,7 @@ jobs:
         run: |
           python -m compileall -q .
           python -m unittest discover -s tests -p 'test*.py'
+          PYTHONPATH=.:tests python tools/benchmark_rl_step.py --episodes 2 --windows 4
           for test in tests/test*.js tests/test*.cjs; do node "$test"; done
           for source in *.js; do node --check "$source"; done
           sh -n start.sh
