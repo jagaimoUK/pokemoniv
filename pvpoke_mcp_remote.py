@@ -21,7 +21,15 @@ from http.server import BaseHTTPRequestHandler
 from pvpoke_http_security import BoundedHTTPServer, RateBudget, safe_equal
 import pvpoke_bridge_core as backend
 from pvpoke_iv_workflow import IVWorkflow
+from pvpoke_app_batch import DurableSelectionBatch
+from pvpoke_archive import archive_dir
+from pathlib import Path
 from pvpoke_app_ui import HTML as APP_HTML
+NOTIFICATION_SW = b"""self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  event.waitUntil(clients.openWindow('/app'));
+});
+"""
 from pvpoke_party_ui import HTML as PARTY_HTML
 from pvpoke_app_access import AppAccess, BrowserLogin
 from pvpoke_app_input import parse_import
@@ -33,6 +41,10 @@ import pvpoke_browser_migration as browser_migration
 APP_ACCESS = AppAccess()
 
 IV_RUNNER = IVWorkflow(backend)
+# Durable single-user batch queue: separate from the ChatGPT MCP tool surface.
+BATCH_RUNNER = DurableSelectionBatch(
+    IV_RUNNER, archive_dir(Path.home() / 'pvpoke_automation_web') / 'selection_batches.sqlite3')
+BATCH_RUNNER.recover()
 RATE_BUDGET = RateBudget()
 BACKUP_SLOTS = threading.BoundedSemaphore(1)
 APP_REQUEST_SLOTS = threading.BoundedSemaphore(4)
@@ -311,7 +323,7 @@ class Handler(BaseHTTPRequestHandler):
         hashes = ' '.join("'sha256-" + base64.b64encode(hashlib.sha256(x).digest()).decode() + "'" for x in scripts)
         self.send_header('Content-Security-Policy',
                          "default-src 'none'; script-src " + (hashes or "'none'") +
-                         "; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; "
+                         "; style-src 'unsafe-inline'; connect-src 'self'; worker-src 'self'; img-src 'self' data:; "
                          "base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'")
 
     def rate_allowed(self, name, count, seconds):
@@ -387,7 +399,9 @@ class Handler(BaseHTTPRequestHandler):
                              '/app-api/meta-preview', '/app-api/meta-apply', '/app-api/meta-presets', '/app-api/meta-preset-save', '/app-api/meta-preset-export', '/app-api/low-score', '/app-api/visual-backup-token', '/app-api/flashcards',
                              '/app-api/party/list', '/app-api/party/get', '/app-api/party/save',
                              '/app-api/party/start', '/app-api/party/status', '/app-api/party/cancel',
-                             '/app-api/party/meta-weights'):
+                             '/app-api/party/meta-weights', '/app-api/batch-start',
+                             '/app-api/batch-status', '/app-api/batch-cancel', '/app-api/batch-resume',
+                             '/app-api/batch-latest'):
             return self.respond(404, {'error': 'Not found'})
         origin = self.headers.get('Origin')
         if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'):
@@ -410,6 +424,18 @@ class Handler(BaseHTTPRequestHandler):
                     if 'HTTP 409:' in str(exc):
                         return self.respond(409, {'error': '保存競合、または他の計算中です'})
                     raise
+            if self.path == '/app-api/batch-latest':
+                return self.respond(200, BATCH_RUNNER.latest())
+            if self.path == '/app-api/batch-start':
+                return self.respond(200, BATCH_RUNNER.start(args))
+            if self.path == '/app-api/batch-status':
+                return self.respond(200, BATCH_RUNNER.status(
+                    args.get('batch_id'), include_results=args.get('include_results', False),
+                    include_plan=args.get('include_plan', False)))
+            if self.path == '/app-api/batch-cancel':
+                return self.respond(200, BATCH_RUNNER.cancel(args.get('batch_id')))
+            if self.path == '/app-api/batch-resume':
+                return self.respond(200, BATCH_RUNNER.resume(args.get('batch_id')))
             if self.path == '/app-api/session':
                 return self.respond(200, {'expires_in_seconds': BROWSER_LOGIN.ttl},
                                     cookie=BROWSER_LOGIN.issue(secure=APP_ORIGIN.startswith('https://')))
@@ -542,6 +568,16 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        if self.path == '/app-notifications-sw.js':
+            data = NOTIFICATION_SW
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/javascript; charset=utf-8')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Service-Worker-Allowed', '/app')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if self.path in ('/flashcards', '/app/party', '/app/migration'):
             return self.app_page()
         # This one read-only route contains only global, fixed PvP rankings
@@ -613,7 +649,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path in ('/app-api/visual-backup-token', '/app-api/visual-backup-connections', '/app-api/visual-backup-revoke') and not (strong_auth or cookie_ok):
             return self.unauthorized()
-        if self.path in ('/app-api/run', '/app-api/party/start') and not self.rate_allowed('compute-owner', 12, 60):
+        if self.path in ('/app-api/run', '/app-api/party/start', '/app-api/batch-start', '/app-api/batch-resume') and not self.rate_allowed('compute-owner', 12, 60):
             return
         if self.path in ('/app-api/session', '/app-api/visual-backup-token') and not self.rate_allowed('issue-owner', 12, 60):
             return
