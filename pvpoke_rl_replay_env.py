@@ -167,9 +167,13 @@ class ReplayStepEnv:
             self._view, self._events, self._table = view, observed, proposed
             return self._observation(view, observed), 0.0, False, False, self._info()
 
-        outcome = receipt.get("outcome")
-        if outcome not in ("self_ko_win", "opponent_ko_win", "simultaneous_ko", "timeout"):
-            raise ReplayStepError("Invalid native terminal outcome")
+        # Reuse the native search's terminal ledger checks. Never reward a
+        # forged win or a malformed HP/energy/shield receipt.
+        from pvpoke_observed_search import _cell
+        try:
+            outcome = _cell(receipt)["outcome"]
+        except (ValueError, KeyError, TypeError) as error:
+            raise ReplayStepError("Invalid native terminal result") from error
         self._table = proposed
         self._done = True
         if outcome == "timeout":
