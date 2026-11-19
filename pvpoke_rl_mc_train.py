@@ -125,6 +125,8 @@ class PublicMonteCarloPolicy:
     final match return, so credit assignment is intentionally coarse.
     """
 
+    MODEL_VERSION = VERSION
+
     def __init__(self, *, seed=0):
         if type(seed) is not int:
             raise ValueError("Policy seed must be an integer")
@@ -133,9 +135,13 @@ class PublicMonteCarloPolicy:
         self.completed_matches = 0
 
     def choose(self, view, *, epsilon=0.2):
+        return self._choose_encoded(public_state(view), epsilon=epsilon)
+
+    def _choose_encoded(self, encoded, *, epsilon):
+        """Use the same action-selection algorithm with a versioned encoder."""
         if type(epsilon) not in (float, int) or not math.isfinite(epsilon) or not 0 <= epsilon <= 1:
             raise ValueError("epsilon must be between 0 and 1")
-        kind, key, legal = public_state(view)
+        kind, key, legal = encoded
         table = self._values[kind].get(key, {})
         if self._rng.random() < epsilon or (kind == "selection" and not table):
             action = self._rng.choice(legal)
@@ -186,14 +192,14 @@ class PublicMonteCarloPolicy:
 
     def snapshot(self):
         # No raw observations, opponent private team, replay, or credentials.
-        return {"schema": VERSION, "completed_matches": self.completed_matches,
+        return {"schema": self.MODEL_VERSION, "completed_matches": self.completed_matches,
                 "values": self._values}
 
     @classmethod
     def restore(cls, payload, *, seed=0):
         if (type(payload) is not dict or set(payload) !=
                 {"schema", "completed_matches", "values"} or
-                payload["schema"] != VERSION or
+                payload["schema"] != cls.MODEL_VERSION or
                 type(payload["completed_matches"]) is not int or
                 payload["completed_matches"] < 0):
             raise LearningError("Invalid learning checkpoint")
