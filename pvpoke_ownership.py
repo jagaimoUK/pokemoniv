@@ -309,11 +309,11 @@ class Ownership:
             self._advance(db)
             return record
 
-    def _replay(self, db, event_id, request_hash):
+    def _replay(self, db, event_id, request_hash, *, legacy_hashes=()):
         row = db.execute('''SELECT request_hash, body, digest FROM ownership_events_v1
             WHERE owner_scope=? AND event_id=?''', (self.owner, event_id)).fetchone()
         if row:
-            if row[0] != request_hash:
+            if row[0] != request_hash and row[0] not in legacy_hashes:
                 raise OwnershipConflict('Event ID already used for a different request')
             return _unpack(row[1:])
         return None
@@ -336,14 +336,19 @@ class Ownership:
         fields = None if observation is None else self._observation(
             observation, partial=not register_if_missing)
         identity = ['instance', self.actor, instance_id, expected_revision, state, fields]
+        legacy_hashes = ()
         if register_if_missing:
             if expected_revision != 0 or fields is None or state != 'confirmed_owned':
                 raise ValueError('A new instance requires an explicit owned observation')
             identity.append('register')
+        elif fields is not None:
+            legacy_fields = self._observation(observation, partial=False)
+            legacy_hashes = (_json_hash(['instance', self.actor, instance_id, expected_revision, state, legacy_fields]),)
+            identity.append('partial-v1')
         request_hash = _json_hash(identity)
         with self.store._writer(critical=True) as db:
             self._ensure_tables(db)
-            replay = self._replay(db, event_id, request_hash)
+            replay = self._replay(db, event_id, request_hash, legacy_hashes=legacy_hashes)
             if replay is not None:
                 return replay
             previous = self._instance(db, instance_id)

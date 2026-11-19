@@ -285,6 +285,8 @@ async function checkWidth(browser, width) {
     await candidateUpdateForm.locator('input[type="number"]').nth(0).fill('1492');
     await candidateUpdateForm.locator('input[type="checkbox"]').last().check();
     await candidateUpdateForm.locator('button:not([type="button"])').click();
+    await page.locator('#result-tree small').filter({hasText: 'rev 2'}).waitFor({state: 'attached'});
+    await page.locator('#result-tree details.record > summary').first().click();
     await page.locator('#result-tree small').filter({hasText: 'rev 2'}).waitFor();
     // Step 1 ownership ledger (including P2 empty-with-has_more page), history, and box-scope confirmation smoke.
     await page.locator('#inventory-panel > summary').click();

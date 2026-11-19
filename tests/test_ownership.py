@@ -554,6 +554,69 @@ inventory.confirm('crash', 'a', expected_revision=1, state='confirmed_absent')
         self.assertIsNone(minimal_new['instance']['current_level'])
         self.assertIsNone(minimal_new['instance']['current_moves'])
 
+        # Bidirectional conflict on new partial events: explicit None -> omitted must also conflict.
+        with self.assertRaises(OwnershipConflict):
+            self.inventory.confirm(
+                'ev-clear-lv', 'inst-p1', expected_revision=4, state='confirmed_owned',
+                observation={**cp_only, 'current_cp': 1500},
+                register_if_missing=False, preserve_identity=True,
+            )
+
+        # Legacy pre-partial event replay compatibility:
+        # Simulate a stored event created with legacy _observation(partial=False) request_hash
+        # and confirm replay with same omitted-field payload returns the stored event without writes,
+        # while modified payload, wrong actor, or foreign owner fails safely.
+        from pvpoke_battle_service import _json_hash
+        from pvpoke_ownership import _pack
+        legacy_fields = self.inventory._observation(cp_only, partial=False)
+        legacy_hash = _json_hash([
+            'instance', self.inventory.actor, 'inst-p1', 5, 'confirmed_owned', legacy_fields,
+        ])
+        legacy_event = {
+            'event_id': 'ev-legacy-update', 'kind': 'instance', 'instance_id': 'inst-p1',
+            'previous_state': 'confirmed_owned', 'new_state': 'confirmed_owned',
+            'input_revision': 5, 'output_revision': 6,
+            'confirmed_at': '2026-11-18T00:00:00.000+00:00',
+            'confirmed_by': self.inventory.actor, 'source': 'manual',
+            'instance': {**self.inventory.get('inst-p1'), 'current_cp': 1492,
+                         'current_level': None, 'current_moves': None, 'revision': 6},
+        }
+        with self.store._writer(critical=True) as db:
+            db.execute('''INSERT INTO ownership_events_v1
+                (owner_scope, event_id, kind, target, request_hash, body, digest)
+                VALUES (?, ?, 'instance', ?, ?, ?, ?)''',
+                (self.inventory.owner, 'ev-legacy-update', 'inst-p1', legacy_hash, *_pack(legacy_event)))
+            rev_before_replay = self.inventory._revision(db)
+            count_before_replay = db.execute('SELECT COUNT(*) FROM ownership_events_v1').fetchone()[0]
+
+        replayed = self.inventory.confirm(
+            'ev-legacy-update', 'inst-p1', expected_revision=5, state='confirmed_owned',
+            observation=cp_only, register_if_missing=False, preserve_identity=True,
+        )
+        self.assertEqual(replayed, legacy_event)
+        with self.store._reader() as db:
+            self.assertEqual(self.inventory._revision(db), rev_before_replay)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM ownership_events_v1').fetchone()[0], count_before_replay)
+        with self.assertRaises(OwnershipConflict):
+            self.inventory.confirm(
+                'ev-legacy-update', 'inst-p1', expected_revision=5, state='confirmed_owned',
+                observation={**cp_only, 'current_cp': 1499},
+                register_if_missing=False, preserve_identity=True,
+            )
+        foreign_actor = Ownership(self.store, species_ids=self.inventory.species_ids, actor='other-actor')
+        with self.assertRaises(OwnershipConflict):
+            foreign_actor.confirm(
+                'ev-legacy-update', 'inst-p1', expected_revision=5, state='confirmed_owned',
+                observation=cp_only, register_if_missing=False, preserve_identity=True,
+            )
+        foreign_owner = Ownership(BattleStore(self.store.path, owner_scope='foreign'),
+                                  species_ids=self.inventory.species_ids)
+        with self.assertRaises(OwnershipConflict):
+            foreign_owner.confirm(
+                'ev-legacy-update', 'inst-p1', expected_revision=5, state='confirmed_owned',
+                observation=cp_only, register_if_missing=False, preserve_identity=True,
+            )
+
         # 512-row filtered scan boundary: empty first page with has_more=True, followed by page 2 item.
         boundary_store = BattleStore(self.root / 'volume' / 'boundary512.sqlite3')
         boundary_inv = Ownership(boundary_store, species_ids=self.inventory.species_ids)

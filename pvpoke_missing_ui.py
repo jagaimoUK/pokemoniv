@@ -90,7 +90,7 @@ const outcomes={self_win:'勝ち',opponent_win:'負け',simultaneous_ko:'同時�
 const ownership={confirmed_owned:'所持確認済み',confirmed_absent:'所持していないことを確認済み',unknown:'未確認'};
 const builds={exact:'個体値・CP・Lv・技が一致',unverified:'一致の判定に必要な情報が不足',different:'CP・Lv・技のいずれかが異なる'};
 let credential='',catalog=Object.create(null),moves={},speciesNames=new Map(),busy=false,editRevision=0,displayed=null,lastRequest=null;
-let inventoryLedgerRevision=null,inventoryCursor=null,inventoryLoaded=false;
+let inventoryLedgerRevision=null,inventoryCursor=null,inventoryLoaded=false,inventoryFilterKey='';
 let scopePrevious='',scopeEventId='';
 let reference;
 const alternatives=[],scenarios=[];
@@ -908,6 +908,12 @@ async function loadInventory(append){
  const species=speciesInput?resolveSpecies(speciesInput):'';
  if(speciesInput&&!species)throw Error('絞り込みの種族は一覧からフォルムまで選択してください。');
  const state=$('inventory-state').value;
+ const filterKey=JSON.stringify({species,state});
+ if(append&&filterKey!==inventoryFilterKey){
+  await loadInventory(false);
+  announce('絞り込み条件が変更されたため、先頭から読み込み直しました。');
+  return;
+ }
  const payload={action:'ownership_list',limit:64,include_scopes:!append};
  if(species)payload.species_id=species;
  if(state)payload.state=state;
@@ -918,6 +924,7 @@ async function loadInventory(append){
   announce('台帳が更新されたため、先頭から最新の状態を読み込み直しました。');
   return;
  }
+ inventoryFilterKey=filterKey;
  inventoryLedgerRevision=data.ledger_revision;
  inventoryCursor=data.has_more?data.next_after:null;
  inventoryLoaded=true;
@@ -965,6 +972,9 @@ $('add-scenario').addEventListener('click',()=>addScenario(true));
 $('add-alternative').addEventListener('click',addAlternative);
 $('inventory-load').addEventListener('click',()=>perform(()=>loadInventory(false)));
 $('inventory-more').addEventListener('click',()=>perform(()=>loadInventory(true)));
+const invalidateInventoryCursor=()=>{inventoryCursor=null;$('inventory-more').hidden=true;};
+$('inventory-species').addEventListener('input',invalidateInventoryCursor);
+$('inventory-state').addEventListener('change',invalidateInventoryCursor);
 $('scope-complete').addEventListener('change',()=>{
  const done=$('scope-complete').checked;
  $('scope-absence').disabled=!done;
