@@ -103,14 +103,15 @@ def main():
     metrics = evaluate_paired(
         trained=trained, untrained=untrained,
         scenarios=heldout_scenarios(count=args.evaluate,
-                                    seed=args.seed + 100000))
+                                    seed=args.seed + 100000),
+        fixed_selection=args.selection)
     print(json.dumps({
         "experiment": "fixed_own_selection_tactics_transfer_diagnostic_v1",
         "policy_variant": args.policy,
         "own_selection": args.selection,
         "training": training,
         "evaluation": metrics,
-        "limits": "synthetic 6v3 only; hidden opponent lineup varies; fixed baseline uses separate own selection",
+        "limits": "synthetic 6v3 only; hidden opponent lineup varies; all baselines share fixed own selection",
     }, sort_keys=True))
 
 
