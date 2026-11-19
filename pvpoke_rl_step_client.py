@@ -26,12 +26,8 @@ class NativeStepError(RuntimeError):
     """The local worker failed or the step protocol became untrustworthy."""
 
 
-class NativeStepClient:
-    """One OS process for many native battle steps and episode resets.
-
-    In this initial experiment, the action space excludes manual shielding,
-    switching, stochastic effects, and team selection.
-    """
+class _NativeWorkerTransport:
+    """Bounded JSONL transport shared by the local native environments."""
 
     def __init__(self, source, *, timeout=10.0):
         source = Path(source).resolve()
@@ -43,8 +39,6 @@ class NativeStepClient:
         self._timeout = timeout
         self._proc = None
         self._buffer = bytearray()
-        self._legal = ()
-        self._done = True
 
     def __enter__(self):
         return self
@@ -114,6 +108,46 @@ class NativeStepClient:
             self.close()
             raise
 
+    def stats(self):
+        response = self._rpc({"op": "stats"})
+        rss, peak = response.get("rss_bytes"), response.get("peak_rss_kib")
+        if type(rss) is not int or type(peak) is not int or rss < 0 or peak < 0:
+            raise NativeStepError("Invalid worker memory measurement")
+        return {"rss_bytes": rss, "peak_rss_kib": peak}
+
+    def close(self):
+        proc, self._proc = self._proc, None
+        self._buffer.clear()
+        if proc is not None:
+            if proc.poll() is None:
+                proc.terminate()
+            try:
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            for stream in (proc.stdin, proc.stdout):
+                if stream is not None:
+                    stream.close()
+
+
+class NativeStepClient(_NativeWorkerTransport):
+    """One OS process for many native battle steps and episode resets.
+
+    In this initial experiment, the action space excludes manual shielding,
+    switching, stochastic effects, and team selection.
+    """
+
+    def __init__(self, source, *, timeout=10.0):
+        super().__init__(source, timeout=timeout)
+        self._legal = ()
+        self._done = True
+
+    def close(self):
+        super().close()
+        self._legal = ()
+        self._done = True
+
     def reset(self, prepared, *, horizon=500):
         """Return public (observation, info); private prepared data stays in Node."""
         if type(horizon) is not int or not 1 <= horizon <= 500:
@@ -161,27 +195,3 @@ class NativeStepClient:
             self._legal = ()
         self._done = terminated or truncated
         return observation, float(reward), terminated, truncated, result.get("info", {})
-
-    def stats(self):
-        response = self._rpc({"op": "stats"})
-        rss, peak = response.get("rss_bytes"), response.get("peak_rss_kib")
-        if type(rss) is not int or type(peak) is not int or rss < 0 or peak < 0:
-            raise NativeStepError("Invalid worker memory measurement")
-        return {"rss_bytes": rss, "peak_rss_kib": peak}
-
-    def close(self):
-        proc, self._proc = self._proc, None
-        self._buffer.clear()
-        self._done = True
-        self._legal = ()
-        if proc is not None:
-            if proc.poll() is None:
-                proc.terminate()
-            try:
-                proc.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-            for stream in (proc.stdin, proc.stdout):
-                if stream is not None:
-                    stream.close()

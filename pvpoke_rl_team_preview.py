@@ -56,7 +56,8 @@ def six(rows, parser, with_ids=False):
     if type(rows) is not list or len(rows) != 6:
         raise ValueError("Exactly six team members required")
     parsed = [parser(row) for row in rows]
-    if len({p["roster_clause_id"] for p in parsed}) != 6:
+    if (len({p["roster_clause_id"] for p in parsed}) != 6 or
+            len({p["species"] for p in parsed}) != 6):
         raise ValueError("Duplicate roster clause")
     if with_ids and len({p["combatant_id"] for p in parsed}) != 6:
         raise ValueError("Duplicate combatant ID")

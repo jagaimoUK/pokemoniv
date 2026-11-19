@@ -23,6 +23,7 @@ function Battle(){
 	var turnAnimations = []; // Animations to be displayed by the front end this turn
 	var turnActions = []; // Actions to be performed this turn
 	var actionIndex = 0; // Iterator over current turnActions
+	var stepSuspended = false; // Optional headless decision within a turn
 	var queuedActions = []; // Input registered from previous turns to be processed on future turns
 	var sandbox = false; // Is this automated or following user instructions?
 	var mode = "simulate"; // Simulate or emulate?
@@ -251,7 +252,7 @@ function Battle(){
 		}
 
 		// Determine if charged move priority should be used
-		usePriority = false;
+		usePriority = !!self.teamStepRules;
 
 		if(pokemon[0].stats.atk != pokemon[1].stats.atk
 			|| pokemon[0].speciesId == "cramorant" && pokemon[1].speciesId == "cramorant" ){
@@ -262,6 +263,7 @@ function Battle(){
 		matchupDisplayTime = 0;
 		turns = 1;
 		lastProcessedTurn = 0;
+		stepSuspended = false;
 		turnsToWin = [0, 0];
 		timeline = [];
 		queuedActions = [];
@@ -275,7 +277,7 @@ function Battle(){
 
 	// Process a turn
 
-	this.step = function(){
+	function prepareStep(){
 		// Return from this function if paused
 		if(phase == "game_paused"){
 			return false;
@@ -326,7 +328,7 @@ function Battle(){
 			for(var i = 0; i < 2; i++){
 
 				var poke = pokemon[i];
-				var opponent = this.getOpponent(i);
+				var opponent = self.getOpponent(i);
 				var action = self.getTurnAction(poke, opponent);
 
 				if(action){
@@ -412,7 +414,12 @@ function Battle(){
 				valid = true;
 
 				if(chargedMoveLastTurn){
-					action.priority -= 40; // Resolve floating Fast Attacks before 0 turn swaps after a Charged Attack sequence
+					// Resolve floating fast attacks before a zero-turn post-charge swap.
+					if(self.teamStepRules){
+						action.settings.priority -= 40;
+					} else {
+						action.priority -= 40;
+					}
 				}
 			}
 
@@ -426,8 +433,15 @@ function Battle(){
 		// Sort actions by priority
 		turnActions.sort((a,b) => (a.settings.priority > b.settings.priority) ? -1 : ((b.settings.priority > a.settings.priority) ? 1 : 0));
 
-		// Process actions on this turn
+		self.teamStepRules?.orderActions(turnActions);
 		actionIndex = 0;
+		return true;
+	}
+
+	this.step = function(){
+		if(!stepSuspended && !prepareStep()) return false;
+		stepSuspended = false;
+		// Resume at the same action without preparing the turn a second time.
 		
 		while(actionIndex < turnActions.length){
 			// Return here if we've reached a suspended state
@@ -435,7 +449,7 @@ function Battle(){
 				return false;
 			}
 
-			var action = turnActions[actionIndex++];
+			var action = turnActions[actionIndex];
 			var poke = pokemon[action.actor];
 			var opponent = pokemon[ (action.actor == 0) ? 1 : 0 ];
 
@@ -485,6 +499,11 @@ function Battle(){
 					break;
 			}
 
+			if(self.teamStepRules?.beforeAction(action, poke, opponent) === false){
+				stepSuspended = true;
+				return false;
+			}
+			actionIndex++;
 			self.processAction(action, poke, opponent);
 		}
 
@@ -1395,7 +1414,7 @@ function Battle(){
 
 			// Roll against the buff chance to see if it applies
 
-			var buffRoll = Math.random() + buffChanceModifier + shieldBuffModifier; // Totally not Really Random but just to get off the ground for now
+			var buffRoll = (self.teamStepRules ? self.teamStepRules.rollBuff(move) : Math.random()) + buffChanceModifier + shieldBuffModifier; // Totally not Really Random but just to get off the ground for now
 
 			if(forceBuff){
 				buffRoll += 2; // Allow this to overcome the buffChanceModifier

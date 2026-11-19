@@ -87,6 +87,10 @@ class SelectionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             SixToThreeSelection(own, public, enemy, (0, 1, 2), 0, ruleset_id="v1")
         own[-1]["roster_clause_id"] = "clause5"
+        own[-1]["species"] = own[0]["species"]
+        with self.assertRaises(ValueError):
+            SixToThreeSelection(own, public, enemy, (0, 1, 2), 0, ruleset_id="v1")
+        own[-1]["species"] = "species5"
         public[0]["species"] = "wrong"
         with self.assertRaises(ValueError):
             SixToThreeSelection(own, public, enemy, (0, 1, 2), 0, ruleset_id="v1")
