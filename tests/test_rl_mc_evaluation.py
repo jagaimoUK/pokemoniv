@@ -97,6 +97,37 @@ class MatchedEvaluationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             _metrics([{**results[0], "decisions": 6}])
 
+    def test_wait_reasons_are_disjoint_and_accounted_for(self):
+        episode = {
+            "status": "discarded", "outcome": "timeout", "reward": None,
+            "decisions": 8,
+            "action_counts": {
+                "selection": 1, "wait": 5, "fast": 2, "charged": 0,
+                "switch": 0, "shield": 0,
+            },
+            "public_wait_reasons": {
+                "forced_only_wait": 4, "optional_wait": 1,
+                "cooldown_forced": 3, "other_forced": 1,
+                "fast_available_when_waiting": 1,
+                "charge_available_when_waiting": 0,
+            },
+        }
+        summary = _metrics([episode])
+        self.assertEqual(summary["public_wait_reasons"]["forced_only_wait"], 4)
+        self.assertEqual(summary["public_wait_reasons"]["optional_wait"], 1)
+        self.assertEqual(summary["public_wait_reasons"]["cooldown_forced"], 3)
+        self.assertEqual(summary["discard_reasons"], {"timeout": 1})
+        self.assertEqual(summary["wins"], 0)
+        self.assertEqual(summary["losses"], 0)
+        invalid = copy.deepcopy(episode)
+        invalid["public_wait_reasons"]["optional_wait"] = 2
+        with self.assertRaises(ValueError):
+            _metrics([invalid])
+        invalid = copy.deepcopy(episode)
+        invalid["public_wait_reasons"]["cooldown_forced"] = 5
+        with self.assertRaises(ValueError):
+            _metrics([invalid])
+
     def test_learning_coverage_fraction_has_an_explicit_denominator(self):
         stat = _metrics([
             {"status": "complete", "reward": 1, "decisions": 6,
