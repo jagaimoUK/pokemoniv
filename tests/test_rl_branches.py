@@ -13,10 +13,13 @@ class _RecordingEnvironment(SixToThreeEnvironment):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.actions = []
+        self.rosters = []
 
     def reset(self, **kwargs):
         self.actions.append([])
-        return super().reset(**kwargs)
+        view, info = super().reset(**kwargs)
+        self.rosters.append(tuple(row["species"] for row in view["own_six"]))
+        return view, info
 
     def step(self, action):
         self.actions[-1].append(action)
@@ -37,7 +40,9 @@ class BranchReplayTests(unittest.TestCase):
                 self.assertEqual(set(member), {"species", "fainted", "hp_bucket_5pct", "seen_moves"})
             return policy(view)
 
-        for pair in branches.PAIRS:
+        cases = [(branches.DEFAULT_ROSTER, pair) for pair in branches.PAIRS]
+        cases += [("skarmory", "switch"), ("primeape", "charge")]
+        for roster, pair in cases:
             envs = []
 
             def make_recording(*args, **kwargs):
@@ -45,12 +50,19 @@ class BranchReplayTests(unittest.TestCase):
                 envs.append(env)
                 return env
 
-            with (self.subTest(pair=pair),
+            with (self.subTest(roster=roster, pair=pair),
                   patch.object(branches, "SixToThreeEnvironment",
                                side_effect=make_recording),
                   patch.object(branches, "fixed_public_action", side_effect=public_only)):
-                result = branches.compare_branches(pair=pair, seed=12, scenarios=1)
+                result = branches.compare_branches(roster=roster, pair=pair, seed=12, scenarios=1)
+                selection, primeape_slot = branches.ROSTERS[roster]
+                self.assertEqual(envs[0].rosters, [envs[0].rosters[0]] * 3)
+                if primeape_slot is None:
+                    self.assertNotIn("primeape", envs[0].rosters[0])
+                else:
+                    self.assertEqual(envs[0].rosters[0][primeape_slot], "primeape")
                 reference, control, alternative = envs[0].actions
+                self.assertEqual(reference[0], selection)
                 self.assertEqual(reference, control)
                 index = next(i for i, (a, b) in enumerate(zip(reference, alternative)) if a != b)
                 self.assertGreater(index, 1)  # Selection and at least one tactical action.
@@ -58,6 +70,7 @@ class BranchReplayTests(unittest.TestCase):
                 self.assertEqual(result["fork_state_matches"], 2)
                 self.assertEqual(result["same_action_replay_matches"], 1)
                 self.assertEqual(result["attempted_pairs"], 1)
+                self.assertEqual(result["roster"], roster)
                 self.assertEqual(result["excluded_before_pair"], {})
                 self.assertEqual(result["post_fork_divergence"]["audited_pairs"], 1)
                 serialized = json.dumps(result)
@@ -134,6 +147,8 @@ class BranchReplayTests(unittest.TestCase):
                 self.assertEqual(result["both_completed"], 0)
                 self.assertEqual(result["arms"]["candidate"]["censored"], {reason: 1})
                 self.assertEqual(result["arms"]["candidate"]["losses"], 0)
+                self.assertEqual(result["both_completed_rate"], 0)
+                self.assertIsNone(result["paired_reward_delta_mean"])
                 self.assertNotIn("private sentinel", json.dumps(result))
 
     def test_native_timeout_before_frontier_is_not_a_pair(self):
@@ -141,6 +156,16 @@ class BranchReplayTests(unittest.TestCase):
         self.assertEqual(result["excluded_before_pair"], {"timeout": 1})
         self.assertEqual(result["candidate_frontiers"], 0)
         self.assertEqual(result["attempted_pairs"], 0)
+        self.assertIsNone(result["both_completed_rate"])
+        self.assertIsNone(result["paired_reward_delta_mean"])
+
+    def test_charge_pair_requires_both_moves_at_the_same_frontier(self):
+        result = branches.compare_branches(roster="skarmory", pair="charge", seed=12, scenarios=1)
+        self.assertEqual(result["attempted_pairs"], 0)
+        self.assertEqual(result["candidate_frontiers"], 0)
+        self.assertEqual(sum(result["excluded_before_pair"].values()), 1)
+        self.assertNotIn("worker_failure", result["excluded_before_pair"])
+        self.assertNotIn("invalid_native_result", result["excluded_before_pair"])
 
     def test_terminal_labels_require_verified_ko_and_preserve_draws(self):
         good = {"training_eligible": True, "outcome": "simultaneous_ko", "selection_reward": 0}
@@ -158,14 +183,15 @@ class BranchReplayTests(unittest.TestCase):
                 for name in ("baseline", "candidate")}
         win, draw, loss, timeout = (1, None), (0, None), (-1, None), (None, "timeout")
         for baseline, candidate in (
-            (win, loss), (draw, draw), (loss, win), (win, timeout),
+            (win, loss), (draw, draw), (loss, draw), (win, timeout),
             (timeout, loss), (timeout, timeout),
         ):
             branches._record_pair(metrics, arms, baseline, candidate)
         self.assertEqual(metrics, {"both_completed": 3, "better": 1, "equal": 1, "worse": 1,
+                                   "paired_reward_delta_sum": -1,
                                    "baseline_only_completed": 1, "candidate_only_completed": 1,
                                    "both_censored": 1})
         self.assertEqual(arms["baseline"], {"wins": 2, "losses": 1, "draws": 1,
                                             "censored": {"timeout": 2}})
-        self.assertEqual(arms["candidate"], {"wins": 1, "losses": 2, "draws": 1,
+        self.assertEqual(arms["candidate"], {"wins": 0, "losses": 2, "draws": 2,
                                              "censored": {"timeout": 2}})

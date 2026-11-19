@@ -15,8 +15,20 @@ from tools.evaluate_rl_mc import fixed_public_action, heldout_scenarios
 from tools.run_rl_mc import GAME_DATA, fixture_teams
 
 PAIRS = {"fast": ("turn", "fast", "wait"),
-         "shield": ("shield", "shield_yes", "shield_no")}
-OWN_SELECTION = "2,3,5|2"
+         "shield": ("shield", "shield_yes", "shield_no"),
+         "charge": ("turn", "charge_0", "charge_1"),
+         "switch": ("turn", "fast", "switch_1")}
+# Predeclared before the charge/switch runs. Keep the opponent pool and the
+# selection/lead sampling rule common across the three distinct own rosters.
+ROSTERS = {"azumarill": ("2,3,5|2", None),
+           "skarmory": ("0,4,5|4", 0),
+           "primeape": ("0,1,4|1", 1)}
+DEFAULT_ROSTER = "azumarill"
+PRIMEAPE = {
+    "species": "primeape", "roster_clause_id": "primeape", "fast": "KARATE_CHOP",
+    "charged1": "NIGHT_SLASH", "charged2": "RAGE_FIST",
+    "atk": 5, "def": 15, "hp": 15, "level": 24, "cp": 1498,
+}
 DEFAULT_SEED = 400012
 MAX_SCENARIOS = 12
 MAX_DECISIONS = 2000
@@ -53,18 +65,18 @@ def _verdict(transition):
     return None, "invalid_outcome"
 
 
-def _start(env, seed, horizon):
+def _start(env, seed, horizon, selection):
     env.reset(seed=seed, horizon=horizon)
-    return env.step(OWN_SELECTION)
+    return env.step(selection)
 
 
-def _read_audit(env):
+def _read_audit(env, selection):
     try:
         audit = env.private_replay()
     except KeyError:
         raise InvalidNativeTeamResult("Missing native audit") from None
     battle = audit.get("battle") if type(audit) is dict else None
-    if (type(battle) is not dict or audit.get("selection") != OWN_SELECTION or
+    if (type(battle) is not dict or audit.get("selection") != selection or
             battle.get("schema") != SCHEMA or "result" not in battle or
             any(type(battle.get(key)) is not expected for key, expected in AUDIT_FIELDS.items())):
         raise InvalidNativeTeamResult("Invalid native audit")
@@ -76,7 +88,7 @@ def _read_audit(env):
     return audit
 
 
-def _find_frontier(env, transition, pair, budget):
+def _find_frontier(env, transition, pair, budget, selection):
     phase, baseline, candidate = pair
     prefix = []
     while len(prefix) < budget:
@@ -87,7 +99,7 @@ def _find_frontier(env, transition, pair, budget):
         action = fixed_public_action(view)
         if (prefix and view["phase"] == phase and action == baseline and
                 baseline in view["legal_actions"] and candidate in view["legal_actions"]):
-            audit = _read_audit(env)
+            audit = _read_audit(env, selection)
             if len(audit["battle"]["decisions"]) < len(prefix):
                 raise InvalidNativeTeamResult("Incomplete native prefix audit")
             return (tuple(prefix), transition, audit), None
@@ -106,7 +118,7 @@ def _check_replay(env, transition, frontier):
         transition = env.step(action)
     # The worker regenerates opponent actions, including its internal shield
     # decisions. Equality verifies the actual two-sided history and RNG draws.
-    if transition != expected or _read_audit(env) != audit:
+    if transition != expected or _read_audit(env, audit["selection"]) != audit:
         raise _ReplayMismatch("fork_state_mismatch")
 
 
@@ -119,7 +131,7 @@ def _roll_out(env, first_action, budget, prefix_audit):
             elapsed = info.get("elapsed_ms") if type(info) is dict else None
             if type(elapsed) is not int or elapsed < 0:
                 raise InvalidNativeTeamResult("Invalid native rollout clock")
-            audit = _read_audit(env)
+            audit = _read_audit(env, prefix_audit["selection"])
             prefix, battle = prefix_audit["battle"], audit["battle"]
             depth = len(prefix["decisions"])
             if (len(battle["decisions"]) < depth + index + 1 or
@@ -156,6 +168,7 @@ def _record_pair(metrics, arms, baseline, candidate):
     old, new = baseline[0], candidate[0]
     if old is not None and new is not None:
         metrics["both_completed"] += 1
+        metrics["paired_reward_delta_sum"] += new - old
         metrics["better" if new > old else "worse" if new < old else "equal"] += 1
     elif old is not None:
         metrics["baseline_only_completed"] += 1
@@ -165,8 +178,9 @@ def _record_pair(metrics, arms, baseline, candidate):
         metrics["both_censored"] += 1
 
 
-def _run_case(env, seed, pair, horizon, budget, report):
-    frontier, missing = _find_frontier(env, _start(env, seed, horizon), pair, budget)
+def _run_case(env, seed, pair, horizon, budget, selection, report):
+    frontier, missing = _find_frontier(
+        env, _start(env, seed, horizon, selection), pair, budget, selection)
     if frontier is None:
         report["excluded_before_pair"][missing] += 1
         return
@@ -176,14 +190,14 @@ def _run_case(env, seed, pair, horizon, budget, report):
     remaining = budget - len(prefix)
     baseline = _roll_out(env, baseline_action, remaining, audit)
 
-    _check_replay(env, _start(env, seed, horizon), frontier)
+    _check_replay(env, _start(env, seed, horizon, selection), frontier)
     report["fork_state_matches"] += 1
     repeated = _roll_out(env, baseline_action, remaining, audit)
     if repeated != baseline:
         raise _ReplayMismatch("same_action_replay_mismatch")
     report["same_action_replay_matches"] += 1
 
-    _check_replay(env, _start(env, seed, horizon), frontier)
+    _check_replay(env, _start(env, seed, horizon, selection), frontier)
     report["fork_state_matches"] += 1
     report["branch_legal_count"] += 1
     report["attempted_pairs"] += 1
@@ -199,25 +213,32 @@ def _run_case(env, seed, pair, horizon, budget, report):
     _record_pair(report, report["arms"], _verdict(baseline.transition), candidate_verdict)
 
 
-def compare_branches(*, pair="shield", seed=DEFAULT_SEED, scenarios=6,
+def compare_branches(*, pair="shield", roster=DEFAULT_ROSTER, seed=DEFAULT_SEED, scenarios=6,
                      horizon=500, max_decisions=MAX_DECISIONS):
     """Return aggregate comparisons; raw native audits stay inside this harness.
 
     A candidate frontier follows at least one tactical step. Each accepted pair
     contributes two fork state matches and one same-action control match.
     A partial integrity failure can contribute an individual match but no pair.
+    Completion uses all attempted pairs. Mean candidate-minus-baseline reward
+    uses only pairs with two verified terminal returns.
     """
     if (type(pair) is not str or pair not in PAIRS or
+            type(roster) is not str or roster not in ROSTERS or
             type(scenarios) is not int or not 1 <= scenarios <= MAX_SCENARIOS or
             type(horizon) is not int or not 1 <= horizon <= 500 or
             type(max_decisions) is not int or not 1 <= max_decisions <= MAX_DECISIONS):
         raise ValueError("Invalid bounded branch experiment parameters")
     cases = heldout_scenarios(count=scenarios, seed=seed)
     own, public, opponent = fixture_teams()
+    selection, primeape_slot = ROSTERS[roster]
+    if primeape_slot is not None:
+        own[primeape_slot] = {**own[primeape_slot], **PRIMEAPE}
     report = dict.fromkeys((
         "candidate_frontiers", "fork_state_matches", "same_action_replay_matches",
         "branch_legal_count", "attempted_pairs", "both_completed", "baseline_only_completed",
         "candidate_only_completed", "both_censored", "better", "equal", "worse",
+        "paired_reward_delta_sum",
     ), 0)
     report["arms"] = {
         arm: {"wins": 0, "losses": 0, "draws": 0, "censored": Counter()}
@@ -233,7 +254,7 @@ def compare_branches(*, pair="shield", seed=DEFAULT_SEED, scenarios=6,
         with SixToThreeEnvironment(GAME_DATA, own, public, opponent, hidden, lead,
                                    ruleset_id="great-league-v1") as env:
             try:
-                _run_case(env, scenario_seed, PAIRS[pair], horizon, max_decisions, report)
+                _run_case(env, scenario_seed, PAIRS[pair], horizon, max_decisions, selection, report)
             except _ReplayMismatch as error:
                 exclusions[str(error)] += 1
             except InvalidNativeTeamResult:
@@ -241,8 +262,12 @@ def compare_branches(*, pair="shield", seed=DEFAULT_SEED, scenarios=6,
             except NativeStepError:
                 exclusions["worker_failure"] += 1
     phase, baseline, candidate = PAIRS[pair]
+    both_completed = report["both_completed"]
+    attempted = report["attempted_pairs"]
+    mean_reward_delta = report["paired_reward_delta_sum"] / both_completed if both_completed else None
     return {
         "experiment": "native_3v3_paired_tactical_branches_v1",
+        "roster": roster,
         "scenarios": scenarios,
         "phase": phase,
         "baseline_action": baseline,
@@ -250,6 +275,8 @@ def compare_branches(*, pair="shield", seed=DEFAULT_SEED, scenarios=6,
         "horizon": horizon,
         "max_decisions": max_decisions,
         **report,
+        "both_completed_rate": both_completed / attempted if attempted else None,
+        "paired_reward_delta_mean": mean_reward_delta,
         "elapsed_seconds": round(monotonic() - started, 3),
         "limits": "synthetic fixture, two replay checks per accepted pair; divergent actions can consume RNG differently",
     }
@@ -258,11 +285,13 @@ def compare_branches(*, pair="shield", seed=DEFAULT_SEED, scenarios=6,
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pair", choices=tuple(PAIRS), default="shield")
+    parser.add_argument("--roster", choices=tuple(ROSTERS), default=DEFAULT_ROSTER)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--scenarios", type=int, default=6)
     args = parser.parse_args()
     try:
-        result = compare_branches(pair=args.pair, seed=args.seed, scenarios=args.scenarios)
+        result = compare_branches(pair=args.pair, roster=args.roster,
+                                  seed=args.seed, scenarios=args.scenarios)
     except ValueError as error:
         parser.error(str(error))
     print(json.dumps(result, sort_keys=True))
