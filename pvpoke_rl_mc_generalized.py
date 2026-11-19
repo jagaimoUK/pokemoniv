@@ -113,5 +113,5 @@ class GeneralizedMonteCarloPolicy(PublicMonteCarloPolicy):
 
     MODEL_VERSION = VERSION
 
-    def choose(self, view, *, epsilon=0.2):
-        return self._choose_encoded(coarse_public_state(view), epsilon=epsilon)
+    def encode_state(self, view):
+        return coarse_public_state(view)
