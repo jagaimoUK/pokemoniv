@@ -234,7 +234,7 @@ function moves(row={},sid=el('species').value){fillMoveFields(sid,row,['fast','c
 function presetKey(p){return p.key||[p.species,p.fast,p.charged1,p.charged2].join('|');}
 function currentCandidate(){return {species:el('species').value.trim(),fast:el('fast').value,charged1:el('charged1').value,charged2:el('charged2').value};}
 const transferMissing=el('transferMissing');
-transferMissing.hidden=!document.querySelector('.quick-nav a[href="/app/missing"]');
+transferMissing.hidden=!document.querySelector?.('.quick-nav a[href="/app/missing"]');
 transferMissing.onclick=()=>{
  const current=currentCandidate();
  if(!catalog[current.species]||!current.fast||!current.charged1||!current.charged2||
