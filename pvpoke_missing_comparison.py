@@ -187,6 +187,52 @@ def _opponent_boundaries(service, payload):
         candidate['spec'], iv_floors=payload.get('iv_floors', (0, 0, 0)))
 
 
+def _ownership_list(service, payload):
+    _object(payload, 'ownership list', ('action',),
+            ('after', 'limit', 'species_id', 'state', 'include_scopes', 'scope_limit'))
+    inventory = Ownership(service.store, species_ids=service.species)
+    return inventory.list_snapshot(
+        after=payload.get('after', ''),
+        limit=payload.get('limit', 64),
+        species_id=payload.get('species_id'),
+        state=payload.get('state'),
+        include_scopes=payload.get('include_scopes', True),
+        scope_limit=payload.get('scope_limit', 32),
+    )
+
+
+def _ownership_history(service, payload):
+    _object(payload, 'ownership history', ('action', 'instance_id'), ('after_revision', 'limit'))
+    inventory = Ownership(service.store, species_ids=service.species)
+    history = inventory.instance_history(
+        payload['instance_id'],
+        after_revision=payload.get('after_revision', 0),
+        limit=payload.get('limit', 32),
+    )
+    if history is None:
+        raise ValueError('Unknown inventory instance')
+    return history
+
+
+def _ownership_scope(service, payload):
+    _object(payload, 'ownership scope confirmation', (
+        'action', 'event_id', 'expected_ledger_revision', 'species_id',
+        'search', 'box_range', 'complete', 'absence_confirmed',
+    ))
+    inventory = Ownership(service.store, species_ids=service.species)
+    event = inventory.confirm_scope(
+        payload['event_id'],
+        expected_ledger_revision=payload['expected_ledger_revision'],
+        species_id=payload['species_id'],
+        search=payload['search'],
+        box_range=payload['box_range'],
+        complete=payload['complete'],
+        absence_confirmed=payload['absence_confirmed'],
+    )
+    status = inventory.scope_status(event['event_id'])
+    return status if status is not None else {**event, 'current': False}
+
+
 def app_operation(service, payload):
     action = payload.get('action')
     if action == 'evaluate':
@@ -213,18 +259,22 @@ def app_operation(service, payload):
             raise ValueError('Explicit ownership confirmation is required')
         inventory = Ownership(service.store, species_ids=service.species)
         observation = payload.get('observation')
+        if observation is not None and state != 'confirmed_owned':
+            raise ValueError('Observation updates require confirmed_owned state')
         revision = payload['expected_revision']
         register = payload.get('register', observation is not None and revision == 0)
         if type(register) is not bool:
             raise ValueError('Invalid ownership registration choice')
-        if observation is not None and not register:
-            observed = inventory._observation(observation)
-            previous = inventory.get(payload['instance_id'])
-            if previous is None or any(previous[key] != observed[key] for key in ('species_id', 'ivs')):
-                raise OwnershipConflict('Observation conflicts with the individual identity')
         event = inventory.confirm(payload['event_id'], payload['instance_id'],
                                   expected_revision=revision, state=state,
-                                  observation=observation, register_if_missing=register)
+                                  observation=observation, register_if_missing=register,
+                                  preserve_identity=True)
         return {'instance_id': event['instance_id'], 'state': event['new_state'],
                 'revision': event['output_revision']}
+    if action == 'ownership_list':
+        return _ownership_list(service, payload)
+    if action == 'ownership_history':
+        return _ownership_history(service, payload)
+    if action == 'ownership_scope':
+        return _ownership_scope(service, payload)
     raise ValueError('Unknown missing comparison operation')

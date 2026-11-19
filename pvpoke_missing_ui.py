@@ -46,6 +46,34 @@ input,select,button{font:inherit;color:inherit;min-height:44px;border:1px solid 
 <p class="muted">下の個体カードから照合できます。個体・技・開始条件・相手対面が一致しなければ拒否します。</p>
 </div></section>
 <section id="results" class="results stack" aria-labelledby="results-heading" hidden><h2 id="results-heading" tabindex="-1">不足分析の結果</h2><p id="edited" class="muted" hidden>入力が変更されました。表示中の結果は前回の条件です。</p><div id="result-tree"></div></section>
+<details id="inventory-panel" class="edit"><summary>手持ち台帳・ボックス確認範囲</summary>
+<div class="stack">
+<p class="muted">登録済みの個体一覧・変更履歴・ボックス確認範囲を閲覧および更新します。未登録・未確認の個体は「未所持」とはみなされません。</p>
+<div class="grid">
+<label>種族で絞り込み（任意）<input id="inventory-species" type="text" list="pokemon-list" autocomplete="off" placeholder="例：マリルリ（空欄で全種族）"></label>
+<label>所持状態<select id="inventory-state"><option value="">すべて</option><option value="confirmed_owned">所持確認済み</option><option value="confirmed_absent">所持していないことを確認済み</option><option value="unknown">未確認</option></select></label>
+</div>
+<div class="actions"><button id="inventory-load" type="button" class="quiet" data-action>手持ち台帳を読み込む</button></div>
+<p id="inventory-summary" class="muted">「手持ち台帳を読み込む」を押すと、保存済みの手持ち記録と確認範囲を取得します。</p>
+<ul id="inventory-items" class="inventory"></ul>
+<div class="actions"><button id="inventory-more" type="button" class="quiet" data-action hidden>次のページを読み込む</button></div>
+<details id="scope-panel" class="match"><summary>ボックス確認範囲の記録</summary>
+<div class="stack">
+<p class="muted">検索式とボックス範囲を確認した事実を別記録として保存します。個体ごとの所持状態は自動変更されません。</p>
+<ul id="scope-list" class="inventory"></ul>
+<form id="scope-form" class="stack">
+<label>確認したポケモン・フォルム<input id="scope-species" type="text" list="pokemon-list" autocomplete="off" required placeholder="例：マリルリ"></label>
+<label>使用した検索式（任意）<input id="scope-search" type="text" maxlength="256" autocomplete="off" placeholder="例：0attack"></label>
+<div class="grid">
+<label>開始番号<input id="scope-start" type="number" min="1" max="100000" step="1" value="1" required></label>
+<label>終了番号<input id="scope-end" type="number" min="1" max="100000" step="1" value="100" required></label>
+</div>
+<label class="check"><input id="scope-complete" type="checkbox">指定した範囲を最後まで確認した</label>
+<label class="check"><input id="scope-absence" type="checkbox" disabled>確認範囲内に該当個体が不在だった（個別レコードは書き換えません）</label>
+<div class="actions"><button id="scope-submit" class="quiet" data-action>確認範囲を記録</button></div>
+</form>
+</div></details>
+</div></details>
 </div>
 <datalist id="pokemon-list"></datalist>
 </main><script>
@@ -61,7 +89,9 @@ const substitutes={sufficient:['十分に代替（この役割）','good'],condi
 const outcomes={self_win:'勝ち',opponent_win:'負け',simultaneous_ko:'同時ひんし'};
 const ownership={confirmed_owned:'所持確認済み',confirmed_absent:'所持していないことを確認済み',unknown:'未確認'};
 const builds={exact:'個体値・CP・Lv・技が一致',unverified:'一致の判定に必要な情報が不足',different:'CP・Lv・技のいずれかが異なる'};
-let credential='',catalog=Object.create(null),moves={},speciesNames=new Map(),busy=false,editRevision=0,displayed=null;
+let credential='',catalog=Object.create(null),moves={},speciesNames=new Map(),busy=false,editRevision=0,displayed=null,lastRequest=null;
+let inventoryLedgerRevision=null,inventoryCursor=null,inventoryLoaded=false;
+let scopePrevious='',scopeEventId='';
 let reference;
 const alternatives=[],scenarios=[];
 const tacticLinkKey='pokemoniv:tactic-evidence-link-v1';
@@ -355,6 +385,46 @@ function registerInventory(parent,candidate,request){
   confirmOwnership({instance_id:instanceId,event_id:eventId,expected_revision:0,state:'confirmed_owned',observation},request,form);
  });
 }
+function observedMovesText(currentMoves){
+ if(!currentMoves)return '未記録';
+ const parts=[];
+ if(currentMoves.fast)parts.push(move(currentMoves.fast));
+ if(Array.isArray(currentMoves.charged)&&currentMoves.charged.length)parts.push(...currentMoves.charged.map(move));
+ return parts.length?parts.join('・'):'未記録';
+}
+async function loadOwnershipHistory(instanceId,target){
+ const data=await api('missing-analysis',{action:'ownership_history',instance_id:instanceId,limit:32});
+ target.replaceChildren();
+ const item=data.instance;
+ if(item){
+  const summary=[
+   '種族 '+name(item.species_id)+' '+ivText(item.ivs),
+   '状態 '+(ownership[item.state]||'未確認')+'（rev '+item.revision+'）',
+   'CP '+(item.current_cp??'未記録')+' ／ Lv '+(item.current_level??'未記録'),
+   '技 '+observedMovesText(item.current_moves),
+  ];
+  node('p',summary.join(' · '),target,'muted break');
+ }
+ const events=Array.isArray(data.events)?data.events:[];
+ if(!events.length){
+  node('p','確認履歴はまだありません。',target,'muted');
+ }else{
+  const list=node('ul',null,target,'inventory');
+  for(const ev of events){
+   const li=node('li',null,list);
+   const prev=ownership[ev.previous_state]||ev.previous_state||'未確認';
+   const next=ownership[ev.new_state]||ev.new_state||'未確認';
+   node('p','rev '+ev.output_revision+'：'+prev+' → '+next,li);
+   const meta=[];
+   if(ev.confirmed_at)meta.push(ev.confirmed_at);
+   if(ev.instance?.current_cp!=null)meta.push('CP '+ev.instance.current_cp);
+   if(ev.instance?.current_level!=null)meta.push('Lv '+ev.instance.current_level);
+   if(meta.length)node('small',meta.join(' · '),li,'muted break');
+  }
+  if(data.has_more)node('p','表示は最新32件までです。',target,'muted');
+ }
+ announce('所持履歴を読み込みました。');
+}
 function renderInventory(parent,candidate,request){
  const box=node('div',null,parent,'stack');
  node('h3','手持ちの確認',box);node('p',heldLabel(candidate),box);
@@ -363,16 +433,38 @@ function renderInventory(parent,candidate,request){
   for(const record of candidate.owned_instances){
    const row=node('li',null,list);
    node('p',(ownership[record.state]||'未確認')+' ／ '+(builds[record.build_match]||'構成の一致は未確認'),row);
-   if(record.state==='confirmed_absent')continue;
-   const panel=detail(row,'この所持記録を更新','record');
-   node('small','記録ID '+record.instance_id,panel,'break');
-   const form=node('form',null,panel,'stack');
-   checkbox(form,'ゲーム内で、この個体を所持していないことを確認した');
-   const submit=node('button','所持していないと記録',node('div',null,form,'actions'),'quiet');submit.dataset.action='';submit.disabled=busy;
-   const eventId=crypto.randomUUID();
-   form.addEventListener('submit',event=>{
-    event.preventDefault();confirmOwnership({instance_id:record.instance_id,event_id:eventId,expected_revision:record.revision,state:'confirmed_absent'},request,form);
+   const panel=detail(row,'この所持記録を更新・履歴を見る','record');
+   node('small','記録ID '+record.instance_id+' · rev '+record.revision,panel,'break');
+   const historyBox=node('div',null,panel,'stack');
+   button(node('div',null,panel,'actions'),'履歴を表示',()=>perform(()=>loadOwnershipHistory(record.instance_id,historyBox)),'quiet');
+   const updateForm=node('form',null,panel,'stack');
+   const fields=node('div',null,updateForm,'grid');
+   const cp=input(fields,'現在のCP',{type:'number',min:10,max:10000,step:1,required:true});
+   const level=input(fields,'現在のLv（任意）',{type:'number',min:1,max:51,step:.5});
+   const currentMoves=checkbox(updateForm,'現在の技がこの候補の技構成と一致している');currentMoves.required=false;
+   checkbox(updateForm,'ゲーム内で、この個体の所持と現在のCP・技を確認した');
+   const updateBtn=node('button',record.state==='confirmed_owned'?'CP・Lv・技を更新する':'所持を再確認して記録',node('div',null,updateForm,'actions'),'quiet');
+   updateBtn.dataset.action='';updateBtn.disabled=busy;
+   let prevUpdate='',updateEventId='';
+   updateForm.addEventListener('submit',event=>{
+    event.preventDefault();
+    const observation={species_id:candidate.species_id,ivs:candidate.ivs,current_cp:cp.valueAsNumber};
+    if(level.value)observation.current_level=level.valueAsNumber;
+    if(currentMoves.checked)observation.current_moves=candidate.moves;
+    const encoded=JSON.stringify([record.revision,observation]);
+    if(prevUpdate!==encoded){prevUpdate=encoded;updateEventId=crypto.randomUUID();}
+    confirmOwnership({instance_id:record.instance_id,event_id:updateEventId,expected_revision:record.revision,
+     state:'confirmed_owned',register:false,observation},request,updateForm);
    });
+   if(record.state!=='confirmed_absent'){
+    const form=node('form',null,panel,'stack');
+    checkbox(form,'ゲーム内で、この個体を所持していないことを確認した');
+    const submit=node('button','所持していないと記録',node('div',null,form,'actions'),'quiet');submit.dataset.action='';submit.disabled=busy;
+    const eventId=crypto.randomUUID();
+    form.addEventListener('submit',event=>{
+     event.preventDefault();confirmOwnership({instance_id:record.instance_id,event_id:eventId,expected_revision:record.revision,state:'confirmed_absent'},request,form);
+    });
+   }
   }
  }
  registerInventory(box,candidate,request);
@@ -471,6 +563,7 @@ function renderResult(result,request,revision){
 async function evaluate(request,revision){
  const result=await api('missing-analysis',request);
  if(!result.reference||!Array.isArray(result.candidates))throw Error('分析結果を読み取れませんでした。');
+ lastRequest=request;
  renderResult(result,request,revision);
  try{sessionStorage.setItem(missingFormKey,JSON.stringify(request));}catch{}
 }
@@ -483,14 +576,20 @@ function simulate(condition,request){
   await evaluate(request,revision);announce('対面を計算し、保存済みの結果を照合しました。');
  });
 }
-function confirmOwnership(change,request,form){
- const revision=displayed.revision;
+function confirmOwnership(change,request,form,{reloadLedger=false}={}){
+ const revision=displayed?.revision??editRevision;
  perform(async()=>{
   announce('所持の確認を記録しています。');
   await api('missing-analysis',{action:'ownership',...change});
-  form.hidden=true;
-  try{await evaluate(request,revision);announce('所持の確認を記録しました。');}
-  catch(error){announce('所持の確認は記録しました。結果の更新に失敗しました。もう一度照合してください。',true);}
+  if(form)form.hidden=true;
+  let refreshFailed=false;
+  if(request){
+   try{await evaluate(request,revision);}catch{refreshFailed=true;}
+  }
+  if(reloadLedger||inventoryLoaded){
+   try{await loadInventory(false);}catch{refreshFailed=true;}
+  }
+  announce(refreshFailed?'所持の確認は記録しました。画面の更新に失敗しました。もう一度読み込んでください。':'所持の確認を記録しました。',refreshFailed);
  });
 }
 function linkedTactics(){
@@ -703,8 +802,141 @@ $('analysis-form').addEventListener('submit',event=>{
   announce('保存済みの結果を照合しました。');$('results-heading').focus();
  });
 });
+function renderScopeRecords(scopes,truncated){
+ const list=$('scope-list');list.replaceChildren();
+ if(!scopes.length){
+  node('li','保存済みのボックス確認範囲はまだありません。',list,'muted');
+  return;
+ }
+ for(const item of scopes){
+  const li=node('li',null,list);
+  const tags=node('div',null,li,'tags');
+  tag(tags,item.current?'最新':'古い記録（再確認が必要）',item.current?'good':'wait');
+  if(item.absence_confirmed)tag(tags,'範囲内に不在を確認','muted');
+  else if(item.complete)tag(tags,'範囲確認完了','good');
+  else tag(tags,'確認途中','wait');
+  const range=Array.isArray(item.scope?.box_range)?item.scope.box_range.join('〜'):'';
+  node('p',name(item.scope?.species_id)+' · ボックス '+range+(item.scope?.search?' · 検索「'+item.scope.search+'」':''),li,'break');
+  node('small','台帳rev '+item.ledger_revision+(item.confirmed_at?' · '+item.confirmed_at:''),li,'muted break');
+ }
+ if(truncated)node('li','表示は最新32件までです。',list,'muted');
+}
+function renderLedgerItem(parent,item){
+ const row=node('li',null,parent);
+ const tags=node('div',null,row,'tags');
+ tag(tags,ownership[item.state]||'未確認',item.state==='confirmed_owned'?'good':item.state==='confirmed_absent'?'fail':'wait');
+ node('p',name(item.species_id)+' '+ivText(item.ivs)+' · CP '+(item.current_cp??'未記録')+' / Lv '+(item.current_level??'未記録'),row,'break');
+ node('small','技 '+observedMovesText(item.current_moves)+' · rev '+item.revision+(item.confirmed_at?' · '+item.confirmed_at:''),row,'muted break');
+ const panel=detail(row,'履歴・所持状態の更新','record');
+ node('small','記録ID '+item.instance_id,panel,'break');
+ const historyBox=node('div',null,panel,'stack');
+ button(node('div',null,panel,'actions'),'履歴を表示',()=>perform(()=>loadOwnershipHistory(item.instance_id,historyBox)),'quiet');
+ const updateForm=node('form',null,panel,'stack');
+ const fields=node('div',null,updateForm,'grid');
+ const cp=input(fields,'現在のCP',{type:'number',min:10,max:10000,step:1,required:true});
+ if(item.current_cp!=null)cp.value=String(item.current_cp);
+ const level=input(fields,'現在のLv（任意）',{type:'number',min:1,max:51,step:.5});
+ if(item.current_level!=null)level.value=String(item.current_level);
+ const pokemon=catalog[item.species_id]||{};
+ const fast=select(fields,'通常技（任意）',[['','変更しない'],...(pokemon.fastMoves||[]).map(id=>[id,move(id)])],'wide');
+ const c1=select(fields,'ゲージ技1（任意）',[['','変更しない'],...(pokemon.chargedMoves||[]).map(id=>[id,move(id)])]);
+ const c2=select(fields,'ゲージ技2（任意）',[['','なし／変更しない'],...(pokemon.chargedMoves||[]).map(id=>[id,move(id)])]);
+ const hasOption=(field,value)=>Boolean(value&&[...field.options].some(option=>option.value===value));
+ if(hasOption(fast,item.current_moves?.fast))fast.value=item.current_moves.fast;
+ if(hasOption(c1,item.current_moves?.charged?.[0]))c1.value=item.current_moves.charged[0];
+ if(hasOption(c2,item.current_moves?.charged?.[1]))c2.value=item.current_moves.charged[1];
+ const validateMovePair=()=>c2.setCustomValidity(c1.value&&c2.value&&c1.value===c2.value?'異なるゲージ技を選んでください。':'');
+ c1.addEventListener('change',validateMovePair);c2.addEventListener('change',validateMovePair);
+ checkbox(updateForm,'ゲーム内で、この個体の所持と現在のCP・技を確認した');
+ const updateBtn=node('button',item.state==='confirmed_owned'?'CP・Lv・技を更新する':'所持を再確認して記録',node('div',null,updateForm,'actions'),'quiet');
+ updateBtn.dataset.action='';updateBtn.disabled=busy;
+ let prevPayload='',updateEventId='';
+ updateForm.addEventListener('submit',event=>{
+  event.preventDefault();
+  const observation={species_id:item.species_id,ivs:item.ivs,current_cp:cp.valueAsNumber};
+  if(level.value)observation.current_level=level.valueAsNumber;
+  const charged=[c1.value,c2.value].filter(Boolean);
+  if(fast.value||charged.length){
+   observation.current_moves={fast:fast.value||item.current_moves?.fast||null,charged:charged.length?charged:item.current_moves?.charged||null};
+  }else if(item.current_moves){
+   observation.current_moves=item.current_moves;
+  }
+  const encoded=JSON.stringify([item.revision,observation]);
+  if(prevPayload!==encoded){prevPayload=encoded;updateEventId=crypto.randomUUID();}
+  confirmOwnership({instance_id:item.instance_id,event_id:updateEventId,expected_revision:item.revision,
+   state:'confirmed_owned',register:false,observation},lastRequest,updateForm,{reloadLedger:true});
+ });
+ if(item.state!=='confirmed_absent'){
+  const absentForm=node('form',null,panel,'stack');
+  checkbox(absentForm,'ゲーム内で、この個体を所持していないことを確認した');
+  const absentBtn=node('button','所持していないと記録',node('div',null,absentForm,'actions'),'quiet');
+  absentBtn.dataset.action='';absentBtn.disabled=busy;
+  const absentEventId=crypto.randomUUID();
+  absentForm.addEventListener('submit',event=>{
+   event.preventDefault();
+   confirmOwnership({instance_id:item.instance_id,event_id:absentEventId,expected_revision:item.revision,
+    state:'confirmed_absent'},lastRequest,absentForm,{reloadLedger:true});
+  });
+ }
+ return row;
+}
+async function loadInventory(append){
+ const speciesInput=$('inventory-species').value.trim();
+ const species=speciesInput?resolveSpecies(speciesInput):'';
+ if(speciesInput&&!species)throw Error('絞り込みの種族は一覧からフォルムまで選択してください。');
+ const state=$('inventory-state').value;
+ const payload={action:'ownership_list',limit:64,include_scopes:!append};
+ if(species)payload.species_id=species;
+ if(state)payload.state=state;
+ if(append&&inventoryCursor)payload.after=inventoryCursor;
+ const data=await api('missing-analysis',payload);
+ inventoryLedgerRevision=data.ledger_revision;
+ inventoryCursor=data.has_more?data.next_after:null;
+ inventoryLoaded=true;
+ const list=$('inventory-items');
+ if(!append)list.replaceChildren();
+ const items=Array.isArray(data.items)?data.items:[];
+ if(!append&&!items.length){
+  node('li','条件に一致する登録個体はありません。未登録の個体は「未所持」とはみなされません。',list,'muted');
+ }else{
+  for(const item of items){
+   const li=renderLedgerItem(list,item);
+   li.dataset.inventoryItem='1';
+  }
+ }
+ $('inventory-more').hidden=!data.has_more||!inventoryCursor;
+ $('inventory-summary').textContent='台帳リビジョン '+data.ledger_revision+' ／ 表示 '+list.querySelectorAll(':scope > li[data-inventory-item="1"]').length+'件'+(data.has_more?'（続きあり）':'');
+ if(!append&&Array.isArray(data.scopes))renderScopeRecords(data.scopes,Boolean(data.scopes_truncated));
+ announce('手持ち台帳を読み込みました。');
+}
+async function submitScope(){
+ if(inventoryLedgerRevision==null)throw Error('先に「手持ち台帳を読み込む」を押して最新の台帳リビジョンを確認してください。');
+ const species=resolveSpecies($('scope-species').value);
+ if(!species)throw Error('確認したポケモンは一覧からフォルムまで選択してください。');
+ const first=$('scope-start').valueAsNumber,last=$('scope-end').valueAsNumber;
+ if(!Number.isInteger(first)||!Number.isInteger(last)||first<1||last>100000||first>last)
+  throw Error('ボックス範囲の開始番号と終了番号を確認してください。');
+ const complete=$('scope-complete').checked;
+ const absence_confirmed=complete&&$('scope-absence').checked;
+ const search=$('scope-search').value;
+ const payload={expected_ledger_revision:inventoryLedgerRevision,species_id:species,
+  search,box_range:[first,last],complete,absence_confirmed};
+ const encoded=JSON.stringify(payload);
+ if(scopePrevious!==encoded){scopePrevious=encoded;scopeEventId=crypto.randomUUID();}
+ await api('missing-analysis',{action:'ownership_scope',event_id:scopeEventId,...payload});
+ await loadInventory(false);
+ announce('ボックス確認範囲を記録しました。個別レコードの所持状態は変更していません。');
+}
 $('tactic-evidence-read').addEventListener('click',()=>perform(compareSavedTactics));
 $('add-scenario').addEventListener('click',()=>addScenario(true));
 $('add-alternative').addEventListener('click',addAlternative);
+$('inventory-load').addEventListener('click',()=>perform(()=>loadInventory(false)));
+$('inventory-more').addEventListener('click',()=>perform(()=>loadInventory(true)));
+$('scope-complete').addEventListener('change',()=>{
+ const done=$('scope-complete').checked;
+ $('scope-absence').disabled=!done;
+ if(!done)$('scope-absence').checked=false;
+});
+$('scope-form').addEventListener('submit',event=>{event.preventDefault();perform(submitScope);});
 perform(()=>connect(false));
 </script></body></html>'''

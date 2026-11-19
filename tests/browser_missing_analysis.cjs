@@ -38,6 +38,8 @@ async function checkWidth(browser, width) {
       sessionStorage.setItem('pokemoniv:observed-evidence-link-v1',
         JSON.stringify({evaluation_id:'e'.repeat(64),build_id:'b'.repeat(64),search_id:'d'.repeat(64)}));
     });
+    let savedScopes = [];
+    const sampleInstanceId = 'inst-smoke-1';
     await page.route('http://127.0.0.1:9876/**', async route => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
@@ -124,6 +126,72 @@ async function checkWidth(browser, width) {
           representatives:[{attack:0,defense:15,hp:15}]
         }});
       }
+      if (payload.action === 'ownership_list') {
+        const record = {
+          instance_id: sampleInstanceId,
+          species_id: rows[0].species,
+          ivs: {attack: rows[0].atk, defense: rows[0].def, hp: rows[0].hp},
+          current_cp: 1495,
+          current_level: rows[0].level,
+          current_moves: {fast: rows[0].fast, charged: [rows[0].charged1, rows[0].charged2]},
+          state: 'confirmed_owned',
+          revision: 1,
+          confirmed_at: '2026-11-19T00:00:00Z',
+        };
+        return route.fulfill({json: {
+          ledger_revision: 2,
+          items: [record],
+          has_more: false,
+          next_after: null,
+          ...(payload.include_scopes ? {scopes: savedScopes, scopes_truncated: false} : {}),
+        }});
+      }
+      if (payload.action === 'ownership_history') {
+        assert.equal(payload.instance_id, sampleInstanceId);
+        return route.fulfill({json: {
+          instance: {
+            instance_id: sampleInstanceId,
+            species_id: rows[0].species,
+            ivs: {attack: rows[0].atk, defense: rows[0].def, hp: rows[0].hp},
+            current_cp: 1495,
+            current_level: rows[0].level,
+            current_moves: {fast: rows[0].fast, charged: [rows[0].charged1, rows[0].charged2]},
+            state: 'confirmed_owned',
+            revision: 1,
+          },
+          events: [{
+            event_id: 'ev-smoke-1',
+            kind: 'instance',
+            instance_id: sampleInstanceId,
+            previous_state: 'unknown',
+            new_state: 'confirmed_owned',
+            input_revision: 0,
+            output_revision: 1,
+            confirmed_at: '2026-11-19T00:00:00Z',
+            instance: {current_cp: 1495, current_level: rows[0].level},
+          }],
+          has_more: false,
+        }});
+      }
+      if (payload.action === 'ownership_scope') {
+        assert.equal(payload.expected_ledger_revision, 2);
+        assert.equal(payload.species_id, rows[0].species);
+        assert.deepEqual(payload.box_range, [1, 100]);
+        assert.equal(payload.complete, true);
+        assert.equal(payload.absence_confirmed, true);
+        const event = {
+          event_id: payload.event_id,
+          kind: 'scope',
+          scope: {species_id: payload.species_id, search: payload.search, box_range: payload.box_range},
+          complete: payload.complete,
+          absence_confirmed: payload.absence_confirmed,
+          ledger_revision: payload.expected_ledger_revision,
+          confirmed_at: '2026-11-19T00:05:00Z',
+          current: true,
+        };
+        savedScopes = [event];
+        return route.fulfill({json: event});
+      }
       throw Error('Unexpected request ' + path);
     });
     await page.goto('http://127.0.0.1:9876/app/missing');
@@ -176,10 +244,27 @@ async function checkWidth(browser, width) {
     await page.getByText(/同じ役割条件で比べられる観測役割：win/).waitFor();
     await page.getByText(/方策 1：この対面の有限条件 2件/).waitFor();
     await page.getByText(/条件 win：未確認が残る/).waitFor();
+    // Step 1 ownership ledger, history, and box-scope confirmation smoke.
+    await page.locator('#inventory-panel > summary').click();
+    await page.locator('#inventory-load').click();
+    await page.getByText('台帳リビジョン 2 ／ 表示 1件', {exact: true}).waitFor();
+    await page.locator('#inventory-items details.record > summary').first().click();
+    await page.locator('#inventory-items').getByRole('button', {name: '履歴を表示'}).click();
+    await page.getByText('rev 1：未確認 → 所持確認済み', {exact: true}).waitFor();
+    await page.locator('#scope-panel > summary').click();
+    assert.equal(await page.locator('#scope-absence').isDisabled(), true);
+    await page.locator('#scope-species').fill(rows[0].species);
+    await page.locator('#scope-search').fill('0attack');
+    await page.locator('#scope-complete').check();
+    assert.equal(await page.locator('#scope-absence').isDisabled(), false);
+    await page.locator('#scope-absence').check();
+    await page.locator('#scope-submit').click();
+    await page.locator('#scope-list').getByText('範囲内に不在を確認', {exact: true}).waitFor();
+    await page.locator('#scope-list').getByText(/検索「0attack」/).waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
     assert.deepEqual(errors, []);
-    // The optional 32-battle click at 390px is exactly one extra API call.
-    assert.equal(requests.length, width > 320 ? 7 : 5);
+    // Base requests (5 at 320px, 7 at 390px) + 4 Step 1 inventory/scope requests.
+    assert.equal(requests.length, width > 320 ? 11 : 9);
   } finally {
     await page.close();
   }

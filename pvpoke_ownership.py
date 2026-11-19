@@ -187,6 +187,103 @@ class Ownership:
             return [_unpack(row) for row in db.execute('''SELECT body, digest FROM owned_instances_v1
                 WHERE owner_scope=? AND instance_id>? ORDER BY instance_id LIMIT ?''', (self.owner, after, limit))]
 
+    def list_snapshot(self, *, after='', limit=64, species_id=None, state=None,
+                      include_scopes=True, scope_limit=32):
+        """Read owner-scoped ledger revision, instances and recent scopes in one SQLite snapshot."""
+        if after != '':
+            _id(after)
+        _int(limit, 1, 128)
+        if species_id is not None:
+            species_id = self._species(species_id)
+        if state is not None and state not in STATES:
+            raise ValueError('Invalid ownership state filter')
+        if type(include_scopes) is not bool:
+            raise ValueError('Invalid include_scopes flag')
+        _int(scope_limit, 1, 64)
+        empty = {'ledger_revision': 0, 'items': [], 'has_more': False, 'next_after': None}
+        if include_scopes:
+            empty.update({'scopes': [], 'scopes_truncated': False})
+        if not self.store.path.exists():
+            return empty
+        with self.store._reader() as db:
+            if not self._exists(db):
+                return empty
+            ledger_revision = self._revision(db)
+            scan_limit = 512 if state is not None else limit + 1
+            if species_id is None:
+                rows = db.execute('''SELECT instance_id, body, digest FROM owned_instances_v1
+                    WHERE owner_scope=? AND instance_id>? ORDER BY instance_id LIMIT ?''',
+                    (self.owner, after, scan_limit)).fetchall()
+            else:
+                rows = db.execute('''SELECT instance_id, body, digest FROM owned_instances_v1
+                    WHERE owner_scope=? AND species_id=? AND instance_id>? ORDER BY instance_id LIMIT ?''',
+                    (self.owner, species_id, after, scan_limit)).fetchall()
+            items = []
+            has_more = False
+            next_after = None
+            for row_id, body, digest in rows:
+                record = _unpack((body, digest))
+                if record.get('instance_id') != row_id:
+                    raise OwnershipUnavailable('Inventory record identity mismatch')
+                if state is not None and record.get('state') != state:
+                    continue
+                if len(items) < limit:
+                    items.append(record)
+                else:
+                    has_more = True
+                    next_after = items[-1]['instance_id'] if items else None
+                    break
+            if not has_more and state is not None and len(rows) == scan_limit:
+                has_more = True
+                next_after = rows[-1][0]
+            result = {'ledger_revision': ledger_revision, 'items': items,
+                      'has_more': has_more, 'next_after': next_after}
+            if include_scopes:
+                scope_rows = db.execute('''SELECT target, event_id, body, digest FROM ownership_events_v1
+                    WHERE owner_scope=? AND kind='scope' ORDER BY sequence DESC LIMIT 257''',
+                    (self.owner,)).fetchall()
+                truncated = len(scope_rows) > 256
+                latest_by_target = {}
+                scopes = []
+                for target, event_id, body, digest in scope_rows[:256]:
+                    latest_by_target.setdefault(target, event_id)
+                    event = _unpack((body, digest))
+                    scope = event.get('scope')
+                    if (event.get('event_id') != event_id or event.get('kind') != 'scope'
+                            or not isinstance(scope, dict) or 'species_id' not in scope
+                            or type(event.get('ledger_revision')) is not int):
+                        raise OwnershipUnavailable('Invalid inventory scope event')
+                    if species_id is not None and scope['species_id'] != species_id:
+                        continue
+                    current = (latest_by_target[target] == event_id
+                               and event['ledger_revision'] == ledger_revision)
+                    if len(scopes) < scope_limit:
+                        scopes.append({**event, 'current': current})
+                    else:
+                        truncated = True
+                result['scopes'] = scopes
+                result['scopes_truncated'] = truncated
+            return result
+
+    def instance_history(self, instance_id, *, after_revision=0, limit=64):
+        """Read one instance and its append-only event log in a single SQLite snapshot."""
+        _id(instance_id)
+        _int(after_revision, 0, MAX_REVISION)
+        _int(limit, 1, 128)
+        if not self.store.path.exists():
+            return None
+        with self.store._reader() as db:
+            if not self._exists(db):
+                return None
+            record = self._instance(db, instance_id)
+            if record is None:
+                return None
+            rows = db.execute('''SELECT body, digest FROM ownership_events_v1
+                WHERE owner_scope=? AND kind='instance' AND target=? ORDER BY sequence LIMIT ? OFFSET ?''',
+                (self.owner, instance_id, limit + 1, after_revision)).fetchall()
+            events = [_unpack(row) for row in rows[:limit]]
+            return {'instance': record, 'events': events, 'has_more': len(rows) > limit}
+
     def register(self, instance_id, observation):
         """Register an observed individual with no ownership confirmation."""
         _id(instance_id)
@@ -220,13 +317,15 @@ class Ownership:
                    (self.owner, event['event_id'], event['kind'], target, request_hash, *_pack(event)))
 
     def confirm(self, event_id, instance_id, *, expected_revision, state, observation=None,
-                register_if_missing=False):
+                register_if_missing=False, preserve_identity=False):
         """Apply one explicit manual confirmation, optionally updating current observed details."""
         _id(event_id)
         _id(instance_id)
         _int(expected_revision, 0, MAX_REVISION - 1)
         if state not in STATES:
             raise ValueError('Invalid ownership state')
+        if type(preserve_identity) is not bool:
+            raise ValueError('Invalid preserve_identity flag')
         fields = None if observation is None else self._observation(observation)
         identity = ['instance', self.actor, instance_id, expected_revision, state, fields]
         if register_if_missing:
@@ -248,6 +347,9 @@ class Ownership:
                 raise OwnershipConflict('Instance ID already exists')
             if previous is None or previous['revision'] != expected_revision:
                 raise OwnershipConflict('Instance missing or revision changed')
+            if preserve_identity and fields is not None and not register_if_missing:
+                if any(previous[key] != fields[key] for key in ('species_id', 'ivs')):
+                    raise OwnershipConflict('Observation conflicts with the individual identity')
             now = _now()
             record = {**previous, **(fields or {}), 'state': state, 'revision': expected_revision + 1,
                       'confirmed_at': now, 'confirmed_by': self.actor, 'source': 'manual'}

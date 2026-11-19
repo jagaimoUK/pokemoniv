@@ -398,3 +398,98 @@ inventory.confirm('crash', 'a', expected_revision=1, state='confirmed_absent')
         self.assertEqual(MissingAnalysis(restored_store).evidence(
             plan, active_versions=self.service.versions, normalizer=self.service), before)
         self.assertEqual(self.service.cache_stats['engine_calls'], 1)
+
+    def test_list_snapshot_filters_pagination_scopes_and_owner_isolation(self):
+        empty = self.inventory.list_snapshot()
+        self.assertEqual(empty, {'ledger_revision': 0, 'items': [], 'has_more': False,
+                                 'next_after': None, 'scopes': [], 'scopes_truncated': False})
+        alt = {**self.observed, 'species_id': 'quagsire_shadow'}
+        self.inventory.register('inst-1', self.observed)
+        self.inventory.confirm('ev-1', 'inst-1', expected_revision=0, state='confirmed_owned')
+        self.inventory.register('inst-2', self.observed)
+        self.inventory.confirm('ev-2', 'inst-2', expected_revision=0, state='confirmed_absent')
+        self.inventory.register('inst-3', alt)
+        rev = self.inventory.revision()
+        self.inventory.confirm_scope('sc-1', expected_ledger_revision=rev,
+                                     species_id=self.observed['species_id'], search='0attack',
+                                     box_range=[1, 50], complete=True, absence_confirmed=False)
+        self.inventory.confirm_scope('sc-2', expected_ledger_revision=rev,
+                                     species_id=self.observed['species_id'], search='0attack',
+                                     box_range=[1, 50], complete=True, absence_confirmed=True)
+
+        page1 = self.inventory.list_snapshot(limit=2)
+        self.assertEqual(page1['ledger_revision'], rev)
+        self.assertEqual([item['instance_id'] for item in page1['items']], ['inst-1', 'inst-2'])
+        self.assertTrue(page1['has_more'])
+        self.assertEqual(page1['next_after'], 'inst-2')
+        self.assertEqual([sc['event_id'] for sc in page1['scopes']], ['sc-2', 'sc-1'])
+        self.assertEqual([sc['current'] for sc in page1['scopes']], [True, False])
+
+        page2 = self.inventory.list_snapshot(after=page1['next_after'], limit=2, include_scopes=False)
+        self.assertEqual([item['instance_id'] for item in page2['items']], ['inst-3'])
+        self.assertFalse(page2['has_more'])
+        self.assertIsNone(page2['next_after'])
+        self.assertNotIn('scopes', page2)
+
+        owned_only = self.inventory.list_snapshot(state='confirmed_owned')
+        self.assertEqual([item['instance_id'] for item in owned_only['items']], ['inst-1'])
+        shadow_only = self.inventory.list_snapshot(species_id='quagsire_shadow')
+        self.assertEqual([item['instance_id'] for item in shadow_only['items']], ['inst-3'])
+        self.assertEqual(shadow_only['scopes'], [])
+
+        # Advancing ledger invalidates previously current scope in the same snapshot.
+        self.inventory.confirm('ev-3', 'inst-3', expected_revision=0, state='confirmed_owned')
+        after_adv = self.inventory.list_snapshot()
+        self.assertEqual(after_adv['ledger_revision'], rev + 1)
+        self.assertTrue(all(not sc['current'] for sc in after_adv['scopes']))
+
+        other = Ownership(BattleStore(self.store.path, owner_scope='other'),
+                          species_ids=self.inventory.species_ids)
+        self.assertEqual(other.list_snapshot(), {'ledger_revision': 0, 'items': [], 'has_more': False,
+                                                 'next_after': None, 'scopes': [], 'scopes_truncated': False})
+
+        for bad in ({'after': 123}, {'limit': 0}, {'limit': 129}, {'limit': True},
+                    {'state': 'keep_candidate'}, {'species_id': 'unknown_mon'}, {'include_scopes': 'yes'}):
+            with self.assertRaises(ValueError):
+                self.inventory.list_snapshot(**bad)
+
+    def test_instance_history_snapshot_reconfirm_and_tamper_detection(self):
+        self.assertIsNone(self.inventory.instance_history('missing'))
+        self.inventory.register('inst-a', self.observed)
+        self.inventory.confirm('ev-own', 'inst-a', expected_revision=0, state='confirmed_owned',
+                               observation=self.observed, preserve_identity=True)
+        self.inventory.confirm('ev-abs', 'inst-a', expected_revision=1, state='confirmed_absent',
+                               preserve_identity=True)
+        updated = {**self.observed, 'current_cp': 1495, 'current_level': 20.5}
+        self.inventory.confirm('ev-reown', 'inst-a', expected_revision=2, state='confirmed_owned',
+                               observation=updated, preserve_identity=True)
+        with self.assertRaises(OwnershipConflict):
+            self.inventory.confirm('ev-bad-iv', 'inst-a', expected_revision=3, state='confirmed_owned',
+                                   observation={**updated, 'ivs': {'attack': 15, 'defense': 15, 'hp': 15}},
+                                   preserve_identity=True)
+        with self.assertRaises(OwnershipConflict):
+            self.inventory.confirm('ev-bad-sp', 'inst-a', expected_revision=3, state='confirmed_owned',
+                                   observation={**updated, 'species_id': 'quagsire_shadow'},
+                                   preserve_identity=True)
+
+        snap = self.inventory.instance_history('inst-a', limit=2)
+        self.assertEqual(snap['instance']['state'], 'confirmed_owned')
+        self.assertEqual(snap['instance']['current_cp'], 1495)
+        self.assertEqual(snap['instance']['revision'], 3)
+        self.assertEqual([e['event_id'] for e in snap['events']], ['ev-own', 'ev-abs'])
+        self.assertTrue(snap['has_more'])
+
+        tail = self.inventory.instance_history('inst-a', after_revision=2, limit=2)
+        self.assertEqual([e['event_id'] for e in tail['events']], ['ev-reown'])
+        self.assertFalse(tail['has_more'])
+
+        other = Ownership(BattleStore(self.store.path, owner_scope='other'),
+                          species_ids=self.inventory.species_ids)
+        self.assertIsNone(other.instance_history('inst-a'))
+
+        with closing(sqlite3.connect(self.store.path)) as db, db:
+            db.execute("UPDATE owned_instances_v1 SET instance_id='inst-tampered' WHERE instance_id='inst-a'")
+        with self.assertRaises(OwnershipUnavailable):
+            self.inventory.list_snapshot()
+        with self.assertRaises(OwnershipUnavailable):
+            self.inventory.instance_history('inst-tampered')

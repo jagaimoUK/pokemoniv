@@ -273,3 +273,92 @@ class MissingLocalTests(server.ServerFixture):
         self.assertEqual(code, 200)
         self.assertEqual([item['status'] for item in report['candidates']], ['pending', 'conditional'])
         self.assertFalse(server.web.BATTLE_RUNNING)
+
+    def test_ownership_list_history_scope_and_reconfirm_via_missing_api(self):
+        payload = case()
+        candidate = payload['candidates'][0]
+        observation = {
+            'species_id': candidate['species_id'], 'ivs': candidate['ivs'],
+            'current_cp': 1476, 'current_level': candidate['level'],
+            'current_moves': candidate['moves'],
+        }
+        with patch.object(server.web.BattleService, 'simulate',
+                          side_effect=AssertionError('Ownership operations must not invoke PvPoke')):
+            code, empty = self.compare({'action': 'ownership_list'})
+            self.assertEqual(code, 200)
+            self.assertEqual(empty['ledger_revision'], 0)
+            self.assertEqual(empty['items'], [])
+            self.assertEqual(empty['scopes'], [])
+            self.assertEqual(self.compare({'action': 'ownership_list', 'owner_scope': 'other'})[0], 400)
+            self.assertEqual(self.compare({'action': 'ownership_history', 'instance_id': 'missing'})[0], 400)
+
+            # Register + confirm owned, then absent, then reconfirm with updated CP/Lv.
+            ev_create = {
+                'action': 'ownership', 'instance_id': 'step1-inst', 'event_id': 'step1-ev-1',
+                'expected_revision': 0, 'state': 'confirmed_owned', 'observation': observation,
+            }
+            self.assertEqual(self.compare(ev_create)[0], 200)
+            # Observation updates must be rejected when marking confirmed_absent.
+            self.assertEqual(self.compare({
+                'action': 'ownership', 'instance_id': 'step1-inst', 'event_id': 'step1-ev-bad',
+                'expected_revision': 1, 'state': 'confirmed_absent', 'observation': observation,
+            })[0], 400)
+            ev_absent = {
+                'action': 'ownership', 'instance_id': 'step1-inst', 'event_id': 'step1-ev-2',
+                'expected_revision': 1, 'state': 'confirmed_absent',
+            }
+            self.assertEqual(self.compare(ev_absent), (200, {'instance_id': 'step1-inst', 'state': 'confirmed_absent', 'revision': 2}))
+            updated_obs = {**observation, 'current_cp': 1492, 'current_level': 21.0}
+            ev_reown = {
+                'action': 'ownership', 'instance_id': 'step1-inst', 'event_id': 'step1-ev-3',
+                'expected_revision': 2, 'state': 'confirmed_owned', 'register': False,
+                'observation': updated_obs,
+            }
+            self.assertEqual(self.compare(ev_reown), (200, {'instance_id': 'step1-inst', 'state': 'confirmed_owned', 'revision': 3}))
+            # Replay is idempotent; changing species/IVs on update conflicts (409).
+            self.assertEqual(self.compare(ev_reown), (200, {'instance_id': 'step1-inst', 'state': 'confirmed_owned', 'revision': 3}))
+            self.assertEqual(self.compare({
+                'action': 'ownership', 'instance_id': 'step1-inst', 'event_id': 'step1-ev-4',
+                'expected_revision': 3, 'state': 'confirmed_owned', 'register': False,
+                'observation': {**updated_obs, 'ivs': {'attack': 15, 'defense': 15, 'hp': 15}},
+            })[0], 409)
+
+            code, listed = self.compare({'action': 'ownership_list', 'species_id': candidate['species_id'], 'state': 'confirmed_owned'})
+            self.assertEqual(code, 200)
+            self.assertEqual(len(listed['items']), 1)
+            self.assertEqual(listed['items'][0]['current_cp'], 1492)
+            self.assertEqual(listed['items'][0]['revision'], 3)
+            ledger_rev = listed['ledger_revision']
+
+            code, hist = self.compare({'action': 'ownership_history', 'instance_id': 'step1-inst', 'limit': 10})
+            self.assertEqual(code, 200)
+            self.assertEqual([e['new_state'] for e in hist['events']], ['confirmed_owned', 'confirmed_absent', 'confirmed_owned'])
+            self.assertEqual(hist['instance']['current_cp'], 1492)
+            self.assertFalse(hist['has_more'])
+
+            # Explicit box scope confirmation requires matching ledger revision and complete=True for absence.
+            scope_req = {
+                'action': 'ownership_scope', 'event_id': 'step1-scope-1',
+                'expected_ledger_revision': ledger_rev, 'species_id': candidate['species_id'],
+                'search': '0attack', 'box_range': [1, 100], 'complete': True, 'absence_confirmed': True,
+            }
+            self.assertEqual(self.compare({**scope_req, 'event_id': 'bad-scope', 'complete': False})[0], 400)
+            self.assertEqual(self.compare({**scope_req, 'event_id': 'stale-scope', 'expected_ledger_revision': ledger_rev + 1})[0], 409)
+            code, scope_res = self.compare(scope_req)
+            self.assertEqual(code, 200)
+            self.assertTrue(scope_res['current'])
+            self.assertTrue(scope_res['absence_confirmed'])
+            self.assertEqual(self.compare(scope_req), (200, scope_res))
+
+            # Scope confirmation must never alter individual instance ownership state.
+            code, after_scope = self.compare({'action': 'ownership_list'})
+            self.assertEqual(code, 200)
+            self.assertEqual(after_scope['items'][0]['state'], 'confirmed_owned')
+            self.assertEqual(len(after_scope['scopes']), 1)
+            self.assertTrue(after_scope['scopes'][0]['current'])
+
+        foreign = BattleStore(self.root / 'volume' / 'battle_analysis.sqlite3', owner_scope='foreign')
+        other = Ownership(foreign, species_ids={candidate['species_id']})
+        self.assertEqual(other.list_snapshot()['items'], [])
+        self.assertEqual(other.list_snapshot()['scopes'], [])
+        self.assertIsNone(other.instance_history('step1-inst'))
