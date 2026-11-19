@@ -83,7 +83,9 @@ def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS):
     wait_reasons = {"forced_only_wait": 0, "optional_wait": 0,
                     "cooldown_forced": 0, "other_forced": 0,
                     "fast_available_when_waiting": 0,
-                    "charge_available_when_waiting": 0}
+                    "charge_available_when_waiting": 0,
+                    "switch_available_when_waiting": 0,
+                    "optional_turn_wait": 0, "optional_other_phase_wait": 0}
     with SixToThreeEnvironment(
         GAME_DATA, own, public, opponent, hidden, lead, ruleset_id="great-league-v1"
     ) as env:
@@ -126,6 +128,12 @@ def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS):
                         wait_reasons["other_forced"] += 1
                 else:
                     wait_reasons["optional_wait"] += 1
+                    wait_reasons["switch_available_when_waiting"] += int(
+                        any(a.startswith("switch_") for a in legal))
+                    wait_reasons[
+                        "optional_turn_wait" if view["phase"] == "turn"
+                        else "optional_other_phase_wait"
+                    ] += 1
                     wait_reasons["fast_available_when_waiting"] += int(
                         "fast" in legal)
                     wait_reasons["charge_available_when_waiting"] += int(
@@ -200,7 +208,9 @@ def _metrics(results):
         raise ValueError("Inconsistent public decision counts")
     reason_names = ("forced_only_wait", "optional_wait", "cooldown_forced",
                     "other_forced", "fast_available_when_waiting",
-                    "charge_available_when_waiting")
+                    "charge_available_when_waiting",
+                    "switch_available_when_waiting",
+                    "optional_turn_wait", "optional_other_phase_wait")
     wait_totals = {name: sum(
         item.get("public_wait_reasons", {}).get(name, 0) for item in results)
         for name in reason_names}
@@ -212,6 +222,11 @@ def _metrics(results):
                 wait_totals["fast_available_when_waiting"] >
                 wait_totals["optional_wait"] or
                 wait_totals["charge_available_when_waiting"] >
+                wait_totals["optional_wait"] or
+                wait_totals["switch_available_when_waiting"] >
+                wait_totals["optional_wait"] or
+                wait_totals["optional_turn_wait"] +
+                wait_totals["optional_other_phase_wait"] !=
                 wait_totals["optional_wait"]):
             raise ValueError("Inconsistent public wait reason counters")
     timeout_clocks = [row.get("public_clock_before_final_action")
