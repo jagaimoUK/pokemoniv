@@ -145,6 +145,44 @@ class PublicMCTests(unittest.TestCase):
         with self.assertRaises(LearningError):
             model.choose({**tactic, "legal_actions": [{"bad": "unhashable"}]})
 
+    def test_completed_returns_change_both_policy_decisions(self):
+        policy = PublicMonteCarloPolicy(seed=4)
+        sel_kind, sel_key, legal = public_state(preview())
+        tac_kind, tac_key, _ = public_state(public_tactics())
+        preferred_selection = legal[0]
+        alternative_selection = legal[1]
+        policy.learn([("selection", sel_key, preferred_selection),
+                      ("tactics", tac_key, "fast")],
+                     reward=1, selection_reward=1)
+        policy.learn([("selection", sel_key, alternative_selection),
+                      ("tactics", tac_key, "wait")],
+                     reward=-1, selection_reward=-1)
+        selected, _ = policy.choose(preview(), epsilon=0)
+        tactic, _ = policy.choose(public_tactics(), epsilon=0)
+        self.assertEqual(sel_kind, "selection")
+        self.assertEqual(tac_kind, "tactics")
+        self.assertEqual(selected, preferred_selection)
+        self.assertEqual(tactic, "fast")
+        self.assertEqual(policy.completed_matches, 2)
+
+    def test_state_limit_failure_does_not_partially_update_model(self):
+        from unittest.mock import patch
+        policy = PublicMonteCarloPolicy(seed=1)
+        _, sk, actions = public_state(preview())
+        _, tk, _ = public_state(public_tactics())
+        changed = public_tactics()
+        changed["opponent"]["revealed"][0]["hp_bucket_5pct"] = 10
+        _, tk2, _ = public_state(changed)
+        self.assertNotEqual(tk, tk2)
+        with patch("pvpoke_rl_mc_train.MAX_STATES", 1):
+            with self.assertRaises(LearningError):
+                policy.learn([("selection", sk, actions[0]),
+                              ("tactics", tk, "fast"),
+                              ("tactics", tk2, "fast")],
+                             reward=1, selection_reward=1)
+        self.assertEqual(policy.completed_matches, 0)
+        self.assertEqual(policy.snapshot()["values"], {"selection": {}, "tactics": {}})
+
     def test_checkpoint_rejects_invalid_counts_values_and_schema(self):
         p = PublicMonteCarloPolicy(seed=1)
         play_episode(FakeMatch(), p, epsilon=0)
