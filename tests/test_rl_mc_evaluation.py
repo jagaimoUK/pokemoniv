@@ -175,6 +175,38 @@ class MatchedEvaluationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             _metrics([invalid])
 
+    def test_optional_tactical_counts_exclude_forced_choices_and_check_ambiguity(self):
+        event = {
+            "status": "complete", "outcome": "self_ko_win",
+            "reward": 1, "decisions": 5,
+            "coverage": {
+                "state_hits": 4, "chosen_action_hits": 3,
+                "selection_state_seen": True, "selection_action_seen": True,
+                "value_sign_counts": {
+                    "positive": 1, "zero": 0, "negative": 2,
+                    "unseen_action": 2,
+                },
+                "optional_tactical_counts": {
+                    "decisions": 2, "positive": 0, "zero": 0,
+                    "negative": 1, "unseen_action": 1,
+                    "negative_with_unseen_alternative": 0,
+                    "unseen_with_positive_alternative": 0,
+                },
+            },
+        }
+        counts = _metrics([event])["learned_coverage"]["optional_tactical_counts"]
+        self.assertEqual(counts["decisions"], 2)
+        self.assertEqual(counts["negative"], 1)
+        self.assertEqual(counts["unseen_action"], 1)
+        invalid = copy.deepcopy(event)
+        invalid["coverage"]["optional_tactical_counts"]["negative_with_unseen_alternative"] = 2
+        with self.assertRaises(ValueError):
+            _metrics([invalid])
+        invalid = copy.deepcopy(event)
+        invalid["coverage"]["optional_tactical_counts"]["decisions"] = 3
+        with self.assertRaises(ValueError):
+            _metrics([invalid])
+
     def test_learning_coverage_fraction_has_an_explicit_denominator(self):
         stat = _metrics([
             {"status": "complete", "reward": 1, "decisions": 6,
@@ -279,6 +311,8 @@ class MatchedEvaluationTests(unittest.TestCase):
         self.assertEqual(record["coverage"]["chosen_action_hits"], 2)
         self.assertEqual(record["coverage"]["value_sign_counts"]["positive"], 2)
         self.assertEqual(record["coverage"]["value_sign_counts"]["unseen_action"], 0)
+        self.assertEqual(record["coverage"]["optional_tactical_counts"]["decisions"], 1)
+        self.assertEqual(record["coverage"]["optional_tactical_counts"]["positive"], 1)
         self.assertTrue(record["coverage"]["selection_state_seen"])
         self.assertTrue(record["coverage"]["selection_action_seen"])
         self.assertEqual(record["selection_action"], "0,1,2|0")
