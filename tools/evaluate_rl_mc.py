@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 
 from pvpoke_rl_mc_train import PublicMonteCarloPolicy, public_state
 from pvpoke_rl_team_env import SixToThreeEnvironment
-from run_rl_mc import GAME_DATA, fixture_teams, run_batch
+from run_rl_mc import GAME_DATA, fixture_teams, run_batch, POLICY_VARIANTS
 
 BASELINE_SELECTION = "0,1,2|0"
 KINDS = ("fixed", "untrained", "trained")
@@ -215,21 +215,23 @@ def main():
     p.add_argument("--train", type=int, default=8)
     p.add_argument("--evaluate", type=int, default=4)
     p.add_argument("--seed", type=int, default=12)
+    p.add_argument("--policy", choices=tuple(POLICY_VARIANTS), default="v1")
     a = p.parse_args()
     if not 0 <= a.train <= 32 or not 1 <= a.evaluate <= 32:
         p.error("Training and evaluation each allow at most 32 episodes")
     if not 0 <= a.seed <= 2**32 - 200000:
         p.error("Invalid experiment seed")
-    trained = PublicMonteCarloPolicy(seed=a.seed)
+    policy_class = POLICY_VARIANTS[a.policy]
+    trained = policy_class(seed=a.seed)
     trained_stats = run_batch(
         trained, episodes=a.train, seed=a.seed, epsilon=0.25, training=True,
     )
     # Reset policy RNGs to the same evaluation seed. Otherwise training-time
     # sampling history would confound "trained vs untrained" comparisons.
     eval_policy_seed = a.seed + 70000
-    trained_eval = PublicMonteCarloPolicy.restore(
+    trained_eval = policy_class.restore(
         trained.snapshot(), seed=eval_policy_seed)
-    untrained = PublicMonteCarloPolicy(seed=eval_policy_seed)
+    untrained = policy_class(seed=eval_policy_seed)
     matched = evaluate_paired(
         trained=trained_eval, untrained=untrained,
         scenarios=heldout_scenarios(count=a.evaluate, seed=a.seed + 100000),
@@ -240,6 +242,7 @@ def main():
         "matched_evaluation": matched,
         "training_completed_matches": trained.completed_matches,
         "schema": trained.snapshot()["schema"],
+        "policy_variant": a.policy,
     }, sort_keys=True))
 
 
