@@ -65,12 +65,19 @@ class MissingGatewayTests(server.ServerFixture):
         with patch.dict(os.environ, {'PVP_MISSING_ANALYSIS_ENABLED': '0'}):
             self.assertEqual(request(self.server, PAGE_PATH)[0], 404)
             self.assertEqual(request(self.server, APP_PATH, case(), headers=auth)[0], 503)
-        with patch.dict(os.environ, {'PVP_MISSING_ANALYSIS_ENABLED': '1'}), patch.object(
+        with patch.dict(os.environ, {
+                'PVP_MISSING_ANALYSIS_ENABLED': '1',
+                'PVP_SANDBOX_ENABLED': '1',
+                'PVP_TACTIC_SEARCH_ENABLED': '1',
+                'PVP_OBSERVED_SEARCH_ENABLED': '1'}), patch.object(
                 server.gateway.backend, '_token', return_value='local-test-token'), patch.object(
                 server.gateway.backend, '_request', return_value={'state': 'evidence_pending'}) as call:
             code, html, headers = request(self.server, PAGE_PATH)
             self.assertEqual(code, 200)
             self.assertIn('不足'.encode(), html)
+            self.assertIn(b'data-sandbox="1"', html)
+            self.assertIn(b'data-tactic-search="1"', html)
+            self.assertIn(b'data-observed-search="1"', html)
             self.assertIn('Content-Security-Policy', headers)
             self.assertEqual(request(self.server, APP_PATH, case())[0], 401)
             self.assertEqual(request(self.server, APP_PATH, case(), headers={**auth, 'Origin': 'https://other.invalid'})[0], 403)
@@ -565,3 +572,186 @@ class MissingLocalTests(server.ServerFixture):
         self.assertEqual(narrow['eligible_iv_count'], 1)
         self.assertEqual(narrow['completed_iv_count'], 1)
         self.assertEqual(narrow['qualifying_count'], 1)
+
+    def test_step4_readonly_tactic_observed_and_sandbox_lists(self):
+        import hashlib
+        from pvpoke_battle_service import BattleService
+        from pvpoke_direct_backend import DirectMatrixClient
+        from pvpoke_observed_search import ObservedSearch
+        from pvpoke_sandbox import SandboxService
+        from pvpoke_sandbox_workspace import TacticStore
+        from pvpoke_tactic_search import TacticSearch
+
+        # 503 gating when sandbox / tactic-search / observed flags are disabled
+        with patch.dict(os.environ, {'PVP_SANDBOX_ENABLED': '0',
+                                     'PVP_TACTIC_SEARCH_ENABLED': '1',
+                                     'PVP_OBSERVED_SEARCH_ENABLED': '1'}):
+            self.assertEqual(self.compare({'action': 'tactic_search_list'})[0], 503)
+            self.assertEqual(self.compare({'action': 'observed_search_list'})[0], 503)
+            self.assertEqual(self.compare({'action': 'sandbox_tactic_list'})[0], 503)
+        with patch.dict(os.environ, {'PVP_SANDBOX_ENABLED': '1',
+                                     'PVP_TACTIC_SEARCH_ENABLED': '0',
+                                     'PVP_OBSERVED_SEARCH_ENABLED': '0'}):
+            self.assertEqual(self.compare({'action': 'tactic_search_list'})[0], 503)
+            self.assertEqual(self.compare({'action': 'observed_search_list'})[0], 503)
+            self.assertEqual(self.compare({'action': 'sandbox_tactic_list'}), (200, {'items': []}))
+
+        with patch.dict(os.environ, {'PVP_SANDBOX_ENABLED': '1',
+                                     'PVP_TACTIC_SEARCH_ENABLED': '1',
+                                     'PVP_OBSERVED_SEARCH_ENABLED': '1'}):
+            # Empty before any saved records exist
+            self.assertEqual(self.compare({'action': 'tactic_search_list'}),
+                             (200, {'items': [], 'has_more': False, 'next_after': None}))
+            self.assertEqual(self.compare({'action': 'observed_search_list'}),
+                             (200, {'items': [], 'has_more': False, 'next_after': None}))
+            self.assertEqual(self.compare({'action': 'sandbox_tactic_list'}), (200, {'items': []}))
+
+            # Evaluate missing analysis baseline so we can also test direct ID reuse
+            eval_payload = case(threshold=0)
+            status, evaluated = self.compare(eval_payload)
+            self.assertEqual(status, 200)
+            eval_id = evaluated['evaluation_id']
+            battle_spec_base = evaluated['candidates'][0]['conditions'][0]['spec']
+
+            # Create local owner fixed tactic searches (2), observed search (1), and sandbox tactic (2 revisions)
+            store = BattleStore.from_volume()
+            client = DirectMatrixClient(gamemaster=self.root / 'gamemaster.json', log_dir=self.root)
+            self.addCleanup(client.close)
+            service = BattleService(client, store=store)
+            sandbox = SandboxService(service)
+            tactic_search = TacticSearch(service)
+            sandbox_base = {k: v for k, v in battle_spec_base.items()
+                            if k not in ('calculation_version', 'policies')}
+            spec1 = {**sandbox_base, 'mode': 'sandbox', 'actions': [], 'shield_decisions': []}
+            spec2 = {**sandbox_base, 'mode': 'sandbox',
+                     'combatants': [sandbox_base['combatants'][0],
+                                    {**sandbox_base['combatants'][1],
+                                     'initial': {**sandbox_base['combatants'][1]['initial'], 'energy': 10}}],
+                     'actions': [], 'shield_decisions': []}
+            ts1_id = tactic_search.start(spec1)
+            tactic_search.step(ts1_id, budget=1)
+            ts2_id = tactic_search.start(spec2)
+
+            observed = ObservedSearch(sandbox)
+            world1 = {**sandbox_base, 'mode': 'sandbox'}
+            world2 = {**sandbox_base, 'mode': 'sandbox',
+                      'combatants': [sandbox_base['combatants'][0],
+                                     {**sandbox_base['combatants'][1],
+                                      'initial': {**sandbox_base['combatants'][1]['initial'], 'energy': 25}}]}
+            obs_res = observed.start(
+                [world1, world2],
+                [{'attack': 'standard', 'shield': 'never'}],
+                [{'fast_delay': 0, 'miss_first_fast': False, 'reverse_fast_batch': False}],
+                1,
+                roles=[{'id': 'win', 'priority': 1, 'outcomes': ['self_ko_win'], 'minimum': {}}],
+            )
+            observed.step(obs_res['search_id'], 0, 1)
+
+            tstore = TacticStore(store)
+            tid = '1' * 32
+            tstore.save(sandbox, tid, 0, '初手プラン', spec1)
+            tstore.save(sandbox, tid, 1, '初手プラン改', spec2)
+
+            # Create foreign-owner records that must never leak to local owner
+            foreign_store = BattleStore(store.path, owner_scope='foreign')
+            foreign_service = BattleService(client, store=foreign_store)
+            foreign_sandbox = SandboxService(foreign_service)
+            foreign_spec = {**sandbox_base, 'mode': 'sandbox',
+                            'combatants': [sandbox_base['combatants'][0],
+                                           {**sandbox_base['combatants'][1],
+                                            'initial': {**sandbox_base['combatants'][1]['initial'], 'energy': 33}}],
+                            'actions': [], 'shield_decisions': []}
+            foreign_ts_id = TacticSearch(foreign_service).start(foreign_spec)
+            foreign_obs = ObservedSearch(foreign_sandbox).start(
+                [foreign_spec],
+                [{'attack': 'standard', 'shield': 'never'}],
+                [{'fast_delay': 0, 'miss_first_fast': False, 'reverse_fast_batch': False}],
+                1,
+            )
+            TacticStore(foreign_store).save(foreign_sandbox, '2' * 32, 0, '他オーナー戦術', foreign_spec)
+            self.assertNotEqual(foreign_ts_id, ts1_id)
+            self.assertNotEqual(foreign_obs['search_id'], obs_res['search_id'])
+
+            db_before = hashlib.sha256(store.path.read_bytes()).hexdigest()
+
+            # Read-only listing must run zero battles, zero receipt replays, and zero DB writes
+            with patch.object(server.web.BattleService, 'simulate',
+                              side_effect=AssertionError('List must not simulate')), \
+                 patch.object(SandboxService, 'simulate',
+                              side_effect=AssertionError('List must not simulate sandbox')), \
+                 patch.object(ObservedSearch, '_replay',
+                              side_effect=AssertionError('List must not replay receipts')):
+                c1, page1 = self.compare({'action': 'tactic_search_list', 'limit': 1})
+                self.assertEqual(c1, 200)
+                self.assertEqual(len(page1['items']), 1)
+                self.assertTrue(page1['has_more'])
+                self.assertEqual(page1['next_after'], page1['items'][0]['search_id'])
+
+                c2, page2 = self.compare({'action': 'tactic_search_list', 'limit': 1,
+                                          'after_id': page1['next_after']})
+                self.assertEqual(c2, 200)
+                self.assertEqual(len(page2['items']), 1)
+                self.assertFalse(page2['has_more'])
+                listed_ts_ids = {page1['items'][0]['search_id'], page2['items'][0]['search_id']}
+                self.assertEqual(listed_ts_ids, {ts1_id, ts2_id})
+                for item in page1['items'] + page2['items']:
+                    self.assertTrue(item['version_current'])
+                    self.assertEqual(item['shields'], [1, 1])
+                    self.assertIn('species_id', item['self'])
+                    self.assertIn('species_id', item['opponent'])
+                    if item['search_id'] == ts1_id:
+                        self.assertEqual(item['attempted_scripts'], 1)
+                        self.assertGreaterEqual(item['complete_scripts'], 0)
+
+                oc, obs_list = self.compare({'action': 'observed_search_list', 'limit': 24})
+                self.assertEqual(oc, 200)
+                self.assertFalse(obs_list['has_more'])
+                self.assertEqual([item['search_id'] for item in obs_list['items']], [obs_res['search_id']])
+                obs_item = obs_list['items'][0]
+                self.assertEqual(obs_item['work'], 1)
+                self.assertEqual(obs_item['world_count'], 2)
+                self.assertEqual(len(obs_item['worlds']), 2)
+                self.assertFalse(obs_item['worlds_truncated'])
+                self.assertEqual(obs_item['worlds'][0]['energy'], 0)
+                self.assertEqual(obs_item['roles'], ['win'])
+                self.assertTrue(obs_item['version_current'])
+
+                sc, sb_list = self.compare({'action': 'sandbox_tactic_list'})
+                self.assertEqual(sc, 200)
+                self.assertEqual([item['tactic_id'] for item in sb_list['items']], [tid])
+                sb_item = sb_list['items'][0]
+                self.assertEqual((sb_item['revision'], sb_item['name'], sb_item['energy']), (2, '初手プラン改', 0))
+                self.assertTrue(sb_item['version_current'])
+
+                # Validation rejects invalid arguments / unknown keys / owner_scope
+                for bad in ({'action': 'tactic_search_list', 'limit': True},
+                            {'action': 'tactic_search_list', 'limit': 33},
+                            {'action': 'tactic_search_list', 'after_id': 'bad'},
+                            {'action': 'tactic_search_list', 'owner_scope': 'foreign'},
+                            {'action': 'observed_search_list', 'limit': 0},
+                            {'action': 'observed_search_list', 'owner_scope': 'foreign'},
+                            {'action': 'sandbox_tactic_list', 'owner_scope': 'foreign'},
+                            {'action': 'sandbox_tactic_list', 'limit': 5}):
+                    self.assertEqual(self.compare(bad)[0], 400, bad)
+
+            self.assertEqual(hashlib.sha256(store.path.read_bytes()).hexdigest(), db_before)
+
+            # End-to-end: feed listed search IDs straight into evidence actions without sessionStorage links
+            ev_c, ev_data = self.compare({'action': 'tactic_evidence', 'evaluation_id': eval_id,
+                                          'search_ids': [ts1_id]})
+            self.assertEqual(ev_c, 200)
+            self.assertEqual(ev_data['searched_count'], 1)
+
+            oe_c, oe_data = self.compare({'action': 'observed_evidence', 'evaluation_id': eval_id,
+                                          'search_ids': [obs_res['search_id']]})
+            self.assertEqual(oe_c, 200)
+            self.assertEqual(oe_data['links'][0]['search_id'], obs_res['search_id'])
+
+            # Fail closed (503) if stored records are corrupted
+            with store._writer(critical=True) as db:
+                db.execute("UPDATE tactic_searches_v1 SET digest='bad' WHERE search_id=?", (ts1_id,))
+                db.execute("UPDATE observed_jobs_v2 SET plan='{}' WHERE id=?", (obs_res['search_id'],))
+                db.execute("UPDATE sandbox_tactics_v1 SET digest='bad' WHERE tactic_id=?", (tid,))
+            self.assertEqual(self.compare({'action': 'tactic_search_list'})[0], 503)
+            self.assertEqual(self.compare({'action': 'observed_search_list'})[0], 503)
+            self.assertEqual(self.compare({'action': 'sandbox_tactic_list'})[0], 503)

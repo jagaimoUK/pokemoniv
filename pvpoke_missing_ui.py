@@ -51,15 +51,33 @@ input,select,button{font:inherit;color:inherit;min-height:44px;border:1px solid 
 <section class="stack"><div><h2>比較する個体</h2><p class="intro">同じポケモンの別個体や、別のポケモンを最大7体追加できます。手持ちの確認は結果から行えます。</p></div><div id="alternatives" class="stack"></div><div class="actions"><button id="add-alternative" type="button" class="quiet" data-action>比較する個体を追加</button></div></section>
 <div class="actions"><button id="evaluate" class="primary" data-action>保存済みの対面結果を照合</button></div>
 </form>
-<section id="tactic-evidence-panel" data-observed-search="0" class="results stack" hidden><h2>Sandbox戦術の根拠</h2>
+<section id="tactic-evidence-panel" data-sandbox="0" data-tactic-search="0" data-observed-search="0" class="results stack" hidden><h2>Sandbox戦術の根拠・保存済み戦術</h2>
 <p>標準計算と指定戦術は別の結果です。実戦再現性は未検証で、所持・役割の判定は変更しません。</p>
-<div class="actions"><button id="tactic-evidence-read" type="button" data-action>保存済み戦術を不足分析と照合</button></div>
+<div id="fixed-tactic-controls" class="stack" hidden>
+<h3>保存済み固定戦術の探索（読み取り専用）</h3>
+<p class="muted">保存済みの固定戦術探索を最大6件まで選び、不足分析の評価結果と照合できます。</p>
+<div class="actions"><button id="tactic-search-load" type="button" class="quiet" data-action hidden>保存済み固定戦術を読み込む</button><button id="tactic-evidence-read" type="button" data-action hidden>保存済み戦術を不足分析と照合</button></div>
+<p id="tactic-search-summary" class="muted"></p>
+<ul id="tactic-search-items" class="inventory"></ul>
+<div class="actions"><button id="tactic-search-more" type="button" class="quiet" data-action hidden>さらに固定戦術を読み込む</button></div>
+</div>
 <div id="tactic-evidence-results" class="stack"></div>
 <div id="observed-evidence-controls" class="stack" hidden>
 <h3>観測履歴の共有方策（試験・参考）</h3>
 <p class="muted">宣言した有限の相手候補と操作条件だけを確認します。通常の判定やランキングは変えません。</p>
-<label>保存済み観測探索ID<input id="observed-search-id" type="text" maxlength="64" pattern="[0-9a-f]{64}" autocomplete="off" spellcheck="false" placeholder="Sandboxから戻ると自動入力"></label>
+<div class="actions"><button id="observed-search-load" type="button" class="quiet" data-action>保存済み観測探索を読み込む</button></div>
+<p id="observed-search-summary" class="muted"></p>
+<ul id="observed-search-items" class="inventory"></ul>
+<div class="actions"><button id="observed-search-more" type="button" class="quiet" data-action hidden>さらに観測探索を読み込む</button></div>
+<label>保存済み観測探索ID<input id="observed-search-id" type="text" maxlength="64" pattern="[0-9a-f]{64}" autocomplete="off" spellcheck="false" placeholder="Sandboxから戻ると自動入力・または一覧から選択"></label>
 <p class="muted">下の個体カードから照合できます。個体・技・開始条件・相手対面が一致しなければ拒否します。</p>
+</div>
+<div id="sandbox-tactic-controls" class="stack" hidden>
+<h3>保存済みSandbox戦術（読み取り専用一覧・Sandbox参照）</h3>
+<p class="muted">Sandboxで保存した個別戦術を確認し、そのままSandbox画面で参照できます。</p>
+<div class="actions"><button id="sandbox-tactic-load" type="button" class="quiet" data-action>保存済みSandbox戦術を読み込む</button></div>
+<p id="sandbox-tactic-summary" class="muted"></p>
+<ul id="sandbox-tactic-items" class="inventory"></ul>
 </div></section>
 <section id="results" class="results stack" aria-labelledby="results-heading" hidden><h2 id="results-heading" tabindex="-1">不足分析の結果</h2><p id="edited" class="muted" hidden>入力が変更されました。表示中の結果は前回の条件です。</p><div id="result-tree"></div></section>
 <details id="inventory-panel" class="edit"><summary>手持ち台帳・ボックス確認範囲</summary>
@@ -112,10 +130,14 @@ let reference;
 const alternatives=[],scenarios=[];
 const tacticLinkKey='pokemoniv:tactic-evidence-link-v1';
 const observedLinkKey='pokemoniv:observed-evidence-link-v1';
+const sandboxTacticLoadKey='pokemoniv:sandbox-tactic-load-v1';
 const fixedEvidenceTargets=new Map();
 const missingFormKey='pokemoniv:missing-analysis-form-v1';
 const missingTransferKey='pokemoniv:missing-reference-transfer-v1';
 let historyItems=[],historyCursor=null,metaPresets=[],metaImportRows=[];
+let tacticSearchItems=[],tacticSearchCursor=null;
+const selectedTacticSearches=new Set();
+let observedSearchItems=[],observedSearchCursor=null,sandboxTacticItems=[];
 
 function node(tag,text,parent,cls){
  const el=document.createElement(tag);
@@ -743,11 +765,22 @@ function linkedTactics(){
  return null;
 }
 async function compareSavedTactics(){
- const link=linkedTactics();if(!link)throw Error('保存済みの戦術探索が見つかりません。');
- if(!displayed||displayed.evaluation_id!==link.evaluation_id)
-  throw Error('比較条件が変更されています。不足分析をもう一度照合してください。');
+ const selected=[...selectedTacticSearches].filter(id=>/^[a-f0-9]{64}$/.test(id)).slice(0,6);
+ const link=linkedTactics();
+ let evaluationId,searchIds;
+ if(selected.length){
+  if(!displayed?.evaluation_id)throw Error('先に「保存済みの対面結果を照合」を実行してください。');
+  evaluationId=displayed.evaluation_id;
+  searchIds=selected;
+ }else{
+  if(!link)throw Error('保存済みの戦術探索を選択するか、Sandboxから探索結果を引き継いでください。');
+  if(!displayed||displayed.evaluation_id!==link.evaluation_id)
+   throw Error('比較条件が変更されています。不足分析をもう一度照合してください。');
+  evaluationId=link.evaluation_id;
+  searchIds=link.search_ids;
+ }
  const data=await api('missing-analysis',{action:'tactic_evidence',
-  evaluation_id:link.evaluation_id,search_ids:link.search_ids});
+  evaluation_id:evaluationId,search_ids:searchIds});
  if(data.schema!=='missing-tactic-evidence-v1'||!Array.isArray(data.builds))
   throw Error('戦術証拠の形式が異なります。');
  const root=$('tactic-evidence-results');root.replaceChildren();
@@ -810,6 +843,116 @@ async function compareSavedTactics(){
   }
  }
  announce('標準対戦・保有状態を変更せず、保存済み戦術を照合しました。');
+}
+function tacticSearchSummary(){
+ return '表示 '+tacticSearchItems.length+'件'+(tacticSearchCursor?'（続きあり）':'')+
+  ' ／ 選択中 '+selectedTacticSearches.size+' / 6件';
+}
+function renderTacticSearches(){
+ const list=$('tactic-search-items');list.replaceChildren();
+ if(!tacticSearchItems.length)node('li','保存済みの固定戦術探索はまだありません。',list,'muted');
+ for(const item of tacticSearchItems){
+  const row=node('li',null,list);
+  const checkLabel=node('label',null,row,'check');
+  const box=node('input',null,checkLabel);box.type='checkbox';
+  box.checked=selectedTacticSearches.has(item.search_id);
+  node('span','照合対象に選ぶ · '+buildText(item.self)+' vs '+buildText(item.opponent),checkLabel,'break');
+  box.addEventListener('change',()=>{
+   if(box.checked){
+    if(selectedTacticSearches.size>=6){
+     box.checked=false;announce('照合できる固定戦術は最大6件までです。',true);return;
+    }
+    selectedTacticSearches.add(item.search_id);
+   }else selectedTacticSearches.delete(item.search_id);
+   $('tactic-search-summary').textContent=tacticSearchSummary();
+  });
+  node('p','盾 '+item.shields.join(' / ')+' · 開始ゲージ '+item.energy+' · 完了 '+
+   item.complete_scripts+' / 予定 '+item.planned_scripts+'（試行 '+item.attempted_scripts+'）',row,'muted break');
+  const flags=node('div',null,row,'tags');
+  tag(flags,item.version_current?'現在の計算データと一致':'計算データ更新あり',item.version_current?'good':'wait');
+  node('small','探索ID '+item.search_id.slice(0,12)+'…',row,'muted break');
+ }
+ $('tactic-search-summary').textContent=tacticSearchSummary();
+ $('tactic-search-more').hidden=!tacticSearchCursor;
+ $('tactic-evidence-read').hidden=!linkedTactics()&&!tacticSearchItems.length;
+}
+async function loadTacticSearches(append){
+ const request={action:'tactic_search_list',limit:24};
+ if(append&&tacticSearchCursor)request.after_id=tacticSearchCursor;
+ const result=await api('missing-analysis',request);
+ if(!Array.isArray(result.items))throw Error('固定戦術一覧の応答が不正です。');
+ tacticSearchItems=append?tacticSearchItems.concat(result.items):result.items;
+ tacticSearchCursor=result.has_more?result.next_after:null;
+ if(!append&&!selectedTacticSearches.size){
+  for(const id of linkedTactics()?.search_ids||[]){
+   if(tacticSearchItems.some(item=>item.search_id===id)&&selectedTacticSearches.size<6)
+    selectedTacticSearches.add(id);
+  }
+ }
+ renderTacticSearches();
+ announce('保存済みの固定戦術探索を読み込みました。');
+}
+function renderObservedSearches(){
+ const list=$('observed-search-items');list.replaceChildren();
+ if(!observedSearchItems.length)node('li','保存済みの観測探索はまだありません。',list,'muted');
+ for(const item of observedSearchItems){
+  const row=node('li',null,list);
+  const first=item.worlds?.[0];
+  const headline=first?(buildText(first.self)+' vs '+name(first.opponent.species_id)+
+   '（候補 '+item.world_count+'件'+(item.worlds_truncated?'・一部表示':'')+'）'):('候補 '+item.world_count+'件');
+  node('p',headline,row,'break');
+  const roleIds=(item.roles||[]).map(r=>typeof r==='string'?r:r?.id).filter(Boolean).join('・')||'なし';
+  node('p','再生 '+item.work+'回 · '+item.scenario_count+'シナリオ · 役割 '+roleIds+
+   (item.paused?' · 一時停止中':''),row,'muted break');
+  const flags=node('div',null,row,'tags');
+  tag(flags,item.version_current?'現在の計算データと一致':'計算データ更新あり',item.version_current?'good':'wait');
+  node('small','観測探索ID '+item.search_id.slice(0,12)+'…',row,'muted break');
+  button(node('div',null,row,'actions'),'この観測IDを選択',()=>{
+   $('observed-search-id').value=item.search_id;
+   announce('観測探索ID '+item.search_id.slice(0,12)+'… を選択しました。下の個体カードから照合できます。');
+  },'quiet');
+ }
+ $('observed-search-summary').textContent='表示 '+observedSearchItems.length+'件'+(observedSearchCursor?'（続きあり）':'')+'。';
+ $('observed-search-more').hidden=!observedSearchCursor;
+}
+async function loadObservedSearches(append){
+ const request={action:'observed_search_list',limit:24};
+ if(append&&observedSearchCursor)request.after_id=observedSearchCursor;
+ const result=await api('missing-analysis',request);
+ if(!Array.isArray(result.items))throw Error('観測探索一覧の応答が不正です。');
+ observedSearchItems=append?observedSearchItems.concat(result.items):result.items;
+ observedSearchCursor=result.has_more?result.next_after:null;
+ renderObservedSearches();
+ announce('保存済みの観測探索を読み込みました。');
+}
+function renderSandboxTactics(){
+ const list=$('sandbox-tactic-items');list.replaceChildren();
+ if(!sandboxTacticItems.length)node('li','保存済みのSandbox戦術はまだありません。',list,'muted');
+ for(const item of sandboxTacticItems){
+  const row=node('li',null,list);
+  const when=new Date(item.saved_at*1000);
+  const date=Number.isNaN(when.getTime())?'日時不明':when.toLocaleString('ja-JP');
+  node('p',item.name+'（版 '+item.revision+' · '+date+'）',row,'break');
+  node('p',buildText(item.self)+' vs '+buildText(item.opponent)+' · 盾 '+item.shields.join(' / ')+
+   ' · 開始ゲージ '+item.energy+' · 指定行動 '+item.action_count+'件',row,'muted break');
+  const flags=node('div',null,row,'tags');
+  tag(flags,item.version_current?'現在の計算データと一致':'計算データ更新あり',item.version_current?'good':'wait');
+  button(node('div',null,row,'actions'),'Sandboxで参照を開く',()=>{
+   try{
+    sessionStorage.removeItem('pokemoniv:sandbox-input-v1');
+    sessionStorage.setItem(sandboxTacticLoadKey,JSON.stringify({tactic_id:item.tactic_id,revision:item.revision}));
+    location.assign('/app/sandbox');
+   }catch{announce('Sandboxへの参照引き継ぎを保存できませんでした。',true);}
+  },'quiet');
+ }
+ $('sandbox-tactic-summary').textContent='表示 '+sandboxTacticItems.length+'件（各戦術の最新版・最大40件）。';
+}
+async function loadSandboxTactics(){
+ const result=await api('missing-analysis',{action:'sandbox_tactic_list'});
+ if(!Array.isArray(result.items))throw Error('Sandbox戦術一覧の応答が不正です。');
+ sandboxTacticItems=result.items;
+ renderSandboxTactics();
+ announce('保存済みのSandbox戦術を読み込みました。');
 }
 async function compareSavedObserved(evaluationId,buildId,parent){
  if(!displayed||displayed.evaluation_id!==evaluationId)
@@ -892,7 +1035,10 @@ function renderHistory(){
   if(previous){
    const before=(gaps[previous.state]||gaps.evidence_pending)[0];
    const after=(gaps[item.state]||gaps.evidence_pending)[0];
-   node('p','同条件の前回記録から：'+(previous.state===item.state?'判定の変化なし':before+' → '+after),row,'muted');
+   const trend=previous.state===item.state?'判定の変化なし'
+    :previous.created_at===item.created_at?'同時刻の別スナップショットあり（前後順は確定できません）'
+    :before+' → '+after;
+   node('p','同条件の前回記録から：'+trend,row,'muted');
   }else node('small','同条件の前回記録はこの表示範囲にありません。',row,'muted');
  }
  $('history-summary').textContent='表示 '+historyItems.length+'件'+(historyCursor?'（続きあり）':'')+'。保存済みスナップショットを表示中。';
@@ -1024,10 +1170,16 @@ async function connect(manual){
    if(priorities[savedForm.role?.priority])$('priority').value=String(savedForm.role.priority);
   }else addScenario(false);
    const linked=linkedTactics();
-   const observed=$('tactic-evidence-panel').dataset.observedSearch==='1';
-   $('tactic-evidence-panel').hidden=!linked&&!observed;
-   $('tactic-evidence-read').hidden=!linked;
+   const panel=$('tactic-evidence-panel');
+   const canSandbox=panel.dataset.sandbox==='1';
+   const canFixed=panel.dataset.tacticSearch==='1';
+   const observed=panel.dataset.observedSearch==='1';
+   panel.hidden=!linked&&!canSandbox&&!canFixed&&!observed;
+   $('fixed-tactic-controls').hidden=!linked&&!canFixed;
+   $('tactic-search-load').hidden=!canFixed;
+   $('tactic-evidence-read').hidden=!linked&&!tacticSearchItems.length;
    $('observed-evidence-controls').hidden=!observed;
+   $('sandbox-tactic-controls').hidden=!canSandbox;
    if(observed){
     try{
      const link=JSON.parse(sessionStorage.getItem(observedLinkKey)||'null');
@@ -1207,7 +1359,12 @@ $('history-more').addEventListener('click',()=>perform(()=>loadHistory(true)));
 $('meta-import-load').addEventListener('click',()=>perform(loadMetaPresetChoices));
 $('meta-import-open').addEventListener('click',()=>perform(loadMetaPresetRows));
 $('meta-import-filter').addEventListener('input',renderMetaImportRows);
+$('tactic-search-load').addEventListener('click',()=>perform(()=>loadTacticSearches(false)));
+$('tactic-search-more').addEventListener('click',()=>perform(()=>loadTacticSearches(true)));
 $('tactic-evidence-read').addEventListener('click',()=>perform(compareSavedTactics));
+$('observed-search-load').addEventListener('click',()=>perform(()=>loadObservedSearches(false)));
+$('observed-search-more').addEventListener('click',()=>perform(()=>loadObservedSearches(true)));
+$('sandbox-tactic-load').addEventListener('click',()=>perform(loadSandboxTactics));
 $('add-scenario').addEventListener('click',()=>addScenario(true));
 $('add-alternative').addEventListener('click',()=>addAlternative());
 $('inventory-load').addEventListener('click',()=>perform(()=>loadInventory(false)));

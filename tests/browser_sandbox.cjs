@@ -284,6 +284,17 @@ async function checkWidth(browser, width) {
     await page.locator('#observed-results').getByText(/未探索/).waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
     assert.deepEqual(errors, []);
+    // Step 4: navigating to /app/sandbox with sandbox-tactic-load-v1 restores saved tactic cleanly.
+    await page.evaluate(tacticId => {
+      sessionStorage.removeItem('pokemoniv:sandbox-input-v1');
+      sessionStorage.setItem('pokemoniv:sandbox-tactic-load-v1', JSON.stringify({tactic_id: tacticId, revision: 1}));
+    }, id);
+    await page.goto(origin + '/app/sandbox');
+    await page.locator('#save-status').filter({hasText: /過去の版 1/}).waitFor();
+    assert.equal(await page.locator('#tactic-name').inputValue(), 'テスト戦術');
+    assert.equal(await page.evaluate(() => sessionStorage.getItem('pokemoniv:sandbox-tactic-load-v1')), null);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
+    assert.deepEqual(errors, []);
   } finally {
     await page.close();
   }

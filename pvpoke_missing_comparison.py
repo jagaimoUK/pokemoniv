@@ -6,9 +6,10 @@ from pvpoke_iv_search import BOUNDARY_NAMES, IVSearch, _pool
 from pvpoke_missing_analysis import AnalysisUnavailable, MissingAnalysis
 from pvpoke_ownership import Ownership, OwnershipConflict, build_id
 from pvpoke_role_evaluation import RoleEvaluation, _definition, _hash, condition_id
-from pvpoke_sandbox_workspace import enabled as sandbox_enabled, search_enabled, observed_enabled
-from pvpoke_tactic_evidence import compare_tactics
-from pvpoke_observed_evidence import compare_observed
+from pvpoke_sandbox import SandboxService
+from pvpoke_sandbox_workspace import TacticStore, enabled as sandbox_enabled, search_enabled, observed_enabled
+from pvpoke_tactic_evidence import compare_tactics, list_tactic_searches
+from pvpoke_observed_evidence import compare_observed, list_observed_searches
 
 API_PATH = '/api/missing-analysis'
 APP_PATH = '/app-api/missing-analysis'
@@ -323,11 +324,29 @@ def app_operation(service, payload):
         if not sandbox_enabled() or not search_enabled():
             raise AnalysisUnavailable('Tactical comparison disabled')
         return compare_tactics(service, payload['evaluation_id'], payload['search_ids'])
+    if action == 'tactic_search_list':
+        _object(payload, 'tactic search list', ('action',), ('limit', 'after_id'))
+        if not sandbox_enabled() or not search_enabled():
+            raise AnalysisUnavailable('Tactical comparison disabled')
+        return list_tactic_searches(service, limit=payload.get('limit', 24),
+                                    after_id=payload.get('after_id'))
     if action == 'observed_evidence':
         _object(payload, 'observed evidence', ('action', 'evaluation_id', 'search_ids'))
         if not sandbox_enabled() or not observed_enabled():
             raise AnalysisUnavailable('Observed comparison disabled')
         return compare_observed(service, payload['evaluation_id'], payload['search_ids'])
+    if action == 'observed_search_list':
+        _object(payload, 'observed search list', ('action',), ('limit', 'after_id'))
+        if not sandbox_enabled() or not observed_enabled():
+            raise AnalysisUnavailable('Observed comparison disabled')
+        return list_observed_searches(service, limit=payload.get('limit', 24),
+                                      after_id=payload.get('after_id'))
+    if action == 'sandbox_tactic_list':
+        _object(payload, 'sandbox tactic list', ('action',))
+        if not sandbox_enabled():
+            raise AnalysisUnavailable('Sandbox tactics disabled')
+        return {'items': TacticStore(service.store).list_summaries(
+            calculation_version=SandboxService(service).calculation_version)}
     if action == 'ownership':
         _object(payload, 'ownership confirmation',
                 ('action', 'instance_id', 'event_id', 'expected_revision', 'state'), ('observation', 'register'))

@@ -7,13 +7,25 @@ that the tactic is reproducible using information available to a live player.
 from __future__ import annotations
 
 from collections import defaultdict
+import json
+import sqlite3
 
-from pvpoke_battle_service import _json_hash
+from pvpoke_battle_service import _canonical_json, _json_hash
 from pvpoke_battle_store import BattleStoreError
 from pvpoke_missing_analysis import MissingAnalysis, battle_facts
 from pvpoke_ownership import build_id
 from pvpoke_role_evaluation import RoleEvaluation, _hash, _meets, condition_id
-from pvpoke_tactic_search import TacticSearch, TacticSearchError, _requested_actions_completed
+from pvpoke_tactic_search import (
+    MAX_CANDIDATES,
+    MAX_CELL_BYTES,
+    MAX_PLAN_BYTES,
+    RESULT_TABLE,
+    SCHEMA as TACTIC_SEARCH_SCHEMA,
+    TABLE as TACTIC_SEARCH_TABLE,
+    TacticSearch,
+    TacticSearchError,
+    _requested_actions_completed,
+)
 
 SCHEMA = 'missing-tactic-evidence-v1'
 MAX_SEARCHES = 6
@@ -296,3 +308,81 @@ def compare_tactics(service, evaluation_id, search_ids):
         'searched_count': len(search_ids), 'builds': builds,
         'note': 'Specific scripted outcomes never overwrite standard results or establish live role coverage.',
     }
+
+
+def list_tactic_searches(service, *, limit=24, after_id=None):
+    """List saved fixed-tactic searches for this owner without running battles."""
+    if type(limit) is not int or not 1 <= limit <= 32:
+        raise ValueError('Invalid tactic search list limit')
+    if after_id is not None:
+        _hash(after_id)
+    search = TacticSearch(service)
+    active_version = search._version()
+    if not service.store.path.exists():
+        return {'items': [], 'has_more': False, 'next_after': None}
+    try:
+        with service.store._reader() as db:
+            if not db.execute('SELECT 1 FROM sqlite_schema WHERE type=? AND name=?',
+                              ('table', TACTIC_SEARCH_TABLE)).fetchone():
+                return {'items': [], 'has_more': False, 'next_after': None}
+            has_cells = bool(db.execute('SELECT 1 FROM sqlite_schema WHERE type=? AND name=?',
+                                        ('table', RESULT_TABLE)).fetchone())
+            sql = f'''SELECT search_id, body, digest, next_index
+                FROM {TACTIC_SEARCH_TABLE} WHERE owner_scope=?'''
+            params = [service.store.owner_scope]
+            if after_id is not None:
+                sql += ' AND search_id < ?'
+                params.append(after_id)
+            sql += ' ORDER BY search_id DESC LIMIT ?'
+            params.append(limit + 1)
+            rows = db.execute(sql, params).fetchall()
+            has_more = len(rows) > limit
+            items = []
+            for search_id, body, digest, offset in rows[:limit]:
+                _hash(search_id)
+                if type(body) is not bytes or len(body) > MAX_PLAN_BYTES:
+                    raise ValueError('Invalid tactic plan size')
+                plan = json.loads(body)
+                count = len(plan['candidates'])
+                if (_canonical_json(plan) != body or _json_hash(plan) != digest
+                        or digest != search_id or plan.get('schema') != TACTIC_SEARCH_SCHEMA
+                        or not 1 <= count <= MAX_CANDIDATES
+                        or type(offset) is not int or not 0 <= offset <= count):
+                    raise ValueError('Invalid tactic plan or cursor')
+                if offset and not has_cells:
+                    raise ValueError('Tactic checkpoint differs from saved cells')
+                cell_rows = (db.execute(f'''SELECT cell_index, body, digest FROM {RESULT_TABLE}
+                    WHERE owner_scope=? AND search_id=? ORDER BY cell_index''',
+                    (service.store.owner_scope, search_id)).fetchall() if has_cells else [])
+                if len(cell_rows) != offset:
+                    raise ValueError('Tactic checkpoint differs from saved cells')
+                complete = 0
+                for expected_index, (index, data, checksum) in enumerate(cell_rows):
+                    if (index != expected_index or type(data) is not bytes
+                            or len(data) > MAX_CELL_BYTES):
+                        raise ValueError('Invalid tactic cell')
+                    cell = json.loads(data)
+                    if (_canonical_json(cell) != data or _json_hash(cell) != checksum
+                            or cell.get('index') != index
+                            or cell.get('candidate_key') != _json_hash(plan['candidates'][index]['spec'])):
+                        raise ValueError('Corrupt tactic cell')
+                    if cell.get('status') == 'complete':
+                        complete += 1
+                seed = plan['seed']
+                own, opp = seed['combatants']
+                items.append({
+                    'search_id': search_id,
+                    'build_id': build_id(own),
+                    'self': {k: own[k] for k in ('species_id', 'ivs', 'level', 'moves')},
+                    'opponent': {k: opp[k] for k in ('species_id', 'ivs', 'level', 'moves')},
+                    'shields': [own['initial']['shields'], opp['initial']['shields']],
+                    'energy': own['initial']['energy'],
+                    'planned_scripts': count,
+                    'attempted_scripts': offset,
+                    'complete_scripts': complete,
+                    'version_current': plan.get('version') == active_version,
+                })
+            next_after = items[-1]['search_id'] if has_more and items else None
+            return {'items': items, 'has_more': has_more, 'next_after': next_after}
+    except (sqlite3.Error, OSError, BattleStoreError, ValueError, KeyError, TypeError, RecursionError) as exc:
+        raise TacticEvidenceUnavailable('Could not list saved tactic searches') from exc

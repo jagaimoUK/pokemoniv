@@ -609,9 +609,15 @@ class Handler(BaseHTTPRequestHandler):
             if not missing_enabled():
                 return self.respond(404, {'error': 'Not found'})
             from pvpoke_missing_ui import HTML as missing_html
-            page = missing_html.replace('data-observed-search="0"',
-                                        'data-observed-search="1"' if sandbox_enabled() and observed_enabled()
-                                        else 'data-observed-search="0"')
+            page = missing_html.replace('data-sandbox="0"',
+                                        'data-sandbox="1"' if sandbox_enabled() else 'data-sandbox="0"')
+            page = page.replace('data-tactic-search="0"',
+                                'data-tactic-search="1"'
+                                if sandbox_enabled() and os.environ.get('PVP_TACTIC_SEARCH_ENABLED') == '1'
+                                else 'data-tactic-search="0"')
+            page = page.replace('data-observed-search="0"',
+                                'data-observed-search="1"' if sandbox_enabled() and observed_enabled()
+                                else 'data-observed-search="0"')
         elif self.path in (SANDBOX_PAGE_PATH, SANDBOX_PAGE_PATH + '?observed=1'):
             if not sandbox_enabled():
                 return self.respond(404, {'error': 'Not found'})

@@ -6,6 +6,8 @@ const {chromium} = require('playwright');
 const rows = require('./fixtures/strategy_rows.json');
 
 const html = fs.readFileSync('pvpoke_missing_ui.py', 'utf8').split("HTML = r'''")[1].split("'''")[0]
+  .replace('data-sandbox="0"', 'data-sandbox="1"')
+  .replace('data-tactic-search="0"', 'data-tactic-search="1"')
   .replace('data-observed-search="0"', 'data-observed-search="1"');
 const digest = text => crypto.createHash('sha256').update(text).digest('base64');
 const inline = tag => digest(html.split('<' + tag + '>')[1].split('</' + tag + '>')[0]);
@@ -43,11 +45,15 @@ async function checkWidth(browser, width) {
     let sampleRevision = 1;
     let sampleCp = 1476;
     let listCalls = 0;
+    let tacticEvidenceCalls = 0;
     await page.route('http://127.0.0.1:9876/**', async route => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
       if (path === '/app/missing') {
         return route.fulfill({contentType: 'text/html', body: html, headers: {'Content-Security-Policy': csp}});
+      }
+      if (path === '/app/sandbox') {
+        return route.fulfill({contentType: 'text/html', body: '<!doctype html><meta charset="utf-8"><p>sandbox</p>'});
       }
       if (path === '/favicon.ico') return route.fulfill({status: 404, body: ''});
       const payload = request.postDataJSON();
@@ -77,7 +83,52 @@ async function checkWidth(browser, width) {
           items:[
             {...common,evaluation_id:'e'.repeat(64),created_at:1795000100,state:'covered'},
             {...common,evaluation_id:'d'.repeat(64),created_at:1795000000,state:'evidence_pending'},
+            {...common,evaluation_id:'c'.repeat(64),created_at:1795000000,state:'gap'},
           ],has_more:false,next_after:null,
+        }});
+      }
+      if (payload.action === 'tactic_search_list') {
+        assert.equal(payload.limit, 24);
+        const build0 = {species_id: rows[0].species, ivs: {attack: rows[0].atk, defense: rows[0].def, hp: rows[0].hp},
+          level: rows[0].level, moves: {fast: rows[0].fast, charged: [rows[0].charged1, rows[0].charged2]}};
+        const build2 = {species_id: rows[2].species, ivs: {attack: rows[2].atk, defense: rows[2].def, hp: rows[2].hp},
+          level: rows[2].level, moves: {fast: rows[2].fast, charged: [rows[2].charged1, rows[2].charged2]}};
+        return route.fulfill({json: {
+          items: [
+            {search_id: 'f'.repeat(64), build_id: 'b'.repeat(64), self: build0, opponent: build2,
+             shields: [1, 1], energy: 0, planned_scripts: 4, attempted_scripts: 1, complete_scripts: 1, version_current: true},
+            {search_id: 'a'.repeat(64), build_id: 'b'.repeat(64), self: build0, opponent: build2,
+             shields: [0, 1], energy: 12, planned_scripts: 4, attempted_scripts: 2, complete_scripts: 2, version_current: false},
+          ],
+          has_more: false, next_after: null,
+        }});
+      }
+      if (payload.action === 'observed_search_list') {
+        assert.equal(payload.limit, 24);
+        const build0 = {species_id: rows[0].species, ivs: {attack: rows[0].atk, defense: rows[0].def, hp: rows[0].hp},
+          level: rows[0].level, moves: {fast: rows[0].fast, charged: [rows[0].charged1, rows[0].charged2]}};
+        const build2 = {species_id: rows[2].species, ivs: {attack: rows[2].atk, defense: rows[2].def, hp: rows[2].hp},
+          level: rows[2].level, moves: {fast: rows[2].fast, charged: [rows[2].charged1, rows[2].charged2]}};
+        return route.fulfill({json: {
+          items: [{
+            search_id: 'b'.repeat(64), work: 4, paused: false, scenario_count: 2, world_count: 2,
+            worlds: [{self: build0, opponent: build2, shields: [1, 1], energy: 0}],
+            worlds_truncated: false, roles: ['win'], version_current: true,
+          }],
+          has_more: false, next_after: null,
+        }});
+      }
+      if (payload.action === 'sandbox_tactic_list') {
+        const build0 = {species_id: rows[0].species, ivs: {attack: rows[0].atk, defense: rows[0].def, hp: rows[0].hp},
+          level: rows[0].level, moves: {fast: rows[0].fast, charged: [rows[0].charged1, rows[0].charged2]}};
+        const build2 = {species_id: rows[2].species, ivs: {attack: rows[2].atk, defense: rows[2].def, hp: rows[2].hp},
+          level: rows[2].level, moves: {fast: rows[2].fast, charged: [rows[2].charged1, rows[2].charged2]}};
+        return route.fulfill({json: {
+          items: [{
+            tactic_id: '1'.repeat(32), revision: 2, name: 'テスト戦術', saved_at: 1795000000,
+            self: build0, opponent: build2, shields: [1, 1], energy: 0,
+            action_count: 3, shield_decision_count: 1, version_current: true,
+          }],
         }});
       }
 
@@ -102,8 +153,9 @@ async function checkWidth(browser, width) {
         }});
       }
       if (payload.action === 'tactic_evidence') {
+        tacticEvidenceCalls += 1;
         assert.equal(payload.evaluation_id,'e'.repeat(64));
-        assert.deepEqual(payload.search_ids,['f'.repeat(64)]);
+        assert.deepEqual(payload.search_ids, tacticEvidenceCalls === 1 ? ['f'.repeat(64)] : ['a'.repeat(64)]);
         return route.fulfill({json:{schema:'missing-tactic-evidence-v1',standard_state:'evidence_pending',
           searched_count:1,new_battles:0,builds:[{build_id:'b'.repeat(64),
           theoretical_all_conditions:false,advisory:{evidence_order:1,role_priority:3,
@@ -380,6 +432,7 @@ async function checkWidth(browser, width) {
     await page.locator('#evaluation-history-panel > summary').click();
     await page.locator('#history-load').click();
     await page.locator('#history-items').getByText(/同条件の前回記録から：対戦証拠待ち → 所持確認済みの個体で充足/).waitFor();
+    await page.locator('#history-items').getByText(/同時刻の別スナップショットあり（前後順は確定できません）/).waitFor();
     await page.locator('#meta-import-panel > summary').click();
     await page.locator('#meta-import-load').click();
     await page.locator('#meta-import-open').click();
@@ -389,10 +442,31 @@ async function checkWidth(browser, width) {
     const imported = page.locator('#scenarios details.edit').nth(1);
     assert.equal(await imported.locator('input[type=number]').nth(0).inputValue(), '');
     assert.equal(await imported.locator('input[type=number]').nth(3).inputValue(), '');
+    // Step 4: read-only selection of saved fixed/observed searches and Sandbox tactic listing + transfer.
+    await page.locator('#tactic-search-load').click();
+    await page.locator('#tactic-search-summary').getByText(/表示 2件 ／ 選択中 1 \/ 6件/).waitFor();
+    const fixedChecks = page.locator('#tactic-search-items input[type=checkbox]');
+    assert.equal(await fixedChecks.nth(0).isChecked(), true);
+    assert.equal(await fixedChecks.nth(1).isChecked(), false);
+    await fixedChecks.nth(0).uncheck();
+    await fixedChecks.nth(1).check();
+    await page.locator('#tactic-evidence-read').click();
+    await page.locator('#observed-search-load').click();
+    await page.locator('#observed-search-items').getByRole('button', {name: 'この観測IDを選択'}).click();
+    assert.equal(await page.locator('#observed-search-id').inputValue(), 'b'.repeat(64));
+    await page.locator('#sandbox-tactic-load').click();
+    await page.locator('#sandbox-tactic-items').getByText(/テスト戦術（版 2/).waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
     assert.deepEqual(errors, []);
-    // Base requests (5 at 320px, 7 at 390px) + 1 Step 2 floor explore + 2 candidate update/evaluate + 5 inventory/scope requests.
-    assert.equal(requests.length, width > 320 ? 18 : 16);
+    // Base requests (5 at 320px, 7 at 390px) + Step 2 (1) + update (2) + inventory/scope (5) + Step 3 (5) + Step 4 (4).
+    assert.equal(requests.length, width > 320 ? 22 : 20);
+    await page.locator('#sandbox-tactic-items').getByRole('button', {name: 'Sandboxで参照を開く'}).click();
+    await page.waitForURL('**/app/sandbox');
+    assert.equal(await page.evaluate(() => sessionStorage.getItem('pokemoniv:sandbox-input-v1')), null);
+    assert.deepEqual(
+      await page.evaluate(() => JSON.parse(sessionStorage.getItem('pokemoniv:sandbox-tactic-load-v1'))),
+      {tactic_id: '1'.repeat(32), revision: 2}
+    );
   } finally {
     await page.close();
   }
