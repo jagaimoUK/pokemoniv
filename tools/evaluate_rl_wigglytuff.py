@@ -12,6 +12,7 @@ from pvpoke_rl_team_preview import SixToThreeSelection
 from tools.evaluate_rl_branches import PRIMEAPE
 from tools.evaluate_rl_mc import heldout_scenarios
 from tools.evaluate_rl_switch_traces import LEGACY_SELECTION
+from tools.rl_charge_metrics import charge_stratum, paired_charge_rewards
 from tools.run_rl_mc import fixture_teams
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -26,7 +27,6 @@ ALTERNATE_MATCHUPS = tuple(((1, 3, 5), lead) for lead in (1, 3, 5) for _ in rang
 # Primeape replaces Clodsire in slot 1 and is included in every selected trio.
 SWIFT_ALTERNATE_MATCHUPS = tuple(((1, 3, 4), lead) for lead in (1, 3, 4) for _ in range(2)) + tuple(
     ((0, 1, 2), lead) for lead in (0, 1, 2) for _ in range(2))
-BATTLE_CLOCK_MS = 240000
 CHARGE_ALTERNATIVES = ("fast", "charge_0", "wait")
 
 
@@ -133,37 +133,17 @@ def summarize_timing(cases):
     }
 
 
-def charge_stratum(public_state):
-    """Predeclared buckets using the rounded public HP and the native clock."""
-    hp = public_state["hp_bucket_5pct"]
-    shields = public_state["opponent_shields"]
-    remaining = BATTLE_CLOCK_MS - public_state["elapsed_ms"]
-    if not 0 <= hp <= 20 or not 0 <= shields <= 2 or not 0 <= remaining <= BATTLE_CLOCK_MS:
-        raise ValueError("Invalid public charge-fork state")
-    hp_band = ("0–25%", "30–50%", "55–75%", "80–100%")[max(0, (hp - 1) // 5)]
-    time_band = "≤30s" if remaining <= 30000 else ">30–60s" if remaining <= 60000 else ">60s"
-    return f"{hp_band} / {shields} shield / {time_band}"
-
-
 def _charge_pair_summary(histories, action):
     pairs = [(row["immediate"], row["alternatives"][action])
              for row in histories if action in row["alternatives"]]
-    completed = [(a, b) for a, b in pairs if a["reward"] is not None and b["reward"] is not None]
-    deltas = [b["reward"] - a["reward"] for a, b in completed]
     return {
-        "attempted": len(pairs), "both_completed": len(completed),
-        "both_completed_rate": len(completed) / len(pairs) if pairs else None,
-        "alternative_better": sum(d > 0 for d in deltas), "equal": sum(d == 0 for d in deltas),
-        "alternative_worse": sum(d < 0 for d in deltas),
-        "mean_reward_delta": sum(deltas) / len(deltas) if deltas else None,
+        **paired_charge_rewards(pairs),
         "immediate_swift_resolved_at_fork": sum(any(m["move"] == "SWIFT" for m in a["charge_resolved_at_fork"])
                                                 for a, _ in pairs),
         "immediate_second_swift_resolved": sum(a["second_swift_resolved"] for a, _ in pairs),
         "alternative_second_swift_resolved": sum(b["second_swift_resolved"] for _, b in pairs),
         "alternative_first_charge_from_fork": dict(Counter(
             (b["first_charge_from_fork"] or {}).get("move", "none") for _, b in pairs)),
-        "immediate_censored": dict(Counter(a["outcome"] for a, _ in pairs if a["reward"] is None)),
-        "alternative_censored": dict(Counter(b["outcome"] for _, b in pairs if b["reward"] is None)),
     }
 
 

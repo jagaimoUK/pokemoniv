@@ -4,11 +4,12 @@ const {readFileSync} = require("node:fs");
 const {join} = require("node:path");
 const {isDeepStrictEqual} = require("node:util");
 const {createTeamSession, chooseTeamCpu} = require("../pvpoke_rl_team_native.js");
+const {compareChargeFork, publicChargeState, ownChargesFromFork, verifiedNativeReward} =
+  require("./rl_charge_branches.cjs");
 
 const GAMEMASTER = join(__dirname, "..", "tests", "fixtures", "strategy_gamemaster.json");
 const SLOT = 2;
 const BONUSES = [8, 16];
-const KO_REWARDS = {self_ko_win: 1, opponent_ko_win: -1, simultaneous_ko: 0};
 const TARGET_SWITCH = `switch_${SLOT}`;
 const SECOND_SWIFT = {slot: SLOT, move: "SWIFT", ordinal: 2};
 const CHARGE_ALTERNATIVES = ["fast", "charge_0", "wait"];
@@ -55,7 +56,7 @@ function run(handoff, seed, opening, energyBonus, timingMode = null, chargeChoic
     if (chargeChoice && !chargeFork && fork && sawKo) {
       const swiftAction = readyCharge(view, allSwifts, SECOND_SWIFT);
       if (swiftAction) {
-        chargeFork = {view, audit: session.privateReplay(), swiftAction};
+        chargeFork = {view, audit: session.privateReplay(), baselineAction: swiftAction};
         action = chargeChoice === "immediate" ? swiftAction : chargeChoice;
         if (!legal.includes(action)) throw Error("Charge study action is not legal at the fork");
       }
@@ -116,13 +117,9 @@ function run(handoff, seed, opening, energyBonus, timingMode = null, chargeChoic
   const openingSwitch = fork && audit.events.find(e => e.seq > fork.audit.events.length &&
     e.kind === "switch" && e.actor === 0 && e.turn === fork.view.turn && !e.forced);
   const final = audit.state.sides[0].team[SLOT];
-  const {outcome, training_eligible} = response.info;
-  if (response.terminated && (!training_eligible || KO_REWARDS[outcome] !== response.reward)) {
-    throw Error("Native study returned an unverified terminal reward");
-  }
   const entryStates = entry?.state.sides;
   const summary = {
-    reward: response.terminated ? response.reward : null, outcome,
+    reward: verifiedNativeReward(response), outcome: response.info.outcome,
     [timingMode ? "opening_fork_turn" : "fork_turn"]: fork?.view.turn ?? null,
     switch_at_fork: openingSwitch?.species ?? null,
     entry: entry ? {turn: entry.action_turn, elapsed_ms: entry.elapsed_ms, forced: entry.forced,
@@ -218,9 +215,8 @@ function compareTiming({seed, handoff}) {
 }
 
 function chargeOutcome(rolled) {
-  const {view, audit} = rolled.chargeFork;
-  const resolved = rolled.audit.events.slice(audit.events.length).filter(e =>
-    e.kind === "charged" && e.actor === 0 && e.species === "wigglytuff");
+  const {view} = rolled.chargeFork;
+  const resolved = ownChargesFromFork(rolled);
   return {reward: rolled.summary.reward, outcome: rolled.summary.outcome,
     charge_resolved_at_fork: resolved.filter(e => e.turn === view.turn).map(moveSummary),
     first_charge_from_fork: resolved.length ? moveSummary(resolved[0]) : null,
@@ -229,27 +225,15 @@ function chargeOutcome(rolled) {
 }
 
 function compareChargeHistory(handoff, seed, opening) {
-  const immediate = run(handoff, seed, opening, 0, null, "immediate");
+  const {immediate, alternatives} = compareChargeFork(
+    choice => run(handoff, seed, opening, 0, null, choice), CHARGE_ALTERNATIVES);
   if (!immediate.chargeFork) {
     return {excluded: immediate.summary.swift.length ? "second_swift_not_legal" : "no_first_swift"};
   }
-  const control = run(handoff, seed, opening, 0, null, "immediate");
-  if (!isDeepStrictEqual(immediate, control)) throw Error("Immediate charge A/A replay differs");
-  const {view, swiftAction} = immediate.chargeFork;
-  const enemy = view.opponent.revealed.find(p => p.species === view.opponent.active_species);
-  if (!enemy || enemy.fainted) throw Error("Missing public target at charge fork");
-  const alternatives = {};
-  for (const action of CHARGE_ALTERNATIVES) {
-    if (action === swiftAction || !view.legal_actions.includes(action)) continue;
-    const result = run(handoff, seed, opening, 0, null, action);
-    if (!isDeepStrictEqual(immediate.chargeFork, result.chargeFork)) {
-      throw Error("Charge study histories differ before the fork");
-    }
-    alternatives[action] = chargeOutcome(result);
-  }
-  return {public_state: {turn: view.turn, hp_bucket_5pct: enemy.hp_bucket_5pct,
-    opponent_shields: view.opponent.shields, elapsed_ms: view.elapsed_ms},
-    immediate_action: swiftAction, immediate: chargeOutcome(immediate), alternatives};
+  const {view, baselineAction} = immediate.chargeFork;
+  return {public_state: publicChargeState(view), immediate_action: baselineAction,
+    immediate: chargeOutcome(immediate), alternatives: Object.fromEntries(
+      Object.entries(alternatives).map(([action, result]) => [action, chargeOutcome(result)]))};
 }
 
 function compareSecondSwift({seed, handoff}) {
