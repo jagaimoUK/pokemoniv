@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 
 from pvpoke_rl_mc_train import PublicMonteCarloPolicy, public_state
 from pvpoke_rl_team_env import SixToThreeEnvironment
-from run_rl_mc import GAME_DATA, fixture_teams, run_batch, POLICY_VARIANTS
+from tools.run_rl_mc import GAME_DATA, fixture_teams, run_batch, POLICY_VARIANTS
 
 BASELINE_SELECTION = "0,1,2|0"
 KINDS = ("fixed", "untrained", "trained")
