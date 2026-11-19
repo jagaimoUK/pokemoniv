@@ -75,6 +75,10 @@ def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS,
     # Read-only, public-state lookup. A fixed policy has no learned table.
     learned = policy.snapshot()["values"] if policy is not None else None
     state_hits = action_hits = 0
+    # Action values are already recorded in PUBLIC keyed tables. The learned
+    # estimate is an episode-level terminal return, not a causal move value.
+    value_sign_counts = {"positive": 0, "zero": 0, "negative": 0,
+                         "unseen_action": 0}
     selection_seen = selection_action_seen = None
     selection_action = None
     # Public-observation only; diagnose why synthetic baselines hit the clock.
@@ -151,6 +155,13 @@ def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS,
                 has_action = action in actions_seen
                 state_hits += int(has_state)
                 action_hits += int(has_action)
+                if has_action:
+                    learned_return = actions_seen[action][1]
+                    value_sign = ("positive" if learned_return > 0 else
+                                  "negative" if learned_return < 0 else "zero")
+                    value_sign_counts[value_sign] += 1
+                else:
+                    value_sign_counts["unseen_action"] += 1
                 if kind == "selection":
                     selection_seen = has_state
                     selection_action_seen = has_action
@@ -176,6 +187,7 @@ def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS,
                     "coverage": None if learned is None else {
                         "state_hits": state_hits,
                         "chosen_action_hits": action_hits,
+                        "value_sign_counts": value_sign_counts,
                         "selection_state_seen": selection_seen,
                         "selection_action_seen": selection_action_seen,
                     },
@@ -236,6 +248,15 @@ def _metrics(results):
                       and row.get("public_clock_before_final_action") is not None]
     covered_state = sum(v["state_hits"] for v in present)
     covered_action = sum(v["chosen_action_hits"] for v in present)
+    value_groups = ("positive", "zero", "negative", "unseen_action")
+    value_sign_totals = {name: sum(
+        row.get("value_sign_counts", {}).get(name, 0) for row in present)
+        for name in value_groups}
+    if any("value_sign_counts" in row for row in present):
+        if (sum(value_sign_totals.values()) != total_decisions or
+                sum(value_sign_totals[name] for name in ("positive", "zero", "negative"))
+                != covered_action):
+            raise ValueError("Inconsistent known-action return signs")
     selection_decisions = sum(
         v["selection_state_seen"] is not None for v in present)
     selection_hits = sum(v["selection_state_seen"] is True for v in present)
@@ -271,6 +292,7 @@ def _metrics(results):
         "learned_coverage": ({
             "state_hits": covered_state,
             "chosen_action_hits": covered_action,
+            "value_sign_counts": value_sign_totals,
             "state_hit_fraction": round(covered_state / total_decisions, 4)
                 if total_decisions else None,
             "chosen_action_hit_fraction": round(covered_action / total_decisions, 4)
