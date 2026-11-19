@@ -1,0 +1,8 @@
+{
+  "base_species_id": "quagsire",
+  "shadow_entry": {
+    "speciesId": "quagsire_shadow",
+    "speciesName": "Quagsire (Shadow)",
+    "tags": ["shadow"]
+  }
+}

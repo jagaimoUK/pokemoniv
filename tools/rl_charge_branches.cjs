@@ -48,4 +48,41 @@ function verifiedNativeReward(response) {
   return response.reward;
 }
 
-module.exports = {compareChargeFork, publicChargeState, ownChargesFromFork, verifiedNativeReward};
+function runBankedChargeArm(session, chooseAction, targetSlot, expectedOpponentShields, choice) {
+  let response = session.response();
+  let chargeFork = null;
+  for (let steps = 0; response.observation && steps < 2000; steps++) {
+    const view = response.observation;
+    let action = chooseAction(view);
+    if (!chargeFork && view.own.team[targetSlot].hp === 0) {
+      return {excluded: "target_fainted_before_fork"};
+    }
+    if (!chargeFork && view.phase === "turn" && view.own.active_slot === targetSlot) {
+      const legal = view.legal_actions;
+      if (legal.includes("charge_0") && legal.includes("charge_1")) {
+        if (expectedOpponentShields !== null && view.opponent.shields !== expectedOpponentShields) {
+          throw Error("Banking changed opponent shields");
+        }
+        chargeFork = {view, audit: session.privateReplay(), baselineAction: "charge_0"};
+        action = choice === "immediate" ? "charge_0" : choice;
+      } else {
+        action = legal.includes("fast") ? "fast" : "wait";
+      }
+    }
+    response = session.step([action, chooseAction(session.observe(1))]);
+  }
+  if (response.observation) throw Error("Charge study exceeded its step budget");
+  if (!chargeFork) return {excluded: `${response.info.outcome}_before_fork`};
+  return {chargeFork, audit: session.privateReplay(), reward: verifiedNativeReward(response),
+    outcome: response.info.outcome};
+}
+
+function summarizeChargeArm(rolled, requestedMove) {
+  const turn = rolled.chargeFork.view.turn;
+  const resolved = ownChargesFromFork(rolled).find(e => e.turn === turn && e.move_id === requestedMove);
+  return {reward: rolled.reward, outcome: rolled.outcome, requested_move: requestedMove,
+    move_resolved: Boolean(resolved), shielded: resolved?.shielded ?? null};
+}
+
+module.exports = {compareChargeFork, publicChargeState, ownChargesFromFork, verifiedNativeReward,
+  runBankedChargeArm, summarizeChargeArm};
