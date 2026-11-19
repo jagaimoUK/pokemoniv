@@ -76,6 +76,11 @@ class FakeMatch:
                     "training_eligible": False,
                     "selection_reward": 1, "outcome": "self_ko_win",
                 }
+            if self.final == "mislabeled":
+                return None, 1, True, False, {
+                    "training_eligible": True,
+                    "selection_reward": 1, "outcome": "opponent_ko_win",
+                }
         raise AssertionError("Unexpected fake environment phase")
 
 
@@ -117,7 +122,7 @@ class PublicMCTests(unittest.TestCase):
 
     def test_timeout_and_invalid_rewards_do_not_update_learning(self):
         policy = PublicMonteCarloPolicy(seed=3)
-        for final in ("timeout", "poisoned"):
+        for final in ("timeout", "poisoned", "mislabeled"):
             result = play_episode(FakeMatch(final=final), policy, epsilon=0.0)
             self.assertEqual(result["status"], "discarded")
             self.assertIsNone(result["reward"])
@@ -137,6 +142,8 @@ class PublicMCTests(unittest.TestCase):
                           "legal_actions": ["invalid"]})
         with self.assertRaises(LearningError):
             model.choose({**tactic, "legal_actions": ["wait", "wait"]})
+        with self.assertRaises(LearningError):
+            model.choose({**tactic, "legal_actions": [{"bad": "unhashable"}]})
 
     def test_checkpoint_rejects_invalid_counts_values_and_schema(self):
         p = PublicMonteCarloPolicy(seed=1)
