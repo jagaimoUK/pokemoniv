@@ -134,8 +134,16 @@ class PublicMonteCarloPolicy:
         self._values = {"selection": {}, "tactics": {}}
         self.completed_matches = 0
 
+    def encode_state(self, view):
+        """Version-matched public state encoder used by decisions AND audits.
+
+        Evaluators must call this method rather than calling public_state()
+        directly: the optional v2 policy has a different state-key schema.
+        """
+        return public_state(view)
+
     def choose(self, view, *, epsilon=0.2):
-        return self._choose_encoded(public_state(view), epsilon=epsilon)
+        return self._choose_encoded(self.encode_state(view), epsilon=epsilon)
 
     def _choose_encoded(self, encoded, *, epsilon):
         """Use the same action-selection algorithm with a versioned encoder."""
