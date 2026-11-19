@@ -11,10 +11,11 @@ sys.path.insert(0, str(ROOT / "tools"))
 from evaluate_rl_mc import (
     _metrics, evaluate_one, evaluate_paired, fixed_public_action, heldout_scenarios,
 )
-from pvpoke_rl_mc_train import PublicMonteCarloPolicy
+from pvpoke_rl_mc_train import PublicMonteCarloPolicy, public_state
+from pvpoke_rl_mc_generalized import GeneralizedMonteCarloPolicy, coarse_public_state
 from pvpoke_rl_team_preview import SixToThreeSelection
 from test_rl_team_env import rosters
-from test_rl_mc_train import public_tactics
+from test_rl_mc_train import public_tactics, FakeMatch, preview
 
 
 class MatchedEvaluationTests(unittest.TestCase):
@@ -134,6 +135,49 @@ class MatchedEvaluationTests(unittest.TestCase):
                 [x[0] for x in seen[3*n:3*n+3]],
                 ["fixed", "untrained", "trained"])
             self.assertTrue(all(x[1] == scenarios[n] for x in seen[3*n:3*n+3]))
+
+    def test_v2_evaluation_uses_exactly_the_training_encoder(self):
+        # Regression: v2 previously looked up v1 hashes, reporting zero
+        # coverage even after observing a trained public state/action.
+        model = GeneralizedMonteCarloPolicy(seed=7)
+        selection = preview()
+        tactic = public_tactics()
+        kind, selection_key, _ = coarse_public_state(selection)
+        tactic_kind, tactic_key, _ = coarse_public_state(tactic)
+        self.assertEqual(kind, "selection")
+        self.assertEqual(tactic_kind, "tactics")
+        self.assertNotEqual(coarse_public_state(tactic)[1],
+                            public_state(tactic)[1])
+        self.assertEqual(model.encode_state(selection), coarse_public_state(selection))
+        self.assertEqual(model.encode_state(tactic), coarse_public_state(tactic))
+        model.learn([("selection", selection_key, "0,1,2|0"),
+                     ("tactics", tactic_key, "fast")],
+                    reward=1, selection_reward=1)
+
+        class PublicFakeMatch(FakeMatch):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                pass
+
+        before = model.snapshot()
+        with patch("evaluate_rl_mc.SixToThreeEnvironment",
+                   return_value=PublicFakeMatch()):
+            record = evaluate_one(model, "trained", (12, (0, 1, 2), 0))
+        self.assertEqual(record["status"], "complete")
+        self.assertEqual(record["coverage"]["state_hits"], 2)
+        self.assertEqual(record["coverage"]["chosen_action_hits"], 2)
+        self.assertTrue(record["coverage"]["selection_state_seen"])
+        self.assertTrue(record["coverage"]["selection_action_seen"])
+        self.assertEqual(record["selection_action"], "0,1,2|0")
+        self.assertEqual(model.snapshot(), before)
+
+    def test_v1_evaluation_encoder_remains_backward_compatible(self):
+        model = PublicMonteCarloPolicy(seed=7)
+        self.assertEqual(model.encode_state(preview()), public_state(preview()))
+        self.assertEqual(model.encode_state(public_tactics()),
+                         public_state(public_tactics()))
 
     def test_native_3v3_paired_evaluation_does_not_train(self):
         trained, untrained = PublicMonteCarloPolicy(seed=17), PublicMonteCarloPolicy(seed=17)
