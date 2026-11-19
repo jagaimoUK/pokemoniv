@@ -88,7 +88,7 @@ def _read_audit(env, selection):
     return audit
 
 
-def _find_frontier(env, transition, pair, budget, selection):
+def _find_frontier(env, transition, pair, budget, selection, frontier_filter, prefix_policy):
     phase, baseline, candidate = pair
     prefix = []
     while len(prefix) < budget:
@@ -98,11 +98,14 @@ def _find_frontier(env, transition, pair, budget, selection):
             return None, reason or "completed_before_frontier"
         action = fixed_public_action(view)
         if (prefix and view["phase"] == phase and action == baseline and
-                baseline in view["legal_actions"] and candidate in view["legal_actions"]):
+                baseline in view["legal_actions"] and candidate in view["legal_actions"] and
+                (frontier_filter is None or frontier_filter(view))):
             audit = _read_audit(env, selection)
             if len(audit["battle"]["decisions"]) < len(prefix):
                 raise InvalidNativeTeamResult("Incomplete native prefix audit")
             return (tuple(prefix), transition, audit), None
+        if prefix_policy is not None:
+            action = prefix_policy(view)
         prefix.append(action)
         transition = env.step(action)
     _, reason = _verdict(transition)
@@ -178,9 +181,10 @@ def _record_pair(metrics, arms, baseline, candidate):
         metrics["both_censored"] += 1
 
 
-def _run_case(env, seed, pair, horizon, budget, selection, report):
+def _run_case(env, seed, pair, horizon, budget, selection, report, *, frontier_filter, prefix_policy):
     frontier, missing = _find_frontier(
-        env, _start(env, seed, horizon, selection), pair, budget, selection)
+        env, _start(env, seed, horizon, selection), pair, budget, selection,
+        frontier_filter, prefix_policy)
     if frontier is None:
         report["excluded_before_pair"][missing] += 1
         return
@@ -223,17 +227,32 @@ def compare_branches(*, pair="shield", roster=DEFAULT_ROSTER, seed=DEFAULT_SEED,
     Completion uses all attempted pairs. Mean candidate-minus-baseline reward
     uses only pairs with two verified terminal returns.
     """
-    if (type(pair) is not str or pair not in PAIRS or
-            type(roster) is not str or roster not in ROSTERS or
-            type(scenarios) is not int or not 1 <= scenarios <= MAX_SCENARIOS or
-            type(horizon) is not int or not 1 <= horizon <= 500 or
-            type(max_decisions) is not int or not 1 <= max_decisions <= MAX_DECISIONS):
+    if (type(roster) is not str or roster not in ROSTERS or
+            type(scenarios) is not int or not 1 <= scenarios <= MAX_SCENARIOS):
         raise ValueError("Invalid bounded branch experiment parameters")
     cases = heldout_scenarios(count=scenarios, seed=seed)
     own, public, opponent = fixture_teams()
     selection, primeape_slot = ROSTERS[roster]
     if primeape_slot is not None:
         own[primeape_slot] = {**own[primeape_slot], **PRIMEAPE}
+    return {"roster": roster, **compare_cases(
+        pair=pair, teams=(own, public, opponent), cases=cases, selection=selection,
+        horizon=horizon, max_decisions=max_decisions,
+    )}
+
+
+def compare_cases(*, pair, teams, cases, selection, horizon=500, max_decisions=MAX_DECISIONS,
+                  frontier_filter=None, prefix_policy=None):
+    """Trusted synthetic fixture input. Filters and policies get only public views.
+
+    The setup policy applies exclusively before the fork. Both arms and the
+    same-action control resume the original fixed public policy after one action.
+    """
+    if (type(pair) is not str or pair not in PAIRS or not 1 <= len(cases) <= MAX_SCENARIOS or
+            type(horizon) is not int or not 1 <= horizon <= 500 or
+            type(max_decisions) is not int or not 1 <= max_decisions <= MAX_DECISIONS):
+        raise ValueError("Invalid bounded branch experiment parameters")
+    own, public, opponent = teams
     report = dict.fromkeys((
         "candidate_frontiers", "fork_state_matches", "same_action_replay_matches",
         "branch_legal_count", "attempted_pairs", "both_completed", "baseline_only_completed",
@@ -254,7 +273,8 @@ def compare_branches(*, pair="shield", roster=DEFAULT_ROSTER, seed=DEFAULT_SEED,
         with SixToThreeEnvironment(GAME_DATA, own, public, opponent, hidden, lead,
                                    ruleset_id="great-league-v1") as env:
             try:
-                _run_case(env, scenario_seed, PAIRS[pair], horizon, max_decisions, selection, report)
+                _run_case(env, scenario_seed, PAIRS[pair], horizon, max_decisions, selection,
+                          report, frontier_filter=frontier_filter, prefix_policy=prefix_policy)
             except _ReplayMismatch as error:
                 exclusions[str(error)] += 1
             except InvalidNativeTeamResult:
@@ -267,8 +287,7 @@ def compare_branches(*, pair="shield", roster=DEFAULT_ROSTER, seed=DEFAULT_SEED,
     mean_reward_delta = report["paired_reward_delta_sum"] / both_completed if both_completed else None
     return {
         "experiment": "native_3v3_paired_tactical_branches_v1",
-        "roster": roster,
-        "scenarios": scenarios,
+        "scenarios": len(cases),
         "phase": phase,
         "baseline_action": baseline,
         "candidate_action": candidate,
