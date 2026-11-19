@@ -1,0 +1,128 @@
+"""Check paired held-out evaluation contracts without claiming real strength."""
+import copy
+from pathlib import Path
+import sys
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+
+from evaluate_rl_mc import (
+    _metrics, evaluate_one, evaluate_paired, fixed_public_action, heldout_scenarios,
+)
+from pvpoke_rl_mc_train import PublicMonteCarloPolicy
+from pvpoke_rl_team_preview import SixToThreeSelection
+from test_rl_team_env import rosters
+from test_rl_mc_train import public_tactics
+
+
+class MatchedEvaluationTests(unittest.TestCase):
+    def test_scenarios_are_deterministic_with_legal_hidden_selection(self):
+        scenarios = heldout_scenarios(count=8, seed=1203)
+        self.assertEqual(scenarios, heldout_scenarios(count=8, seed=1203))
+        for seed, chosen, lead in scenarios:
+            self.assertEqual(len(chosen), 3)
+            self.assertEqual(len(set(chosen)), 3)
+            self.assertTrue(all(type(i) is int and 0 <= i < 6 for i in chosen))
+            self.assertIn(lead, chosen)
+        with self.assertRaises(ValueError):
+            heldout_scenarios(count=33, seed=1203)
+
+    def test_native_cpu_baseline_uses_only_public_and_legal_fields(self):
+        selection = SixToThreeSelection(
+            *rosters(), ruleset_id="great-league-v1"
+        ).observe()
+        self.assertEqual(fixed_public_action(selection), "0,1,2|0")
+        tactical = public_tactics()
+        self.assertEqual(fixed_public_action(tactical), "fast")
+        changed = copy.deepcopy(tactical)
+        changed["opponent"]["secret_team"] = ["hidden"]
+        self.assertEqual(fixed_public_action(changed), "fast")
+
+        shield = copy.deepcopy(tactical)
+        shield["phase"] = "shield"
+        shield["legal_actions"] = ["shield_yes", "shield_no"]
+        self.assertEqual(fixed_public_action(shield), "shield_yes")
+        shield["own"]["team"][0]["hp"] = 10
+        self.assertEqual(fixed_public_action(shield), "shield_no")
+
+        replace = copy.deepcopy(tactical)
+        replace["phase"] = "replace"
+        replace["legal_actions"] = ["switch_1", "switch_2"]
+        self.assertEqual(fixed_public_action(replace), "switch_1")
+
+    def test_denominators_count_discarded_and_do_not_treat_as_loss(self):
+        stats = _metrics([
+            {"status": "complete", "reward": 1, "decisions": 10},
+            {"status": "discarded", "reward": None, "decisions": 15},
+            {"status": "complete", "reward": -1, "decisions": 7},
+        ])
+        self.assertEqual(stats["episodes"], 3)
+        self.assertEqual(stats["complete"], 2)
+        self.assertEqual(stats["discarded"], 1)
+        self.assertEqual(stats["wins"], 1)
+        self.assertEqual(stats["losses"], 1)
+        self.assertEqual(stats["win_fraction_among_completed"], 0.5)
+        self.assertEqual(stats["total_decisions"], 32)
+        no_matches = _metrics([
+            {"status": "discarded", "reward": None, "decisions": 4},
+        ])
+        self.assertIsNone(no_matches["win_fraction_among_completed"])
+
+    def test_paired_comparison_excludes_nonmatching_completions(self):
+        seen = []
+        scripted = {
+            "trained": [(1, True), (1, True), (None, False)],
+            "fixed": [(-1, True), (None, False), (-1, True)],
+            "untrained": [(1, True), (-1, True), (None, False)],
+        }
+
+        def fake_one(policy, label, scenario, **kwargs):
+            n = scenario[0] - 900
+            seen.append((label, scenario))
+            reward, completed = scripted[label][n]
+            return {"status": "complete" if completed else "discarded",
+                    "reward": reward, "decisions": 3}
+
+        trained, untrained = PublicMonteCarloPolicy(seed=3), PublicMonteCarloPolicy(seed=3)
+        scenarios = [(900 + n, (0, 1, 2), 0) for n in range(3)]
+        with patch("evaluate_rl_mc.evaluate_one", side_effect=fake_one):
+            summary = evaluate_paired(
+                trained=trained, untrained=untrained, scenarios=scenarios)
+        self.assertEqual(
+            summary["paired"]["trained_vs_fixed"],
+            {"both_completed": 1, "trained_better": 1,
+             "equal_return": 0, "trained_worse": 0},
+        )
+        self.assertEqual(
+            summary["paired"]["trained_vs_untrained"],
+            {"both_completed": 2, "trained_better": 1,
+             "equal_return": 1, "trained_worse": 0},
+        )
+        self.assertEqual(summary["metrics"]["fixed"]["discarded"], 1)
+        self.assertEqual(trained.completed_matches, 0)
+        self.assertEqual(untrained.completed_matches, 0)
+        self.assertEqual(len(seen), 9)
+        for n in range(3):
+            self.assertEqual(
+                [x[0] for x in seen[3*n:3*n+3]],
+                ["fixed", "untrained", "trained"])
+            self.assertTrue(all(x[1] == scenarios[n] for x in seen[3*n:3*n+3]))
+
+    def test_native_3v3_paired_evaluation_does_not_train(self):
+        trained, untrained = PublicMonteCarloPolicy(seed=17), PublicMonteCarloPolicy(seed=17)
+        scenario = heldout_scenarios(count=1, seed=123456)[0]
+        summary = evaluate_paired(
+            trained=trained, untrained=untrained, scenarios=[scenario])
+        self.assertEqual(trained.completed_matches, 0)
+        self.assertEqual(untrained.completed_matches, 0)
+        for kind in ("fixed", "untrained", "trained"):
+            stats = summary["metrics"][kind]
+            self.assertEqual(stats["episodes"], 1)
+            self.assertEqual(stats["complete"] + stats["discarded"], 1)
+        self.assertFalse(summary["evaluation_policy_updated"])
+
+
+if __name__ == "__main__":
+    unittest.main()
