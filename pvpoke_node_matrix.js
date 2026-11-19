@@ -50,9 +50,16 @@ const engineFiles = [
   "js/pokemon/Pokemon.js",
   "js/battle/rankers/TeamRanker.js"
 ];
+const sourceHash = source => crypto.createHash("sha256").update(source).digest("hex");
+const loadedSources = Object.fromEntries(
+  [__filename, require.resolve("./pvpoke_battle_policy.js"), require.resolve("./pvpoke_minior_strategy.js")]
+    .map(filename => ["adapter/" + path.basename(filename), sourceHash(fs.readFileSync(filename))])
+);
 for (const file of engineFiles) {
   const filename = path.join(ROOT, "src", file);
-  vm.runInThisContext(fs.readFileSync(filename, "utf8"), {filename});
+  const source = fs.readFileSync(filename, "utf8");
+  loadedSources[file] = sourceHash(source);
+  vm.runInThisContext(source, {filename});
 }
 
 function buildGM(data) {
@@ -257,6 +264,7 @@ async function main() {
         result = req.action === "detail" ? runner.run(req.battle) :
           req.action === "switch_prefix" ? runner.switchPrefix(req.branch) : runner.branch(req.branch);
         result.gamemaster_hash = gmDataHash;
+        if (req.include_engine_sources === true) result.engine_sources = loadedSources;
         result.node_memory = {rss_mb:process.memoryUsage().rss / 1048576,
           peak_rss_mb:process.resourceUsage().maxRSS / 1024};
       } else result=matrix(req);
