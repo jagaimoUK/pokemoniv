@@ -12,6 +12,8 @@ import json
 import math
 import random
 
+from pvpoke_rl_team_env import verified_6v3_return
+
 VERSION = "rl-public-mc-v1"
 TACTICAL = frozenset(("turn", "shield", "replace"))
 TACTIC_ACTIONS = frozenset(("wait", "fast", "charge_0", "charge_1",
@@ -251,18 +253,12 @@ def play_episode(env, policy, *, seed=0, epsilon=0.2, max_decisions=2000, learn=
         decisions.append(record)
         view, reward, terminated, truncated, info = env.step(action)
         if terminated or truncated:
-            expected_outcome = {"self_ko_win": 1, "opponent_ko_win": -1,
-                                "simultaneous_ko": 0}
-            eligible = (terminated and not truncated and
-                        type(info) is dict and info.get("training_eligible") is True and
-                        type(reward) is int and reward in (-1, 0, 1) and
-                        info.get("selection_reward") == reward and
-                        expected_outcome.get(info.get("outcome")) == reward)
+            target = verified_6v3_return(reward, terminated, truncated, info)
+            eligible = target is not None
             if eligible and learn:
-                policy.learn(decisions, reward=reward,
-                             selection_reward=info["selection_reward"])
+                policy.learn(decisions, reward=target, selection_reward=target)
             return {"status": "complete" if eligible else "discarded",
                     "outcome": info.get("outcome") if type(info) is dict else None,
-                    "reward": reward if eligible else None,
+                    "reward": target,
                     "decisions": n + 1, "updated": bool(eligible and learn)}
     raise LearningError("Episode exceeded the bounded decision budget")

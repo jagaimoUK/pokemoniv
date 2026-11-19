@@ -1,5 +1,4 @@
 """Minimal local JSON-lines/Python integration for native 1v1 stepping."""
-import os
 import subprocess
 import sys
 import unittest
@@ -63,10 +62,22 @@ class NativeStepClientTests(unittest.TestCase):
                 [sys.executable, "-c", "import time; time.sleep(10)"],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL)
-            os.set_blocking(client._proc.stdin.fileno(), False)
             with self.assertRaisesRegex(NativeStepError, "timed out during input"):
                 client._rpc({"padding": "x" * 90_000})
             self.assertIsNone(client._proc)
+
+    def test_stalled_worker_output_closes_transport_and_allows_reset(self):
+        request = self.fixture.request(energy=0, shields=(0, 0))
+        with NativeStepClient(self.fixture.client.source, timeout=1) as client:
+            client._proc = subprocess.Popen(
+                [sys.executable, "-c", "import sys,time; sys.stdin.readline(); time.sleep(10)"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            with self.assertRaisesRegex(NativeStepError, "timed out$"):
+                client._rpc({"op": "stats"})
+            self.assertIsNone(client._proc)
+            self.assertIsNone(client._pipe_thread)
+            view, _ = client.reset(request, horizon=4)
+            self.assertEqual(view["turn"], 1)
 
     def test_two_resets_follow_same_deterministic_first_steps(self):
         request = self.fixture.request(energy=0, shields=(0, 0))

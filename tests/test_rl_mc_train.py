@@ -81,6 +81,11 @@ class FakeMatch:
                     "training_eligible": True,
                     "selection_reward": 1, "outcome": "opponent_ko_win",
                 }
+            if self.final == "boolean_selection":
+                return None, 1, True, False, {
+                    "training_eligible": True,
+                    "selection_reward": True, "outcome": "self_ko_win",
+                }
         raise AssertionError("Unexpected fake environment phase")
 
 
@@ -122,7 +127,7 @@ class PublicMCTests(unittest.TestCase):
 
     def test_timeout_and_invalid_rewards_do_not_update_learning(self):
         policy = PublicMonteCarloPolicy(seed=3)
-        for final in ("timeout", "poisoned", "mislabeled"):
+        for final in ("timeout", "poisoned", "mislabeled", "boolean_selection"):
             result = play_episode(FakeMatch(final=final), policy, epsilon=0.0)
             self.assertEqual(result["status"], "discarded")
             self.assertIsNone(result["reward"])

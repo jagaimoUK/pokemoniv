@@ -9,8 +9,9 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import select
+from queue import Empty, Queue
 import subprocess
+from threading import Thread
 from time import monotonic
 
 from pvpoke_child_env import child_environment
@@ -26,6 +27,28 @@ class NativeStepError(RuntimeError):
     """The local worker failed or the step protocol became untrustworthy."""
 
 
+def _pipe_exchange(proc, requests, replies):
+    """Keep blocking pipe operations off the caller's deadline thread."""
+    while (wire := requests.get()) is not None:
+        try:
+            pending = memoryview(wire)
+            while pending:
+                sent = os.write(proc.stdin.fileno(), pending)
+                if sent <= 0:
+                    raise NativeStepError("Native worker closed its input")
+                pending = pending[sent:]
+            replies.put(None)  # Input finished; the caller now awaits a line.
+            line = proc.stdout.readline(MAX_OUTPUT + 1)
+            if len(line) > MAX_OUTPUT:
+                raise NativeStepError("Worker response exceeds the output budget")
+            if not line.endswith(b"\n"):
+                raise NativeStepError("Native worker closed its output")
+            replies.put(line)
+        except (OSError, NativeStepError) as error:
+            replies.put(error)
+            return
+
+
 class _NativeWorkerTransport:
     """Bounded JSONL transport shared by the local native environments."""
 
@@ -38,7 +61,7 @@ class _NativeWorkerTransport:
         self._source = source
         self._timeout = timeout
         self._proc = None
-        self._buffer = bytearray()
+        self._pipe_thread = None
 
     def __enter__(self):
         return self
@@ -54,54 +77,48 @@ class _NativeWorkerTransport:
                 stderr=subprocess.DEVNULL,
                 env=child_environment({"PVP_PVPOKE_SOURCE": str(self._source)}),
             )
-            # A blocking stdin write can hang before the response timeout starts.
-            # Use partial, nonblocking writes within the same RPC deadline.
-            os.set_blocking(self._proc.stdin.fileno(), False)
+        if self._pipe_thread is None:
+            self._requests = Queue()
+            self._replies = Queue()
+            thread = Thread(
+                target=_pipe_exchange, args=(self._proc, self._requests, self._replies),
+                name="pvpoke-native-pipe", daemon=True,
+            )
+            try:
+                thread.start()
+            except RuntimeError as error:
+                raise NativeStepError("Could not start the native pipe worker") from error
+            self._pipe_thread = thread
+
+    def _receive(self, deadline, message):
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise NativeStepError(message)
+        try:
+            reply = self._replies.get(timeout=remaining)
+        except Empty as error:
+            raise NativeStepError(message) from error
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
 
     def _rpc(self, payload):
-        self._start()
         try:
             wire = (json.dumps(payload, allow_nan=False, separators=(",", ":")) + "\n").encode()
             if len(wire) > MAX_INPUT:
                 raise NativeStepError("Worker request exceeds the input budget")
+            self._start()
             if self._proc.poll() is not None:
                 raise NativeStepError("Native worker exited")
             deadline = monotonic() + self._timeout
-            written = 0
-            while written < len(wire):
-                remaining = deadline - monotonic()
-                if remaining <= 0:
-                    raise NativeStepError("Native worker timed out during input")
-                _, writable, _ = select.select([], [self._proc.stdin], [], remaining)
-                if not writable:
-                    raise NativeStepError("Native worker timed out during input")
-                try:
-                    n = os.write(self._proc.stdin.fileno(), wire[written:])
-                except BlockingIOError:
-                    continue
-                if n <= 0:
-                    raise NativeStepError("Native worker closed its input")
-                written += n
-            while b"\n" not in self._buffer:
-                remaining = deadline - monotonic()
-                if remaining <= 0:
-                    raise NativeStepError("Native worker timed out")
-                readable, _, _ = select.select([self._proc.stdout], [], [], remaining)
-                if not readable:
-                    raise NativeStepError("Native worker timed out")
-                chunk = os.read(self._proc.stdout.fileno(), 8192)
-                if not chunk:
-                    raise NativeStepError("Native worker closed its output")
-                self._buffer.extend(chunk)
-                if len(self._buffer) > MAX_OUTPUT:
-                    raise NativeStepError("Worker response exceeds the output budget")
-            line, _, rest = self._buffer.partition(b"\n")
-            self._buffer = bytearray(rest)
+            self._requests.put(wire)
+            self._receive(deadline, "Native worker timed out during input")
+            line = self._receive(deadline, "Native worker timed out")
             response = json.loads(line)
             if type(response) is not dict or response.get("ok") is not True:
                 raise NativeStepError("Native worker rejected an operation")
             return response
-        except (OSError, ValueError, TypeError, BrokenPipeError) as error:
+        except (OSError, ValueError, TypeError) as error:
             self.close()
             raise NativeStepError("Native worker I/O failed") from error
         except NativeStepError:
@@ -117,7 +134,7 @@ class _NativeWorkerTransport:
 
     def close(self):
         proc, self._proc = self._proc, None
-        self._buffer.clear()
+        thread, self._pipe_thread = self._pipe_thread, None
         if proc is not None:
             if proc.poll() is None:
                 proc.terminate()
@@ -126,6 +143,10 @@ class _NativeWorkerTransport:
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
+            if thread is not None:
+                # Closing the child first releases either blocked pipe operation.
+                self._requests.put(None)
+                thread.join()
             for stream in (proc.stdin, proc.stdout):
                 if stream is not None:
                     stream.close()

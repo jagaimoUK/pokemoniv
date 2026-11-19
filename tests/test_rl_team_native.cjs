@@ -345,3 +345,34 @@ function moves(session) {
   assert.equal(state(late).energy_points, 35);
   assert.equal(late.privateReplay().events.length, 0);
 }
+
+{
+  // A queued fast hit after a charge can resolve the last KO exactly at the
+  // deadline. With insufficient time for the charge, the hit stays unresolved.
+  for (const [beforeFast, outcome, reward] of [
+    [229500, "self_ko_win", 1], [239000, "timeout", null],
+  ]) {
+    const s = game(handoff([0, 1, 4], [0, 1, 4]), {
+      shields: [0, 0],
+      initial: [[], [{hp_points: 1}, {hp_points: 1}, {hp_points: 1, energy_points: 100}]],
+    });
+    for (const slot of [1, 2]) {
+      s.step(["fast", "wait"]);
+      s.step(wait);
+      s.step(["wait", "switch_" + slot]);
+    }
+    for (let elapsed = s.observe().elapsed_ms; elapsed < beforeFast; elapsed += 500) {
+      s.step(wait);
+    }
+    s.step(["fast", "wait"]);
+    assert.equal(s.observe().elapsed_ms, beforeFast + 500);
+    assert.equal(s.observe(1).own.team[2].hp, 1);
+    const final = s.step(["wait", "charge_0"]);
+    assert.equal(final.info.elapsed_ms, 240000);
+    assert.equal(final.info.outcome, outcome);
+    assert.equal(final.reward, reward);
+    assert.equal(final.terminated, reward !== null);
+    assert.equal(final.truncated, reward === null);
+    assert.equal(final.info.training_eligible, reward !== null);
+  }
+}

@@ -16,6 +16,7 @@ from tools.evaluate_rl_fixed_selection import FixedOwnSelection, train_fixed_own
 from tools.evaluate_rl_mc import evaluate_paired, heldout_scenarios
 from tools.run_rl_mc import POLICY_VARIANTS
 from tools.rl_wait_guard import ABLATION_NAME, GuardedWaitMonteCarloPolicy
+from tools.rl_supported_tactics import MIN_EPISODES, SupportedTacticsPolicy
 
 FOLLOWUP_SELECTIONS = ("2,3,5|2", "0,4,5|4")
 HELDOUT_OFFSET = 200000
@@ -23,12 +24,15 @@ MAX_SEED = 2**32 - 300000
 
 
 def compare_followup(*, policy_variant="v2", seed=12, train=12, evaluate=6,
-                     guarded_ablation=False):
+                     guarded_ablation=False, support_ablation=False):
     if policy_variant not in POLICY_VARIANTS:
         raise ValueError("Unknown policy variant")
     if type(guarded_ablation) is not bool or (
             guarded_ablation and policy_variant != "v2"):
         raise ValueError("The wait ablation is opt-in and v2-only")
+    if type(support_ablation) is not bool or (
+            support_ablation and (policy_variant != "v2" or guarded_ablation)):
+        raise ValueError("The support ablation is v2-only and runs separately")
     if (type(seed) is not int or not 0 <= seed <= MAX_SEED or
             type(train) is not int or not 0 <= train <= 16 or
             type(evaluate) is not int or not 1 <= evaluate <= 12):
@@ -60,6 +64,10 @@ def compare_followup(*, policy_variant="v2", seed=12, train=12, evaluate=6,
                 GuardedWaitMonteCarloPolicy.restore(
                     learner.snapshot(), seed=eval_policy_seed), selection)
             kwargs["guarded"] = guarded
+        if support_ablation:
+            kwargs["supported"] = FixedOwnSelection(
+                SupportedTacticsPolicy.restore(learner.snapshot(), seed=eval_policy_seed),
+                selection)
         paired = evaluate_paired(**kwargs)
         out[selection] = {"training": train_stats, "evaluation": paired}
     return {
@@ -70,6 +78,8 @@ def compare_followup(*, policy_variant="v2", seed=12, train=12, evaluate=6,
         "evaluation_scenarios_per_selection": evaluate,
         "heldout_seed_offset": HELDOUT_OFFSET,
         "wait_guard_ablation": ABLATION_NAME if guarded_ablation else None,
+        **({"support_ablation": {"minimum_completed_episodes_per_action": MIN_EPISODES}}
+           if support_ablation else {}),
         "selection_results": out,
         "limitations": (
             "Lineups selected from previous probe; exploratory only. "
@@ -86,13 +96,17 @@ def main():
     p.add_argument("--seed", type=int, default=12)
     p.add_argument("--train", type=int, default=12)
     p.add_argument("--evaluate", type=int, default=6)
-    p.add_argument("--guarded-ablation", action="store_true",
-                   help="Compare an evaluation-only v2 wait guard on the same checkpoint")
+    ablation = p.add_mutually_exclusive_group()
+    ablation.add_argument("--guarded-ablation", action="store_true",
+                          help="Compare an evaluation-only v2 wait guard on the same checkpoint")
+    ablation.add_argument("--support-ablation", action="store_true",
+                          help="Compare tactical decisions supported by both action counts")
     a = p.parse_args()
     try:
         result = compare_followup(policy_variant=a.policy, seed=a.seed,
                                   train=a.train, evaluate=a.evaluate,
-                                  guarded_ablation=a.guarded_ablation)
+                                  guarded_ablation=a.guarded_ablation,
+                                  support_ablation=a.support_ablation)
     except ValueError as e:
         p.error(str(e))
     print(json.dumps(result, sort_keys=True))

@@ -17,8 +17,9 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from pvpoke_rl_mc_train import PublicMonteCarloPolicy, public_state
-from pvpoke_rl_team_env import SixToThreeEnvironment
+from pvpoke_rl_mc_train import public_state
+from pvpoke_rl_team_env import SixToThreeEnvironment, verified_6v3_return
+from tools.rl_supported_tactics import compare_tactical_actions
 from tools.run_rl_mc import GAME_DATA, fixture_teams, run_batch, POLICY_VARIANTS
 
 BASELINE_SELECTION = "0,1,2|0"
@@ -68,7 +69,8 @@ def heldout_scenarios(*, count, seed):
 def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS,
                  fixed_selection=BASELINE_SELECTION):
     """Return only public aggregate-worthy outcomes, never secret opponents."""
-    if label not in (*KINDS, "guarded") or type(max_decisions) is not int or not 1 <= max_decisions <= 4000:
+    if (label not in (*KINDS, "guarded", "supported") or
+            type(max_decisions) is not int or not 1 <= max_decisions <= 4000):
         raise ValueError("Invalid evaluation parameters")
     own, public, opponent = fixture_teams()
     episode_seed, hidden, lead = scenario
@@ -87,6 +89,7 @@ def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS,
     }
     selection_seen = selection_action_seen = None
     selection_action = None
+    comparable_decisions = supported_deviations = 0
     # Public-observation only; diagnose why synthetic baselines hit the clock.
     action_counts = {"wait": 0, "fast": 0, "charged": 0,
                      "switch": 0, "shield": 0, "selection": 0}
@@ -151,12 +154,16 @@ def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS,
                         any(a.startswith("charge_") for a in legal))
             # The metric must use the SAME versioned public encoder as the
             # policy. v2's coarse hashes are not interchangeable with v1.
-            kind, key, _ = (policy.encode_state(view) if learned is not None
-                            else public_state(view))
+            kind, key, legal = (policy.encode_state(view) if learned is not None
+                                else public_state(view))
             if kind == "selection":
                 selection_action = action
             if learned is not None:
                 actions_seen = learned[kind].get(key, {})
+                if label == "supported" and kind == "tactics" and len(legal) > 1:
+                    baseline, _, comparable = compare_tactical_actions(legal, actions_seen)
+                    comparable_decisions += comparable
+                    supported_deviations += action != baseline
                 has_state = bool(actions_seen)
                 has_action = action in actions_seen
                 state_hits += int(has_state)
@@ -185,18 +192,10 @@ def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS,
                     selection_action_seen = has_action
             view, reward, terminated, truncated, info = env.step(action)
             if terminated or truncated:
-                expected = {"self_ko_win": 1, "opponent_ko_win": -1,
-                            "simultaneous_ko": 0}
-                eligible = (
-                    terminated is True and truncated is False and
-                    info.get("training_eligible") is True and
-                    type(reward) is int and
-                    expected.get(info.get("outcome")) == reward and
-                    info.get("selection_reward") == reward
-                )
+                target = verified_6v3_return(reward, terminated, truncated, info)
                 return {
-                    "status": "complete" if eligible else "discarded",
-                    "reward": reward if eligible else None,
+                    "status": "complete" if target is not None else "discarded",
+                    "reward": target,
                     "outcome": info.get("outcome") if type(info) is dict else None,
                     "decisions": step,
                     "public_clock_before_final_action": final_public_clock,
@@ -212,6 +211,9 @@ def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS,
                     },
                     # Own publicly chosen trio+lead, never opponent hidden picks.
                     "selection_action": selection_action,
+                    **({"supported_deviations": supported_deviations,
+                        "comparable_tactical_decisions": comparable_decisions}
+                       if label == "supported" else {}),
                 }
     raise RuntimeError("Episode exceeded evaluation decision budget")
 
@@ -351,27 +353,21 @@ def _metrics(results):
 
 
 def evaluate_paired(*, trained, untrained, scenarios,
-                    fixed_selection=BASELINE_SELECTION, guarded=None):
-    """Same held-out initial conditions; optional v2 wait-guard ablation.
-
-    Without a guarded policy the existing three-way API and output stay
-    unchanged. With one, all four policies share each scenario and selection.
-    """
-    prior = {"trained": json.dumps(trained.snapshot(), sort_keys=True)}
-    if guarded is not None:
-        prior["guarded"] = json.dumps(guarded.snapshot(), sort_keys=True)
+                    fixed_selection=BASELINE_SELECTION, guarded=None, supported=None):
+    """Compare policies on the same held-out initial conditions."""
+    ablations = [(name, model) for name, model in
+                 (("guarded", guarded), ("supported", supported)) if model is not None]
     participants = [("fixed", None), ("untrained", untrained),
-                    ("trained", trained)]
-    if guarded is not None:
-        participants.append(("guarded", guarded))
+                    ("trained", trained), *ablations]
+    prior = {name: json.dumps(policy.snapshot(), sort_keys=True)
+             for name, policy in participants if policy is not None}
     results = {kind: [] for kind, _ in participants}
     for scenario in scenarios:
         for kind, policy in participants:
             results[kind].append(evaluate_one(
                 policy, kind, scenario, fixed_selection=fixed_selection))
-    if (json.dumps(trained.snapshot(), sort_keys=True) != prior["trained"] or
-            (guarded is not None and
-             json.dumps(guarded.snapshot(), sort_keys=True) != prior["guarded"])):
+    if any(json.dumps(policy.snapshot(), sort_keys=True) != prior[name]
+           for name, policy in participants if policy is not None):
         raise RuntimeError("Held-out evaluation mutated a policy model")
 
     # Compare only pairs where both matches terminated with verified KO.
@@ -403,14 +399,18 @@ def evaluate_paired(*, trained, untrained, scenarios,
         "trained_vs_fixed": pairwise("trained", "fixed", "trained"),
         "trained_vs_untrained": pairwise("trained", "untrained", "trained"),
     }
-    if guarded is not None:
-        comparisons["guarded_vs_trained"] = pairwise(
-            "guarded", "trained", "guarded")
-        comparisons["guarded_vs_untrained"] = pairwise(
-            "guarded", "untrained", "guarded")
+    for name, _ in ablations:
+        for baseline in ("trained", "untrained"):
+            comparisons[f"{name}_vs_{baseline}"] = pairwise(name, baseline, name)
+    metrics = {kind: _metrics(results[kind]) for kind in results}
+    if supported is not None:
+        metrics["supported"]["comparable_tactical_decisions"] = sum(
+            row["comparable_tactical_decisions"] for row in results["supported"])
+        metrics["supported"]["tactical_deviations_from_untrained_priority"] = sum(
+            row["supported_deviations"] for row in results["supported"])
     return {
         "label": "matched_initial_conditions_synthetic_not_competitive_strength",
-        "metrics": {kind: _metrics(results[kind]) for kind in results},
+        "metrics": metrics,
         "paired": comparisons,
         "evaluation_policy_updated": False,
         "fixed_baseline_selection": fixed_selection,

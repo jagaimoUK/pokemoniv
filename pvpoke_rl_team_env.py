@@ -17,6 +17,20 @@ ACTIONS = frozenset(("wait", "fast", "charge_0", "charge_1",
 OUTCOME_REWARD = {"self_ko_win": 1, "opponent_ko_win": -1, "simultaneous_ko": 0}
 
 
+def verified_6v3_return(reward, terminated, truncated, info):
+    """Return a shared tactic/selection label only for a verified terminal KO."""
+    if (terminated is not True or truncated is not False or
+            type(reward) is not int or type(info) is not dict or
+            info.get("training_eligible") is not True):
+        return None
+    outcome = info.get("outcome")
+    selection_reward = info.get("selection_reward")
+    if (type(outcome) is str and OUTCOME_REWARD.get(outcome) == reward and
+            type(selection_reward) is int and selection_reward == reward):
+        return reward
+    return None
+
+
 class ThreeVThreeEnvironment(_NativeWorkerTransport):
     """One persistent native worker, with a CPU using only its own view."""
 
