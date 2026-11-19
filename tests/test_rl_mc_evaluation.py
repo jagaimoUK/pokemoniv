@@ -89,6 +89,11 @@ class MatchedEvaluationTests(unittest.TestCase):
         self.assertEqual(hits["chosen_action_hit_fraction"], 0.2)
         self.assertEqual(hits["selection_state_hits"], 1)
         self.assertEqual(hits["selection_action_hits"], 0)
+        self.assertEqual(hits["tactical_decisions"], 8)
+        self.assertEqual(hits["tactical_state_hits"], 4)
+        self.assertEqual(hits["tactical_action_hits"], 2)
+        self.assertEqual(hits["tactical_state_hit_fraction"], 0.5)
+        self.assertEqual(hits["tactical_action_hit_fraction"], 0.25)
         self.assertEqual(stat["complete"], 1)
         self.assertEqual(stat["discarded"], 1)
 
