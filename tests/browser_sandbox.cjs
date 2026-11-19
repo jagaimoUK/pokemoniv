@@ -61,10 +61,13 @@ async function checkWidth(browser, width) {
   page.on('pageerror', error => errors.push(error.message));
   try {
     await page.addInitScript(({key, spec}) => {
-      sessionStorage.setItem(key, JSON.stringify(spec));
-      sessionStorage.setItem('pokemoniv:tactic-evidence-link-v1', JSON.stringify({
-        evaluation_id:'e'.repeat(64), build_id:'b'.repeat(64), search_ids:[]
-      }));
+      if (!sessionStorage.getItem('pokemoniv:test-seeded-v1') && !sessionStorage.getItem('pokemoniv:sandbox-tactic-load-v1')) {
+        sessionStorage.setItem('pokemoniv:test-seeded-v1', '1');
+        sessionStorage.setItem(key, JSON.stringify(spec));
+        sessionStorage.setItem('pokemoniv:tactic-evidence-link-v1', JSON.stringify({
+          evaluation_id:'e'.repeat(64), build_id:'b'.repeat(64), search_ids:[]
+        }));
+      }
     }, {key: importKey, spec: initialSpec});
     await page.route(origin + '/**', async route => {
       const request = route.request();
@@ -285,6 +288,7 @@ async function checkWidth(browser, width) {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
     assert.deepEqual(errors, []);
     // Step 4: navigating to /app/sandbox with sandbox-tactic-load-v1 restores saved tactic cleanly.
+    const loadsBefore = requests.filter(r => r.payload?.action === 'load').length;
     await page.evaluate(tacticId => {
       sessionStorage.removeItem('pokemoniv:sandbox-input-v1');
       sessionStorage.setItem('pokemoniv:sandbox-tactic-load-v1', JSON.stringify({tactic_id: tacticId, revision: 1}));
@@ -293,6 +297,22 @@ async function checkWidth(browser, width) {
     await page.locator('#save-status').filter({hasText: /過去の版 1/}).waitFor();
     assert.equal(await page.locator('#tactic-name').inputValue(), 'テスト戦術');
     assert.equal(await page.evaluate(() => sessionStorage.getItem('pokemoniv:sandbox-tactic-load-v1')), null);
+    assert.equal(await page.evaluate(() => sessionStorage.getItem('pokemoniv:sandbox-input-v1')), null);
+    const loadsAfter = requests.filter(r => r.payload?.action === 'load');
+    assert.equal(loadsAfter.length, loadsBefore + 1);
+    assert.deepEqual(loadsAfter.at(-1).payload, {action: 'load', tactic_id: id, revision: 1});
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
+    assert.deepEqual(errors, []);
+
+    // Standard spec handoff takes precedence without calling load when both keys exist.
+    await page.evaluate(({key, spec, tacticId}) => {
+      sessionStorage.setItem(key, JSON.stringify(spec));
+      sessionStorage.setItem('pokemoniv:sandbox-tactic-load-v1', JSON.stringify({tactic_id: tacticId, revision: 1}));
+    }, {key: importKey, spec: initialSpec, tacticId: id});
+    await page.goto(origin + '/app/sandbox');
+    await page.getByText('不足分析から両者の個体・技・開始状態を読み込みました。').waitFor();
+    assert.equal(await page.evaluate(key => sessionStorage.getItem(key), importKey), null);
+    assert.equal(requests.filter(r => r.payload?.action === 'load').length, loadsAfter.length);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
     assert.deepEqual(errors, []);
   } finally {

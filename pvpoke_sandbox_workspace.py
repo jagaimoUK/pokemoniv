@@ -74,13 +74,18 @@ class TacticStore:
             with self.store._reader() as db:
                 if not self._exists(db):
                     return []
-                rows = db.execute('''SELECT body, digest FROM sandbox_tactics_v1 AS tactics
+                rows = db.execute('''SELECT tactic_id, revision, body, digest FROM sandbox_tactics_v1 AS tactics
                     WHERE owner_scope=? AND revision=(
                         SELECT MAX(revision) FROM sandbox_tactics_v1 AS latest
                         WHERE latest.owner_scope=tactics.owner_scope AND latest.tactic_id=tactics.tactic_id
                     ) ORDER BY saved_at DESC, tactic_id LIMIT 40''', (self.store.owner_scope,))
                 items = []
-                for item in map(self._decode, rows):
+                for row_id, row_rev, body, digest in rows:
+                    item = self._decode((body, digest))
+                    if (type(row_id) is not str or type(row_rev) is not int or
+                            item['tactic_id'] != row_id or
+                            type(item['revision']) is not int or item['revision'] != row_rev):
+                        raise ValueError('Mismatched tactic ID or revision')
                     spec = item['spec']
                     own, opp = spec['combatants']
                     items.append({

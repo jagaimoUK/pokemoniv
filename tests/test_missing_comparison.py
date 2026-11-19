@@ -747,6 +747,30 @@ class MissingLocalTests(server.ServerFixture):
             self.assertEqual(oe_c, 200)
             self.assertEqual(oe_data['links'][0]['search_id'], obs_res['search_id'])
 
+            # Fail closed (503) if row tactic_id or revision mismatches body even when digest is valid
+            tid_b = '3' * 32
+            tstore.save(sandbox, tid_b, 0, '別戦術B', spec1)
+            tstore.save(sandbox, tid_b, 1, '別戦術B第2版', spec2)
+            with store._reader() as db:
+                row_a1 = db.execute("SELECT body, digest FROM sandbox_tactics_v1 WHERE tactic_id=? AND revision=1",
+                                    (tid,)).fetchone()
+                row_a2 = db.execute("SELECT body, digest FROM sandbox_tactics_v1 WHERE tactic_id=? AND revision=2",
+                                    (tid,)).fetchone()
+                row_b2 = db.execute("SELECT body, digest FROM sandbox_tactics_v1 WHERE tactic_id=? AND revision=2",
+                                    (tid_b,)).fetchone()
+            with store._writer(critical=True) as db:
+                db.execute("UPDATE sandbox_tactics_v1 SET body=?, digest=? WHERE tactic_id=? AND revision=2",
+                           (row_a1[0], row_a1[1], tid))
+            self.assertEqual(self.compare({'action': 'sandbox_tactic_list'})[0], 503)
+            with store._writer(critical=True) as db:
+                db.execute("UPDATE sandbox_tactics_v1 SET body=?, digest=? WHERE tactic_id=? AND revision=2",
+                           (row_b2[0], row_b2[1], tid))
+            self.assertEqual(self.compare({'action': 'sandbox_tactic_list'})[0], 503)
+            with store._writer(critical=True) as db:
+                db.execute("UPDATE sandbox_tactics_v1 SET body=?, digest=? WHERE tactic_id=? AND revision=2",
+                           (row_a2[0], row_a2[1], tid))
+            self.assertEqual(self.compare({'action': 'sandbox_tactic_list'})[0], 200)
+
             # Fail closed (503) if stored records are corrupted
             with store._writer(critical=True) as db:
                 db.execute("UPDATE tactic_searches_v1 SET digest='bad' WHERE search_id=?", (ts1_id,))

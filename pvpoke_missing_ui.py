@@ -389,6 +389,7 @@ function renderMatch(parent,condition,current,result,request){
   const actions=node('div',null,body,'actions');
   const openSandbox=observed=>{
    try{
+    sessionStorage.removeItem(sandboxTacticLoadKey);
     sessionStorage.setItem('pokemoniv:sandbox-input-v1',JSON.stringify(condition.spec));
     let old=null;try{old=JSON.parse(sessionStorage.getItem(tacticLinkKey)||'null');}catch{}
     const search_ids=old?.evaluation_id===result.evaluation_id&&Array.isArray(old.search_ids)
