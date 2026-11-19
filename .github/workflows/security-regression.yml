@@ -42,16 +42,22 @@ jobs:
         run: |
           python -m compileall -q .
           python -m unittest discover -s tests -p 'test*.py'
-          PYTHONPATH=.:tests python tools/benchmark_rl_step.py --episodes 2 --windows 4
+          # Fast mandatory smoke: the full unit suite also covers synthetic
+          # RL contracts. Experimental comparisons are on-demand below.
           PYTHONPATH=.:tests python tools/run_rl_mc.py --train 4 --evaluate 2 --seed 12
+          for test in tests/test*.js tests/test*.cjs; do node "$test"; done
+          for source in *.js; do node --check "$source"; done
+          sh -n start.sh
+      - name: Optional synthetic RL research and performance experiments
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          # Exploratory only; never interpret these as competitive win rates.
+          PYTHONPATH=.:tests python tools/benchmark_rl_step.py --episodes 2 --windows 4
           PYTHONPATH=.:tests python tools/evaluate_rl_mc.py --train 8 --evaluate 6 --seed 12
           PYTHONPATH=.:tests python tools/evaluate_rl_mc.py --policy v2 --train 8 --evaluate 6 --seed 12
           PYTHONPATH=.:tests python tools/evaluate_rl_fixed_selection.py --policy v2 --train 12 --evaluate 6 --seed 12
           PYTHONPATH=.:tests python tools/diagnose_rl_fixture.py --evaluate 6 --seed 12
           PYTHONPATH=.:tests python tools/evaluate_rl_fresh_holdout.py --policy v2 --train 12 --evaluate 6 --seed 12 --guarded-ablation
-          for test in tests/test*.js tests/test*.cjs; do node "$test"; done
-          for source in *.js; do node --check "$source"; done
-          sh -n start.sh
       - name: Build production image and verify proxy configuration
         run: |
           docker build -t pokemoniv-security-ci .
