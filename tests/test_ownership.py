@@ -493,3 +493,79 @@ inventory.confirm('crash', 'a', expected_revision=1, state='confirmed_absent')
             self.inventory.list_snapshot()
         with self.assertRaises(OwnershipUnavailable):
             self.inventory.instance_history('inst-tampered')
+
+    def test_partial_observation_preserves_omitted_fields_and_512_scan_boundary(self):
+        initial_moves = self.observed['current_moves']
+        created = self.inventory.confirm(
+            'ev-create', 'inst-p1', expected_revision=0, state='confirmed_owned',
+            observation={**self.observed, 'current_cp': 1476, 'current_level': 20.5},
+            register_if_missing=True, preserve_identity=True,
+        )
+        self.assertEqual(created['instance']['current_level'], 20.5)
+        self.assertEqual(created['instance']['current_moves'], initial_moves)
+
+        # Updating only CP (omitting current_level and current_moves) must preserve saved values.
+        cp_only = {'species_id': self.observed['species_id'], 'ivs': self.observed['ivs'], 'current_cp': 1492}
+        ev_cp = self.inventory.confirm(
+            'ev-cp', 'inst-p1', expected_revision=1, state='confirmed_owned',
+            observation=cp_only, register_if_missing=False, preserve_identity=True,
+        )
+        self.assertEqual(ev_cp['instance']['current_cp'], 1492)
+        self.assertEqual(ev_cp['instance']['current_level'], 20.5)
+        self.assertEqual(ev_cp['instance']['current_moves'], initial_moves)
+        # Idempotent replay matches; changing omitted vs explicit None with same event_id conflicts.
+        self.assertEqual(
+            self.inventory.confirm('ev-cp', 'inst-p1', expected_revision=1, state='confirmed_owned',
+                                   observation=cp_only, register_if_missing=False, preserve_identity=True),
+            ev_cp,
+        )
+        with self.assertRaises(OwnershipConflict):
+            self.inventory.confirm(
+                'ev-cp', 'inst-p1', expected_revision=1, state='confirmed_owned',
+                observation={**cp_only, 'current_level': None},
+                register_if_missing=False, preserve_identity=True,
+            )
+
+        # confirmed_absent -> reconfirm with CP only also keeps saved Lv/moves intact.
+        self.inventory.confirm('ev-abs', 'inst-p1', expected_revision=2, state='confirmed_absent',
+                               preserve_identity=True)
+        ev_re = self.inventory.confirm(
+            'ev-re', 'inst-p1', expected_revision=3, state='confirmed_owned',
+            observation={**cp_only, 'current_cp': 1500}, register_if_missing=False, preserve_identity=True,
+        )
+        self.assertEqual(ev_re['instance']['current_cp'], 1500)
+        self.assertEqual(ev_re['instance']['current_level'], 20.5)
+        self.assertEqual(ev_re['instance']['current_moves'], initial_moves)
+
+        # Explicit None clears only that field while omitted fields stay preserved.
+        ev_clear = self.inventory.confirm(
+            'ev-clear-lv', 'inst-p1', expected_revision=4, state='confirmed_owned',
+            observation={**cp_only, 'current_cp': 1500, 'current_level': None},
+            register_if_missing=False, preserve_identity=True,
+        )
+        self.assertIsNone(ev_clear['instance']['current_level'])
+        self.assertEqual(ev_clear['instance']['current_moves'], initial_moves)
+
+        # Backward compatibility: register_if_missing=True still initializes omitted fields to None.
+        minimal_new = self.inventory.confirm(
+            'ev-new-min', 'inst-min', expected_revision=0, state='confirmed_owned',
+            observation=cp_only, register_if_missing=True, preserve_identity=True,
+        )
+        self.assertIsNone(minimal_new['instance']['current_level'])
+        self.assertIsNone(minimal_new['instance']['current_moves'])
+
+        # 512-row filtered scan boundary: empty first page with has_more=True, followed by page 2 item.
+        boundary_store = BattleStore(self.root / 'volume' / 'boundary512.sqlite3')
+        boundary_inv = Ownership(boundary_store, species_ids=self.inventory.species_ids)
+        for idx in range(512):
+            boundary_inv.register(f'i-{idx:04d}', cp_only)
+        boundary_inv.confirm('ev-513', 'i-0512', expected_revision=0, state='confirmed_owned',
+                             observation=cp_only, register_if_missing=True)
+        page1 = boundary_inv.list_snapshot(state='confirmed_owned')
+        self.assertEqual(page1['items'], [])
+        self.assertTrue(page1['has_more'])
+        self.assertEqual(page1['next_after'], 'i-0511')
+        page2 = boundary_inv.list_snapshot(after=page1['next_after'], state='confirmed_owned', include_scopes=False)
+        self.assertEqual([item['instance_id'] for item in page2['items']], ['i-0512'])
+        self.assertFalse(page2['has_more'])
+        self.assertIsNone(page2['next_after'])

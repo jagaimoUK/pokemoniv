@@ -40,6 +40,9 @@ async function checkWidth(browser, width) {
     });
     let savedScopes = [];
     const sampleInstanceId = 'inst-smoke-1';
+    let sampleRevision = 1;
+    let sampleCp = 1476;
+    let listCalls = 0;
     await page.route('http://127.0.0.1:9876/**', async route => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
@@ -61,7 +64,13 @@ async function checkWidth(browser, width) {
           state: 'evidence_pending', evaluation_id: 'e'.repeat(64), reference,
           role: {role_id: 'lead', priority: 1}, can_calculate: width > 320,
           candidates: [{...candidate, ...reference, status: 'pending', party_substitution: 'pending',
-                        conditions: [condition], owned_instances: []}],
+                        conditions: [condition],
+                        owned_instances: [{
+                          instance_id: sampleInstanceId,
+                          state: 'confirmed_owned',
+                          revision: sampleRevision,
+                          build_match: 'unverified',
+                        }]}],
         }});
       }
       if (payload.action === 'tactic_evidence') {
@@ -126,16 +135,42 @@ async function checkWidth(browser, width) {
           representatives:[{attack:0,defense:15,hp:15}]
         }});
       }
+      if (payload.action === 'ownership') {
+        assert.equal(payload.instance_id, sampleInstanceId);
+        assert.equal(payload.expected_revision, 1);
+        assert.equal(payload.state, 'confirmed_owned');
+        assert.equal(payload.register, false);
+        assert.equal(payload.observation.current_cp, 1492);
+        assert.equal(Object.hasOwn(payload.observation, 'current_level'), false);
+        assert.equal(Object.hasOwn(payload.observation, 'current_moves'), false);
+        sampleRevision = 2;
+        sampleCp = 1492;
+        return route.fulfill({json: {
+          instance_id: sampleInstanceId,
+          state: 'confirmed_owned',
+          revision: sampleRevision,
+        }});
+      }
       if (payload.action === 'ownership_list') {
+        listCalls += 1;
+        if (listCalls === 1) {
+          return route.fulfill({json: {
+            ledger_revision: 2,
+            items: [],
+            has_more: true,
+            next_after: 'i-0511',
+            ...(payload.include_scopes ? {scopes: savedScopes, scopes_truncated: false} : {}),
+          }});
+        }
         const record = {
           instance_id: sampleInstanceId,
           species_id: rows[0].species,
           ivs: {attack: rows[0].atk, defense: rows[0].def, hp: rows[0].hp},
-          current_cp: 1495,
+          current_cp: sampleCp,
           current_level: rows[0].level,
           current_moves: {fast: rows[0].fast, charged: [rows[0].charged1, rows[0].charged2]},
           state: 'confirmed_owned',
-          revision: 1,
+          revision: sampleRevision,
           confirmed_at: '2026-11-19T00:00:00Z',
         };
         return route.fulfill({json: {
@@ -153,11 +188,11 @@ async function checkWidth(browser, width) {
             instance_id: sampleInstanceId,
             species_id: rows[0].species,
             ivs: {attack: rows[0].atk, defense: rows[0].def, hp: rows[0].hp},
-            current_cp: 1495,
+            current_cp: sampleCp,
             current_level: rows[0].level,
             current_moves: {fast: rows[0].fast, charged: [rows[0].charged1, rows[0].charged2]},
             state: 'confirmed_owned',
-            revision: 1,
+            revision: sampleRevision,
           },
           events: [{
             event_id: 'ev-smoke-1',
@@ -168,7 +203,7 @@ async function checkWidth(browser, width) {
             input_revision: 0,
             output_revision: 1,
             confirmed_at: '2026-11-19T00:00:00Z',
-            instance: {current_cp: 1495, current_level: rows[0].level},
+            instance: {current_cp: 1476, current_level: rows[0].level},
           }],
           has_more: false,
         }});
@@ -244,9 +279,18 @@ async function checkWidth(browser, width) {
     await page.getByText(/同じ役割条件で比べられる観測役割：win/).waitFor();
     await page.getByText(/方策 1：この対面の有限条件 2件/).waitFor();
     await page.getByText(/条件 win：未確認が残る/).waitFor();
-    // Step 1 ownership ledger, history, and box-scope confirmation smoke.
+    // P1 candidate-card CP-only update: Lv blank and candidate-moves unchecked must omit current_level/current_moves.
+    await page.locator('#result-tree details.record > summary').first().click();
+    const candidateUpdateForm = page.locator('#result-tree details.record').first().locator('form').first();
+    await candidateUpdateForm.locator('input[type="number"]').nth(0).fill('1492');
+    await candidateUpdateForm.locator('input[type="checkbox"]').last().check();
+    await candidateUpdateForm.locator('button:not([type="button"])').click();
+    await page.locator('#result-tree small').filter({hasText: 'rev 2'}).waitFor();
+    // Step 1 ownership ledger (including P2 empty-with-has_more page), history, and box-scope confirmation smoke.
     await page.locator('#inventory-panel > summary').click();
     await page.locator('#inventory-load').click();
+    await page.locator('#inventory-items').getByText(/この範囲には該当個体はありません（続きあり）/).waitFor();
+    await page.locator('#inventory-more').click();
     await page.getByText('台帳リビジョン 2 ／ 表示 1件', {exact: true}).waitFor();
     await page.locator('#inventory-items details.record > summary').first().click();
     await page.locator('#inventory-items').getByRole('button', {name: '履歴を表示'}).click();
@@ -263,8 +307,8 @@ async function checkWidth(browser, width) {
     await page.locator('#scope-list').getByText(/検索「0attack」/).waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
     assert.deepEqual(errors, []);
-    // Base requests (5 at 320px, 7 at 390px) + 4 Step 1 inventory/scope requests.
-    assert.equal(requests.length, width > 320 ? 11 : 9);
+    // Base requests (5 at 320px, 7 at 390px) + 2 candidate update/evaluate + 5 inventory/scope requests.
+    assert.equal(requests.length, width > 320 ? 14 : 12);
   } finally {
     await page.close();
   }

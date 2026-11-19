@@ -440,8 +440,21 @@ function renderInventory(parent,candidate,request){
    const updateForm=node('form',null,panel,'stack');
    const fields=node('div',null,updateForm,'grid');
    const cp=input(fields,'現在のCP',{type:'number',min:10,max:10000,step:1,required:true});
-   const level=input(fields,'現在のLv（任意）',{type:'number',min:1,max:51,step:.5});
-   const currentMoves=checkbox(updateForm,'現在の技がこの候補の技構成と一致している');currentMoves.required=false;
+   const level=input(fields,'現在のLv（任意・空欄で維持）',{type:'number',min:1,max:51,step:.5});
+   const currentMoves=checkbox(updateForm,'現在の技がこの候補の技構成と一致している（未選択なら維持）');currentMoves.required=false;
+   const pokemon=catalog[candidate.species_id]||{};
+   const moveOverride=detail(updateForm,'別の技に変更する（任意・変更しない場合は未選択）','quiet');
+   const moveFields=node('div',null,moveOverride,'grid');
+   const fast=select(moveFields,'通常技',[['','変更しない'],...(pokemon.fastMoves||[]).map(id=>[id,move(id)])],'wide');
+   const c1=select(moveFields,'ゲージ技1',[['','変更しない'],...(pokemon.chargedMoves||[]).map(id=>[id,move(id)])]);
+   const c2=select(moveFields,'ゲージ技2',[['','なし／変更しない'],...(pokemon.chargedMoves||[]).map(id=>[id,move(id)])]);
+   const validateMovePair=()=>c2.setCustomValidity(!currentMoves.checked&&c1.value&&c2.value&&c1.value===c2.value?'異なるゲージ技を選んでください。':'');
+   c1.addEventListener('change',validateMovePair);c2.addEventListener('change',validateMovePair);
+   currentMoves.addEventListener('change',()=>{
+    const same=currentMoves.checked;
+    fast.disabled=same;c1.disabled=same;c2.disabled=same;
+    validateMovePair();
+   });
    checkbox(updateForm,'ゲーム内で、この個体の所持と現在のCP・技を確認した');
    const updateBtn=node('button',record.state==='confirmed_owned'?'CP・Lv・技を更新する':'所持を再確認して記録',node('div',null,updateForm,'actions'),'quiet');
    updateBtn.dataset.action='';updateBtn.disabled=busy;
@@ -450,7 +463,17 @@ function renderInventory(parent,candidate,request){
     event.preventDefault();
     const observation={species_id:candidate.species_id,ivs:candidate.ivs,current_cp:cp.valueAsNumber};
     if(level.value)observation.current_level=level.valueAsNumber;
-    if(currentMoves.checked)observation.current_moves=candidate.moves;
+    if(currentMoves.checked){
+     observation.current_moves=candidate.moves;
+    }else if(fast.value||c1.value||c2.value){
+     const charged=[c1.value,c2.value].filter(Boolean);
+     if(!fast.value||!charged.length){
+      moveOverride.open=true;
+      announce('別の技を指定する場合は通常技とゲージ技1を選んでください。',true);
+      return;
+     }
+     observation.current_moves={fast:fast.value,charged};
+    }
     const encoded=JSON.stringify([record.revision,observation]);
     if(prevUpdate!==encoded){prevUpdate=encoded;updateEventId=crypto.randomUUID();}
     confirmOwnership({instance_id:record.instance_id,event_id:updateEventId,expected_revision:record.revision,
@@ -890,14 +913,24 @@ async function loadInventory(append){
  if(state)payload.state=state;
  if(append&&inventoryCursor)payload.after=inventoryCursor;
  const data=await api('missing-analysis',payload);
+ if(append&&inventoryLedgerRevision!=null&&data.ledger_revision!==inventoryLedgerRevision){
+  await loadInventory(false);
+  announce('台帳が更新されたため、先頭から最新の状態を読み込み直しました。');
+  return;
+ }
  inventoryLedgerRevision=data.ledger_revision;
  inventoryCursor=data.has_more?data.next_after:null;
  inventoryLoaded=true;
  const list=$('inventory-items');
  if(!append)list.replaceChildren();
+ else list.querySelectorAll(':scope > li.inventory-note').forEach(el=>el.remove());
  const items=Array.isArray(data.items)?data.items:[];
- if(!append&&!items.length){
-  node('li','条件に一致する登録個体はありません。未登録の個体は「未所持」とはみなされません。',list,'muted');
+ if(!items.length){
+  if(data.has_more){
+   node('li','この範囲には該当個体はありません（続きあり）。「次のページを読み込む」で残りの記録を確認できます。',list,'muted inventory-note');
+  }else if(!list.querySelector(':scope > li[data-inventory-item="1"]')){
+   node('li','条件に一致する登録個体はありません。未登録の個体は「未所持」とはみなされません。',list,'muted inventory-note');
+  }
  }else{
   for(const item of items){
    const li=renderLedgerItem(list,item);
@@ -907,7 +940,7 @@ async function loadInventory(append){
  $('inventory-more').hidden=!data.has_more||!inventoryCursor;
  $('inventory-summary').textContent='台帳リビジョン '+data.ledger_revision+' ／ 表示 '+list.querySelectorAll(':scope > li[data-inventory-item="1"]').length+'件'+(data.has_more?'（続きあり）':'');
  if(!append&&Array.isArray(data.scopes))renderScopeRecords(data.scopes,Boolean(data.scopes_truncated));
- announce('手持ち台帳を読み込みました。');
+ announce(!items.length&&data.has_more?'この範囲には該当個体がありませんでした。続きを読み込めます。':'手持ち台帳を読み込みました。');
 }
 async function submitScope(){
  if(inventoryLedgerRevision==null)throw Error('先に「手持ち台帳を読み込む」を押して最新の台帳リビジョンを確認してください。');

@@ -357,7 +357,67 @@ class MissingLocalTests(server.ServerFixture):
             self.assertEqual(len(after_scope['scopes']), 1)
             self.assertTrue(after_scope['scopes'][0]['current'])
 
-        foreign = BattleStore(self.root / 'volume' / 'battle_analysis.sqlite3', owner_scope='foreign')
+            # Step 1 P1 regression: CP-only update (omitting current_level and current_moves) must keep saved Lv/moves.
+            ev_p1_create = {
+                'action': 'ownership', 'instance_id': 'step1-p1-inst', 'event_id': 'step1-p1-1',
+                'expected_revision': 0, 'state': 'confirmed_owned',
+                'observation': {
+                    'species_id': candidate['species_id'], 'ivs': candidate['ivs'],
+                    'current_cp': 1476, 'current_level': 20.5,
+                    'current_moves': candidate['moves'],
+                },
+            }
+            self.assertEqual(self.compare(ev_p1_create)[0], 200)
+            ev_p1_cp = {
+                'action': 'ownership', 'instance_id': 'step1-p1-inst', 'event_id': 'step1-p1-2',
+                'expected_revision': 1, 'state': 'confirmed_owned', 'register': False,
+                'observation': {'species_id': candidate['species_id'], 'ivs': candidate['ivs'], 'current_cp': 1492},
+            }
+            self.assertEqual(self.compare(ev_p1_cp), (200, {'instance_id': 'step1-p1-inst', 'state': 'confirmed_owned', 'revision': 2}))
+            # Replay same event_id and conflict on stale revision.
+            self.assertEqual(self.compare(ev_p1_cp), (200, {'instance_id': 'step1-p1-inst', 'state': 'confirmed_owned', 'revision': 2}))
+            self.assertEqual(self.compare({**ev_p1_cp, 'event_id': 'step1-p1-stale'})[0], 409)
+
+            code, hist_p1 = self.compare({'action': 'ownership_history', 'instance_id': 'step1-p1-inst'})
+            self.assertEqual(code, 200)
+            self.assertEqual(hist_p1['instance']['current_cp'], 1492)
+            self.assertEqual(hist_p1['instance']['current_level'], 20.5)
+            self.assertEqual(hist_p1['instance']['current_moves'], candidate['moves'])
+
+            # confirmed_absent -> reconfirm CP-only preserves Lv/moves; explicit move change updates moves; invalid move rejects 400.
+            self.assertEqual(self.compare({
+                'action': 'ownership', 'instance_id': 'step1-p1-inst', 'event_id': 'step1-p1-3',
+                'expected_revision': 2, 'state': 'confirmed_absent',
+            })[0], 200)
+            self.assertEqual(self.compare({
+                'action': 'ownership', 'instance_id': 'step1-p1-inst', 'event_id': 'step1-p1-4',
+                'expected_revision': 3, 'state': 'confirmed_owned', 'register': False,
+                'observation': {'species_id': candidate['species_id'], 'ivs': candidate['ivs'], 'current_cp': 1498},
+            })[0], 200)
+            new_moves = {'fast': candidate['moves']['fast'], 'charged': [candidate['moves']['charged'][0]]}
+            self.assertEqual(self.compare({
+                'action': 'ownership', 'instance_id': 'step1-p1-inst', 'event_id': 'step1-p1-bad-move',
+                'expected_revision': 4, 'state': 'confirmed_owned', 'register': False,
+                'observation': {'species_id': candidate['species_id'], 'ivs': candidate['ivs'],
+                                'current_cp': 1498, 'current_moves': {'fast': 'bad-move', 'charged': ['STONE_EDGE']}},
+            })[0], 400)
+            self.assertEqual(self.compare({
+                'action': 'ownership', 'instance_id': 'step1-p1-inst', 'event_id': 'step1-p1-5',
+                'expected_revision': 4, 'state': 'confirmed_owned', 'register': False,
+                'observation': {'species_id': candidate['species_id'], 'ivs': candidate['ivs'],
+                                'current_cp': 1498, 'current_moves': new_moves},
+            })[0], 200)
+
+        store = BattleStore.from_volume()
+        owner_db = Ownership(store, species_ids={candidate['species_id']})
+        stored = owner_db.get('step1-p1-inst')
+        self.assertIsNotNone(stored)
+        self.assertEqual(stored['current_cp'], 1498)
+        self.assertEqual(stored['current_level'], 20.5)
+        self.assertEqual(stored['current_moves'], new_moves)
+        self.assertEqual(stored['revision'], 5)
+
+        foreign = BattleStore(store.path, owner_scope='foreign')
         other = Ownership(foreign, species_ids={candidate['species_id']})
         self.assertEqual(other.list_snapshot()['items'], [])
         self.assertEqual(other.list_snapshot()['scopes'], [])

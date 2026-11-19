@@ -101,7 +101,7 @@ class Ownership:
             raise ValueError('Unknown species or form')
         return species
 
-    def _observation(self, value):
+    def _observation(self, value, *, partial=False):
         if type(value) is not dict or not {'species_id', 'ivs'} <= value.keys() or (
             value.keys() - {'species_id', 'ivs', 'current_cp', 'current_level', 'current_moves'}
         ):
@@ -109,28 +109,35 @@ class Ownership:
         ivs = value['ivs']
         if type(ivs) is not dict or set(ivs) != {'attack', 'defense', 'hp'}:
             raise ValueError('Invalid inventory IVs')
-        cp = value.get('current_cp')
-        level = value.get('current_level')
-        if level is not None and (type(level) not in (int, float)
-                                  or not 1 <= level <= 51 or level * 2 % 1):
-            raise ValueError('Invalid current level')
-        moves = value.get('current_moves')
-        if moves is not None:
-            if type(moves) is not dict or moves.keys() - {'fast', 'charged'}:
-                raise ValueError('Invalid current moves')
-            fast, charged = moves.get('fast'), moves.get('charged')
-            if charged is not None:
-                if type(charged) is not list or not 1 <= len(charged) <= 2:
-                    raise ValueError('Invalid current charged moves')
-                charged = [_id(move, r'[A-Z0-9_]{1,100}') for move in charged]
-                if len(set(charged)) != len(charged):
-                    raise ValueError('Duplicate current charged move')
-            moves = {'fast': None if fast is None else _id(fast, r'[A-Z0-9_]{1,100}'),
-                     'charged': charged}
-        return {'species_id': self._species(value['species_id']),
-                'ivs': {key: _int(number, 0, 15) for key, number in ivs.items()},
-                'current_cp': None if cp is None else _int(cp, 10, 10000),
-                'current_level': None if level is None else float(level), 'current_moves': moves}
+        result = {
+            'species_id': self._species(value['species_id']),
+            'ivs': {key: _int(number, 0, 15) for key, number in ivs.items()},
+        }
+        if not partial or 'current_cp' in value:
+            cp = value.get('current_cp')
+            result['current_cp'] = None if cp is None else _int(cp, 10, 10000)
+        if not partial or 'current_level' in value:
+            level = value.get('current_level')
+            if level is not None and (type(level) not in (int, float)
+                                      or not 1 <= level <= 51 or level * 2 % 1):
+                raise ValueError('Invalid current level')
+            result['current_level'] = None if level is None else float(level)
+        if not partial or 'current_moves' in value:
+            moves = value.get('current_moves')
+            if moves is not None:
+                if type(moves) is not dict or moves.keys() - {'fast', 'charged'}:
+                    raise ValueError('Invalid current moves')
+                fast, charged = moves.get('fast'), moves.get('charged')
+                if charged is not None:
+                    if type(charged) is not list or not 1 <= len(charged) <= 2:
+                        raise ValueError('Invalid current charged moves')
+                    charged = [_id(move, r'[A-Z0-9_]{1,100}') for move in charged]
+                    if len(set(charged)) != len(charged):
+                        raise ValueError('Duplicate current charged move')
+                moves = {'fast': None if fast is None else _id(fast, r'[A-Z0-9_]{1,100}'),
+                         'charged': charged}
+            result['current_moves'] = moves
+        return result
 
     @staticmethod
     def _ensure_tables(db):
@@ -326,7 +333,8 @@ class Ownership:
             raise ValueError('Invalid ownership state')
         if type(preserve_identity) is not bool:
             raise ValueError('Invalid preserve_identity flag')
-        fields = None if observation is None else self._observation(observation)
+        fields = None if observation is None else self._observation(
+            observation, partial=not register_if_missing)
         identity = ['instance', self.actor, instance_id, expected_revision, state, fields]
         if register_if_missing:
             if expected_revision != 0 or fields is None or state != 'confirmed_owned':
