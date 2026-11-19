@@ -68,7 +68,7 @@ def heldout_scenarios(*, count, seed):
 def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS,
                  fixed_selection=BASELINE_SELECTION):
     """Return only public aggregate-worthy outcomes, never secret opponents."""
-    if label not in KINDS or type(max_decisions) is not int or not 1 <= max_decisions <= 4000:
+    if label not in (*KINDS, "guarded") or type(max_decisions) is not int or not 1 <= max_decisions <= 4000:
         raise ValueError("Invalid evaluation parameters")
     own, public, opponent = fixture_teams()
     episode_seed, hidden, lead = scenario
@@ -351,47 +351,66 @@ def _metrics(results):
 
 
 def evaluate_paired(*, trained, untrained, scenarios,
-                    fixed_selection=BASELINE_SELECTION):
-    """Use the SAME held-out scenario list for all three competing policies."""
-    before = json.dumps(trained.snapshot(), sort_keys=True)
-    results = {kind: [] for kind in KINDS}
+                    fixed_selection=BASELINE_SELECTION, guarded=None):
+    """Same held-out initial conditions; optional v2 wait-guard ablation.
+
+    Without a guarded policy the existing three-way API and output stay
+    unchanged. With one, all four policies share each scenario and selection.
+    """
+    prior = {"trained": json.dumps(trained.snapshot(), sort_keys=True)}
+    if guarded is not None:
+        prior["guarded"] = json.dumps(guarded.snapshot(), sort_keys=True)
+    participants = [("fixed", None), ("untrained", untrained),
+                    ("trained", trained)]
+    if guarded is not None:
+        participants.append(("guarded", guarded))
+    results = {kind: [] for kind, _ in participants}
     for scenario in scenarios:
-        for kind, policy in (
-            ("fixed", None), ("untrained", untrained), ("trained", trained)
-        ):
+        for kind, policy in participants:
             results[kind].append(evaluate_one(
                 policy, kind, scenario, fixed_selection=fixed_selection))
-    if json.dumps(trained.snapshot(), sort_keys=True) != before:
-        raise RuntimeError("Held-out evaluation mutated the trained model")
+    if (json.dumps(trained.snapshot(), sort_keys=True) != prior["trained"] or
+            (guarded is not None and
+             json.dumps(guarded.snapshot(), sort_keys=True) != prior["guarded"])):
+        raise RuntimeError("Held-out evaluation mutated a policy model")
 
-    # Comparisons are defined only on the same episodes where BOTH policies
-    # completed; timeouts are not losses. Return the denominator explicitly.
-    comparisons = {}
-    for competitor in ("fixed", "untrained"):
-        paired = [
-            (t["reward"], b["reward"])
-            for t, b in zip(results["trained"], results[competitor])
-            if t["status"] == "complete" and b["status"] == "complete"
+    # Compare only pairs where both matches terminated with verified KO.
+    # Censored timeouts are NOT a loss, and divergent tactics may consume
+    # the native random stream in different orders despite matched seeds.
+    def pairwise(candidate, competitor, prefix):
+        pairs = [
+            (a["reward"], b["reward"])
+            for a, b in zip(results[candidate], results[competitor])
+            if a["status"] == "complete" and b["status"] == "complete"
         ]
-        # Selection agreement is meaningful even when both matches time out.
         selected = [
-            (t.get("selection_action"), b.get("selection_action"))
-            for t, b in zip(results["trained"], results[competitor])
-            if t.get("selection_action") is not None and
+            (a.get("selection_action"), b.get("selection_action"))
+            for a, b in zip(results[candidate], results[competitor])
+            if a.get("selection_action") is not None and
                b.get("selection_action") is not None
         ]
-        comparisons["trained_vs_" + competitor] = {
-            "both_completed": len(paired),
-            "trained_better": sum(t > b for t, b in paired),
-            "equal_return": sum(t == b for t, b in paired),
-            "trained_worse": sum(t < b for t, b in paired),
+        return {
+            "both_completed": len(pairs),
+            prefix + "_better": sum(a > b for a, b in pairs),
+            "equal_return": sum(a == b for a, b in pairs),
+            prefix + "_worse": sum(a < b for a, b in pairs),
             "selection_compared": len(selected),
-            "same_selection": sum(t == b for t, b in selected),
-            "different_selection": sum(t != b for t, b in selected),
+            "same_selection": sum(a == b for a, b in selected),
+            "different_selection": sum(a != b for a, b in selected),
         }
+
+    comparisons = {
+        "trained_vs_fixed": pairwise("trained", "fixed", "trained"),
+        "trained_vs_untrained": pairwise("trained", "untrained", "trained"),
+    }
+    if guarded is not None:
+        comparisons["guarded_vs_trained"] = pairwise(
+            "guarded", "trained", "guarded")
+        comparisons["guarded_vs_untrained"] = pairwise(
+            "guarded", "untrained", "guarded")
     return {
         "label": "matched_initial_conditions_synthetic_not_competitive_strength",
-        "metrics": {kind: _metrics(results[kind]) for kind in KINDS},
+        "metrics": {kind: _metrics(results[kind]) for kind in results},
         "paired": comparisons,
         "evaluation_policy_updated": False,
         "fixed_baseline_selection": fixed_selection,
