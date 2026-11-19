@@ -89,7 +89,10 @@ def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS):
                 action, _ = policy.choose(view, epsilon=0.0)
             if action not in view["legal_actions"]:
                 raise ValueError("Policy produced an illegal action")
-            kind, key, _ = public_state(view)
+            # The metric must use the SAME versioned public encoder as the
+            # policy. v2's coarse hashes are not interchangeable with v1.
+            kind, key, _ = (policy.encode_state(view) if learned is not None
+                            else public_state(view))
             if kind == "selection":
                 selection_action = action
             if learned is not None:
