@@ -26,13 +26,13 @@ KINDS = ("fixed", "untrained", "trained")
 MAX_DECISIONS = 2000
 
 
-def fixed_public_action(view):
-    """Fixed first-three lead, native CPU's PUBLIC tactical rule."""
+def fixed_public_action(view, *, selection=BASELINE_SELECTION):
+    """A legal fixed public trio+lead, with native CPU's PUBLIC tactics."""
     kind, _, legal = public_state(view)
     if kind == "selection":
-        if BASELINE_SELECTION not in legal:
+        if type(selection) is not str or selection not in legal:
             raise ValueError("Invalid fixed baseline selection space")
-        return BASELINE_SELECTION
+        return selection
     actions = set(legal)
     own = view["own"]
     current = own["team"][own["active_slot"]]
@@ -65,7 +65,8 @@ def heldout_scenarios(*, count, seed):
     return scenarios
 
 
-def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS):
+def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS,
+                 fixed_selection=BASELINE_SELECTION):
     """Return only public aggregate-worthy outcomes, never secret opponents."""
     if label not in KINDS or type(max_decisions) is not int or not 1 <= max_decisions <= 4000:
         raise ValueError("Invalid evaluation parameters")
@@ -94,7 +95,7 @@ def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS):
             if view is None:
                 raise ValueError("No active public evaluation observation")
             if label == "fixed":
-                action = fixed_public_action(view)
+                action = fixed_public_action(view, selection=fixed_selection)
             else:
                 action, _ = policy.choose(view, epsilon=0.0)
             if action not in view["legal_actions"]:
@@ -289,7 +290,8 @@ def _metrics(results):
     }
 
 
-def evaluate_paired(*, trained, untrained, scenarios):
+def evaluate_paired(*, trained, untrained, scenarios,
+                    fixed_selection=BASELINE_SELECTION):
     """Use the SAME held-out scenario list for all three competing policies."""
     before = json.dumps(trained.snapshot(), sort_keys=True)
     results = {kind: [] for kind in KINDS}
@@ -297,7 +299,8 @@ def evaluate_paired(*, trained, untrained, scenarios):
         for kind, policy in (
             ("fixed", None), ("untrained", untrained), ("trained", trained)
         ):
-            results[kind].append(evaluate_one(policy, kind, scenario))
+            results[kind].append(evaluate_one(
+                policy, kind, scenario, fixed_selection=fixed_selection))
     if json.dumps(trained.snapshot(), sort_keys=True) != before:
         raise RuntimeError("Held-out evaluation mutated the trained model")
 
@@ -331,6 +334,7 @@ def evaluate_paired(*, trained, untrained, scenarios):
         "metrics": {kind: _metrics(results[kind]) for kind in KINDS},
         "paired": comparisons,
         "evaluation_policy_updated": False,
+        "fixed_baseline_selection": fixed_selection,
         "rng_limitation": "equal_seed_not_identical_draws_after_divergent_actions",
         "confidence": "insufficient_for_strength_claims",
     }
