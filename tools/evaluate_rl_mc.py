@@ -80,6 +80,10 @@ def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS):
     action_counts = {"wait": 0, "fast": 0, "charged": 0,
                      "switch": 0, "shield": 0, "selection": 0}
     final_public_clock = None
+    wait_reasons = {"forced_only_wait": 0, "optional_wait": 0,
+                    "cooldown_forced": 0, "other_forced": 0,
+                    "fast_available_when_waiting": 0,
+                    "charge_available_when_waiting": 0}
     with SixToThreeEnvironment(
         GAME_DATA, own, public, opponent, hidden, lead, ruleset_id="great-league-v1"
     ) as env:
@@ -107,6 +111,25 @@ def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS):
             if action_group not in action_counts:
                 raise ValueError("Unrecognized public action")
             action_counts[action_group] += 1
+            if action == "wait":
+                legal = view["legal_actions"]
+                if legal == ["wait"]:
+                    wait_reasons["forced_only_wait"] += 1
+                    if view["phase"] == "turn":
+                        current = view["own"]["team"][view["own"]["active_slot"]]
+                        cooldown = current.get("cooldown_ms")
+                        if type(cooldown) is int and cooldown > 500:
+                            wait_reasons["cooldown_forced"] += 1
+                        else:
+                            wait_reasons["other_forced"] += 1
+                    else:
+                        wait_reasons["other_forced"] += 1
+                else:
+                    wait_reasons["optional_wait"] += 1
+                    wait_reasons["fast_available_when_waiting"] += int(
+                        "fast" in legal)
+                    wait_reasons["charge_available_when_waiting"] += int(
+                        any(a.startswith("charge_") for a in legal))
             # The metric must use the SAME versioned public encoder as the
             # policy. v2's coarse hashes are not interchangeable with v1.
             kind, key, _ = (policy.encode_state(view) if learned is not None
@@ -140,6 +163,7 @@ def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS):
                     "decisions": step,
                     "public_clock_before_final_action": final_public_clock,
                     "action_counts": action_counts,
+                    "public_wait_reasons": wait_reasons,
                     "coverage": None if learned is None else {
                         "state_hits": state_hits,
                         "chosen_action_hits": action_hits,
@@ -174,6 +198,22 @@ def _metrics(results):
     if any("action_counts" in item for item in results) and (
             sum(action_totals.values()) != total_decisions):
         raise ValueError("Inconsistent public decision counts")
+    reason_names = ("forced_only_wait", "optional_wait", "cooldown_forced",
+                    "other_forced", "fast_available_when_waiting",
+                    "charge_available_when_waiting")
+    wait_totals = {name: sum(
+        item.get("public_wait_reasons", {}).get(name, 0) for item in results)
+        for name in reason_names}
+    if any("public_wait_reasons" in item for item in results):
+        if (wait_totals["forced_only_wait"] + wait_totals["optional_wait"] !=
+                action_totals["wait"] or
+                wait_totals["cooldown_forced"] + wait_totals["other_forced"] !=
+                wait_totals["forced_only_wait"] or
+                wait_totals["fast_available_when_waiting"] >
+                wait_totals["optional_wait"] or
+                wait_totals["charge_available_when_waiting"] >
+                wait_totals["optional_wait"]):
+            raise ValueError("Inconsistent public wait reason counters")
     timeout_clocks = [row.get("public_clock_before_final_action")
                       for row in results if row["status"] == "discarded"
                       and row.get("outcome") == "timeout"
@@ -199,6 +239,7 @@ def _metrics(results):
             round(sum(v["reward"] for v in matches) / count, 4) if count else None),
         "total_decisions": total_decisions,
         "public_action_counts": action_totals,
+        "public_wait_reasons": wait_totals,
         "timeout_public_clocks": {
             "observed": len(timeout_clocks),
             "latest_elapsed_ms_min": min(
