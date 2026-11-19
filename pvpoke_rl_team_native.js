@@ -54,11 +54,18 @@ function validateHandoff(handoff, seed, horizon) {
 }
 
 function createTeamSession(handoff, {gamemasterPath, seed, horizon = MAX_TURNS,
-  initial = [[], []], shields = [2, 2]} = {}) {
+  initial = [[], []], shields = [2, 2], entryStudy = null} = {}) {
   validateHandoff(handoff, seed, horizon);
   handoff = structuredClone(handoff);
   initial = structuredClone(initial);
   shields = structuredClone(shields);
+  if (entryStudy !== null) {
+    if (!integer(entryStudy.slot, 1, 2) || !integer(entryStudy.energyBonus, 0, 16)) {
+      throw Error("Invalid entry study settings");
+    }
+    entryStudy = {slot: entryStudy.slot, energyBonus: entryStudy.energyBonus};
+  }
+  let studiedEntry = null;
   if (!Array.isArray(shields) || shields.length !== 2 ||
       shields.some(count => !integer(count, 0, 2))) {
     throw Error("Invalid starting team shields");
@@ -209,6 +216,15 @@ function createTeamSession(handoff, {gamemasterPath, seed, horizon = MAX_TURNS,
       previous_species: actor.speciesId, forced});
     // A returning Pokemon's move metadata must refer to its current target.
     pokemon.forEach(poke => poke.resetMoves());
+    // Offline-only intervention. Capture the resolved entry before any later
+    // move in this step and before adding energy to the incoming Pokémon.
+    if (entryStudy && index === 0 && action.value === entryStudy.slot && !studiedEntry) {
+      const energyAdded = Math.min(entryStudy.energyBonus, 100 - incoming.energy);
+      studiedEntry = {action_turn: battle.getTurns(), elapsed_ms: elapsed, forced,
+        state: snapshot(), event_count: events.length, decision_count: decisions.length,
+        randomness_count: randomness.length, energy_added: energyAdded};
+      incoming.energy += energyAdded;
+    }
   };
 
   battle.start();
@@ -359,7 +375,8 @@ function createTeamSession(handoff, {gamemasterPath, seed, horizon = MAX_TURNS,
     return structuredClone({schema: VERSION, ruleset_id: handoff.ruleset_id,
       game_data_sha256: dataHash, seed, horizon,
       handoff, initial_conditions: initial, starting_shields: shields, initial: initialState,
-      decisions, randomness, events, state: snapshot(), result});
+      decisions, randomness, events, state: snapshot(), result,
+      ...(entryStudy === null ? {} : {studied_entry: studiedEntry})});
   }
   return Object.freeze({observe, step, response, privateReplay});
 }

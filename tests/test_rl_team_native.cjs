@@ -31,6 +31,24 @@ function moves(session) {
 }
 
 {
+  // The offline study observes the resolved entry before granting energy.
+  const initial = [[{}, {}, {energy_points: 95}], []];
+  const entries = [0, 16].map(energyBonus => {
+    const s = game(handoff(), {initial, entryStudy: {slot: 2, energyBonus}});
+    s.step(["switch_2", "wait"]);
+    const {energy_added, ...entry} = s.privateReplay().studied_entry;
+    assert.equal(entry.state.sides[0].team[2].energy_points, 95);
+    assert.equal(entry.state.sides[0].switch_timer_ms, 45000);
+    assert.equal(energy_added, energyBonus ? 5 : 0);
+    assert.equal(s.observe().own.team[2].energy_points, 95 + energy_added);
+    assert(!Object.hasOwn(s.observe(), "studied_entry"));
+    return entry;
+  });
+  assert.deepEqual(entries[0], entries[1]);
+  assert(!Object.hasOwn(game().privateReplay(), "studied_entry"));
+}
+
+{
   // Ordinary switch preserves HP and energy, removes stages, and starts the
   // full cooldown. The original lead can act with banked energy on return.
   const s = game(handoff(), {initial: [[{hp_points: 80, energy_points: 72, buffs: [2, -1]}], []]});
