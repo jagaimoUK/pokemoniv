@@ -148,6 +148,33 @@ class MatchedEvaluationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             _metrics([invalid])
 
+    def test_learned_action_return_signs_separate_known_from_unseen(self):
+        row = {
+            "status": "complete", "outcome": "self_ko_win",
+            "reward": 1, "decisions": 5,
+            "coverage": {
+                "state_hits": 4, "chosen_action_hits": 3,
+                "selection_state_seen": True, "selection_action_seen": True,
+                "value_sign_counts": {
+                    "positive": 1, "negative": 1, "zero": 1,
+                    "unseen_action": 2,
+                },
+            },
+        }
+        result = _metrics([row])
+        self.assertEqual(
+            result["learned_coverage"]["value_sign_counts"],
+            {"positive": 1, "negative": 1, "zero": 1, "unseen_action": 2})
+        self.assertEqual(result["learned_coverage"]["chosen_action_hits"], 3)
+        invalid = copy.deepcopy(row)
+        invalid["coverage"]["value_sign_counts"]["positive"] = 2
+        with self.assertRaises(ValueError):
+            _metrics([invalid])
+        invalid = copy.deepcopy(row)
+        invalid["coverage"]["value_sign_counts"]["unseen_action"] = 3
+        with self.assertRaises(ValueError):
+            _metrics([invalid])
+
     def test_learning_coverage_fraction_has_an_explicit_denominator(self):
         stat = _metrics([
             {"status": "complete", "reward": 1, "decisions": 6,
@@ -250,6 +277,8 @@ class MatchedEvaluationTests(unittest.TestCase):
         self.assertEqual(record["status"], "complete")
         self.assertEqual(record["coverage"]["state_hits"], 2)
         self.assertEqual(record["coverage"]["chosen_action_hits"], 2)
+        self.assertEqual(record["coverage"]["value_sign_counts"]["positive"], 2)
+        self.assertEqual(record["coverage"]["value_sign_counts"]["unseen_action"], 0)
         self.assertTrue(record["coverage"]["selection_state_seen"])
         self.assertTrue(record["coverage"]["selection_action_seen"])
         self.assertEqual(record["selection_action"], "0,1,2|0")
