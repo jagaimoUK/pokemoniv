@@ -169,12 +169,17 @@ def main():
     if not 0 <= a.seed <= 2**32 - 200000:
         p.error("Invalid experiment seed")
     trained = PublicMonteCarloPolicy(seed=a.seed)
-    untrained = PublicMonteCarloPolicy(seed=a.seed)
     trained_stats = run_batch(
         trained, episodes=a.train, seed=a.seed, epsilon=0.25, training=True,
     )
+    # Reset policy RNGs to the same evaluation seed. Otherwise training-time
+    # sampling history would confound "trained vs untrained" comparisons.
+    eval_policy_seed = a.seed + 70000
+    trained_eval = PublicMonteCarloPolicy.restore(
+        trained.snapshot(), seed=eval_policy_seed)
+    untrained = PublicMonteCarloPolicy(seed=eval_policy_seed)
     matched = evaluate_paired(
-        trained=trained, untrained=untrained,
+        trained=trained_eval, untrained=untrained,
         scenarios=heldout_scenarios(count=a.evaluate, seed=a.seed + 100000),
     )
     print(json.dumps({
