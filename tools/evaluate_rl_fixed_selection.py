@@ -47,6 +47,11 @@ class FixedOwnSelection:
     def snapshot(self):
         return self.policy.snapshot()
 
+    def learn(self, decisions, *, reward, selection_reward):
+        """Delegate only verified terminal rewards to the wrapped learner."""
+        return self.policy.learn(decisions, reward=reward,
+                                 selection_reward=selection_reward)
+
 
 def train_fixed_own(policy, *, count, seed, selection=DEFAULT_SELECTION):
     """Train only from valid KO-decided episodes and return an honest summary."""
