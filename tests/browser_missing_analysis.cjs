@@ -53,6 +53,34 @@ async function checkWidth(browser, width) {
       const payload = request.postDataJSON();
       requests.push({path, payload});
       if (path === '/app-api/catalog') return route.fulfill({json: {ready: true, species}});
+      if (path === '/app-api/meta-presets') {
+        return route.fulfill({json: {
+          default_id: 'custom:smoke', revision: 1,
+          items: [{id: 'custom:smoke', name: 'テスト用メタ', rows: 1,
+                   sha256: 'a'.repeat(64), available: true}],
+        }});
+      }
+      if (path === '/app-api/meta-preset-export') {
+        assert.equal(payload.id, 'custom:smoke');
+        assert.equal(payload.expected_sha256, 'a'.repeat(64));
+        return route.fulfill({json: {
+          id: 'custom:smoke', sha256: 'a'.repeat(64),
+          csv: [rows[3].species, rows[3].fast, rows[3].charged1, rows[3].charged2].join(','),
+        }});
+      }
+      if (payload.action === 'evaluation_history') {
+        assert.equal(payload.limit, 24);
+        const common={comparison_key:'f'.repeat(64), role_id:'lead',role_revision:1,
+          priority:1,analysis_id:'c'.repeat(64),evidence_state:'partial',
+          versions_current:true,ledger_revision:2};
+        return route.fulfill({json:{
+          items:[
+            {...common,evaluation_id:'e'.repeat(64),created_at:1795000100,state:'covered'},
+            {...common,evaluation_id:'d'.repeat(64),created_at:1795000000,state:'evidence_pending'},
+          ],has_more:false,next_after:null,
+        }});
+      }
+
       if (payload.action === 'evaluate') {
         const candidate = payload.candidates[0];
         const opponent = payload.scenarios[0].opponent;
@@ -348,10 +376,23 @@ async function checkWidth(browser, width) {
     await page.locator('#scope-submit').click();
     await page.locator('#scope-list').getByText('範囲内に不在を確認', {exact: true}).waitFor();
     await page.locator('#scope-list').getByText(/検索「0attack」/).waitFor();
+    // Step 3: history stays read-only and trend compares only matching snapshot conditions.
+    await page.locator('#evaluation-history-panel > summary').click();
+    await page.locator('#history-load').click();
+    await page.locator('#history-items').getByText(/同条件の前回記録から：対戦証拠待ち → 所持確認済みの個体で充足/).waitFor();
+    await page.locator('#meta-import-panel > summary').click();
+    await page.locator('#meta-import-load').click();
+    await page.locator('#meta-import-open').click();
+    await page.locator('#meta-import-items').getByRole('button', {name: 'この相手を対面に追加'}).first().click();
+    assert.equal(await page.locator('#scenarios details.edit').count(), 2);
+    // Imported meta rows carry species/moves but must not invent IV or level.
+    const imported = page.locator('#scenarios details.edit').nth(1);
+    assert.equal(await imported.locator('input[type=number]').nth(0).inputValue(), '');
+    assert.equal(await imported.locator('input[type=number]').nth(3).inputValue(), '');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
     assert.deepEqual(errors, []);
     // Base requests (5 at 320px, 7 at 390px) + 1 Step 2 floor explore + 2 candidate update/evaluate + 5 inventory/scope requests.
-    assert.equal(requests.length, width > 320 ? 15 : 13);
+    assert.equal(requests.length, width > 320 ? 18 : 16);
   } finally {
     await page.close();
   }

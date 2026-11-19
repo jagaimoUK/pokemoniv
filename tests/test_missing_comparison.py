@@ -423,6 +423,27 @@ class MissingLocalTests(server.ServerFixture):
         self.assertEqual(other.list_snapshot()['scopes'], [])
         self.assertIsNone(other.instance_history('step1-inst'))
 
+    def test_step3_readonly_role_history_action_and_validation(self):
+        payload = case(threshold=0)
+        status, result = self.compare(payload)
+        self.assertEqual(status, 200)
+        expected_id = result['evaluation_id']
+        with patch.object(server.web.BattleService, 'simulate',
+                          side_effect=AssertionError('History must never run a battle')):
+            code, history = self.compare({'action': 'evaluation_history', 'limit': 1})
+            self.assertEqual(code, 200)
+            self.assertEqual(len(history['items']), 1)
+            self.assertEqual(history['items'][0]['evaluation_id'], expected_id)
+            self.assertEqual(history['items'][0]['role_id'], 'lead')
+            self.assertTrue(history['items'][0]['versions_current'])
+            self.assertEqual(history['items'][0]['state'], result['state'])
+            self.assertFalse(history['has_more'])
+            for invalid in ({'action': 'evaluation_history', 'limit': True},
+                            {'action': 'evaluation_history', 'limit': 0},
+                            {'action': 'evaluation_history', 'after_id': expected_id},
+                            {'action': 'evaluation_history', 'owner_scope': 'foreign'}):
+                self.assertEqual(self.compare(invalid)[0], 400)
+
     def test_step2_explore_floors_boundaries_progress_ownership_and_isolation(self):
         payload = case(threshold=0)
         payload['scenarios'].append({

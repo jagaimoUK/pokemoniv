@@ -348,6 +348,15 @@ def app_operation(service, payload):
                                   preserve_identity=True)
         return {'instance_id': event['instance_id'], 'state': event['new_state'],
                 'revision': event['output_revision']}
+    if action == 'evaluation_history':
+        _object(payload, 'role evaluation history', ('action',),
+                ('limit', 'after_created_at', 'after_id'))
+        return RoleEvaluation(service.store).list_history(
+            limit=payload.get('limit', 24),
+            after_created_at=payload.get('after_created_at'),
+            after_id=payload.get('after_id'),
+            active_versions=service.versions,
+        )
     if action == 'ownership_list':
         return _ownership_list(service, payload)
     if action == 'ownership_history':

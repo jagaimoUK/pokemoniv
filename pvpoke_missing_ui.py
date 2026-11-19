@@ -28,6 +28,22 @@ input,select,button{font:inherit;color:inherit;min-height:44px;border:1px solid 
 <section id="login" hidden><form id="login-form" class="stack"><h2>アプリに接続</h2><label>接続キー<input id="credential" type="password" autocomplete="off" required></label><div class="actions"><button class="primary" data-action>接続する</button></div></form></section>
 <p id="status" class="status" role="status" aria-live="polite">接続を確認しています。</p>
 <div id="workspace" class="stack" hidden>
+<details id="evaluation-history-panel" class="edit"><summary>不足分析の評価履歴・推移</summary><div class="stack">
+<p class="muted">保存済み評価を読み取り専用で表示します。同じ分析計画・役割条件・計算バージョンの記録だけを推移として比較します。古い結果は現在の所持状態を保証しません。</p>
+<div class="actions"><button id="history-load" type="button" class="quiet" data-action>評価履歴を読み込む</button></div>
+<p id="history-summary" class="muted">操作すると保存済み評価を新しい順で表示します。</p>
+<ul id="history-items" class="inventory"></ul>
+<div class="actions"><button id="history-more" type="button" class="quiet" data-action hidden>さらに古い履歴</button></div>
+</div></details>
+<details id="meta-import-panel" class="edit"><summary>保存済みメタプリセットから対面を取り込む</summary><div class="stack">
+<p class="muted">メタの種族と技だけを取り込みます。相手のIV・レベルはプリセットにないため、対面計算前に手動で確認してください。既存の対面やメタを上書きしません。</p>
+<div class="actions"><button id="meta-import-load" type="button" class="quiet" data-action>メタプリセット一覧を取得</button></div>
+<label>メタプリセット<select id="meta-import-choice"><option value="">先に一覧を取得してください</option></select></label>
+<div class="actions"><button id="meta-import-open" type="button" class="quiet" data-action>このメタのポケモンを表示</button></div>
+<label>候補を絞り込む<input id="meta-import-filter" type="search" autocomplete="off" placeholder="種族名・技"></label>
+<p id="meta-import-summary" class="muted">取り込む対面を個別に選択できます（最大6件）。</p>
+<ul id="meta-import-items" class="inventory"></ul>
+</div></details>
 <form id="analysis-form" class="stack">
 <section class="stack"><div><h2>探したいポケモンと役割</h2><p class="intro">基準にする個体のフォルム・個体値・レベル・技を指定します。</p></div>
 <div id="reference"></div><div class="grid"><label>役割<select id="role"><option value="lead">初手</option><option value="safe_switch">引き先</option><option value="closer">締め</option><option value="coverage">苦手対面の補完</option></select></label><label>優先度<select id="priority"><option value="1">標準</option><option value="2">高い</option><option value="3">最優先</option></select></label></div></section>
@@ -98,6 +114,8 @@ const tacticLinkKey='pokemoniv:tactic-evidence-link-v1';
 const observedLinkKey='pokemoniv:observed-evidence-link-v1';
 const fixedEvidenceTargets=new Map();
 const missingFormKey='pokemoniv:missing-analysis-form-v1';
+const missingTransferKey='pokemoniv:missing-reference-transfer-v1';
+let historyItems=[],historyCursor=null,metaPresets=[],metaImportRows=[];
 
 function node(tag,text,parent,cls){
  const el=document.createElement(tag);
@@ -213,8 +231,8 @@ function buildEditor(parent,title,{open=false,removable,initial}={}){
  for(const field of charged)field.addEventListener('change',validateMoves);
  if(initial){
   species.value=nameWithId(initial.species_id);
-  for(const [id,field] of Object.entries(ivs))field.value=initial.ivs[id];
-  level.value=initial.level;
+  if(initial.ivs)for(const [id,field] of Object.entries(ivs))field.value=initial.ivs[id];
+  if(initial.level!=null)level.value=initial.level;
   updateSpecies(initial.moves);
  }
  if(removable)button(body,'この項目を削除',()=>removable(el),'quiet');
@@ -858,6 +876,120 @@ async function compareSavedObserved(evaluationId,buildId,parent){
  }
  announce('保存済み観測戦術を新規対戦計算なしで照合しました。');
 }
+function renderHistory(){
+ const list=$('history-items');list.replaceChildren();
+ if(!historyItems.length)node('li','保存済みの評価はまだありません。',list,'muted');
+ for(const [i,item] of historyItems.entries()){
+  const row=node('li',null,list);
+  const when=new Date(item.created_at*1000);
+  const date=Number.isNaN(when.getTime())?'日時不明':when.toLocaleString('ja-JP');
+  node('p',date+' · '+(roles[item.role_id]||item.role_id)+' · rev '+item.role_revision,row,'break');
+  const flags=node('div',null,row,'tags');
+  tag(flags,...(gaps[item.state]||gaps.evidence_pending));
+  if(!item.versions_current)tag(flags,'現在の計算データとは異なる','wait');
+  node('small','台帳rev '+item.ledger_revision+' · 評価ID '+item.evaluation_id.slice(0,12),row,'muted break');
+  const previous=historyItems.slice(i+1).find(older=>older.comparison_key===item.comparison_key);
+  if(previous){
+   const before=(gaps[previous.state]||gaps.evidence_pending)[0];
+   const after=(gaps[item.state]||gaps.evidence_pending)[0];
+   node('p','同条件の前回記録から：'+(previous.state===item.state?'判定の変化なし':before+' → '+after),row,'muted');
+  }else node('small','同条件の前回記録はこの表示範囲にありません。',row,'muted');
+ }
+ $('history-summary').textContent='表示 '+historyItems.length+'件'+(historyCursor?'（続きあり）':'')+'。保存済みスナップショットを表示中。';
+ $('history-more').hidden=!historyCursor;
+}
+async function loadHistory(append){
+ const request={action:'evaluation_history',limit:24};
+ if(append&&historyCursor){
+  request.after_created_at=historyCursor.created_at;
+  request.after_id=historyCursor.evaluation_id;
+ }
+ const result=await api('missing-analysis',request);
+ if(!Array.isArray(result.items))throw Error('履歴一覧の応答が不正です。');
+ historyItems=append?historyItems.concat(result.items):result.items;
+ historyCursor=result.has_more?result.next_after:null;
+ renderHistory();
+ announce('保存済みの評価履歴を読み込みました。');
+}
+async function loadMetaPresetChoices(){
+ const result=await api('meta-presets',{});
+ if(!Array.isArray(result.items))throw Error('メタプリセット一覧を取得できませんでした。');
+ metaPresets=result.items.filter(p=>p&&typeof p.id==='string'&&p.available!==false&&typeof p.sha256==='string');
+ const choices=metaPresets.map(p=>[p.id,p.name+'（'+p.rows+'構成）']);
+ setOptions($('meta-import-choice'),[['','プリセットを選択'],...choices],result.default_id);
+ metaImportRows=[];renderMetaImportRows();
+ announce('メタプリセット一覧を取得しました。');
+}
+function parseMetaImport(csv){
+ if(typeof csv!=='string'||csv.length>100000)throw Error('プリセットのサイズが大きすぎます。');
+ const unique=new Set(),rows=[];
+ for(const line of csv.split(/\r?\n/)){
+  if(!line.trim())continue;
+  const parts=line.split(',').map(v=>v.trim());
+  if(parts.length!==4)continue;
+  const sid=parts[0].toLowerCase().replace(/-shadow$/,'_shadow');
+  const pokemon=catalog[sid];
+  if(!pokemon)continue;
+  const [fast,c1,c2]=parts.slice(1);
+  if(!pokemon.fastMoves?.includes(fast)||!pokemon.chargedMoves?.includes(c1)||
+     !pokemon.chargedMoves?.includes(c2)||c1===c2)continue;
+  const key=[sid,fast,c1,c2].join(',');
+  if(unique.has(key))continue;
+  unique.add(key);
+  rows.push({species_id:sid,moves:{fast,charged:[c1,c2]}});
+  if(rows.length>=500)break;
+ }
+ return rows;
+}
+function renderMetaImportRows(){
+ const list=$('meta-import-items');list.replaceChildren();
+ const query=normalize($('meta-import-filter').value);
+ const found=metaImportRows.filter(r=>normalize(name(r.species_id)+' '+r.species_id+' '+
+  [r.moves.fast,...r.moves.charged].map(move).join(' ')).includes(query));
+ for(const r of found.slice(0,40)){
+  const li=node('li',null,list);
+  node('p',name(r.species_id)+' · '+[r.moves.fast,...r.moves.charged].map(move).join(' / '),li,'break');
+  button(li,'この相手を対面に追加',()=>{
+   if(scenarios.length>=maxScenarios){announce('対面は最大6件までです。',true);return;}
+   if(scenarios.some(e=>e.read().species_id===r.species_id&&
+      JSON.stringify(e.read().moves)===JSON.stringify(r.moves))){
+    announce('同じ種族・技の対面はすでに入力されています。');return;
+   }
+   addScenario(true,{opponent:r,shields:[1,1],energy:0,requirement:{outcomes:['self_win']}});
+   announce('種族と技を対面に追加しました。個体値とレベルを必ず指定してください。');
+  },'quiet');
+ }
+ $('meta-import-summary').textContent='使用可能な技構成 '+metaImportRows.length+'件 ／ 絞り込み '+found.length+
+   '件（最大40件表示）。各相手のIV・レベルは空欄のままです。';
+ if(metaImportRows.length&&!found.length)node('li','該当するポケモンはありません。',list,'muted');
+}
+async function loadMetaPresetRows(){
+ const id=$('meta-import-choice').value;
+ const selected=metaPresets.find(p=>p.id===id);
+ if(!selected)throw Error('メタプリセットを選択してください。');
+ const data=await api('meta-preset-export',{id:selected.id,expected_sha256:selected.sha256});
+ if(data.id!==id||data.sha256!==selected.sha256)throw Error('メタが更新されました。一覧を再取得してください。');
+ metaImportRows=parseMetaImport(data.csv);
+ renderMetaImportRows();
+ announce('メタの技構成を確認しました。取り込む相手を選んでください。');
+}
+function readReferenceTransfer(){
+ let value=null;
+ try{
+  const raw=sessionStorage.getItem(missingTransferKey);
+  sessionStorage.removeItem(missingTransferKey);
+  if(!raw||raw.length>2048)return null;
+  value=JSON.parse(raw);
+  if(value?.schema!=='missing-reference-transfer-v1'||!catalog[value.species_id])return null;
+  const moveset=value.moves,pokemon=catalog[value.species_id];
+  if(!moveset||!pokemon.fastMoves?.includes(moveset.fast)||
+     !Array.isArray(moveset.charged)||moveset.charged.length!==2||
+     moveset.charged[0]===moveset.charged[1]||
+     !moveset.charged.every(m=>pokemon.chargedMoves?.includes(m)))return null;
+  if(value.ivs&&(!['attack','defense','hp'].every(k=>Number.isInteger(value.ivs[k])&&value.ivs[k]>=0&&value.ivs[k]<=15)))return null;
+  return {species_id:value.species_id,moves:moveset,...(value.ivs?{ivs:value.ivs}:{})};
+ }catch{return null;}
+}
 async function connect(manual){
  if(manual)credential=$('credential').value.trim();
  announce('ポケモンと技の一覧を読み込んでいます。');
@@ -877,8 +1009,10 @@ async function connect(manual){
        candidate.scenarios.length<=6)savedForm=candidate;
    }
   }catch{}
+  const importedReference=readReferenceTransfer();
+  if(importedReference)savedForm=null;
   reference=buildEditor($('reference'),'基準個体',{open:true,
-   initial:savedForm?.candidates[0]});
+   initial:importedReference||savedForm?.candidates[0]});
   if(savedForm){
    for(const condition of savedForm.scenarios)addScenario(false,condition);
    for(const [index,candidate] of savedForm.candidates.slice(1).entries()){
@@ -900,7 +1034,8 @@ async function connect(manual){
      if(/^[a-f0-9]{64}$/.test(link?.search_id))$('observed-search-id').value=link.search_id;
     }catch{}
    }
-  announce(savedForm?'前回の比較条件を復元しました。保存済み結果を照合してください。':
+  announce(importedReference?'通常厳選から種族・技・入力済みIVを引き継ぎました。対戦レベルと対面条件を確認してください。':
+   savedForm?'前回の比較条件を復元しました。保存済み結果を照合してください。':
    '基準個体と対面を入力してください。');
  }catch(error){
   credential='';$('login').hidden=false;
@@ -1067,6 +1202,11 @@ async function submitScope(){
  await loadInventory(false);
  announce('ボックス確認範囲を記録しました。個別レコードの所持状態は変更していません。');
 }
+$('history-load').addEventListener('click',()=>perform(()=>loadHistory(false)));
+$('history-more').addEventListener('click',()=>perform(()=>loadHistory(true)));
+$('meta-import-load').addEventListener('click',()=>perform(loadMetaPresetChoices));
+$('meta-import-open').addEventListener('click',()=>perform(loadMetaPresetRows));
+$('meta-import-filter').addEventListener('input',renderMetaImportRows);
 $('tactic-evidence-read').addEventListener('click',()=>perform(compareSavedTactics));
 $('add-scenario').addEventListener('click',()=>addScenario(true));
 $('add-alternative').addEventListener('click',()=>addAlternative());
