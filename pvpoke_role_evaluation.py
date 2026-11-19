@@ -161,6 +161,69 @@ class RoleEvaluation:
         except (sqlite3.Error, OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
             raise AnalysisUnavailable('Could not read role evaluation') from exc
 
+    def list_history(self, *, limit=24, after_created_at=None, after_id=None, active_versions=None):
+        """Bounded, owner-only history. Never recalculates or updates saved evaluations."""
+        if type(limit) is not int or not 1 <= limit <= 32:
+            raise ValueError('Invalid role history limit')
+        if (after_created_at is None) != (after_id is None):
+            raise ValueError('Incomplete role history cursor')
+        if after_id is not None:
+            _hash(after_id)
+            if type(after_created_at) is not int or not 0 <= after_created_at < 2**63:
+                raise ValueError('Invalid role history cursor')
+        try:
+            if not self.store.path.exists():
+                return {'items': [], 'has_more': False, 'next_after': None}
+            with self.store._reader() as db:
+                if not db.execute('SELECT 1 FROM sqlite_schema WHERE type=? AND name=?',
+                                  ('table', TABLE)).fetchone():
+                    return {'items': [], 'has_more': False, 'next_after': None}
+                sql = '''SELECT evaluation_id, body, digest, created_at
+                    FROM missing_role_evaluations_v1 WHERE owner_scope=?'''
+                params = [self.store.owner_scope]
+                if after_id is not None:
+                    sql += ''' AND (created_at < ? OR (created_at = ? AND evaluation_id < ?))'''
+                    params.extend([after_created_at, after_created_at, after_id])
+                sql += ' ORDER BY created_at DESC, evaluation_id DESC LIMIT ?'
+                params.append(limit + 1)
+                rows = db.execute(sql, params).fetchall()
+                has_more = len(rows) > limit
+                items = []
+                for evaluation_id, body, digest, created_at in rows[:limit]:
+                    if (type(body) is not bytes or len(body) > MAX_SNAPSHOT_BYTES
+                            or type(created_at) is not int or created_at < 0):
+                        raise ValueError('Invalid historical role entry')
+                    value = json.loads(body)
+                    if (type(value) is not dict or value.get('schema') != EVALUATION_SCHEMA
+                            or value.get('evaluation_id') != evaluation_id
+                            or _json_hash(value) != digest or type(value.get('definition')) is not dict
+                            or value.get('scope') != 'analysis_plan'
+                            or value.get('state') not in ('covered', 'ownership_confirmation_needed',
+                                                        'evidence_pending', 'gap')):
+                        raise ValueError('Invalid historical role checksum or schema')
+                    definition = value['definition']
+                    items.append({
+                        'evaluation_id': evaluation_id,
+                        'created_at': created_at,
+                        'analysis_id': value['analysis_id'],
+                        'role_id': definition['role_id'],
+                        'role_revision': definition['revision'],
+                        'priority': definition['priority'],
+                        'state': value['state'],
+                        'evidence_state': value['evidence_state'],
+                        'ledger_revision': value['ledger_revision'],
+                        'versions_current': (value['active_versions'] == active_versions
+                                             and value['plan_versions'] == active_versions),
+                        'comparison_key': _json_hash([value['analysis_id'], definition,
+                                                      value['active_versions'], value['plan_versions']]),
+                    })
+                next_after = ({'created_at': items[-1]['created_at'],
+                               'evaluation_id': items[-1]['evaluation_id']}
+                              if has_more and items else None)
+                return {'items': items, 'has_more': has_more, 'next_after': next_after}
+        except (sqlite3.Error, OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
+            raise AnalysisUnavailable('Could not list role evaluation history') from exc
+
     def evaluate(self, analysis_id, definition, *, active_versions, normalizer=None):
         role = _definition(definition)
         versions = _versions(active_versions)

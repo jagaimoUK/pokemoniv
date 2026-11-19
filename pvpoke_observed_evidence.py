@@ -5,10 +5,21 @@ or live reproducibility. No native replay or write transaction is performed.
 """
 from __future__ import annotations
 
+import json
+import sqlite3
+
 from pvpoke_battle_service import _json_hash, UnsupportedBattle
+from pvpoke_battle_store import BattleStoreError
 from pvpoke_missing_analysis import MissingAnalysis
 from pvpoke_observed_observation import FLAGS
-from pvpoke_observed_search import ObservedSearch
+from pvpoke_observed_search import (
+    MAX_WORK,
+    ObservedSearch,
+    SCHEMA as OBSERVED_SEARCH_SCHEMA,
+    digest as observed_digest,
+    integer as observed_integer,
+    versions as observed_versions,
+)
 from pvpoke_role_evaluation import RoleEvaluation, _hash, condition_id
 from pvpoke_sandbox import SandboxService
 
@@ -216,3 +227,79 @@ def compare_observed(service, evaluation_id, search_ids):
     return {"schema": SCHEMA, "evaluation_id": evaluation_id, "links": links,
             "standard_state": role["state"], "new_battles": 0,
             "standard_assessment_unchanged": True, **FLAGS}
+
+
+def list_observed_searches(service, *, limit=24, after_id=None):
+    """List saved observed-search plans for this owner without replaying receipts."""
+    if type(limit) is not int or not 1 <= limit <= 32:
+        raise ValueError("Invalid observed search list limit")
+    if after_id is not None:
+        _hash(after_id)
+    sandbox = SandboxService(service)
+    base_version = observed_versions(sandbox, False)
+    role_version = observed_versions(sandbox, True)
+    if not service.store.path.exists():
+        return {"items": [], "has_more": False, "next_after": None}
+    try:
+        with service.store._reader() as db:
+            if not db.execute("SELECT 1 FROM sqlite_schema WHERE name='observed_jobs_v2'").fetchone():
+                return {"items": [], "has_more": False, "next_after": None}
+            sql = "SELECT id, plan, cursor, paused FROM observed_jobs_v2 WHERE owner=?"
+            params = [service.store.owner_scope]
+            if after_id is not None:
+                sql += " AND id < ?"
+                params.append(after_id)
+            sql += " ORDER BY id DESC LIMIT ?"
+            params.append(limit + 1)
+            rows = db.execute(sql, params).fetchall()
+            has_more = len(rows) > limit
+            items = []
+            for search_id, body, cursor, paused in rows[:limit]:
+                _hash(search_id)
+                if (type(body) is not str and type(body) is not bytes) or len(body) > 1024 * 1024:
+                    raise BattleStoreError("Invalid observed checkpoint")
+                if not observed_integer(cursor, 0, MAX_WORK) or paused not in (0, 1):
+                    raise BattleStoreError("Invalid observed checkpoint")
+                plan = json.loads(body)
+                if observed_digest(plan) != search_id or plan.get("schema") != OBSERVED_SEARCH_SCHEMA:
+                    raise BattleStoreError("Invalid observed plan")
+                manifest = plan["manifest"]
+                worlds_by_key = {}
+                for entry in manifest.values():
+                    battle = entry["battle"]
+                    wkey = entry.get("world_id") or _world_key(battle)
+                    if wkey not in worlds_by_key:
+                        own, opp = battle["self"], battle["opponent"]
+                        worlds_by_key[wkey] = {
+                            "self": {
+                                "species_id": own["species"],
+                                "ivs": {"attack": own["atk"], "defense": own["def"], "hp": own["hp"]},
+                                "level": own["level"],
+                            },
+                            "opponent": {
+                                "species_id": opp["species"],
+                                "ivs": {"attack": opp["atk"], "defense": opp["def"], "hp": opp["hp"]},
+                                "level": opp["level"],
+                            },
+                            "shields": list(battle["shields"]),
+                            "energy": battle["initial"][0]["energy_points"],
+                        }
+                sorted_keys = sorted(worlds_by_key)
+                expected_version = role_version if "roles" in plan else base_version
+                items.append({
+                    "search_id": search_id,
+                    "work": cursor,
+                    "paused": bool(paused),
+                    "scenario_count": len(manifest),
+                    "world_count": len(sorted_keys),
+                    "worlds": [worlds_by_key[k] for k in sorted_keys[:6]],
+                    "worlds_truncated": len(sorted_keys) > 6,
+                    "roles": [r["id"] for r in plan.get("roles", ())],
+                    "version_current": plan.get("versions") == expected_version,
+                })
+            next_after = items[-1]["search_id"] if has_more and items else None
+            return {"items": items, "has_more": has_more, "next_after": next_after}
+    except BattleStoreError:
+        raise
+    except (sqlite3.Error, OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
+        raise BattleStoreError("Could not list observed searches") from exc

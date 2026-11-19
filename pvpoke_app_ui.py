@@ -101,7 +101,7 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 </details>
 <section class="card"><h2>1. ポケモンと個体値</h2><label for="preset">登録プリセット（任意）</label><select id="preset"></select><p class="note" id="presetHint"></p><label for="allSpecies">全ポケモンから選ぶ</label><select id="allSpecies"></select><label for="species">ポケモン名・英語ID（直接入力）</label><input id="species" list="speciesList" value="quagsire" autocomplete="off"><datalist id="speciesList"></datalist>
 <div class="actions" role="group" aria-label="登録区分を一括変更"><button id="bulkNormal" class="secondary">すべて通常に変更</button><button id="bulkShadow" class="secondary">すべてシャドウに変更</button><button id="bulkPurified" class="secondary">すべてリトレーンに変更</button><button id="bulkStatusUndo" class="secondary" hidden>区分変更を元に戻す</button></div><p class="note" id="bulkStatusNote">対象：フォーム、または取り込み済みの全種類。区分だけを修正し、個体値・CPは変えません。リトレーン済みの個体値・CPを入力してください。変更後に再計算します。</p>
-<label for="ivs">攻撃,防御,HP（1行1体・最大4,096通り）</label><textarea id="ivs" spellcheck="false" placeholder="0,11,12&#10;3,13,8&#10;2,15,13"></textarea></section>
+<label for="ivs">攻撃,防御,HP（1行1体・最大4,096通り）</label><textarea id="ivs" spellcheck="false" placeholder="0,11,12&#10;3,13,8&#10;2,15,13"></textarea><div class="actions"><button id="transferMissing" class="secondary" type="button" hidden>この個体を不足分析へ引き継ぐ</button></div></section>
 </div></main><script>
 'use strict';
 const el=id=>document.getElementById(id);let calculating=false,stopRequested=false,stopPromise=null,stopError=null;
@@ -233,6 +233,30 @@ function fillMoveFields(sid,row,[fast,charged1,charged2],label){
 function moves(row={},sid=el('species').value){fillMoveFields(sid,row,['fast','charged1','charged2'].map(el));}
 function presetKey(p){return p.key||[p.species,p.fast,p.charged1,p.charged2].join('|');}
 function currentCandidate(){return {species:el('species').value.trim(),fast:el('fast').value,charged1:el('charged1').value,charged2:el('charged2').value};}
+const transferMissing=el('transferMissing');
+transferMissing.hidden=!document.querySelector?.('.quick-nav a[href="/app/missing"]');
+transferMissing.onclick=()=>{
+ const current=currentCandidate();
+ if(!catalog[current.species]||!current.fast||!current.charged1||!current.charged2||
+    current.charged1===current.charged2){
+  message('不足分析へ送る種族と技を正しく指定してください。',true);return;
+ }
+ const transfer={schema:'missing-reference-transfer-v1',species_id:current.species,
+  moves:{fast:current.fast,charged:[current.charged1,current.charged2]}};
+ const lines=el('ivs').value.trim().split(/\r?\n/).filter(Boolean);
+ if(lines.length===1){
+  const matched=lines[0].trim().match(/^(\d{1,2})\s*[,/]\s*(\d{1,2})\s*[,/]\s*(\d{1,2})$/);
+  if(matched){
+   const values=matched.slice(1).map(Number);
+   if(values.every(v=>v>=0&&v<=15))transfer.ivs={attack:values[0],defense:values[1],hp:values[2]};
+  }
+ }
+ try{
+  sessionStorage.setItem('pokemoniv:missing-reference-transfer-v1',JSON.stringify(transfer));
+  location.assign('/app/missing');
+ }catch{message('対面条件の一時保存に失敗しました。',true);}
+};
+
 function setCandidate(p){inputPokemonStatus=null;el('species').value=p.species;el('allSpecies').value=p.species;moves(p);const found=presets.find(x=>['species','fast','charged1','charged2'].every(k=>x[k]===p[k]));el('preset').value=found?presetKey(found):'';}
 function setPreset(){const p=presets.find(x=>presetKey(x)===el('preset').value);if(p)setCandidate(p);}
 function resolveTypedSpecies(){const raw=el('species').value.normalize('NFKC').trim().toLowerCase();if(['gourgeist','pumpkaboo','パンプジン','バケッチャ'].includes(raw)){message('このポケモンはサイズごとに能力が異なります。こだましゅ/XS、ちゅうだましゅ/通常、おおだましゅ/XL、ギガだましゅ/XXLを指定してください。',true);return;}const found=Object.entries(catalog).filter(([sid,p])=>[sid,p.name,p.name_ja,...(p.aliases||[])].some(x=>x&&String(x).normalize('NFKC').trim().toLowerCase()===raw));if(found.length===1)el('species').value=found[0][0];else if(found.length>1)message('複数のフォルムが一致しました。サイズやフォルムを指定してください。',true);}

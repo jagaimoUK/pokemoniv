@@ -66,6 +66,46 @@ class TacticStore:
         except (sqlite3.Error, OSError, ValueError, TypeError, KeyError, RecursionError) as exc:
             raise TacticUnavailable('Could not list saved tactics') from exc
 
+    def list_summaries(self, *, calculation_version=None):
+        """Read-only owner-scoped summary of saved Sandbox tactics without altering list()."""
+        if not self.store.path.exists():
+            return []
+        try:
+            with self.store._reader() as db:
+                if not self._exists(db):
+                    return []
+                rows = db.execute('''SELECT tactic_id, revision, body, digest FROM sandbox_tactics_v1 AS tactics
+                    WHERE owner_scope=? AND revision=(
+                        SELECT MAX(revision) FROM sandbox_tactics_v1 AS latest
+                        WHERE latest.owner_scope=tactics.owner_scope AND latest.tactic_id=tactics.tactic_id
+                    ) ORDER BY saved_at DESC, tactic_id LIMIT 40''', (self.store.owner_scope,))
+                items = []
+                for row_id, row_rev, body, digest in rows:
+                    item = self._decode((body, digest))
+                    if (type(row_id) is not str or type(row_rev) is not int or
+                            item['tactic_id'] != row_id or
+                            type(item['revision']) is not int or item['revision'] != row_rev):
+                        raise ValueError('Mismatched tactic ID or revision')
+                    spec = item['spec']
+                    own, opp = spec['combatants']
+                    items.append({
+                        'tactic_id': item['tactic_id'],
+                        'revision': item['revision'],
+                        'name': item['name'],
+                        'saved_at': item['saved_at'],
+                        'self': {k: own[k] for k in ('species_id', 'ivs', 'level', 'moves')},
+                        'opponent': {k: opp[k] for k in ('species_id', 'ivs', 'level', 'moves')},
+                        'shields': [own['initial']['shields'], opp['initial']['shields']],
+                        'energy': own['initial']['energy'],
+                        'action_count': len(spec.get('actions', ())),
+                        'shield_decision_count': len(spec.get('shield_decisions', ())),
+                        'version_current': (calculation_version is not None
+                                            and spec.get('calculation_version') == calculation_version),
+                    })
+                return items
+        except (sqlite3.Error, OSError, ValueError, TypeError, KeyError, RecursionError) as exc:
+            raise TacticUnavailable('Could not list saved tactics') from exc
+
     @staticmethod
     def _decode(row):
         if row is None:

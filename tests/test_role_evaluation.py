@@ -93,6 +93,49 @@ class RoleEvaluationTests(unittest.TestCase):
         self.assertIsNone(self.evaluate(plan, definition, other))
         self.assertEqual(self.service.cache_stats['engine_calls'], 1)
 
+    def test_step3_bounded_history_pagination_owner_and_integrity(self):
+        spec = battle_spec()
+        plan = self.roles.analysis.save_plan(self.service, [spec])
+        definition = self.definition(spec)
+        before = self.evaluate(plan, definition)
+        self.assertEqual(before['state'], 'evidence_pending')
+        self.assertEqual(self.service.simulate(spec)['status'], 'complete')
+        after = self.evaluate(plan, definition)
+        self.assertEqual(after['state'], 'ownership_confirmation_needed')
+        self.assertNotEqual(after['evaluation_id'], before['evaluation_id'])
+        with patch.object(self.service.client, 'strategy', side_effect=AssertionError('no battle calls')):
+            page = self.roles.list_history(limit=1, active_versions=self.service.versions)
+            self.assertEqual(len(page['items']), 1)
+            self.assertTrue(page['has_more'])
+            older = self.roles.list_history(
+                limit=1, after_created_at=page['next_after']['created_at'],
+                after_id=page['next_after']['evaluation_id'],
+                active_versions=self.service.versions,
+            )
+            self.assertEqual(len(older['items']), 1)
+            self.assertFalse(older['has_more'])
+            both = self.roles.list_history(limit=2, active_versions=self.service.versions)['items']
+            self.assertEqual({item['evaluation_id'] for item in both},
+                             {before['evaluation_id'], after['evaluation_id']})
+            self.assertEqual(both[0]['comparison_key'], both[1]['comparison_key'])
+            self.assertTrue(all(item['versions_current'] for item in both))
+            self.assertFalse(self.roles.list_history(
+                active_versions={**self.service.versions, 'engine': '0' * 64},
+            )['items'][0]['versions_current'])
+            for kwargs in ({'limit': 0}, {'limit': True}, {'limit': 33},
+                           {'after_id': before['evaluation_id']},
+                           {'after_created_at': 1},
+                           {'after_created_at': True, 'after_id': before['evaluation_id']}):
+                with self.assertRaises(ValueError):
+                    self.roles.list_history(**kwargs)
+            foreign = RoleEvaluation(BattleStore(self.store.path, owner_scope='foreign'))
+            self.assertEqual(foreign.list_history()['items'], [])
+        with closing(sqlite3.connect(self.store.path)) as db, db:
+            db.execute('UPDATE missing_role_evaluations_v1 SET digest=? WHERE evaluation_id=?',
+                       ('0' * 64, before['evaluation_id']))
+        with self.assertRaises(AnalysisUnavailable):
+            self.roles.list_history()
+
     def test_full_health_requirement_rejects_short_start(self):
         short = battle_spec()
         short['combatants'][0]['initial']['hp'] = 1
