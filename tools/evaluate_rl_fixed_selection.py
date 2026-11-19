@@ -14,8 +14,8 @@ import json
 import random
 
 from pvpoke_rl_mc_train import play_episode
-from evaluate_rl_mc import evaluate_paired, heldout_scenarios
-from run_rl_mc import GAME_DATA, POLICY_VARIANTS, fixture_teams
+from tools.evaluate_rl_mc import evaluate_paired, heldout_scenarios
+from tools.run_rl_mc import GAME_DATA, POLICY_VARIANTS, fixture_teams
 from pvpoke_rl_team_env import SixToThreeEnvironment
 
 DEFAULT_SELECTION = "0,1,4|4"
