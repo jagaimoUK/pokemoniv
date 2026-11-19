@@ -35,6 +35,12 @@ class MatchedEvaluationTests(unittest.TestCase):
             *rosters(), ruleset_id="great-league-v1"
         ).observe()
         self.assertEqual(fixed_public_action(selection), "0,1,2|0")
+        self.assertEqual(
+            fixed_public_action(selection, selection="0,1,4|4"), "0,1,4|4")
+        with self.assertRaises(ValueError):
+            fixed_public_action(selection, selection="0,1,2|3")
+        with self.assertRaises(ValueError):
+            fixed_public_action(selection, selection=42)
         tactical = public_tactics()
         self.assertEqual(fixed_public_action(tactical), "fast")
         changed = copy.deepcopy(tactical)
@@ -254,6 +260,26 @@ class MatchedEvaluationTests(unittest.TestCase):
         self.assertEqual(model.encode_state(preview()), public_state(preview()))
         self.assertEqual(model.encode_state(public_tactics()),
                          public_state(public_tactics()))
+
+    def test_paired_evaluation_supplies_same_fixed_baseline_selection(self):
+        passed = []
+        def fake_one(policy, label, scenario, **kwargs):
+            passed.append((label, kwargs.get("fixed_selection")))
+            return {"status": "discarded", "outcome": "timeout",
+                    "reward": None, "decisions": 1,
+                    "selection_action": "0,1,4|4"}
+        trained = PublicMonteCarloPolicy(seed=8)
+        untrained = PublicMonteCarloPolicy(seed=8)
+        with patch("evaluate_rl_mc.evaluate_one", side_effect=fake_one):
+            summary = evaluate_paired(
+                trained=trained, untrained=untrained,
+                scenarios=[(18, (0, 1, 2), 0)],
+                fixed_selection="0,1,4|4")
+        self.assertEqual(passed, [
+            ("fixed", "0,1,4|4"), ("untrained", "0,1,4|4"),
+            ("trained", "0,1,4|4")])
+        self.assertEqual(summary["fixed_baseline_selection"], "0,1,4|4")
+        self.assertEqual(summary["metrics"]["fixed"]["losses"], 0)
 
     def test_native_3v3_paired_evaluation_does_not_train(self):
         trained, untrained = PublicMonteCarloPolicy(seed=17), PublicMonteCarloPolicy(seed=17)
