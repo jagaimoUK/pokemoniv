@@ -17,6 +17,10 @@ ACTIONS = frozenset(("wait", "fast", "charge_0", "charge_1",
 OUTCOME_REWARD = {"self_ko_win": 1, "opponent_ko_win": -1, "simultaneous_ko": 0}
 
 
+class InvalidNativeTeamResult(NativeStepError):
+    """The worker returned a result that violates the team step contract."""
+
+
 def verified_6v3_return(reward, terminated, truncated, info):
     """Return a shared tactic/selection label only for a verified terminal KO."""
     if (terminated is not True or truncated is not False or
@@ -79,7 +83,7 @@ class ThreeVThreeEnvironment(_NativeWorkerTransport):
                     self._observation = observation
                     return self.observe(), None, False, False, info
         self.close()
-        raise NativeStepError("Invalid native team result")
+        raise InvalidNativeTeamResult("Invalid native team result")
 
     def reset(self, handoff, *, seed=0, horizon=500):
         """Start from a trusted lead-first handoff and return (observation, info)."""
