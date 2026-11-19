@@ -46,8 +46,9 @@ def public_state(observation):
     schema = _required(observation, "schema")
     phase = _required(observation, "phase")
     legal = _required(observation, "legal_actions")
-    if type(legal) is not list or not legal or len(legal) > 60 or (
-            len(legal) != len(set(legal))) or any(type(a) is not str for a in legal):
+    if (type(legal) is not list or not legal or len(legal) > 60 or
+            any(type(a) is not str for a in legal) or
+            len(legal) != len(set(legal))):
         raise LearningError("Invalid legal actions")
     if schema == "rl-6v3-preview-v1" and phase == "select_three":
         own = _required(observation, "own_six")
@@ -156,17 +157,28 @@ class PublicMonteCarloPolicy:
             raise LearningError("Only verified 6v3 terminal returns may train")
         if decisions[0][0] != "selection" or sum(k == "selection" for k, _, _ in decisions) != 1:
             raise LearningError("Each episode must start with exactly one selection")
-        for kind, key, action in decisions:
-            if kind not in self._values or type(key) is not str or len(key) != 64 or type(action) is not str:
+        for item in decisions:
+            if type(item) is not tuple or len(item) != 3:
+                raise LearningError("Invalid training decision")
+            kind, key, action = item
+            if (kind not in self._values or type(key) is not str or len(key) != 64 or
+                    any(c not in "0123456789abcdef" for c in key) or
+                    type(action) is not str or
+                    (kind == "tactics" and action not in TACTIC_ACTIONS)):
                 raise LearningError("Invalid training decision")
         # One update per state-action pair per episode. Prevent long episodes
         # dominated by repeated wait decisions from disproportionate weighting.
-        for kind, key, action in dict.fromkeys(decisions):
+        unique = tuple(dict.fromkeys(decisions))
+        # Check all quotas BEFORE the first write, so errors never half-train.
+        for kind in self._values:
+            fresh = {key for row_kind, key, _ in unique
+                     if row_kind == kind and key not in self._values[kind]}
+            if len(self._values[kind]) + len(fresh) > MAX_STATES:
+                raise LearningError("Training state budget exhausted")
+        for kind, key, action in unique:
             target = selection_reward if kind == "selection" else reward
             states = self._values[kind]
             if key not in states:
-                if len(states) >= MAX_STATES:
-                    raise LearningError("Training state budget exhausted")
                 states[key] = {}
             count, mean = states[key].get(action, (0, 0.0))
             states[key][action] = (count + 1, mean + (target - mean) / (count + 1))
@@ -225,10 +237,13 @@ def play_episode(env, policy, *, seed=0, epsilon=0.2, max_decisions=2000, learn=
         decisions.append(record)
         view, reward, terminated, truncated, info = env.step(action)
         if terminated or truncated:
+            expected_outcome = {"self_ko_win": 1, "opponent_ko_win": -1,
+                                "simultaneous_ko": 0}
             eligible = (terminated and not truncated and
                         type(info) is dict and info.get("training_eligible") is True and
                         type(reward) is int and reward in (-1, 0, 1) and
-                        info.get("selection_reward") == reward)
+                        info.get("selection_reward") == reward and
+                        expected_outcome.get(info.get("outcome")) == reward)
             if eligible and learn:
                 policy.learn(decisions, reward=reward,
                              selection_reward=info["selection_reward"])
