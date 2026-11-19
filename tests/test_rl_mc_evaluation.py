@@ -70,6 +70,27 @@ class MatchedEvaluationTests(unittest.TestCase):
         ])
         self.assertIsNone(no_matches["win_fraction_among_completed"])
 
+    def test_learning_coverage_fraction_has_an_explicit_denominator(self):
+        stat = _metrics([
+            {"status": "complete", "reward": 1, "decisions": 6,
+             "coverage": {"state_hits": 4, "chosen_action_hits": 2,
+                          "selection_state_seen": True,
+                          "selection_action_seen": False}},
+            {"status": "discarded", "reward": None, "decisions": 4,
+             "coverage": {"state_hits": 1, "chosen_action_hits": 0,
+                          "selection_state_seen": False,
+                          "selection_action_seen": False}},
+        ])
+        hits = stat["learned_coverage"]
+        self.assertEqual(hits["state_hits"], 5)
+        self.assertEqual(hits["chosen_action_hits"], 2)
+        self.assertEqual(hits["state_hit_fraction"], 0.5)
+        self.assertEqual(hits["chosen_action_hit_fraction"], 0.2)
+        self.assertEqual(hits["selection_state_hits"], 1)
+        self.assertEqual(hits["selection_action_hits"], 0)
+        self.assertEqual(stat["complete"], 1)
+        self.assertEqual(stat["discarded"], 1)
+
     def test_paired_comparison_excludes_nonmatching_completions(self):
         seen = []
         scripted = {
@@ -93,12 +114,16 @@ class MatchedEvaluationTests(unittest.TestCase):
         self.assertEqual(
             summary["paired"]["trained_vs_fixed"],
             {"both_completed": 1, "trained_better": 1,
-             "equal_return": 0, "trained_worse": 0},
+             "equal_return": 0, "trained_worse": 0,
+             "selection_compared": 0, "same_selection": 0,
+             "different_selection": 0},
         )
         self.assertEqual(
             summary["paired"]["trained_vs_untrained"],
             {"both_completed": 2, "trained_better": 1,
-             "equal_return": 1, "trained_worse": 0},
+             "equal_return": 1, "trained_worse": 0,
+             "selection_compared": 0, "same_selection": 0,
+             "different_selection": 0},
         )
         self.assertEqual(summary["metrics"]["fixed"]["discarded"], 1)
         self.assertEqual(trained.completed_matches, 0)
@@ -122,6 +147,17 @@ class MatchedEvaluationTests(unittest.TestCase):
             self.assertEqual(stats["episodes"], 1)
             self.assertEqual(stats["complete"] + stats["discarded"], 1)
         self.assertFalse(summary["evaluation_policy_updated"])
+        self.assertIsNone(summary["metrics"]["fixed"]["learned_coverage"])
+        for label in ("trained", "untrained"):
+            hits = summary["metrics"][label]["learned_coverage"]
+            self.assertIsNotNone(hits)
+            self.assertGreaterEqual(hits["state_hits"], hits["chosen_action_hits"])
+            self.assertGreaterEqual(hits["state_hit_fraction"],
+                                    hits["chosen_action_hit_fraction"])
+        for name in ("trained_vs_fixed", "trained_vs_untrained"):
+            paired = summary["paired"][name]
+            self.assertEqual(paired["selection_compared"],
+                             paired["same_selection"] + paired["different_selection"])
 
 
 if __name__ == "__main__":
