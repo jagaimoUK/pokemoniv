@@ -110,12 +110,18 @@ class MatchedEvaluationTests(unittest.TestCase):
                 "cooldown_forced": 3, "other_forced": 1,
                 "fast_available_when_waiting": 1,
                 "charge_available_when_waiting": 0,
+                "switch_available_when_waiting": 1,
+                "optional_turn_wait": 1,
+                "optional_other_phase_wait": 0,
             },
         }
         summary = _metrics([episode])
         self.assertEqual(summary["public_wait_reasons"]["forced_only_wait"], 4)
         self.assertEqual(summary["public_wait_reasons"]["optional_wait"], 1)
         self.assertEqual(summary["public_wait_reasons"]["cooldown_forced"], 3)
+        self.assertEqual(summary["public_wait_reasons"]["switch_available_when_waiting"], 1)
+        self.assertEqual(summary["public_wait_reasons"]["optional_turn_wait"], 1)
+        self.assertEqual(summary["public_wait_reasons"]["optional_other_phase_wait"], 0)
         self.assertEqual(summary["discard_reasons"], {"timeout": 1})
         self.assertEqual(summary["wins"], 0)
         self.assertEqual(summary["losses"], 0)
@@ -125,6 +131,14 @@ class MatchedEvaluationTests(unittest.TestCase):
             _metrics([invalid])
         invalid = copy.deepcopy(episode)
         invalid["public_wait_reasons"]["cooldown_forced"] = 5
+        with self.assertRaises(ValueError):
+            _metrics([invalid])
+        invalid = copy.deepcopy(episode)
+        invalid["public_wait_reasons"]["optional_other_phase_wait"] = 1
+        with self.assertRaises(ValueError):
+            _metrics([invalid])
+        invalid = copy.deepcopy(episode)
+        invalid["public_wait_reasons"]["switch_available_when_waiting"] = 2
         with self.assertRaises(ValueError):
             _metrics([invalid])
 
