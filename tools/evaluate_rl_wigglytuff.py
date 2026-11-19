@@ -1,4 +1,4 @@
-"""Trace Swift and compare energy or legal switch timing on synthetic replays."""
+"""Trace Swift and compare legal decisions on synthetic native replays."""
 from __future__ import annotations
 
 import argparse
@@ -18,26 +18,36 @@ ROOT = Path(__file__).resolve().parent.parent
 HISTORICAL = (500014, 500015, 501015, 701014)
 HOLDOUT = tuple(range(800012, 800018)) + tuple(range(801012, 801018))
 TIMING_HOLDOUT = tuple(range(900012, 900018)) + tuple(range(901012, 901018))
+SWIFT_HOLDOUT = tuple(range(1000012, 1000018)) + tuple(range(1001012, 1001018))
 # Each alternate matchup actually selects Primeape (slot 3); its original
 # pool does not contain Primeape. Each lead gets two predeclared seeds.
 ALTERNATE_MATCHUPS = tuple(((1, 3, 5), lead) for lead in (1, 3, 5) for _ in range(2)) + tuple(
     ((0, 2, 3), lead) for lead in (0, 2, 3) for _ in range(2))
+# Primeape replaces Clodsire in slot 1 and is included in every selected trio.
+SWIFT_ALTERNATE_MATCHUPS = tuple(((1, 3, 4), lead) for lead in (1, 3, 4) for _ in range(2)) + tuple(
+    ((0, 1, 2), lead) for lead in (0, 1, 2) for _ in range(2))
+BATTLE_CLOCK_MS = 240000
+CHARGE_ALTERNATIVES = ("fast", "charge_0", "wait")
 
 
-def run_cases(seeds, *, timing_pool=None):
+def run_cases(seeds, *, timing_pool=None, charge_pool=None):
     if not 1 <= len(seeds) <= 12:
         raise ValueError("Expected 1–12 synthetic cases")
     own, public, enemy = fixture_teams()
     own[0] = {**own[0], **PRIMEAPE}
-    if timing_pool not in (None, "legacy", "alternate"):
-        raise ValueError("Unknown switch timing opponent pool")
-    if timing_pool == "alternate":
-        enemy[3] = {**enemy[3], **PRIMEAPE}
-        public[3] = {key: enemy[3][key] for key in ("species", "roster_clause_id")}
+    if (timing_pool and charge_pool or
+            any(pool not in (None, "legacy", "alternate") for pool in (timing_pool, charge_pool))):
+        raise ValueError("Select one study and opponent pool")
+    alternate = timing_pool == "alternate" or charge_pool == "alternate"
+    if alternate:
+        slot, lineup_seeds, matchups = ((1, SWIFT_HOLDOUT, SWIFT_ALTERNATE_MATCHUPS) if charge_pool else
+                                        (3, TIMING_HOLDOUT, ALTERNATE_MATCHUPS))
+        enemy[slot] = {**enemy[slot], **PRIMEAPE}
+        public[slot] = {key: enemy[slot][key] for key in ("species", "roster_clause_id")}
     cases = []
     for seed in seeds:
-        if timing_pool == "alternate":
-            trio, lead = ALTERNATE_MATCHUPS[TIMING_HOLDOUT.index(seed)]
+        if alternate:
+            trio, lead = matchups[lineup_seeds.index(seed)]
         else:
             _, trio, lead = heldout_scenarios(count=1, seed=seed)[0]
         preview = SixToThreeSelection(own, public, enemy, trio, lead, ruleset_id="great-league-v1")
@@ -46,6 +56,8 @@ def run_cases(seeds, *, timing_pool=None):
     command = ["node", str(ROOT / "tools/evaluate_rl_wigglytuff.cjs")]
     if timing_pool:
         command.append("--switch-timing")
+    if charge_pool:
+        command.append("--second-swift")
     result = subprocess.run(
         command, input=json.dumps(cases),
         capture_output=True, encoding="utf-8", cwd=ROOT, timeout=60, check=True,
@@ -121,20 +133,76 @@ def summarize_timing(cases):
     }
 
 
+def charge_stratum(public_state):
+    """Predeclared buckets using the rounded public HP and the native clock."""
+    hp = public_state["hp_bucket_5pct"]
+    shields = public_state["opponent_shields"]
+    remaining = BATTLE_CLOCK_MS - public_state["elapsed_ms"]
+    if not 0 <= hp <= 20 or not 0 <= shields <= 2 or not 0 <= remaining <= BATTLE_CLOCK_MS:
+        raise ValueError("Invalid public charge-fork state")
+    hp_band = ("0–25%", "30–50%", "55–75%", "80–100%")[max(0, (hp - 1) // 5)]
+    time_band = "≤30s" if remaining <= 30000 else ">30–60s" if remaining <= 60000 else ">60s"
+    return f"{hp_band} / {shields} shield / {time_band}"
+
+
+def _charge_pair_summary(histories, action):
+    pairs = [(row["immediate"], row["alternatives"][action])
+             for row in histories if action in row["alternatives"]]
+    completed = [(a, b) for a, b in pairs if a["reward"] is not None and b["reward"] is not None]
+    deltas = [b["reward"] - a["reward"] for a, b in completed]
+    return {
+        "attempted": len(pairs), "both_completed": len(completed),
+        "both_completed_rate": len(completed) / len(pairs) if pairs else None,
+        "alternative_better": sum(d > 0 for d in deltas), "equal": sum(d == 0 for d in deltas),
+        "alternative_worse": sum(d < 0 for d in deltas),
+        "mean_reward_delta": sum(deltas) / len(deltas) if deltas else None,
+        "immediate_swift_resolved_at_fork": sum(any(m["move"] == "SWIFT" for m in a["charge_resolved_at_fork"])
+                                                for a, _ in pairs),
+        "immediate_second_swift_resolved": sum(a["second_swift_resolved"] for a, _ in pairs),
+        "alternative_second_swift_resolved": sum(b["second_swift_resolved"] for _, b in pairs),
+        "alternative_first_charge_from_fork": dict(Counter(
+            (b["first_charge_from_fork"] or {}).get("move", "none") for _, b in pairs)),
+        "immediate_censored": dict(Counter(a["outcome"] for a, _ in pairs if a["reward"] is None)),
+        "alternative_censored": dict(Counter(b["outcome"] for _, b in pairs if b["reward"] is None)),
+    }
+
+
+def summarize_charge(cases):
+    histories = [row for case in cases for row in case["histories"].values()]
+    eligible = [row for row in histories if "public_state" in row]
+    grouped = {}
+    for row in eligible:
+        grouped.setdefault(charge_stratum(row["public_state"]), []).append(row)
+    return {
+        "planned_histories": len(histories), "eligible_histories": len(eligible),
+        "excluded": dict(Counter(row["excluded"] for row in histories if "excluded" in row)),
+        "overall": {action: _charge_pair_summary(eligible, action) for action in CHARGE_ALTERNATIVES},
+        "strata": {key: {"eligible_histories": len(rows), **{
+            action: _charge_pair_summary(rows, action) for action in CHARGE_ALTERNATIVES}}
+            for key, rows in grouped.items()},
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cohort", choices=("historical", "holdout"), required=True)
-    parser.add_argument("--timing-pool", choices=("legacy", "alternate"),
-                        help="Compare legal switch timing instead of synthetic energy bonuses")
+    study = parser.add_mutually_exclusive_group()
+    study.add_argument("--timing-pool", choices=("legacy", "alternate"),
+                       help="Compare legal switch timing instead of synthetic energy bonuses")
+    study.add_argument("--charge-pool", choices=("legacy", "alternate"),
+                       help="Compare one legal action at the second-Swift fork")
     args = parser.parse_args()
-    if args.timing_pool == "alternate" and args.cohort == "historical":
-        parser.error("The alternate pool is predeclared for the timing holdout only")
-    holdout = TIMING_HOLDOUT if args.timing_pool else HOLDOUT
-    rows = run_cases(HISTORICAL if args.cohort == "historical" else holdout, timing_pool=args.timing_pool)
-    stats = summarize_timing(rows) if args.timing_pool else summarize(rows)
+    if (args.timing_pool == "alternate" or args.charge_pool == "alternate") and args.cohort == "historical":
+        parser.error("The alternate pool is predeclared for holdout only")
+    holdout = SWIFT_HOLDOUT if args.charge_pool else TIMING_HOLDOUT if args.timing_pool else HOLDOUT
+    rows = run_cases(HISTORICAL if args.cohort == "historical" else holdout,
+                     timing_pool=args.timing_pool, charge_pool=args.charge_pool)
+    stats = summarize_charge(rows) if args.charge_pool else summarize_timing(rows) if args.timing_pool else summarize(rows)
     report = {"cohort": args.cohort, "summary": stats, "cases": rows}
     if args.timing_pool:
         report["timing_pool"] = args.timing_pool
+    if args.charge_pool:
+        report["charge_pool"] = args.charge_pool
     print(json.dumps(report, sort_keys=True))
 
 

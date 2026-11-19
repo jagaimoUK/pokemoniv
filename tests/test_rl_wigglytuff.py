@@ -3,8 +3,8 @@ import json
 import unittest
 
 from tools.evaluate_rl_wigglytuff import (
-    ALTERNATE_MATCHUPS, HISTORICAL, HOLDOUT, TIMING_HOLDOUT,
-    run_cases, summarize, summarize_timing,
+    ALTERNATE_MATCHUPS, HISTORICAL, HOLDOUT, SWIFT_ALTERNATE_MATCHUPS, SWIFT_HOLDOUT,
+    TIMING_HOLDOUT, charge_stratum, run_cases, summarize, summarize_charge, summarize_timing,
 )
 
 
@@ -38,6 +38,10 @@ class WigglytuffStudyTests(unittest.TestCase):
         self.assertFalse(set(TIMING_HOLDOUT) & (set(HISTORICAL) | set(HOLDOUT)))
         self.assertEqual(len(ALTERNATE_MATCHUPS), len(TIMING_HOLDOUT))
         self.assertTrue(all(3 in trio and lead in trio for trio, lead in ALTERNATE_MATCHUPS))
+        self.assertEqual(len(set(SWIFT_HOLDOUT)), 12)
+        self.assertFalse(set(SWIFT_HOLDOUT) & (set(HISTORICAL) | set(HOLDOUT) | set(TIMING_HOLDOUT)))
+        self.assertEqual(len(SWIFT_ALTERNATE_MATCHUPS), len(SWIFT_HOLDOUT))
+        self.assertTrue(all(1 in trio and lead in trio for trio, lead in SWIFT_ALTERNATE_MATCHUPS))
 
     def test_second_swift_and_rewards_are_compared_only_when_both_complete(self):
         short = {"reward": -1, "swift": [{"shielded": False}]}
@@ -109,3 +113,56 @@ class WigglytuffStudyTests(unittest.TestCase):
         self.assertEqual(report["arms"]["delayed"]["second_swift_legal"], 1)
         self.assertEqual(report["arms"]["delayed"]["second_swift_resolved"], 1)
         self.assertEqual(report["arms"]["delayed"]["second_unshielded_swift_resolved"], 0)
+
+    def test_native_second_swift_uses_same_prefix_and_only_admits_legal_actions(self):
+        legacy, = run_cases((500014,), charge_pool="legacy")
+        self.assertEqual(legacy["histories"]["switch"], {"excluded": "second_swift_not_legal"})
+        stay = legacy["histories"]["stay"]
+        self.assertEqual(stay["public_state"], {"turn": 102, "hp_bucket_5pct": 13,
+                                               "opponent_shields": 0, "elapsed_ms": 156000})
+        self.assertEqual(stay["immediate_action"], "charge_1")
+        self.assertEqual(set(stay["alternatives"]), {"fast", "wait"})
+        self.assertEqual(stay["immediate"]["charge_resolved_at_fork"][0]["move"], "SWIFT")
+        self.assertTrue(all(not b["charge_resolved_at_fork"] for b in stay["alternatives"].values()))
+        self.assertEqual([b["reward"] for b in stay["alternatives"].values()], [1, 1])
+
+        alternate, = run_cases((1001016,), charge_pool="alternate")
+        history = alternate["histories"]["switch"]
+        self.assertEqual(charge_stratum(history["public_state"]), "0–25% / 0 shield / ≤30s")
+        self.assertEqual((history["immediate"]["reward"], history["alternatives"]["fast"]["reward"],
+                          history["alternatives"]["wait"]["reward"]), (1, -1, 1))
+        for key in ("handoff", "randomness", "audit", "state", "decisions"):
+            self.assertNotIn(f'"{key}"', json.dumps((legacy, alternate)))
+
+    def test_charge_strata_use_public_bucket_and_closed_upper_bounds(self):
+        for hp, shields, remaining, expected in (
+            (0, 0, 10000, "0–25% / 0 shield / ≤30s"),
+            (5, 1, 30000, "0–25% / 1 shield / ≤30s"),
+            (6, 2, 30001, "30–50% / 2 shield / >30–60s"),
+            (10, 2, 60000, "30–50% / 2 shield / >30–60s"),
+            (15, 1, 60001, "55–75% / 1 shield / >60s"),
+            (16, 0, 120000, "80–100% / 0 shield / >60s"),
+        ):
+            self.assertEqual(charge_stratum({"hp_bucket_5pct": hp, "opponent_shields": shields,
+                                             "elapsed_ms": 240000 - remaining}), expected)
+
+    def test_charge_summary_pairs_by_action_and_keeps_timeouts_out_of_reward(self):
+        base = {"reward": 1, "outcome": "self_ko_win", "second_swift_resolved": True,
+                "charge_resolved_at_fork": [{"move": "SWIFT"}], "first_charge_from_fork": {"move": "SWIFT"}}
+        cold = {**base, "reward": None, "outcome": "timeout", "second_swift_resolved": False,
+                "charge_resolved_at_fork": [], "first_charge_from_fork": None}
+        cases = [{"histories": {
+            "stay": {"public_state": {"hp_bucket_5pct": 5, "opponent_shields": 1, "elapsed_ms": 230001},
+                     "immediate": base, "alternatives": {"fast": cold, "wait": base}},
+            "switch": {"excluded": "no_first_swift"},
+        }}]
+        report = summarize_charge(cases)
+        self.assertEqual((report["planned_histories"], report["eligible_histories"]), (2, 1))
+        stratum = report["strata"]["0–25% / 1 shield / ≤30s"]
+        self.assertEqual(stratum["fast"]["attempted"], 1)
+        self.assertEqual(stratum["fast"]["both_completed"], 0)
+        self.assertEqual(stratum["fast"]["alternative_censored"], {"timeout": 1})
+        self.assertIsNone(stratum["fast"]["mean_reward_delta"])
+        self.assertEqual(stratum["wait"]["mean_reward_delta"], 0)
+        self.assertEqual(stratum["charge_0"]["attempted"], 0)
+        self.assertIsNone(stratum["charge_0"]["both_completed_rate"])
