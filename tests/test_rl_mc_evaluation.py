@@ -71,6 +71,32 @@ class MatchedEvaluationTests(unittest.TestCase):
         ])
         self.assertIsNone(no_matches["win_fraction_among_completed"])
 
+    def test_public_timeout_diagnostics_do_not_treat_timeout_as_a_loss(self):
+        results = [
+            {"status": "discarded", "outcome": "timeout", "reward": None,
+             "decisions": 5,
+             "action_counts": {"selection": 1, "fast": 2, "wait": 2,
+                               "charged": 0, "switch": 0, "shield": 0},
+             "public_clock_before_final_action": {"elapsed_ms": 239000, "turn": 478}},
+            {"status": "complete", "outcome": "self_ko_win", "reward": 1,
+             "decisions": 4,
+             "action_counts": {"selection": 1, "fast": 1, "wait": 0,
+                               "charged": 1, "switch": 1, "shield": 0},
+             "public_clock_before_final_action": {"elapsed_ms": 25000, "turn": 28}},
+        ]
+        summary = _metrics(results)
+        self.assertEqual(summary["complete"], 1)
+        self.assertEqual(summary["discarded"], 1)
+        self.assertEqual(summary["wins"], 1)
+        self.assertEqual(summary["losses"], 0)
+        self.assertEqual(summary["discard_reasons"], {"timeout": 1})
+        self.assertEqual(summary["public_action_counts"]["wait"], 2)
+        self.assertEqual(summary["public_action_counts"]["fast"], 3)
+        self.assertEqual(summary["timeout_public_clocks"]["latest_elapsed_ms_max"], 239000)
+        self.assertEqual(summary["timeout_public_clocks"]["latest_turn_min"], 478)
+        with self.assertRaises(ValueError):
+            _metrics([{**results[0], "decisions": 6}])
+
     def test_learning_coverage_fraction_has_an_explicit_denominator(self):
         stat = _metrics([
             {"status": "complete", "reward": 1, "decisions": 6,
