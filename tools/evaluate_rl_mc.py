@@ -71,6 +71,11 @@ def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS):
         raise ValueError("Invalid evaluation parameters")
     own, public, opponent = fixture_teams()
     episode_seed, hidden, lead = scenario
+    # Read-only, public-state lookup. A fixed policy has no learned table.
+    learned = policy.snapshot()["values"] if policy is not None else None
+    state_hits = action_hits = 0
+    selection_seen = selection_action_seen = None
+    selection_action = None
     with SixToThreeEnvironment(
         GAME_DATA, own, public, opponent, hidden, lead, ruleset_id="great-league-v1"
     ) as env:
@@ -84,6 +89,18 @@ def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS):
                 action, _ = policy.choose(view, epsilon=0.0)
             if action not in view["legal_actions"]:
                 raise ValueError("Policy produced an illegal action")
+            kind, key, _ = public_state(view)
+            if kind == "selection":
+                selection_action = action
+            if learned is not None:
+                actions_seen = learned[kind].get(key, {})
+                has_state = bool(actions_seen)
+                has_action = action in actions_seen
+                state_hits += int(has_state)
+                action_hits += int(has_action)
+                if kind == "selection":
+                    selection_seen = has_state
+                    selection_action_seen = has_action
             view, reward, terminated, truncated, info = env.step(action)
             if terminated or truncated:
                 expected = {"self_ko_win": 1, "opponent_ko_win": -1,
@@ -99,6 +116,14 @@ def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS):
                     "status": "complete" if eligible else "discarded",
                     "reward": reward if eligible else None,
                     "decisions": step,
+                    "coverage": None if learned is None else {
+                        "state_hits": state_hits,
+                        "chosen_action_hits": action_hits,
+                        "selection_state_seen": selection_seen,
+                        "selection_action_seen": selection_action_seen,
+                    },
+                    # Own publicly chosen trio+lead, never opponent hidden picks.
+                    "selection_action": selection_action,
                 }
     raise RuntimeError("Episode exceeded evaluation decision budget")
 
@@ -109,6 +134,10 @@ def _metrics(results):
     losses = sum(v["reward"] == -1 for v in matches)
     draws = sum(v["reward"] == 0 for v in matches)
     count = len(matches)
+    total_decisions = sum(v["decisions"] for v in results)
+    present = [v["coverage"] for v in results if v.get("coverage") is not None]
+    covered_state = sum(v["state_hits"] for v in present)
+    covered_action = sum(v["chosen_action_hits"] for v in present)
     return {
         "episodes": len(results), "complete": count,
         "discarded": len(results) - count,
@@ -117,7 +146,20 @@ def _metrics(results):
         "win_fraction_among_completed": round(wins / count, 4) if count else None,
         "mean_return_among_completed": (
             round(sum(v["reward"] for v in matches) / count, 4) if count else None),
-        "total_decisions": sum(v["decisions"] for v in results),
+        "total_decisions": total_decisions,
+        # None is not zero: fixed baseline has no learned model to look up.
+        "learned_coverage": ({
+            "state_hits": covered_state,
+            "chosen_action_hits": covered_action,
+            "state_hit_fraction": round(covered_state / total_decisions, 4)
+                if total_decisions else None,
+            "chosen_action_hit_fraction": round(covered_action / total_decisions, 4)
+                if total_decisions else None,
+            "selection_state_hits": sum(
+                v["selection_state_seen"] is True for v in present),
+            "selection_action_hits": sum(
+                v["selection_action_seen"] is True for v in present),
+        } if present else None),
     }
 
 
@@ -142,11 +184,21 @@ def evaluate_paired(*, trained, untrained, scenarios):
             for t, b in zip(results["trained"], results[competitor])
             if t["status"] == "complete" and b["status"] == "complete"
         ]
+        # Selection agreement is meaningful even when both matches time out.
+        selected = [
+            (t.get("selection_action"), b.get("selection_action"))
+            for t, b in zip(results["trained"], results[competitor])
+            if t.get("selection_action") is not None and
+               b.get("selection_action") is not None
+        ]
         comparisons["trained_vs_" + competitor] = {
             "both_completed": len(paired),
             "trained_better": sum(t > b for t, b in paired),
             "equal_return": sum(t == b for t, b in paired),
             "trained_worse": sum(t < b for t, b in paired),
+            "selection_compared": len(selected),
+            "same_selection": sum(t == b for t, b in selected),
+            "different_selection": sum(t != b for t, b in selected),
         }
     return {
         "label": "matched_initial_conditions_synthetic_not_competitive_strength",
