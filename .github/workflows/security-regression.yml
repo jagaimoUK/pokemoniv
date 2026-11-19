@@ -48,7 +48,7 @@ jobs:
           PYTHONPATH=.:tests python tools/evaluate_rl_mc.py --policy v2 --train 8 --evaluate 6 --seed 12
           PYTHONPATH=.:tests python tools/evaluate_rl_fixed_selection.py --policy v2 --train 12 --evaluate 6 --seed 12
           PYTHONPATH=.:tests python tools/diagnose_rl_fixture.py --evaluate 6 --seed 12
-          PYTHONPATH=.:tests python tools/evaluate_rl_fresh_holdout.py --policy v2 --train 12 --evaluate 6 --seed 12
+          PYTHONPATH=.:tests python tools/evaluate_rl_fresh_holdout.py --policy v2 --train 12 --evaluate 6 --seed 12 --guarded-ablation
           for test in tests/test*.js tests/test*.cjs; do node "$test"; done
           for source in *.js; do node --check "$source"; done
           sh -n start.sh
