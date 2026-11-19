@@ -149,6 +149,14 @@ def _metrics(results):
             excluded[reason] = excluded.get(reason, 0) + 1
     covered_state = sum(v["state_hits"] for v in present)
     covered_action = sum(v["chosen_action_hits"] for v in present)
+    selection_decisions = sum(
+        v["selection_state_seen"] is not None for v in present)
+    selection_hits = sum(v["selection_state_seen"] is True for v in present)
+    selection_action_hits = sum(
+        v["selection_action_seen"] is True for v in present)
+    tactical_decisions = total_decisions - selection_decisions
+    tactical_hits = covered_state - selection_hits
+    tactical_action_hits = covered_action - selection_action_hits
     return {
         "episodes": len(results), "complete": count,
         "discarded": len(results) - count,
@@ -167,10 +175,17 @@ def _metrics(results):
                 if total_decisions else None,
             "chosen_action_hit_fraction": round(covered_action / total_decisions, 4)
                 if total_decisions else None,
-            "selection_state_hits": sum(
-                v["selection_state_seen"] is True for v in present),
-            "selection_action_hits": sum(
-                v["selection_action_seen"] is True for v in present),
+            "selection_state_hits": selection_hits,
+            "selection_action_hits": selection_action_hits,
+            "tactical_decisions": tactical_decisions,
+            "tactical_state_hits": tactical_hits,
+            "tactical_action_hits": tactical_action_hits,
+            "tactical_state_hit_fraction": (
+                round(tactical_hits / tactical_decisions, 4)
+                if tactical_decisions else None),
+            "tactical_action_hit_fraction": (
+                round(tactical_action_hits / tactical_decisions, 4)
+                if tactical_decisions else None),
         } if present else None),
     }
 
