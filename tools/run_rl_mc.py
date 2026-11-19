@@ -24,6 +24,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from pvpoke_rl_mc_train import PublicMonteCarloPolicy, play_episode
+from pvpoke_rl_mc_generalized import GeneralizedMonteCarloPolicy
+
+POLICY_VARIANTS = {"v1": PublicMonteCarloPolicy,
+                   "v2": GeneralizedMonteCarloPolicy}
 from pvpoke_rl_team_env import SixToThreeEnvironment
 
 FIXTURE = ROOT / "tests" / "fixtures"
@@ -57,11 +61,11 @@ def save_new_checkpoint(path, policy):
             temp_path.unlink(missing_ok=True)
 
 
-def read_checkpoint(path, seed):
+def read_checkpoint(path, seed, policy_class=PublicMonteCarloPolicy):
     source = Path(path).expanduser()
     if source.stat().st_size > 8 * 1024 * 1024:
         raise ValueError("Checkpoint exceeds 8 MiB")
-    return PublicMonteCarloPolicy.restore(
+    return policy_class.restore(
         json.loads(source.read_text(encoding="utf-8")), seed=seed)
 
 
@@ -110,6 +114,7 @@ def main():
     parser.add_argument("--evaluate", type=int, default=4)
     parser.add_argument("--seed", type=int, default=12)
     parser.add_argument("--epsilon", type=float, default=0.25)
+    parser.add_argument("--policy", choices=tuple(POLICY_VARIANTS), default="v1")
     parser.add_argument("--load", type=Path)
     parser.add_argument("--save", type=Path)
     args = parser.parse_args()
@@ -120,8 +125,9 @@ def main():
     if not 0 <= args.epsilon <= 1:
         parser.error("epsilon must be in [0,1]")
 
-    policy = read_checkpoint(args.load, args.seed) if args.load else (
-        PublicMonteCarloPolicy(seed=args.seed))
+    policy_class = POLICY_VARIANTS[args.policy]
+    policy = read_checkpoint(args.load, args.seed, policy_class) if args.load else (
+        policy_class(seed=args.seed))
     trained = run_batch(policy, episodes=args.train, seed=args.seed,
                         epsilon=args.epsilon, training=True)
     evaluated = run_batch(policy, episodes=args.evaluate, seed=args.seed + 100000,
@@ -132,6 +138,7 @@ def main():
     print(json.dumps({
         "mode": "offline_synthetic_mc_experiment_not_competitive_validation",
         "model_schema": policy.snapshot()["schema"],
+        "policy_variant": args.policy,
         "training": trained, "evaluation": evaluated,
         "cumulative_completed_matches": policy.completed_matches,
         "checkpoint_saved": bool(args.save),
