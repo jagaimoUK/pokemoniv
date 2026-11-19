@@ -32,7 +32,7 @@ class QuagsireStudyTests(unittest.TestCase):
             fixture = Path(temp) / "gamemaster.json"
             fixture.write_text(json.dumps(extended), encoding="utf-8")
             subprocess.run(
-                ["node", str(ROOT / "tests/test_rl_quagsire.cjs"), str(fixture)],
+                ["node", str(ROOT / "tests/rl_quagsire_native_probe.cjs"), str(fixture)],
                 input=json.dumps(handoff), text=True, cwd=ROOT, check=True, timeout=30,
                 env=child_environment({"PVP_PVPOKE_SOURCE": str(ROOT / "vendor/pvpoke")}),
             )
