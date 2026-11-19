@@ -779,3 +779,280 @@ class MissingLocalTests(server.ServerFixture):
             self.assertEqual(self.compare({'action': 'tactic_search_list'})[0], 503)
             self.assertEqual(self.compare({'action': 'observed_search_list'})[0], 503)
             self.assertEqual(self.compare({'action': 'sandbox_tactic_list'})[0], 503)
+
+    def test_step3_and_step4_composite_backup_verify_and_restore(self):
+        import sqlite3
+        from pvpoke_battle_service import BattleService
+        from pvpoke_direct_backend import DirectMatrixClient
+        from pvpoke_missing_analysis import AnalysisUnavailable
+        from pvpoke_missing_comparison import _comparison
+        from pvpoke_observed_evidence import list_observed_searches
+        from pvpoke_observed_search import ObservedSearch
+        from pvpoke_role_evaluation import RoleEvaluation
+        from pvpoke_sandbox import SandboxService
+        from pvpoke_sandbox_workspace import TacticStore, TacticUnavailable
+        from pvpoke_tactic_evidence import list_tactic_searches
+        from pvpoke_tactic_search import TacticSearch
+        from tools import cloud_migration_backup as backup
+
+        with patch.dict(os.environ, {'PVP_SANDBOX_ENABLED': '1',
+                                     'PVP_TACTIC_SEARCH_ENABLED': '1',
+                                     'PVP_OBSERVED_SEARCH_ENABLED': '1'}):
+            store = BattleStore.from_volume()
+            client = DirectMatrixClient(gamemaster=self.root / 'gamemaster.json', log_dir=self.root)
+            self.addCleanup(client.close)
+            service = BattleService(client, store=store)
+            sandbox = SandboxService(service)
+
+            # Step 1: Ownership records for local and foreign owners in one DB
+            sample_spec = battle_spec(left=0)['combatants'][0]
+            obs = {'species_id': sample_spec['species_id'], 'ivs': sample_spec['ivs'], 'current_cp': 1476,
+                   'current_level': sample_spec['level'], 'current_moves': sample_spec['moves']}
+            own_code, own_res = self.compare({
+                'action': 'ownership', 'instance_id': 'local-mon', 'event_id': 'ev-local-1',
+                'expected_revision': 0, 'state': 'confirmed_owned', 'observation': obs,
+            })
+            self.assertEqual((own_code, own_res['state']), (200, 'confirmed_owned'))
+
+            # Step 3: Multiple local role evaluations + one foreign role evaluation
+            eval_status, eval_1 = self.compare(case(energy=0, threshold=0))
+            self.assertEqual(eval_status, 200)
+            eval2_payload = {**case(energy=10, threshold=0),
+                             'role': {'role_id': 'safe_swap', 'revision': 2, 'priority': 3}}
+            eval2_status, eval_2 = self.compare(eval2_payload)
+            self.assertEqual(eval2_status, 200)
+            self.assertNotEqual(eval_1['evaluation_id'], eval_2['evaluation_id'])
+
+            foreign_store = BattleStore(store.path, owner_scope='foreign')
+            foreign_service = BattleService(client, store=foreign_store)
+            foreign_sandbox = SandboxService(foreign_service)
+            Ownership(foreign_store, species_ids=foreign_service.species).confirm(
+                'ev-foreign-1', 'foreign-mon', expected_revision=0, state='confirmed_owned',
+                observation=obs, register_if_missing=True,
+            )
+            foreign_eval = _comparison(foreign_service, {
+                **case(energy=20, threshold=0),
+                'role': {'role_id': 'foreign_closer', 'revision': 3, 'priority': 9},
+            })
+
+            # Step 4: Fixed tactic searches, observed searches, and revisioned Sandbox tactics
+            battle_spec_base = eval_1['candidates'][0]['conditions'][0]['spec']
+            sandbox_base = {k: v for k, v in battle_spec_base.items()
+                            if k not in ('calculation_version', 'policies')}
+            spec1 = {**sandbox_base, 'mode': 'sandbox', 'actions': [], 'shield_decisions': []}
+            spec2 = {**sandbox_base, 'mode': 'sandbox',
+                     'combatants': [sandbox_base['combatants'][0],
+                                    {**sandbox_base['combatants'][1],
+                                     'initial': {**sandbox_base['combatants'][1]['initial'], 'energy': 10}}],
+                     'actions': [], 'shield_decisions': []}
+            foreign_spec = {**sandbox_base, 'mode': 'sandbox',
+                            'combatants': [sandbox_base['combatants'][0],
+                                           {**sandbox_base['combatants'][1],
+                                            'initial': {**sandbox_base['combatants'][1]['initial'], 'energy': 33}}],
+                            'actions': [], 'shield_decisions': []}
+
+            tactic_search = TacticSearch(service)
+            ts1_id = tactic_search.start(spec1)
+            tactic_search.step(ts1_id, budget=1)
+            ts2_id = tactic_search.start(spec2)
+            foreign_ts_id = TacticSearch(foreign_service).start(foreign_spec)
+
+            observed = ObservedSearch(sandbox)
+            obs_res = observed.start(
+                [{**sandbox_base, 'mode': 'sandbox'}, spec2],
+                [{'attack': 'standard', 'shield': 'never'}],
+                [{'fast_delay': 0, 'miss_first_fast': False, 'reverse_fast_batch': False}],
+                1,
+                roles=[{'id': 'win', 'priority': 1, 'outcomes': ['self_ko_win'], 'minimum': {}}],
+            )
+            observed.step(obs_res['search_id'], 0, 1)
+            foreign_obs = ObservedSearch(foreign_sandbox).start(
+                [foreign_spec],
+                [{'attack': 'standard', 'shield': 'never'}],
+                [{'fast_delay': 0, 'miss_first_fast': False, 'reverse_fast_batch': False}],
+                1,
+            )
+
+            tstore = TacticStore(store)
+            tid = '1' * 32
+            tid_single = '4' * 32
+            tid_foreign = '2' * 32
+            tstore.save(sandbox, tid, 0, '保存戦術v1', spec1)
+            tstore.save(sandbox, tid, 1, '保存戦術v2', spec2)
+            tstore.save(sandbox, tid_single, 0, '単版戦術', spec1)
+            TacticStore(foreign_store).save(foreign_sandbox, tid_foreign, 0, '他オーナー戦術', foreign_spec)
+
+            # Capture exact pre-backup state for both local and foreign scopes
+            before_inv = backup.sqlite_inventory(store.path)
+            local_ind_before = Ownership(store, species_ids=service.species).get('local-mon')
+            local_ev_hist_before = Ownership(store, species_ids=service.species).history('local-mon')
+            c_h0, hist_before = self.compare({'action': 'evaluation_history'})
+            self.assertEqual(c_h0, 200)
+            eval1_snap_before = RoleEvaluation(store).history(eval_1['evaluation_id'])
+            c_tl0, ts_list_before = self.compare({'action': 'tactic_search_list'})
+            self.assertEqual(c_tl0, 200)
+            c_te0, ts_ev_before = self.compare({'action': 'tactic_evidence', 'evaluation_id': eval_1['evaluation_id'],
+                                                'search_ids': [ts1_id]})
+            self.assertEqual(c_te0, 200)
+            c_ol0, obs_list_before = self.compare({'action': 'observed_search_list'})
+            self.assertEqual(c_ol0, 200)
+            c_oe0, obs_ev_before = self.compare({'action': 'observed_evidence', 'evaluation_id': eval_1['evaluation_id'],
+                                                 'search_ids': [obs_res['search_id']]})
+            self.assertEqual(c_oe0, 200)
+            c_sl0, sb_list_before = self.compare({'action': 'sandbox_tactic_list'})
+            self.assertEqual(c_sl0, 200)
+            rev1_before = tstore.load(tid, 1, include_latest=True)
+            rev2_before = tstore.load(tid, 2, include_latest=True)
+            single_before = tstore.load(tid_single, include_latest=True)
+
+            foreign_hist_before = RoleEvaluation(foreign_store).list_history(active_versions=service.versions)
+            foreign_ts_before = list_tactic_searches(foreign_service)
+            foreign_obs_before = list_observed_searches(foreign_sandbox)
+            foreign_sb_before = TacticStore(foreign_store).list_summaries(
+                calculation_version=sandbox.calculation_version)
+            foreign_ind_before = Ownership(foreign_store, species_ids=foreign_service.species).get('foreign-mon')
+
+            # App-wide backup -> verify -> reject tampered bundle -> restore
+            backup_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+            volume_root = self.root / 'volume'
+            bundle = backup_root / 'bundle'
+            self.assertTrue(backup.backup({'volume': volume_root}, bundle)['verified'])
+            manifest = backup.verify(bundle)
+            db_rel = store.path.relative_to(volume_root).as_posix()
+            db_entry = [f for f in manifest['files'] if f['path'] == f'volume/{db_rel}'][0]
+            self.assertEqual(db_entry['sqlite'], before_inv)
+
+            tampered_bundle = backup_root / 'tampered_bundle'
+            shutil.copytree(bundle, tampered_bundle)
+            copied_db = tampered_bundle / 'files' / 'volume' / db_rel
+            raw = bytearray(copied_db.read_bytes())
+            raw[-1] ^= 0xFF
+            copied_db.write_bytes(bytes(raw))
+            with self.assertRaises(ValueError):
+                backup.verify(tampered_bundle)
+            with self.assertRaises(ValueError):
+                backup.restore(tampered_bundle, backup_root / 'tampered_restored')
+
+            restored_root = backup_root / 'restored'
+            backup.restore(bundle, restored_root)
+            restored_db = restored_root / 'volume' / db_rel
+            with sqlite3.connect(restored_db) as db:
+                self.assertEqual(db.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+            self.assertEqual(backup.sqlite_inventory(restored_db), before_inv)
+
+            # Verify restored DB read-only through Step 3 & Step 4 APIs and stores
+            with patch.dict(os.environ, {'PVP_ARCHIVE_DIR': str(restored_root / 'volume')}), \
+                 patch.object(server.web.BattleService, 'simulate',
+                              side_effect=AssertionError('Restore read must not simulate')), \
+                 patch.object(SandboxService, 'simulate',
+                              side_effect=AssertionError('Restore read must not simulate sandbox')):
+                restored_store = BattleStore(restored_db)
+                restored_service = BattleService(client, store=restored_store)
+                restored_sandbox = SandboxService(restored_service)
+                restored_tstore = TacticStore(restored_store)
+
+                self.assertEqual(Ownership(restored_store, species_ids=service.species).get('local-mon'),
+                                 local_ind_before)
+                self.assertEqual(Ownership(restored_store, species_ids=service.species).history('local-mon'),
+                                 local_ev_hist_before)
+                self.assertIsNone(Ownership(restored_store, species_ids=service.species).get('foreign-mon'))
+
+                with patch.object(ObservedSearch, '_replay',
+                                  side_effect=AssertionError('List must not replay receipts')):
+                    c_hist, hist_after = self.compare({'action': 'evaluation_history'})
+                    self.assertEqual(c_hist, 200)
+                    self.assertEqual(hist_after, hist_before)
+                    self.assertEqual({i['evaluation_id'] for i in hist_after['items']},
+                                     {eval_1['evaluation_id'], eval_2['evaluation_id']})
+                    self.assertNotIn(foreign_eval['evaluation_id'], {i['evaluation_id'] for i in hist_after['items']})
+                    self.assertEqual(RoleEvaluation(restored_store).history(eval_1['evaluation_id']), eval1_snap_before)
+
+                    c_ts, ts_after = self.compare({'action': 'tactic_search_list'})
+                    self.assertEqual(c_ts, 200)
+                    self.assertEqual(ts_after, ts_list_before)
+                    self.assertEqual({i['search_id'] for i in ts_after['items']}, {ts1_id, ts2_id})
+                    self.assertNotIn(foreign_ts_id, {i['search_id'] for i in ts_after['items']})
+
+                    c_obs, obs_after = self.compare({'action': 'observed_search_list'})
+                    self.assertEqual(c_obs, 200)
+                    self.assertEqual(obs_after, obs_list_before)
+                    self.assertEqual([i['search_id'] for i in obs_after['items']], [obs_res['search_id']])
+
+                    c_sb, sb_after = self.compare({'action': 'sandbox_tactic_list'})
+                    self.assertEqual(c_sb, 200)
+                    self.assertEqual(sb_after, sb_list_before)
+                    self.assertEqual({i['tactic_id'] for i in sb_after['items']}, {tid, tid_single})
+                    self.assertNotIn(tid_foreign, {i['tactic_id'] for i in sb_after['items']})
+
+                c_tev, tev_after = self.compare({'action': 'tactic_evidence',
+                                                 'evaluation_id': eval_1['evaluation_id'],
+                                                 'search_ids': [ts1_id]})
+                self.assertEqual((c_tev, tev_after), (200, ts_ev_before))
+
+                self.assertEqual(ObservedSearch(restored_sandbox).get(obs_res['search_id'])['work'], 1)
+                c_oev, oev_after = self.compare({'action': 'observed_evidence',
+                                                 'evaluation_id': eval_1['evaluation_id'],
+                                                 'search_ids': [obs_res['search_id']]})
+                self.assertEqual((c_oev, oev_after), (200, obs_ev_before))
+
+                # Multi-revision Sandbox restore matches exact name, revision, latest_revision, and spec
+                self.assertEqual(restored_tstore.load(tid, 1, include_latest=True), rev1_before)
+                self.assertEqual(restored_tstore.load(tid, 2, include_latest=True), rev2_before)
+                self.assertEqual(restored_tstore.load(tid_single, include_latest=True), single_before)
+                self.assertIsNone(restored_tstore.load(tid_foreign))
+
+                # Foreign scope restored intact and completely isolated from local records
+                restored_foreign = BattleStore(restored_db, owner_scope='foreign')
+                restored_f_service = BattleService(client, store=restored_foreign)
+                restored_f_sandbox = SandboxService(restored_f_service)
+                self.assertEqual(Ownership(restored_foreign, species_ids=foreign_service.species).get('foreign-mon'),
+                                 foreign_ind_before)
+                self.assertIsNone(Ownership(restored_foreign, species_ids=foreign_service.species).get('local-mon'))
+                self.assertEqual(RoleEvaluation(restored_foreign).list_history(active_versions=service.versions),
+                                 foreign_hist_before)
+                self.assertEqual(list_tactic_searches(restored_f_service), foreign_ts_before)
+                self.assertEqual(list_observed_searches(restored_f_sandbox), foreign_obs_before)
+                self.assertEqual(TacticStore(restored_foreign).list_summaries(
+                    calculation_version=sandbox.calculation_version), foreign_sb_before)
+                self.assertIsNone(TacticStore(restored_foreign).load(tid))
+
+                # Post-restore tamper detection fails closed across every Step 3 / Step 4 table
+                with restored_store._reader() as db:
+                    row_a1 = db.execute("SELECT body, digest FROM sandbox_tactics_v1 WHERE tactic_id=? AND revision=1",
+                                        (tid,)).fetchone()
+                    row_a2 = db.execute("SELECT body, digest FROM sandbox_tactics_v1 WHERE tactic_id=? AND revision=2",
+                                        (tid,)).fetchone()
+                with restored_store._writer(critical=True) as db:
+                    db.execute("UPDATE sandbox_tactics_v1 SET body=?, digest=? WHERE tactic_id=? AND revision=2",
+                               (row_a1[0], row_a1[1], tid))
+                self.assertEqual(self.compare({'action': 'sandbox_tactic_list'})[0], 503)
+                with self.assertRaises(TacticUnavailable):
+                    restored_tstore.load(tid, 2)
+                with restored_store._writer(critical=True) as db:
+                    db.execute("UPDATE sandbox_tactics_v1 SET body=?, digest=? WHERE tactic_id=? AND revision=2",
+                               (row_a2[0], row_a2[1], tid))
+                self.assertEqual(self.compare({'action': 'sandbox_tactic_list'})[0], 200)
+
+                with restored_store._writer(critical=True) as db:
+                    db.execute("UPDATE missing_role_evaluations_v1 SET digest='bad' WHERE owner_scope=? AND evaluation_id=?",
+                               (restored_store.owner_scope, eval_1['evaluation_id']))
+                    db.execute("UPDATE tactic_searches_v1 SET digest='bad' WHERE owner_scope=? AND search_id=?",
+                               (restored_store.owner_scope, ts1_id))
+                    db.execute("UPDATE observed_jobs_v2 SET plan='{}' WHERE owner=? AND id=?",
+                               (restored_store.owner_scope, obs_res['search_id']))
+                    db.execute("UPDATE sandbox_tactics_v1 SET digest='bad' WHERE owner_scope=? AND tactic_id=?",
+                               (restored_store.owner_scope, tid))
+                self.assertEqual(self.compare({'action': 'evaluation_history'})[0], 503)
+                with self.assertRaises(AnalysisUnavailable):
+                    RoleEvaluation(restored_store).history(eval_1['evaluation_id'])
+                self.assertEqual(self.compare({'action': 'tactic_search_list'})[0], 503)
+                self.assertEqual(self.compare({'action': 'observed_search_list'})[0], 503)
+                self.assertEqual(self.compare({'action': 'sandbox_tactic_list'})[0], 503)
+
+                # Foreign scope remains readable even when local records fail closed
+                self.assertEqual(RoleEvaluation(restored_foreign).list_history(active_versions=service.versions),
+                                 foreign_hist_before)
+                self.assertEqual(list_tactic_searches(restored_f_service), foreign_ts_before)
+                self.assertEqual(list_observed_searches(restored_f_sandbox), foreign_obs_before)
+                self.assertEqual(TacticStore(restored_foreign).list_summaries(
+                    calculation_version=sandbox.calculation_version), foreign_sb_before)
