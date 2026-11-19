@@ -115,6 +115,7 @@ def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS):
                 return {
                     "status": "complete" if eligible else "discarded",
                     "reward": reward if eligible else None,
+                    "outcome": info.get("outcome") if type(info) is dict else None,
                     "decisions": step,
                     "coverage": None if learned is None else {
                         "state_hits": state_hits,
@@ -136,11 +137,19 @@ def _metrics(results):
     count = len(matches)
     total_decisions = sum(v["decisions"] for v in results)
     present = [v["coverage"] for v in results if v.get("coverage") is not None]
+    excluded = {}
+    for row in results:
+        if row["status"] == "discarded":
+            reason = row.get("outcome")
+            # Only allow known, low-cardinality reasons in public metrics.
+            reason = reason if reason in ("timeout", "unsupported") else "other"
+            excluded[reason] = excluded.get(reason, 0) + 1
     covered_state = sum(v["state_hits"] for v in present)
     covered_action = sum(v["chosen_action_hits"] for v in present)
     return {
         "episodes": len(results), "complete": count,
         "discarded": len(results) - count,
+        "discard_reasons": excluded,
         "wins": wins, "losses": losses, "draws": draws,
         # No percentage when no valid matches. Never hide discarded games.
         "win_fraction_among_completed": round(wins / count, 4) if count else None,
