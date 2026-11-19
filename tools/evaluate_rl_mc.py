@@ -76,6 +76,10 @@ def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS):
     state_hits = action_hits = 0
     selection_seen = selection_action_seen = None
     selection_action = None
+    # Public-observation only; diagnose why synthetic baselines hit the clock.
+    action_counts = {"wait": 0, "fast": 0, "charged": 0,
+                     "switch": 0, "shield": 0, "selection": 0}
+    final_public_clock = None
     with SixToThreeEnvironment(
         GAME_DATA, own, public, opponent, hidden, lead, ruleset_id="great-league-v1"
     ) as env:
@@ -89,6 +93,20 @@ def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS):
                 action, _ = policy.choose(view, epsilon=0.0)
             if action not in view["legal_actions"]:
                 raise ValueError("Policy produced an illegal action")
+            # Last PUBLIC timing snapshot before the terminal native step.
+            if view["phase"] != "select_three":
+                clock = (view.get("elapsed_ms"), view.get("turn"))
+                if all(type(n) is int and n >= 0 for n in clock):
+                    final_public_clock = {"elapsed_ms": clock[0], "turn": clock[1]}
+            action_group = (
+                "charged" if action.startswith("charge_") else
+                "switch" if action.startswith("switch_") else
+                "shield" if action.startswith("shield_") else
+                "selection" if view["phase"] == "select_three" else action
+            )
+            if action_group not in action_counts:
+                raise ValueError("Unrecognized public action")
+            action_counts[action_group] += 1
             # The metric must use the SAME versioned public encoder as the
             # policy. v2's coarse hashes are not interchangeable with v1.
             kind, key, _ = (policy.encode_state(view) if learned is not None
@@ -120,6 +138,8 @@ def evaluate_one(policy, label, scenario, *, max_decisions=MAX_DECISIONS):
                     "reward": reward if eligible else None,
                     "outcome": info.get("outcome") if type(info) is dict else None,
                     "decisions": step,
+                    "public_clock_before_final_action": final_public_clock,
+                    "action_counts": action_counts,
                     "coverage": None if learned is None else {
                         "state_hits": state_hits,
                         "chosen_action_hits": action_hits,
@@ -147,6 +167,17 @@ def _metrics(results):
             # Only allow known, low-cardinality reasons in public metrics.
             reason = reason if reason in ("timeout", "unsupported") else "other"
             excluded[reason] = excluded.get(reason, 0) + 1
+    group_names = ("selection", "wait", "fast", "charged", "switch", "shield")
+    action_totals = {group: sum(
+        item.get("action_counts", {}).get(group, 0) for item in results)
+        for group in group_names}
+    if any("action_counts" in item for item in results) and (
+            sum(action_totals.values()) != total_decisions):
+        raise ValueError("Inconsistent public decision counts")
+    timeout_clocks = [row.get("public_clock_before_final_action")
+                      for row in results if row["status"] == "discarded"
+                      and row.get("outcome") == "timeout"
+                      and row.get("public_clock_before_final_action") is not None]
     covered_state = sum(v["state_hits"] for v in present)
     covered_action = sum(v["chosen_action_hits"] for v in present)
     selection_decisions = sum(
@@ -167,6 +198,18 @@ def _metrics(results):
         "mean_return_among_completed": (
             round(sum(v["reward"] for v in matches) / count, 4) if count else None),
         "total_decisions": total_decisions,
+        "public_action_counts": action_totals,
+        "timeout_public_clocks": {
+            "observed": len(timeout_clocks),
+            "latest_elapsed_ms_min": min(
+                (v["elapsed_ms"] for v in timeout_clocks), default=None),
+            "latest_elapsed_ms_max": max(
+                (v["elapsed_ms"] for v in timeout_clocks), default=None),
+            "latest_turn_min": min(
+                (v["turn"] for v in timeout_clocks), default=None),
+            "latest_turn_max": max(
+                (v["turn"] for v in timeout_clocks), default=None),
+        },
         # None is not zero: fixed baseline has no learned model to look up.
         "learned_coverage": ({
             "state_hits": covered_state,
