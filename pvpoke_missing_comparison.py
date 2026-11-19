@@ -2,7 +2,7 @@
 import os
 
 from pvpoke_battle_service import _integer, _json_hash, _object
-from pvpoke_iv_search import IVSearch
+from pvpoke_iv_search import BOUNDARY_NAMES, IVSearch, _pool
 from pvpoke_missing_analysis import AnalysisUnavailable, MissingAnalysis
 from pvpoke_ownership import Ownership, OwnershipConflict, build_id
 from pvpoke_role_evaluation import RoleEvaluation, _definition, _hash, condition_id
@@ -114,7 +114,8 @@ def _comparison(service, payload):
 
 
 def _explore(service, payload):
-    _object(payload, 'IV exploration request', ('action', 'evaluation_id', 'build_id', 'budget'))
+    _object(payload, 'IV exploration request',
+            ('action', 'evaluation_id', 'build_id', 'budget'), ('iv_floors',))
     selected = _hash(payload['build_id'])
     budget = _integer(payload['budget'], 'IV exploration budget', 0, 32)
     if budget and not _can_calculate():
@@ -131,24 +132,91 @@ def _explore(service, payload):
              if cell['build_id'] == selected and cell.get('starts_at_full_hp')}
     if not role['requirements'].keys() <= slots.keys():
         raise ValueError('Selected build does not contain all role conditions')
+    specs = [slots[slot] for slot in role['requirements']]
     explorer = IVSearch(service)
-    search_id = explorer.start([slots[slot] for slot in role['requirements']])
+    search_id = explorer.start(specs, iv_floors=payload.get('iv_floors', (0, 0, 0)))
     step = explorer.step(search_id, budget=budget, role=role)
     if step is None or step['coverage'] is None:
         raise AnalysisUnavailable('IV coverage unavailable')
     coverage = step['coverage']
-    bits = int.from_bytes(bytes.fromhex(coverage['qualifying_ivs']), 'little')
+    union_boundaries = {kind: 0 for kind in BOUNDARY_NAMES}
+    condition_summaries = []
+    for cond in coverage['conditions']:
+        cond_boundaries = {}
+        for kind in BOUNDARY_NAMES:
+            mask = int.from_bytes(bytes.fromhex(cond['boundaries'][kind]), 'little')
+            union_boundaries[kind] |= mask
+            cond_boundaries[kind] = mask.bit_count()
+        condition_summaries.append({
+            'condition_id': cond['id'],
+            'opponent': cond['opponent'],
+            'shields': [cond['self_initial']['shields'], cond['opponent']['initial']['shields']],
+            'energy': cond['self_initial']['energy'],
+            'completed_count': cond['completed_count'],
+            'remaining_count': coverage['eligible_iv_count'] - cond['completed_count'],
+            'eligible_iv_count': coverage['eligible_iv_count'],
+            'boundary_counts': cond_boundaries,
+        })
+    boundary_counts = {kind: mask.bit_count() for kind, mask in union_boundaries.items()}
+    species_id = step['candidate']['species_id']
+    moves = step['candidate']['moves']
+    owned_by_iv, species_confirmed_owned_count = Ownership(
+        service.store, species_ids=service.species,
+    ).species_rows_by_iv(species_id)
+    qualifying_hex = coverage['qualifying_ivs'] or ''
+    bits = int.from_bytes(bytes.fromhex(qualifying_hex), 'little') if qualifying_hex else 0
     count = bits.bit_count()
-    examples = []
-    while bits and len(examples) < 32:
-        lsb = bits & -bits
-        index = lsb.bit_length() - 1
-        examples.append({'attack': index >> 8, 'defense': (index >> 4) & 15, 'hp': index & 15})
-        bits ^= lsb
+    owned_exact_count = 0
+    owned_any_count = 0
+    absent_recorded_count = 0
+    unconfirmed_count = 0
+    ranked_examples = []
+    if bits:
+        rows, _ = _pool(service, specs[0], step['iv_floors'])
+        while bits:
+            lsb = bits & -bits
+            index = lsb.bit_length() - 1
+            bits ^= lsb
+            row = rows[index]
+            ivs = {'attack': row['atk'], 'defense': row['def'], 'hp': row['hp']}
+            raw_rows = owned_by_iv.get(index)
+            if raw_rows:
+                matches = Ownership._match_rows(
+                    raw_rows,
+                    {'species_id': species_id, 'ivs': ivs, 'level': row['level'], 'moves': moves},
+                    row['cp'],
+                )
+            else:
+                matches = []
+            has_exact = any(m['state'] == 'confirmed_owned' and m['build_match'] == 'exact' for m in matches)
+            has_owned = any(m['state'] == 'confirmed_owned' for m in matches)
+            has_unknown = any(m['state'] == 'unknown' for m in matches)
+            has_absent = any(m['state'] == 'confirmed_absent' for m in matches)
+            if has_exact:
+                owned_exact_count += 1
+            if has_owned:
+                owned_any_count += 1
+            elif has_absent and not has_unknown:
+                absent_recorded_count += 1
+            else:
+                unconfirmed_count += 1
+            priority = 0 if has_exact else 1 if has_owned else 2
+            ranked_examples.append((priority, index, {
+                **ivs,
+                'level': row['level'],
+                'cp': row['cp'],
+                'owned_instances': matches[:16],
+                'inventory_match_count': len(matches),
+            }))
+    ranked_examples.sort(key=lambda item: (item[0], item[1]))
+    examples = [entry for _, _, entry in ranked_examples[:32]]
     completed = coverage['all_completed_iv_count']
     return {'state': step['state'], 'new_battles': step['new_battles'],
             'retry_needed': any(status != 'complete' and attempts > 0
                                 for status, attempts in step['attempt_outcomes'].items()),
+            'raw_iv_count': coverage['raw_iv_count'],
+            'iv_floors': step['iv_floors'],
+            'candidate': {'species_id': species_id, 'moves': moves},
             'eligible_iv_count': coverage['eligible_iv_count'], 'qualifying_count': count,
             'completed_iv_count': completed,
             'fully_tested_nonqualifying_iv_count': completed - count,
@@ -157,6 +225,15 @@ def _explore(service, payload):
             # possible wins and must never be merged into qualifying_count.
             'not_fully_tested_iv_count': (
                 coverage['eligible_iv_count'] - completed),
+            'conditions': condition_summaries,
+            'boundary_counts': boundary_counts,
+            'ownership_summary': {
+                'confirmed_owned_exact_count': owned_exact_count,
+                'confirmed_owned_count': owned_any_count,
+                'confirmed_absent_recorded_count': absent_recorded_count,
+                'unconfirmed_count': unconfirmed_count,
+                'species_confirmed_owned_count': species_confirmed_owned_count,
+            },
             'qualifying': examples, 'can_calculate': _can_calculate()}
 
 

@@ -617,6 +617,54 @@ inventory.confirm('crash', 'a', expected_revision=1, state='confirmed_absent')
                 observation=cp_only, register_if_missing=False, preserve_identity=True,
             )
 
+        # Dev-build 600be941 compatibility: untagged partial=True request_hash
+        # must also replay cleanly with zero DB writes for identical omitted-field payloads,
+        # while explicit None, modified CP, wrong actor, or foreign owner raise OwnershipConflict.
+        untagged_partial_fields = self.inventory._observation(cp_only, partial=True)
+        untagged_partial_hash = _json_hash([
+            'instance', self.inventory.actor, 'inst-p1', 6, 'confirmed_owned', untagged_partial_fields,
+        ])
+        untagged_partial_event = {
+            **legacy_event,
+            'event_id': 'ev-600be94-update', 'input_revision': 6, 'output_revision': 7,
+            'instance': {**legacy_event['instance'], 'current_level': 20.5, 'revision': 7},
+        }
+        with self.store._writer(critical=True) as db:
+            db.execute('''INSERT INTO ownership_events_v1
+                (owner_scope, event_id, kind, target, request_hash, body, digest)
+                VALUES (?, ?, 'instance', ?, ?, ?, ?)''',
+                (self.inventory.owner, 'ev-600be94-update', 'inst-p1',
+                 untagged_partial_hash, *_pack(untagged_partial_event)))
+            rev_before_600 = self.inventory._revision(db)
+            count_before_600 = db.execute('SELECT COUNT(*) FROM ownership_events_v1').fetchone()[0]
+
+        self.assertEqual(
+            self.inventory.confirm(
+                'ev-600be94-update', 'inst-p1', expected_revision=6, state='confirmed_owned',
+                observation=cp_only, register_if_missing=False, preserve_identity=True,
+            ),
+            untagged_partial_event,
+        )
+        with self.store._reader() as db:
+            self.assertEqual(self.inventory._revision(db), rev_before_600)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM ownership_events_v1').fetchone()[0], count_before_600)
+        for bad_obs in ({**cp_only, 'current_cp': 1499}, {**cp_only, 'current_level': None, 'current_moves': None}):
+            with self.assertRaises(OwnershipConflict):
+                self.inventory.confirm(
+                    'ev-600be94-update', 'inst-p1', expected_revision=6, state='confirmed_owned',
+                    observation=bad_obs, register_if_missing=False, preserve_identity=True,
+                )
+        with self.assertRaises(OwnershipConflict):
+            foreign_actor.confirm(
+                'ev-600be94-update', 'inst-p1', expected_revision=6, state='confirmed_owned',
+                observation=cp_only, register_if_missing=False, preserve_identity=True,
+            )
+        with self.assertRaises(OwnershipConflict):
+            foreign_owner.confirm(
+                'ev-600be94-update', 'inst-p1', expected_revision=6, state='confirmed_owned',
+                observation=cp_only, register_if_missing=False, preserve_identity=True,
+            )
+
         # 512-row filtered scan boundary: empty first page with has_more=True, followed by page 2 item.
         boundary_store = BattleStore(self.root / 'volume' / 'boundary512.sqlite3')
         boundary_inv = Ownership(boundary_store, species_ids=self.inventory.species_ids)

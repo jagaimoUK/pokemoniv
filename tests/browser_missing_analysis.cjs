@@ -115,18 +115,47 @@ async function checkWidth(browser, width) {
         }});
       }
       if (payload.action === 'explore') {
-        assert.ok([0,32].includes(payload.budget));
-        const count = payload.budget === 32 ? 2 : 1;
-        return route.fulfill({json: {completed_iv_count: count, eligible_iv_count: 4096,
-                                     qualifying_count: 1, not_fully_tested_iv_count: 4096-count,
-                                     fully_tested_nonqualifying_iv_count: count-1,
-                                     retry_needed: payload.budget === 32, new_battles: count-1,
-                                     qualifying: [{attack: 0, defense: 15, hp: 15}]}});
+        assert.ok([0, 32].includes(payload.budget));
+        assert.ok(Array.isArray(payload.iv_floors) && payload.iv_floors.length === 3);
+        const filtered = payload.iv_floors.every(n => n === 10);
+        const eligible = filtered ? 216 : 4096;
+        const count = filtered ? 1 : (payload.budget === 32 ? 2 : 1);
+        const qualifying = filtered
+          ? [{attack: 10, defense: 14, hp: 15, level: 26.5, cp: 1492,
+              owned_instances: [{instance_id: 'inst-smoke-10', state: 'confirmed_owned', revision: 1, build_match: 'exact'}],
+              inventory_match_count: 1}]
+          : [{attack: 0, defense: 15, hp: 15, level: rows[0].level, cp: rows[0].cp,
+              owned_instances: [{instance_id: sampleInstanceId, state: 'confirmed_owned', revision: sampleRevision, build_match: 'unverified'}],
+              inventory_match_count: 1}];
+        return route.fulfill({json: {
+          raw_iv_count: 4096, iv_floors: payload.iv_floors,
+          candidate: {species_id: rows[0].species, moves: {fast: rows[0].fast, charged: [rows[0].charged1, rows[0].charged2]}},
+          completed_iv_count: count, eligible_iv_count: eligible,
+          qualifying_count: 1, not_fully_tested_iv_count: eligible - count,
+          fully_tested_nonqualifying_iv_count: count - 1,
+          retry_needed: payload.budget === 32, new_battles: count - 1,
+          boundary_counts: {hp: 4, cmp: 2, breakpoint: 6, bulkpoint: 3,
+            charged_1: 2, charged_2: 1, incoming_charged_1: 2, incoming_charged_2: 2},
+          conditions: [{condition_id: 'a'.repeat(64), opponent: {species_id: rows[2].species, ivs: {attack: rows[2].atk, defense: rows[2].def, hp: rows[2].hp}},
+            shields: [1, 1], energy: 0, completed_count: count, remaining_count: eligible - count,
+            eligible_iv_count: eligible,
+            boundary_counts: {hp: 4, cmp: 2, breakpoint: 6, bulkpoint: 3,
+              charged_1: 2, charged_2: 1, incoming_charged_1: 2, incoming_charged_2: 2}}],
+          ownership_summary: {
+            confirmed_owned_exact_count: filtered ? 1 : 0,
+            confirmed_owned_count: 1,
+            confirmed_absent_recorded_count: 0,
+            unconfirmed_count: 0,
+            species_confirmed_owned_count: 1,
+          },
+          qualifying,
+        }});
       }
       if (payload.action === 'opponent_boundaries') {
         assert.equal(payload.evaluation_id,'e'.repeat(64));
         assert.equal(payload.build_id,'b'.repeat(64));
         assert.equal(payload.battle_key,'c'.repeat(64));
+        assert.deepEqual(payload.iv_floors, [0, 0, 0]);
         return route.fulfill({json:{
           raw_iv_count:4096, profiled_iv_count:4096, distinct_static_profile_count:17,
           native_battles_run:0, battle_outcomes_verified:false,
@@ -255,6 +284,18 @@ async function checkWidth(browser, width) {
       await page.getByText(/静的境界のみ（勝敗未検証）/).waitFor();
       await page.getByText(/代表例（最大32件・勝敗未検証）：0\/15\/15/).waitFor();
     }
+    // Step 2: iv_floors preset, static boundaries & per-condition progress, ownership match, and candidate reflection.
+    await page.getByLabel('よく使う個体値下限').selectOption('10,10,10');
+    await page.getByRole('button', {name: '探索範囲を確認'}).click();
+    await page.getByText(/適用IV下限 10\/10\/10（全4096通り中 216通りが探索対象）/).waitFor();
+    await page.getByText(/達成確認済みIVの所持照合：完全一致を所持確認 1件/).waitFor();
+    await page.getByText('10/14/15 · Lv26.5 · CP 1492', {exact: true}).waitFor();
+    await page.locator('summary').filter({hasText: '静的境界と対面別の探索進捗（静的境界は勝敗未検証）'}).click();
+    await page.getByText(/全体の静的境界（HP・CMP・ダメージ変化境界／勝敗未検証）/).waitFor();
+    await page.getByText(/対戦進捗：計算済み 1 \/ 216通り（未計算 215通り）/).waitFor();
+    await page.getByRole('button', {name: '比較候補へ追加'}).first().click();
+    assert.equal(await page.locator('#alternatives details.edit').count(), 1);
+    assert.equal(await page.locator('#edited').isVisible(), true);
     await page.locator('#tactic-evidence-read').click();
     await page.getByText(/理論上の戦術であり、観測情報に基づく実戦再現性は未検証です/).waitFor();
     await page.getByText(/以下は保存済み戦術だけの参考順です/).waitFor();
@@ -309,8 +350,8 @@ async function checkWidth(browser, width) {
     await page.locator('#scope-list').getByText(/検索「0attack」/).waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
     assert.deepEqual(errors, []);
-    // Base requests (5 at 320px, 7 at 390px) + 2 candidate update/evaluate + 5 inventory/scope requests.
-    assert.equal(requests.length, width > 320 ? 14 : 12);
+    // Base requests (5 at 320px, 7 at 390px) + 1 Step 2 floor explore + 2 candidate update/evaluate + 5 inventory/scope requests.
+    assert.equal(requests.length, width > 320 ? 15 : 13);
   } finally {
     await page.close();
   }

@@ -343,7 +343,10 @@ class Ownership:
             identity.append('register')
         elif fields is not None:
             legacy_fields = self._observation(observation, partial=False)
-            legacy_hashes = (_json_hash(['instance', self.actor, instance_id, expected_revision, state, legacy_fields]),)
+            legacy_hashes = (
+                _json_hash(['instance', self.actor, instance_id, expected_revision, state, fields]),
+                _json_hash(['instance', self.actor, instance_id, expected_revision, state, legacy_fields]),
+            )
             identity.append('partial-v1')
         request_hash = _json_hash(identity)
         with self.store._writer(critical=True) as db:
@@ -467,3 +470,26 @@ class Ownership:
             WHERE owner_scope=? AND species_id=? AND iv_index=? ORDER BY instance_id''',
             (self.owner, combatant['species_id'], _iv_index(combatant['ivs']))).fetchall()
         return self._match_rows(rows, combatant, cp)
+
+    def species_rows_by_iv(self, species_id):
+        """Return validated inventory row pairs keyed by iv_index and confirmed-owned count."""
+        species = self._species(species_id)
+        if not self.store.path.exists():
+            return {}, 0
+        by_iv = {}
+        confirmed_owned = 0
+        with self.store._reader() as db:
+            if not self._exists(db):
+                return {}, 0
+            for iv_index, body, digest in db.execute(
+                '''SELECT iv_index, body, digest FROM owned_instances_v1
+                   WHERE owner_scope=? AND species_id=? ORDER BY iv_index, instance_id''',
+                (self.owner, species),
+            ):
+                record = _unpack((body, digest))
+                if record['species_id'] != species or _iv_index(record['ivs']) != iv_index:
+                    raise OwnershipUnavailable('Inventory match index is inconsistent')
+                if record['state'] == 'confirmed_owned':
+                    confirmed_owned += 1
+                by_iv.setdefault(iv_index, []).append((body, digest))
+        return by_iv, confirmed_owned

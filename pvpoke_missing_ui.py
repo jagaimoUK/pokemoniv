@@ -221,11 +221,26 @@ function buildEditor(parent,title,{open=false,removable,initial}={}){
  return {el,body,species,fields:[species,...Object.values(ivs),level,fast,...charged],read:()=>({species_id:speciesId,ivs:Object.fromEntries(Object.entries(ivs).map(([id,field])=>[id,field.valueAsNumber])),level:level.valueAsNumber,moves:{fast:fast.value,charged:charged.map(field=>field.value)}})};
 }
 function removeEditor(list,el){list.splice(list.findIndex(item=>item.el===el),1);el.remove();markEdited();setBusy(false);}
-function addAlternative(){
- if(alternatives.length>=maxAlternatives)return;
- const candidate=reference.fields.every(field=>field.validity.valid)?reference.read():null;
+function addAlternative(initialCandidate=null){
+ if(alternatives.length>=maxAlternatives){
+  announce('比較する個体は最大'+maxAlternatives+'件までです。',true);
+  return;
+ }
+ const candidate=initialCandidate||(reference.fields.every(field=>field.validity.valid)?reference.read():null);
+ if(initialCandidate){
+  const targetKey=JSON.stringify(initialCandidate);
+  const existing=[reference,...alternatives].some(item=>item.fields.every(field=>field.validity.valid)&&JSON.stringify(item.read())===targetKey);
+  if(existing){
+   announce('この個体はすでに比較候補に入っています。');
+   return;
+  }
+ }
  const editor=buildEditor($('alternatives'),'比較個体',{open:true,initial:candidate,removable:el=>removeEditor(alternatives,el)});
- alternatives.push(editor);markEdited();setBusy(false);editor.species.focus();
+ alternatives.push(editor);markEdited();setBusy(false);
+ if(initialCandidate){
+  announce(buildText(initialCandidate)+' を比較する個体に追加しました。「保存済みの対面結果を照合」で比較できます。');
+  editor.el.scrollIntoView({block:'nearest'});
+ }else editor.species.focus();
 }
 function addScenario(focus,initial=null){
  if(scenarios.length>=maxScenarios)return;
@@ -492,6 +507,19 @@ function renderInventory(parent,candidate,request){
  }
  registerInventory(box,candidate,request);
 }
+const boundaryLabels={hp:'HP',cmp:'CMP',breakpoint:'通常技与ダメージ',bulkpoint:'通常技被ダメージ',
+ charged_1:'ゲージ1与ダメージ',charged_2:'ゲージ2与ダメージ',
+ incoming_charged_1:'ゲージ1被ダメージ',incoming_charged_2:'ゲージ2被ダメージ'};
+function ivFloorControls(parent,legendText,names){
+ const group=node('fieldset',null,parent);node('legend',legendText,group);
+ const grid=node('div',null,group,'ivs');
+ const fields=names.map(label=>input(grid,label,{type:'number',min:0,max:15,step:1,value:0,required:true}));
+ return {fields,read:()=>{
+  const values=fields.map(field=>field.value===''?0:field.valueAsNumber);
+  if(values.some(n=>!Number.isInteger(n)||n<0||n>15))throw Error('個体値の下限は0〜15の整数で指定してください。');
+  return values;
+ }};
+}
 function renderOpponentBoundaries(panel,result){
  if(!result.can_calculate)return;
  const candidate=result.candidates.find(row=>row.build_id===result.reference.build_id);
@@ -504,17 +532,16 @@ function renderOpponentBoundaries(panel,result){
   const choice=node('option','対面'+(i+1)+'：'+name(row.opponent.species_id),selector);
   choice.value=row.battle_key;
  }
+ const oppFloors=ivFloorControls(area,'相手IVの下限（0〜15）',['相手攻撃下限','相手防御下限','相手HP下限']);
  const report=node('p',null,area,'break');
  const preview=node('p',null,area,'break');
- const labels={hp:'HP',cmp:'CMP',breakpoint:'通常技与ダメージ',bulkpoint:'通常技被ダメージ',
-  charged_1:'ゲージ1与ダメージ',charged_2:'ゲージ2与ダメージ',
-  incoming_charged_1:'ゲージ1被ダメージ',incoming_charged_2:'ゲージ2被ダメージ'};
  button(area,'相手IV境界を確認',()=>perform(async()=>{
+  const iv_floors=oppFloors.read();
   const data=await api('missing-analysis',{action:'opponent_boundaries',
-   evaluation_id:result.evaluation_id,build_id:candidate.build_id,battle_key:selector.value});
+   evaluation_id:result.evaluation_id,build_id:candidate.build_id,battle_key:selector.value,iv_floors});
   report.textContent='静的境界のみ（勝敗未検証）：相手IV '+data.profiled_iv_count+' / '+data.raw_iv_count+
    '通りを評価 ／ 静的プロファイル '+data.distinct_static_profile_count+
-   '種類 ／ '+Object.entries(data.boundary_counts).map(([kind,n])=>(labels[kind]||kind)+n+'件').join('・');
+   '種類 ／ '+Object.entries(data.boundary_counts).map(([kind,n])=>(boundaryLabels[kind]||kind)+n+'件').join('・');
   preview.textContent='代表例（最大32件・勝敗未検証）：'+data.representatives.map(
    row=>row.attack+'/'+row.defense+'/'+row.hp).join('、');
   announce('相手IVの静的な境界候補を表示しました。対戦勝敗は未検証です。');
@@ -522,14 +549,87 @@ function renderOpponentBoundaries(panel,result){
 }
 function renderExploration(parent,result){
  const panel=detail(parent,'重要IVを探索');
- const info=node('p','保存済みの対戦を照合し、役割の全条件を満たす個体値を確認します。',panel,'muted');
- const examples=node('p',null,panel,'break');
- const interruption=node('p',null,panel,'muted');
- const actions=node('div',null,panel,'actions');
+ const body=node('div',null,panel,'stack');
+ const preset=select(body,'よく使う個体値下限',[
+  ['0,0,0','指定なし (0/0/0)'],
+  ['1,1,1','フレンド交換 (1/1/1)'],
+  ['5,5,5','大親友交換 (5/5/5)'],
+  ['6,6,6','シャドウレイド (6/6/6)'],
+  ['10,10,10','レイド・リサーチ・タマゴ (10/10/10)'],
+  ['12,12,12','キラポケモン (12/12/12)'],
+  ['custom','自由入力'],
+ ]);
+ const selfFloors=ivFloorControls(body,'探索する個体値の下限（0〜15）',['攻撃下限','防御下限','HP下限']);
+ preset.addEventListener('change',()=>{
+  if(preset.value==='custom')return;
+  const parts=preset.value.split(',');
+  selfFloors.fields.forEach((field,i)=>{field.value=parts[i];});
+ });
+ const syncPreset=()=>{
+  const key=selfFloors.fields.map(field=>field.value===''?'0':field.value).join(',');
+  preset.value=[...preset.options].some(opt=>opt.value===key)?key:'custom';
+ };
+ for(const field of selfFloors.fields)field.addEventListener('input',syncPreset);
+ const info=node('p','保存済みの対戦を照合し、役割の全条件を満たす個体値を確認します。',body,'muted');
+ const floorInfo=node('p',null,body,'muted');
+ const ownershipInfo=node('p',null,body,'muted');
+ const examples=node('p',null,body,'break');
+ const qualifyingList=node('ul',null,body,'inventory');
+ const boundaryDetail=detail(body,'静的境界と対面別の探索進捗（静的境界は勝敗未検証）','match');
+ boundaryDetail.hidden=true;
+ const boundaryBody=node('div',null,boundaryDetail,'stack');
+ const interruption=node('p',null,body,'muted');
+ const actions=node('div',null,body,'actions');
  async function read(budget){
-  const data=await api('missing-analysis',{action:'explore',evaluation_id:result.evaluation_id,build_id:result.reference.build_id,budget});
+  const iv_floors=selfFloors.read();
+  const data=await api('missing-analysis',{action:'explore',evaluation_id:result.evaluation_id,build_id:result.reference.build_id,budget,iv_floors});
   info.textContent='全条件を計算済み '+data.completed_iv_count+' / '+data.eligible_iv_count+'通り ／ 達成確認済み '+data.qualifying_count+'通り ／ 全条件を検証して未達成 '+data.fully_tested_nonqualifying_iv_count+'通り ／ 全条件の検証が未完了 '+data.not_fully_tested_iv_count+'通り';
+  floorInfo.textContent=Array.isArray(data.iv_floors)?'適用IV下限 '+data.iv_floors.join('/')+'（全'+(data.raw_iv_count??4096)+'通り中 '+data.eligible_iv_count+'通りが探索対象）':'';
+  const ownSum=data.ownership_summary;
+  if(ownSum){
+   ownershipInfo.textContent=data.qualifying_count
+    ?'達成確認済みIVの所持照合：完全一致を所持確認 '+ownSum.confirmed_owned_exact_count+'件 ／ 同じIVの所持記録あり '+ownSum.confirmed_owned_count+'件 ／ 所持していない記録 '+ownSum.confirmed_absent_recorded_count+'件 ／ 所持未確認 '+ownSum.unconfirmed_count+'件（種族の所持確認 '+ownSum.species_confirmed_owned_count+'件）'
+    :'この種族の所持確認済み登録 '+ownSum.species_confirmed_owned_count+'件（未記録は未所持とみなしません）';
+  }else ownershipInfo.textContent='';
   examples.textContent=data.qualifying.length?'達成を確認したIV'+(data.qualifying_count>data.qualifying.length?'（一部）':'')+'　'+data.qualifying.map(ivText).join('、'):'';
+  qualifyingList.replaceChildren();
+  const refCandidate=result.candidates?.find(row=>row.build_id===result.reference.build_id);
+  const template=data.candidate||(refCandidate?{species_id:refCandidate.species_id,moves:refCandidate.moves}:null);
+  for(const item of data.qualifying||[]){
+   const li=node('li',null,qualifyingList);
+   const levelLabel=item.level!=null?' · Lv'+item.level:'';
+   const cpLabel=item.cp!=null?' · CP '+item.cp:'';
+   node('p',ivText(item)+levelLabel+cpLabel,li,'break');
+   const matches=Array.isArray(item.owned_instances)?item.owned_instances:[];
+   const ownLabel=heldLabel({owned_instances:matches});
+   const ownTone=matches.some(r=>r.state==='confirmed_owned'&&r.build_match==='exact')?'good'
+    :matches.some(r=>r.state==='confirmed_owned')?'wait'
+    :matches.some(r=>r.state==='confirmed_absent')?'fail':'muted';
+   tag(node('div',null,li,'tags'),ownLabel,ownTone);
+   if(template&&item.level!=null){
+    const rowActions=node('div',null,li,'actions');
+    button(rowActions,'比較候補へ追加',()=>{
+     addAlternative({species_id:template.species_id,ivs:{attack:item.attack,defense:item.defense,hp:item.hp},level:item.level,moves:template.moves});
+    },'quiet');
+   }
+  }
+  if(data.qualifying_count>data.qualifying.length){
+   node('li','表示は最大32件（所持確認済みを優先表示）です。',qualifyingList,'muted');
+  }
+  boundaryBody.replaceChildren();
+  if(data.boundary_counts){
+   node('p','全体の静的境界（HP・CMP・ダメージ変化境界／勝敗未検証）：'+Object.entries(data.boundary_counts).map(([k,n])=>(boundaryLabels[k]||k)+n+'件').join('・'),boundaryBody,'muted break');
+  }
+  if(Array.isArray(data.conditions)&&data.conditions.length){
+   const condList=node('ul',null,boundaryBody,'comparisons');
+   for(const [i,cond] of data.conditions.entries()){
+    const li=node('li',null,condList);
+    node('strong','対面'+(i+1)+'：'+name(cond.opponent.species_id)+' '+ivText(cond.opponent.ivs)+'（盾 '+cond.shields.join(' / ')+(cond.energy?'・開始ゲージ'+cond.energy:'')+'）',li);
+    node('p','対戦進捗：計算済み '+cond.completed_count+' / '+cond.eligible_iv_count+'通り（未計算 '+cond.remaining_count+'通り）',li);
+    node('p','静的境界（勝敗未検証）：'+Object.entries(cond.boundary_counts||{}).map(([k,n])=>(boundaryLabels[k]||k)+n+'件').join('・'),li,'muted break');
+   }
+  }
+  boundaryDetail.hidden=!data.boundary_counts&&!(Array.isArray(data.conditions)&&data.conditions.length);
   interruption.textContent=data.retry_needed?'途中の対戦結果を確定できませんでした。検証済みの結果は保存されています。「追加検証」で再開できます。':'';
   announce(interruption.textContent||(budget?'新規対戦 '+data.new_battles+'件。探索の進捗を更新しました。':'保存済みの探索範囲を確認しました。'));
  }
@@ -544,7 +644,7 @@ function renderExploration(parent,result){
   }
   button(actions,'追加検証',()=>perform(()=>read(Number(budgetSelect.value))),'quiet');
  }
- renderOpponentBoundaries(panel,result);
+ renderOpponentBoundaries(body,result);
 }
 function renderResult(result,request,revision){
  const tree=$('result-tree');tree.replaceChildren();
@@ -969,7 +1069,7 @@ async function submitScope(){
 }
 $('tactic-evidence-read').addEventListener('click',()=>perform(compareSavedTactics));
 $('add-scenario').addEventListener('click',()=>addScenario(true));
-$('add-alternative').addEventListener('click',addAlternative);
+$('add-alternative').addEventListener('click',()=>addAlternative());
 $('inventory-load').addEventListener('click',()=>perform(()=>loadInventory(false)));
 $('inventory-more').addEventListener('click',()=>perform(()=>loadInventory(true)));
 const invalidateInventoryCursor=()=>{inventoryCursor=null;$('inventory-more').hidden=true;};

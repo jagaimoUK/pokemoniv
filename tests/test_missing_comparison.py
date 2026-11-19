@@ -422,3 +422,125 @@ class MissingLocalTests(server.ServerFixture):
         self.assertEqual(other.list_snapshot()['items'], [])
         self.assertEqual(other.list_snapshot()['scopes'], [])
         self.assertIsNone(other.instance_history('step1-inst'))
+
+    def test_step2_explore_floors_boundaries_progress_ownership_and_isolation(self):
+        payload = case(threshold=0)
+        payload['scenarios'].append({
+            **payload['scenarios'][0],
+            'shields': [0, 0],
+        })
+        status, compared = self.compare(payload)
+        self.assertEqual(status, 200)
+        ref_build_id = compared['reference']['build_id']
+        ref_candidate = compared['candidates'][0]
+
+        base_explore = {
+            'action': 'explore',
+            'evaluation_id': compared['evaluation_id'],
+            'build_id': ref_build_id,
+            'budget': 0,
+        }
+        for bad_floor in ([True, 15, 14], [16, 0, 0], [0, 0], None, ['10', 10, 10]):
+            self.assertEqual(self.compare({**base_explore, 'iv_floors': bad_floor})[0], 400)
+
+        code, initial = self.compare({**base_explore, 'iv_floors': [15, 15, 14]})
+        self.assertEqual(code, 200)
+        self.assertEqual(initial['state'], 'unknown')
+        self.assertEqual(initial['raw_iv_count'], 4096)
+        self.assertEqual(initial['iv_floors'], [15, 15, 14])
+        self.assertEqual(initial['eligible_iv_count'], 2)
+        self.assertEqual(initial['completed_iv_count'], 0)
+        self.assertEqual(initial['not_fully_tested_iv_count'], 2)
+        self.assertEqual(initial['candidate'], {'species_id': ref_candidate['species_id'], 'moves': ref_candidate['moves']})
+        self.assertEqual(len(initial['conditions']), 2)
+        self.assertEqual([c['completed_count'] for c in initial['conditions']], [0, 0])
+        self.assertEqual([c['remaining_count'] for c in initial['conditions']], [2, 2])
+        self.assertEqual(set(initial['boundary_counts']), {
+            'hp', 'cmp', 'breakpoint', 'bulkpoint',
+            'charged_1', 'charged_2', 'incoming_charged_1', 'incoming_charged_2',
+        })
+
+        code, partial = self.compare({**base_explore, 'iv_floors': [15, 15, 14], 'budget': 3})
+        self.assertEqual(code, 200)
+        self.assertEqual(partial['state'], 'partial')
+        self.assertEqual(partial['new_battles'], 3)
+        self.assertEqual(partial['completed_iv_count'], 1)
+        self.assertEqual(partial['qualifying_count'], 1)
+        self.assertEqual(partial['not_fully_tested_iv_count'], 1)
+        self.assertEqual(sum(c['completed_count'] for c in partial['conditions']), 3)
+        self.assertEqual(partial['ownership_summary']['unconfirmed_count'], 1)
+        self.assertEqual(partial['ownership_summary']['confirmed_owned_count'], 0)
+
+        code, complete = self.compare({**base_explore, 'iv_floors': [15, 15, 14], 'budget': 1})
+        self.assertEqual(code, 200)
+        self.assertEqual(complete['state'], 'complete')
+        self.assertEqual(complete['new_battles'], 1)
+        self.assertEqual(complete['completed_iv_count'], 2)
+        self.assertEqual(complete['qualifying_count'], 2)
+        self.assertEqual([c['completed_count'] for c in complete['conditions']], [2, 2])
+        self.assertEqual([c['remaining_count'] for c in complete['conditions']], [0, 0])
+        by_iv = {(q['attack'], q['defense'], q['hp']): q for q in complete['qualifying']}
+        self.assertEqual(set(by_iv), {(15, 15, 14), (15, 15, 15)})
+        self.assertTrue(all(q['level'] > 0 and q['cp'] >= 10 and q['owned_instances'] == [] for q in by_iv.values()))
+
+        # Register 15/15/15 as confirmed_owned (exact build) and 15/15/14 as confirmed_absent.
+        q_exact = by_iv[(15, 15, 15)]
+        self.assertEqual(self.compare({
+            'action': 'ownership', 'instance_id': 'step2-exact-inst', 'event_id': 'step2-ev-1',
+            'expected_revision': 0, 'state': 'confirmed_owned',
+            'observation': {
+                'species_id': ref_candidate['species_id'],
+                'ivs': {'attack': 15, 'defense': 15, 'hp': 15},
+                'current_cp': q_exact['cp'], 'current_level': q_exact['level'],
+                'current_moves': ref_candidate['moves'],
+            },
+        })[0], 200)
+        q_absent = by_iv[(15, 15, 14)]
+        self.assertEqual(self.compare({
+            'action': 'ownership', 'instance_id': 'step2-absent-inst', 'event_id': 'step2-ev-2',
+            'expected_revision': 0, 'state': 'confirmed_owned',
+            'observation': {
+                'species_id': ref_candidate['species_id'],
+                'ivs': {'attack': 15, 'defense': 15, 'hp': 14},
+                'current_cp': q_absent['cp'],
+            },
+        })[0], 200)
+        self.assertEqual(self.compare({
+            'action': 'ownership', 'instance_id': 'step2-absent-inst', 'event_id': 'step2-ev-3',
+            'expected_revision': 1, 'state': 'confirmed_absent',
+        })[0], 200)
+
+        # Foreign owner record for 15/15/14 must stay completely isolated.
+        foreign_store = BattleStore.from_volume()
+        foreign_owner = Ownership(BattleStore(foreign_store.path, owner_scope='foreign'),
+                                  species_ids={ref_candidate['species_id']})
+        foreign_owner.register('foreign-only', {
+            'species_id': ref_candidate['species_id'],
+            'ivs': {'attack': 15, 'defense': 15, 'hp': 14},
+            'current_cp': q_absent['cp'], 'current_level': q_absent['level'],
+            'current_moves': ref_candidate['moves'],
+        })
+
+        code, matched = self.compare({**base_explore, 'iv_floors': [15, 15, 14]})
+        self.assertEqual(code, 200)
+        self.assertEqual(matched['new_battles'], 0)
+        self.assertEqual(matched['ownership_summary'], {
+            'confirmed_owned_exact_count': 1,
+            'confirmed_owned_count': 1,
+            'confirmed_absent_recorded_count': 1,
+            'unconfirmed_count': 0,
+            'species_confirmed_owned_count': 1,
+        })
+        # Owned exact qualifying IV is prioritized first.
+        self.assertEqual((matched['qualifying'][0]['attack'], matched['qualifying'][0]['defense'], matched['qualifying'][0]['hp']),
+                         (15, 15, 15))
+        self.assertEqual(matched['qualifying'][0]['owned_instances'][0]['build_match'], 'exact')
+        self.assertEqual(matched['qualifying'][1]['owned_instances'][0]['state'], 'confirmed_absent')
+
+        # Narrower floor reuses saved battles with 0 new simulations.
+        code, narrow = self.compare({**base_explore, 'iv_floors': [15, 15, 15]})
+        self.assertEqual(code, 200)
+        self.assertEqual(narrow['new_battles'], 0)
+        self.assertEqual(narrow['eligible_iv_count'], 1)
+        self.assertEqual(narrow['completed_iv_count'], 1)
+        self.assertEqual(narrow['qualifying_count'], 1)
