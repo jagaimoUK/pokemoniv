@@ -844,6 +844,15 @@ class PartyBuilder:
                 enemy_ids={p["id"] for p in enemy},
                 recommendation_only_ids=recommendation_ids, owner_scope=owner)
 
+        # Compute 2-2 matchups among top meta species to drive generic Phase 1->2->3 meta evolution.
+        evo_meta = [
+            p for p in sorted(meta, key=lambda r: (-weights.get(r["id"], 0), r["species"]))
+            if not core.unverified_mechanic_reason(p["species"])
+        ][:20]
+        evo_matrix = self._meta_evolution_matrix(evo_meta, version, engine, work, known=matrix)
+        evolution_plan = core.evolve_meta_phases(meta, weights, evo_matrix)
+        search_weights = evolution_plan["combined_weights"] if evolution_plan else weights
+
         ids = base_roster if seek_swaps else [p["id"] for p in pool]
         opponents = [p["id"] for p in meta]
         clause = {p["id"]: p["roster_clause_id"] for p in pool}
@@ -852,9 +861,9 @@ class PartyBuilder:
         swaps = None
 
         if is_autocomplete:
-            self._record(jid, "running", {"progress": 90, "message": "最適な6体構成を探索しています", "cache": stats}, owner_scope=owner)
+            self._record(jid, "running", {"progress": 90, "message": "時系列メタ変化（Phase 1→2→3）を踏まえ最適な6体を探索しています", "cache": stats}, owner_scope=owner)
             autocomplete_result = core.autocomplete_search(
-                locked_ids_unified, [p["id"] for p in pool], opponents, matrix, weights, clause,
+                locked_ids_unified, [p["id"] for p in pool], opponents, matrix, search_weights, clause,
                 initial_slots=initial_slot_ids, locked_slots=mapped_locked_slots,
                 beam_width=min(32, max(1, int(args.get("beam_width", 16)))), max_finalists=3,
             )
@@ -1064,6 +1073,21 @@ class PartyBuilder:
         chosen = (core.choose_three(ids, [p["id"] for p in enemy], matrix)
                   if enemy else {"status": "相手6体が未指定"})
         scenario_comparison = core.compare_scenarios(ids, opponents, matrix, compare_specs) if compare_specs else None
+        meta_evolution = None
+        if evolution_plan:
+            evo_cmp = core.compare_scenarios(ids, opponents, matrix, evolution_plan["phases"])
+            if evo_cmp:
+                phase_by_id = {ph["id"]: ph for ph in evolution_plan["phases"]}
+                for item in evo_cmp["scenarios"]:
+                    ph = phase_by_id.get(item["id"], {})
+                    item["stage"] = ph.get("stage")
+                    item["short_name"] = ph.get("short_name", item["name"])
+                    item["description"] = ph.get("description", "")
+                    item["focus"] = ph.get("focus", [])
+                    item["rising"] = ph.get("rising", [])
+                    item["falling"] = ph.get("falling", [])
+                evo_cmp["note"] = evolution_plan["note"]
+                meta_evolution = evo_cmp
         unverified_mechanics = self._collect_unverified(self._unique(pool + meta + enemy), active_scenario, catalog)
 
         labels = {p["id"]: {"species": p["species"],
@@ -1105,6 +1129,7 @@ class PartyBuilder:
                 "hypotheses": len(meta), "assumption": "仮説等分は使用率ではありません"},
                 "scenario": scenario_meta,
                 "scenario_comparison": scenario_comparison,
+                "meta_evolution": meta_evolution,
                 "unverified_mechanics": unverified_mechanics,
                 "labels": labels, "team": whole, "scenarios": scenarios,
                 "condition_weights": {"2-2": .50, "1-1": .20, "0-0": .10,
@@ -1264,3 +1289,57 @@ class PartyBuilder:
                 if client is not None:
                     client.close()
         return matrix, stats
+
+    def _meta_evolution_matrix(self, evo_meta, version, engine, work, *, known=None):
+        """Return a 2-2 matchup dict among top meta species using SQLite cache."""
+        evo_matrix = dict(known or {})
+        if len(evo_meta) < 2:
+            return evo_matrix
+        gamemaster = getattr(engine, "DATA", None)
+        has_gm = bool(gamemaster and (Path(gamemaster) / "gamemaster.json").is_file())
+        shield = core.STANDARD
+        with self._db() as db:
+            client = None
+            try:
+                for start in range(0, len(evo_meta), 6):
+                    own_chunk = evo_meta[start:start + 6]
+                    for col in range(0, len(evo_meta), 10):
+                        opp_chunk = evo_meta[col:col + 10]
+                        keys = {
+                            (p["id"], q["id"]): core.digest(["party-cell-v1", version, p["id"], q["id"], shield])
+                            for p in own_chunk for q in opp_chunk
+                        }
+                        missing = []
+                        for p in own_chunk:
+                            for q in opp_chunk:
+                                pair = (p["id"], q["id"])
+                                if pair + (shield,) in evo_matrix:
+                                    continue
+                                row = db.execute("SELECT rating FROM cells WHERE key=?", (keys[pair],)).fetchone()
+                                if row is not None:
+                                    evo_matrix[pair + (shield,)] = row[0]
+                                elif has_gm:
+                                    missing.append(pair)
+                        if missing and has_gm:
+                            missing_set = set(missing)
+                            sim_own = [p for p in own_chunk if any(p["id"] == a for a, _ in missing_set)]
+                            sim_opp = [q for q in opp_chunk if any(q["id"] == b for _, b in missing_set)]
+                            if client is None:
+                                client = DirectMatrixClient(
+                                    gamemaster=Path(gamemaster) / "gamemaster.json", log_dir=work)
+                            values = client.simulate(sim_own, sim_opp, shield)
+                            for a, p in enumerate(sim_own):
+                                for b, q in enumerate(sim_opp):
+                                    pair = (p["id"], q["id"])
+                                    if pair not in missing_set:
+                                        continue
+                                    rating = values[a + 1][b + 1]
+                                    evo_matrix[pair + (shield,)] = rating
+                                    db.execute("INSERT OR REPLACE INTO cells VALUES(?,?,?)",
+                                               (keys[pair], rating, int(time.time())))
+                            db.commit()
+            finally:
+                if client is not None:
+                    client.close()
+        return evo_matrix
+

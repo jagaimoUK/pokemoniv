@@ -844,3 +844,154 @@ def compare_scenarios(roster, opponents, matrix, scenario_entries):
         },
         "note": "同一の計算済み対面キャッシュを再利用して複数シナリオを比較（平均と最悪ケースを併記）",
     }
+
+
+def evolve_meta_phases(meta_rows, base_weights, matrix, *, shields=STANDARD, alpha=1.6, top_k=5):
+    """Generically evolve any meta weight distribution across 3 time-series phases.
+
+    Phase 1 (起点環境): Current meta weights (or user-adjusted importance distribution).
+    Phase 2 (対策集中期): Upweights species with highest weighted win score vs Phase 1.
+    Phase 3 (再適応期): Upweights species with highest weighted win score vs Phase 2
+                        (counters to the counters), naturally decaying over-targeted picks.
+    Unverified/missing matchups (rating is None) are never fabricated and stay neutral.
+    """
+    active = [row for row in meta_rows if base_weights.get(row["id"], 0) > 0]
+    if not active:
+        return None
+    ids = [row["id"] for row in active]
+    species_by_id = {row["id"]: row["species"] for row in active}
+
+    def normalize(wmap):
+        total = sum(max(0.0, float(wmap.get(mid, 0.0))) for mid in ids)
+        if total <= 0:
+            eq = 1.0 / len(ids)
+            return {mid: eq for mid in ids}
+        return {mid: max(0.0, float(wmap.get(mid, 0.0))) / total for mid in ids}
+
+    w1 = normalize(base_weights)
+
+    def step_phase(prev_w):
+        fitness = {}
+        reasons = {}
+        for mid in ids:
+            num = 0.0
+            den = 0.0
+            beat_contrib = []
+            for opp in ids:
+                if opp == mid:
+                    continue
+                ow = prev_w.get(opp, 0.0)
+                if ow <= 0:
+                    continue
+                rating = lookup(matrix, mid, opp, shields)
+                if rating is None:
+                    continue
+                # Map Battle Rating [250..750] to [-1.0..+1.0] around 500.
+                score = max(-1.0, min(1.0, (rating - 500.0) / 250.0))
+                num += ow * score
+                den += ow
+                if rating > 520:
+                    beat_contrib.append((ow * score, opp, rating))
+            fval = (num / den) if den > 1e-9 else 0.0
+            fitness[mid] = fval
+            beat_contrib.sort(key=lambda x: -x[0])
+            reasons[mid] = [
+                {"id": opp, "species": species_by_id[opp], "rating": round(rt, 1)}
+                for _, opp, rt in beat_contrib[:3]
+            ]
+
+        raw_next = {}
+        ratios = {}
+        for mid in ids:
+            # Bounded multiplicative update (discrete replicator step)
+            exponent = max(-1.05, min(1.25, alpha * fitness[mid]))
+            mult = math.exp(exponent)
+            raw_next[mid] = prev_w[mid] * mult
+        next_w = normalize(raw_next)
+        for mid in ids:
+            ratios[mid] = (next_w[mid] / prev_w[mid]) if prev_w[mid] > 1e-12 else 1.0
+
+        rising = [
+            {
+                "id": mid,
+                "species": species_by_id[mid],
+                "prev_weight": round(prev_w[mid], 6),
+                "next_weight": round(next_w[mid], 6),
+                "ratio": round(ratios[mid], 3),
+                "fitness": round(fitness[mid], 4),
+                "beats": reasons[mid],
+            }
+            for mid in sorted(ids, key=lambda m: (-ratios[m], -next_w[m], species_by_id[m]))
+            if ratios[mid] > 1.08
+        ][:top_k]
+        falling = [
+            {
+                "id": mid,
+                "species": species_by_id[mid],
+                "prev_weight": round(prev_w[mid], 6),
+                "next_weight": round(next_w[mid], 6),
+                "ratio": round(ratios[mid], 3),
+                "fitness": round(fitness[mid], 4),
+            }
+            for mid in sorted(ids, key=lambda m: (ratios[m], -prev_w[m], species_by_id[m]))
+            if ratios[mid] < 0.92
+        ][:top_k]
+        return next_w, rising, falling
+
+    w2, p2_rising, p2_falling = step_phase(w1)
+    w3, p3_rising, p3_falling = step_phase(w2)
+
+    p1_focus = [
+        {
+            "id": mid,
+            "species": species_by_id[mid],
+            "weight": round(w1[mid], 6),
+        }
+        for mid in sorted(ids, key=lambda m: (-w1[m], species_by_id[m]))[:top_k]
+    ]
+
+    combined = normalize({mid: (w1[mid] + w2[mid] + w3[mid]) / 3.0 for mid in ids})
+    phases = [
+        {
+            "id": "phase1_base",
+            "stage": 1,
+            "name": "Phase 1: 起点環境（現在/注目重み）",
+            "short_name": "Phase 1（起点）",
+            "kind": "phase1",
+            "description": "元メタ（またはあなたが重要度を変更した環境）を起点とした基準フェーズ",
+            "weights": w1,
+            "focus": p1_focus,
+            "rising": [],
+            "falling": [],
+        },
+        {
+            "id": "phase2_counters",
+            "stage": 2,
+            "name": "Phase 2: 対策集中期（カウンター台頭）",
+            "short_name": "Phase 2（対策集中）",
+            "kind": "phase2",
+            "description": "Phase 1 の環境全体に有利対面を取りやすい対策枠が自動増加するフェーズ",
+            "weights": w2,
+            "focus": [],
+            "rising": p2_rising,
+            "falling": p2_falling,
+        },
+        {
+            "id": "phase3_adaptation",
+            "stage": 3,
+            "name": "Phase 3: 再適応期（メタのメタ）",
+            "short_name": "Phase 3（再適応）",
+            "kind": "phase3",
+            "description": "Phase 2 で増えた対策枠を狩るポケモンが台頭し、元の軸が対策されて落ち着くフェーズ",
+            "weights": w3,
+            "focus": [],
+            "rising": p3_rising,
+            "falling": p3_falling,
+        },
+    ]
+    return {
+        "phases": phases,
+        "combined_weights": combined,
+        "note": "対面マトリクスに基づく汎用3段階メタ遷移（Phase 1→2→3）を自動展開し、全段階の平均と最悪ケース耐性の両方で評価します。",
+    }
+

@@ -455,6 +455,50 @@ class BackendIntegrationP0Tests(unittest.TestCase):
             t.join()
             web.PARTY = prev_party
 
+    def test_generic_3phase_meta_evolution_handles_multi_focus_and_unknowns(self):
+        # Generic 5-species rock-paper-scissors meta (no Mimikyu hardcoding):
+        # A & B are user-weighted multi-focus picks; C beats A & B; D beats C; U is unverified (None).
+        meta_rows = [
+            {"id": "A", "species": "azumarill"},
+            {"id": "B", "species": "clodsire"},
+            {"id": "C", "species": "feraligatr"},
+            {"id": "D", "species": "serperior"},
+            {"id": "U", "species": "mimikyu"},
+        ]
+        base_weights = {"A": 0.35, "B": 0.35, "C": 0.10, "D": 0.10, "U": 0.10}
+        sh = core.STANDARD
+        matrix = {
+            # C counters both A and B strongly
+            ("C", "A", sh): 720, ("A", "C", sh): 280,
+            ("C", "B", sh): 700, ("B", "C", sh): 300,
+            # D counters C strongly, loses mildly to B
+            ("D", "C", sh): 740, ("C", "D", sh): 260,
+            ("D", "A", sh): 560, ("A", "D", sh): 440,
+            ("D", "B", sh): 420, ("B", "D", sh): 580,
+            # A vs B neutral
+            ("A", "B", sh): 500, ("B", "A", sh): 500,
+            # U (unverified) has no entries -> None
+        }
+        evo = core.evolve_meta_phases(meta_rows, base_weights, matrix)
+        self.assertIsNotNone(evo)
+        self.assertEqual(len(evo["phases"]), 3)
+        self.assertAlmostEqual(sum(evo["combined_weights"].values()), 1.0, places=5)
+
+        p1, p2, p3 = evo["phases"]
+        # Phase 1 keeps user multi-focus weights
+        self.assertAlmostEqual(p1["weights"]["A"], 0.35, places=5)
+        self.assertAlmostEqual(p1["weights"]["B"], 0.35, places=5)
+        # Phase 2 automatically discovers C as the top counter rising against A & B
+        self.assertTrue(p2["rising"])
+        self.assertEqual(p2["rising"][0]["id"], "C")
+        beat_ids = {b["id"] for b in p2["rising"][0]["beats"]}
+        self.assertTrue("A" in beat_ids or "B" in beat_ids)
+        self.assertGreater(p2["weights"]["C"], p1["weights"]["C"])
+        # Phase 3 promotes D (counter to C) and keeps unverified U without crashing
+        self.assertGreater(p3["weights"]["D"], p2["weights"]["D"])
+        self.assertGreater(p3["weights"]["U"], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
+

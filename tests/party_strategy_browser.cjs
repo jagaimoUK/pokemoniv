@@ -70,36 +70,35 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  await page.waitForFunction(()=>document.getElementById('partyState').textContent.includes('大会A改'));
  await page.click('#closePartyDialog');
 
- // 5) Isolated future scenario weights (Future A edit must NOT affect Future B or Current Meta, and survives reload!).
+ // 5) Unified weight-driven meta sets: custom set A edit must NOT affect custom set B or Current Meta, and survives reload!
  await page.locator('#scenarioEditorDetails > summary').click();
- await page.selectOption('#scenario','builtin:mimikyu_rise');
- await page.waitForSelector('#metaWeights select[data-species=quagsire]');
- await page.selectOption('#metaWeights select[data-species=quagsire]','10');
- await page.waitForFunction(()=>document.getElementById('metaWeightSaveStatus').textContent.includes('保存済み'));
- await page.selectOption('#scenario','builtin:mimikyu_counters');
- await page.waitForSelector('#metaWeights select[data-species=quagsire]');
- assert.notEqual(await page.inputValue('#metaWeights select[data-species=quagsire]'),'10','Future A weight must NOT bleed into Future B');
- await page.selectOption('#scenario','current');
- await page.waitForSelector('#metaWeights select[data-species=quagsire]');
- assert.notEqual(await page.inputValue('#metaWeights select[data-species=quagsire]'),'10','Future A weight must NOT bleed into Current Meta');
- // Save independent custom scenario and verify reload persistence.
+ // Save custom set A and B, edit quagsire=10 only on A.
  await page.fill('#scenarioName','独自予測A');
  await page.click('#scenarioSaveAs');
  await page.waitForFunction(()=>document.getElementById('scenarioManageStatus').textContent.includes('独自予測A'));
+ const setAId=await page.inputValue('#scenario');
+ await page.waitForSelector('#metaWeights select[data-species=quagsire]');
+ await page.selectOption('#metaWeights select[data-species=quagsire]','10');
+ await page.waitForFunction(()=>document.getElementById('metaWeightSaveStatus').textContent.includes('保存済み'));
+ await page.selectOption('#scenario','current');
+ await page.waitForSelector('#metaWeights select[data-species=quagsire]');
+ assert.notEqual(await page.inputValue('#metaWeights select[data-species=quagsire]'),'10','Custom set A weight must NOT bleed into Current Meta');
+ await page.fill('#scenarioName','独自予測B');
+ await page.click('#scenarioSaveAs');
+ await page.waitForFunction(()=>document.getElementById('scenarioManageStatus').textContent.includes('独自予測B'));
+ await page.waitForSelector('#metaWeights select[data-species=quagsire]');
+ assert.notEqual(await page.inputValue('#metaWeights select[data-species=quagsire]'),'10','Custom set A weight must NOT bleed into Custom set B');
  await page.reload();await page.waitForSelector('#workspace:not([hidden])');
  await page.locator('#scenarioEditorDetails > summary').click();
- await page.selectOption('#scenario','builtin:mimikyu_rise');
+ await page.selectOption('#scenario',setAId);
  await page.waitForSelector('#metaWeights select[data-species=quagsire]');
- assert.equal(await page.inputValue('#metaWeights select[data-species=quagsire]'),'10','Isolated scenario weight survives reload');
+ assert.equal(await page.inputValue('#metaWeights select[data-species=quagsire]'),'10','Isolated custom weight survives reload');
 
- // 6) 0-member Auto-Complete with Future Scenario + Multi-Scenario comparison (average + worst case) + Heatmap modal.
- await page.locator('#compareScenariosDetails > summary').click();
- await page.locator('#compareScenarios input[value="current"]').check();
- await page.locator('#compareScenarios input[value="builtin:mimikyu_rise"]').check();
- await page.locator('#compareScenarios input[value="builtin:mimikyu_counters"]').check();
+ // 6) 0-member Auto-Complete with automatic 3-phase meta evolution (average + worst case) + Heatmap modal.
  await launch('#autoComplete');await done();
- assert((await page.textContent('#unknownBanner')).includes('ミミッキュ'),'Mimikyu shown as unverified/unknown');
- assert((await page.textContent('#summaryResult')).includes('最悪ケース'),'Worst-case scenario displayed');
+ assert((await page.textContent('#summaryResult')).includes('時系列メタ変化'),'Automatic 3-phase meta evolution displayed');
+ assert((await page.textContent('#summaryResult')).includes('全3段階の平均'),'Cross-phase average displayed');
+ assert((await page.textContent('#summaryResult')).includes('最悪ケース耐性'),'Worst-case phase resilience displayed');
  assert((await page.textContent('#recommendedThree')).includes('推奨3体選出'),'Recommended 3 displayed immediately');
  assert((await page.textContent('#allTriplesPanel')).includes('全20組'),'All 20 triples expandable panel rendered');
  assert(await page.locator('#swapAdvice .completion-card').count()>=1);

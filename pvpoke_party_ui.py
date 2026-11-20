@@ -128,40 +128,26 @@ dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100
  </section>
 
  <section>
-  <div class="section-head"><h2>メタ・未来メタ選択</h2><button id="infoBtnMeta" type="button" class="info-btn" data-info="meta" title="ヘルプ">ⓘ</button></div>
+  <div class="section-head"><h2>メタ・環境変化設定</h2><button id="infoBtnMeta" type="button" class="info-btn" data-info="meta" title="ヘルプ">ⓘ</button></div>
   <div class="meta-row">
-   <label>基準メタ（現行）<select id="meta"></select></label>
-   <label>評価シナリオ<select id="scenario"></select></label>
+   <label>対象メタ<select id="meta"></select></label>
+   <label>重要度セット<select id="scenario"></select></label>
   </div>
-  <details id="compareScenariosDetails"><summary>複数シナリオを比較（平均＋最悪ケース）</summary>
-   <p>選択したシナリオを同じ対面キャッシュで同時評価し、平均と最悪ケースを表示します。</p>
-   <div id="compareScenarios" class="compare-checks"></div>
-  </details>
-  <details id="scenarioEditorDetails"><summary>未来メタの重み編集・根拠・シナリオ管理</summary>
-   <div id="scenarioEvidence" class="evidence-box"></div>
-   <div class="generator-box">
-    <h3 style="margin-top:0">選択中メタから未来シナリオを自動生成</h3>
-    <div class="fields">
-     <label>軸にするポケモン<select id="genSpecies"></select></label>
-     <label>変化予測<select id="genTrend"><option value="rise">台頭・増加（対策枠も連鎖増加）</option><option value="counters">対策枠の台頭（鋼・耐性枠等）</option><option value="decline">減少・下火</option></select></label>
-    </div>
-    <div class="tools" style="margin-top:8px">
-     <button id="generateScenarioBtn" type="button" class="small-btn primary">この条件で未来シナリオを生成</button>
-    </div>
-   </div>
-   <label for="metaFilter">ポケモンを絞り込む（日本語・英語）</label><input id="metaFilter" type="search" placeholder="例：メルメタル、Florges、ミミッキュ">
+  <details id="scenarioEditorDetails"><summary>重要度（重み）の調整・カスタム保存</summary>
+   <div id="scenarioEvidence" class="evidence-box" hidden></div>
+   <label for="metaFilter">ポケモンを絞り込む（日本語・英語）</label><input id="metaFilter" type="search" placeholder="例：マリルリ、Clodsire、トリデプス">
    <p id="metaWeightStatus" role="status">メタのポケモン一覧を読み込みます。</p>
-   <div id="metaWeights" aria-label="シナリオ別の重要度"></div>
+   <div id="metaWeights" aria-label="メタの重要度"></div>
    <p id="metaWeightSaveStatus" role="status"></p>
    <div class="result">
-    <h3>未来シナリオを独立保存</h3>
-    <label for="scenarioName">シナリオ名（対象が分かる名前・現行メタ重複不可）</label>
-    <input id="scenarioName" maxlength="60" placeholder="例：独自予測（鋼増加）">
+    <h3>重要度セットを独立保存</h3>
+    <label for="scenarioName">セット名（現行メタ重複不可）</label>
+    <input id="scenarioName" maxlength="60" placeholder="例：独自環境（フェアリー増加）">
     <label for="scenarioSummary">メモ・仮定（任意）</label>
-    <input id="scenarioSummary" maxlength="200" placeholder="例：対策枠増加後の再適応を想定">
+    <input id="scenarioSummary" maxlength="200" placeholder="例：新技追加後の想定重み">
     <div class="tools">
-     <button id="scenarioSave" type="button" class="small-btn">現在のシナリオを上書き保存</button>
-     <button id="scenarioSaveAs" type="button" class="small-btn secondary">新しい未来シナリオとして保存</button>
+     <button id="scenarioSave" type="button" class="small-btn">上書き保存</button>
+     <button id="scenarioSaveAs" type="button" class="small-btn secondary">別名で保存</button>
      <button id="scenarioDelete" type="button" class="small-btn danger" hidden>削除</button>
     </div>
     <p id="scenarioManageStatus" role="status"></p>
@@ -328,31 +314,15 @@ function syncOpponentStrategyGate(){
 }
 function renderScenarioDropdown(selectedId='current'){
  const sel=$('scenario');sel.replaceChildren();
- sel.append(new Option('現行メタ（基準）','current'));
- for(const sc of scenarioItems){
-  const tag=sc.builtin?'[標準予測] ':'[独自] ';
-  sel.append(new Option(tag+sc.name,sc.id));
+ sel.append(new Option('現行メタ（初期値）','current'));
+ for(const sc of scenarioItems.filter(x=>!x.builtin)){
+  sel.append(new Option('[カスタム] '+sc.name,sc.id));
  }
  sel.value=[...sel.options].some(o=>o.value===selectedId)?selectedId:'current';
- renderCompareCheckboxes();
  updateScenarioEditorMeta();
 }
-function renderCompareCheckboxes(selectedIds=[]){
- const root=$('compareScenarios');
- const prev=new Set(selectedIds.length?selectedIds:[...root.querySelectorAll('input:checked')].map(x=>x.value));
- root.replaceChildren();
- const entries=[{id:'current',name:'現行メタ'},...scenarioItems.map(x=>({id:x.id,name:x.name}))];
- for(const item of entries){
-  const l=node('label'),cb=node('input');cb.type='checkbox';cb.value=item.id;cb.checked=prev.has(item.id);
-  cb.onchange=()=>{
-   const checked=[...root.querySelectorAll('input:checked')];
-   if(checked.length>4){cb.checked=false;status('比較シナリオは最大4件までです');return;}
-   inputRevision++;
-  };
-  l.append(cb,document.createTextNode(' '+item.name));root.append(l);
- }
-}
-function getCompareScenarioIds(){return [...$('compareScenarios').querySelectorAll('input:checked')].map(x=>x.value)}
+function renderCompareCheckboxes(){}
+function getCompareScenarioIds(){return []}
 function updateScenarioEditorMeta(){
  const sc=currentScenarioObj();
  $('scenarioName').value=sc&&!sc.builtin?sc.name:'';
@@ -363,46 +333,12 @@ function updateScenarioEditorMeta(){
 }
 function renderScenarioEvidence(sc){
  const root=$('scenarioEvidence');root.replaceChildren();
- if(sc){
-  root.append(node('strong','選択中の未来仮説: '+sc.name));
-  if(sc.summary)addLine(root,sc.summary);
-  if(sc.chain_steps?.length){
-   const ol=node('ol');
-   for(const st of sc.chain_steps){
-    const li=node('li');
-    li.append(node('strong','段階'+st.stage+' ['+(st.basis==='observed'?'観測':'仮説')+']: '+st.title+' — '),document.createTextNode(st.detail));
-    ol.append(li);
-   }
-   root.append(ol);
-  }
-  if(sc.assumptions?.length){
-   const ul=node('ul');
-   sc.assumptions.forEach(a=>ul.append(node('li',a)));
-   root.append(ul);
-  }
+ if(sc&&sc.summary){
+  root.hidden=false;
+  root.append(node('strong','メモ: '+sc.name));
+  addLine(root,sc.summary);
  }else{
-  root.append(node('strong','現行メタ（基準環境）'));
-  addLine(root,'重複する「現行環境維持」シナリオは作らず、この基準メタと独立した未来シナリオを比較します。');
- }
- if(observations){
-  const d=node('details');d.append(node('summary','実測データ（9/8–11/13・観測と仮説を分離）'));
-  addLine(d,'左上日付を正本。集計期間が重複するため単純合算禁止。上位12圏外（—）は0%ではありません。採用率画像のみから共起は捏造しません。');
-  const scroll=node('div',null,'obs-scroll'),table=node('table',null,'obs-table');
-  const thead=node('thead'),hr=node('tr');
-  hr.append(node('th','ポケモン'));
-  for(const p of observations.periods)hr.append(node('th',p.label+' ('+p.teams+')'));
-  thead.append(hr);table.append(thead);
-  const tbody=node('tbody');
-  for(const s of observations.series){
-   const tr=node('tr');tr.append(node('td',s.label_ja));
-   for(const r of s.rates)tr.append(node('td',r==null?'圏外':r+'%'));
-   tbody.append(tr);
-  }
-  table.append(tbody);scroll.append(table);d.append(scroll);
-  for(const u of observations.unconfirmed_observations||[]){
-   addLine(d,'未確認の補助観測: '+u.label_ja+' — '+u.note);
-  }
-  root.append(d);
+  root.hidden=true;
  }
 }
 function renderMetaWeightRows(){
@@ -413,7 +349,7 @@ function renderMetaWeightRows(){
  const allIds=[...metaWeightRows,...extraSpecies];
  const query=normalizePartyName($('metaFilter').value);
  const filtered=allIds.filter(id=>!query||[id,catalog[id]?.name,catalog[id]?.name_ja,...(catalog[id]?.aliases||[])].some(x=>x&&normalizePartyName(x).includes(query)));
- $('metaWeightStatus').textContent='対象 '+allIds.length+'種 / 表示 '+filtered.length+'種（保存先: '+(sc?sc.name:'現行メタ')+' のみ独立保存）';
+ $('metaWeightStatus').textContent='対象 '+allIds.length+'種 / 表示 '+filtered.length+'種（保存先: '+(sc?sc.name:'現行メタ')+' に独立保存）';
  if(!filtered.length){root.append(node('p','一致するポケモンはありません'));return;}
  for(const id of filtered){
   const div=node('div',null,'weight-row'),span=node('span');
@@ -427,20 +363,11 @@ function renderMetaWeightRows(){
   select.value=String(value);
   select.onchange=()=>{
    const v=Number(select.value);metaWeightValues[id]=v;pendingScopedWeights[id]=v;inputRevision++;
-   $('metaWeightSaveStatus').textContent='このシナリオ専用の重要度を保存中…';
+   $('metaWeightSaveStatus').textContent='この重要度セットに保存中…';
    clearTimeout(weightSaveTimer);weightSaveTimer=setTimeout(()=>flushScopedWeights().catch(()=>{}),200);
   };
   div.append(span,select);root.append(div);
  }
- updateGenSpeciesOptions();
-}
-function updateGenSpeciesOptions(){
- const select=$('genSpecies');if(!select)return;
- const cur=select.value;select.replaceChildren();
- for(const id of metaWeightRows){
-  select.append(new Option(partyDisplay(id),id));
- }
- if(cur&&metaWeightRows.includes(cur))select.value=cur;
 }
 async function flushScopedWeights(){
  clearTimeout(weightSaveTimer);
@@ -561,23 +488,48 @@ function renderOverallSummary(result){
  const sc=result.scenario||{name:'現行メタ'};
  card.append(node('h3','総合評価（'+sc.name+'）'));
  const t=result.team;
- addLine(card,'未対応 D0 '+pct(t.d0)+' / 担当1体 D1 '+pct(t.d1)+' / 深刻度 '+t.severity0.toFixed(3)+' / 補完度 '+pct(t.coverage)+' / 未計算(unknown) '+pct(t.unknown_weight));
- addLine(card,'計算版: '+result.calculation_version+' / 評価版: '+result.evaluation_version+' / キャッシュ再利用 '+result.cache.hits+'・新規 '+result.cache.computed);
- if(result.scenario_comparison){
-  const cmp=result.scenario_comparison;
+ addLine(card,'起点環境：未対応 D0 '+pct(t.d0)+' / 担当1体 D1 '+pct(t.d1)+' / 深刻度 '+t.severity0.toFixed(3)+' / 補完度 '+pct(t.coverage)+' / 未計算(unknown) '+pct(t.unknown_weight));
+ if(result.meta_evolution){
+  const evo=result.meta_evolution;
   const box=node('div',null,'result');
-  box.append(node('strong','複数シナリオ比較（'+cmp.count+'件・キャッシュ再利用）'));
-  addLine(box,'平均: D0 '+pct(cmp.average.d0)+' / D1 '+pct(cmp.average.d1)+' / 補完度 '+pct(cmp.average.coverage)+' / unknown '+pct(cmp.average.unknown_weight));
-  const wc=cmp.worst_case;
+  box.append(node('strong','時系列メタ変化（Phase 1→2→3 自動予測・総合評価）'));
+  const avgP=node('p');
+  avgP.append(node('span','全3段階の平均','badge'),document.createTextNode(' 補完度 '+pct(evo.average.coverage)+' / 未対応 D0 '+pct(evo.average.d0)+' / D1 '+pct(evo.average.d1)+' / unknown '+pct(evo.average.unknown_weight)));
+  box.append(avgP);
+  const wc=evo.worst_case;
   const warn=node('p');
-  warn.append(node('span','最悪ケース','badge danger'),document.createTextNode(' '+wc.scenario_name+' — D0 '+pct(wc.summary.d0)+' / 深刻度 '+wc.summary.severity0.toFixed(3)+' / unknown '+pct(wc.summary.unknown_weight)));
+  warn.append(node('span','最悪ケース耐性','badge danger'),document.createTextNode(' '+wc.scenario_name+' — 補完度 '+pct(wc.summary.coverage)+' / 未対応 D0 '+pct(wc.summary.d0)+' / 深刻度 '+wc.summary.severity0.toFixed(3)));
   box.append(warn);
-  const ul=node('ul');
-  for(const row of cmp.scenarios){
-   ul.append(node('li',row.name+'：D0 '+pct(row.summary.d0)+' / D1 '+pct(row.summary.d1)+' / 補完度 '+pct(row.summary.coverage)+' / unknown '+pct(row.summary.unknown_weight)));
+  for(const row of evo.scenarios){
+   const pCard=node('div',null,'triple-card');
+   pCard.append(node('strong',row.name));
+   addLine(pCard,'補完度 '+pct(row.summary.coverage)+' / 未対応 D0 '+pct(row.summary.d0)+' / D1 '+pct(row.summary.d1));
+   if(row.stage===1&&row.focus?.length){
+    const fLine=node('div');
+    fLine.append(node('span','注目上位','badge'));
+    for(const f of row.focus.slice(0,4))fLine.append(document.createTextNode(' '+name(f.species)));
+    pCard.append(fLine);
+   }
+   if(row.rising?.length){
+    const rLine=node('div');
+    rLine.append(node('span','↑ 増加予測','badge'));
+    for(const r of row.rising.slice(0,3)){
+     const beats=r.beats?.length?'（'+r.beats.slice(0,2).map(b=>name(b.species)).join('・')+'等に有利）':'';
+     rLine.append(document.createTextNode(' '+name(r.species)+' ×'+r.ratio.toFixed(2)+beats));
+    }
+    pCard.append(rLine);
+   }
+   if(row.falling?.length){
+    const dLine=node('div');
+    dLine.append(node('span','↓ 減少予測','badge warn'));
+    for(const f of row.falling.slice(0,3))dLine.append(document.createTextNode(' '+name(f.species)+' ×'+f.ratio.toFixed(2)));
+    pCard.append(dLine);
+   }
+   box.append(pCard);
   }
-  box.append(ul);card.append(box);
+  card.append(box);
  }
+ addLine(card,'計算版: '+result.calculation_version+' / 評価版: '+result.evaluation_version+' / キャッシュ再利用 '+result.cache.hits+'・新規 '+result.cache.computed);
  root.append(card);
 }
 function renderRecommendedThree(result){
@@ -1026,36 +978,10 @@ async function setup(){
  $('autoComplete').disabled=false;$('evaluate').disabled=false;
  status('準備完了。0体から「自動補完」、または6体入力後に「パーティ評価」を実行できます。');
 }
-$('generateScenarioBtn').onclick=()=>{
- const targetId=$('genSpecies').value;if(!targetId)return;
- const trend=$('genTrend').value;
- const targetName=partyDisplay(targetId);
- const scenarioName=(trend==='rise'?'予測：'+targetName+'台頭':trend==='counters'?'予測：'+targetName+'対策強化':'予測：'+targetName+'減少');
- $('scenarioName').value=scenarioName;
- $('scenarioSummary').value='選択中のメタを基点に'+targetName+'の'+(trend==='rise'?'普及と対抗枠台頭':trend==='counters'?'対策枠増加':'減少')+'をシミュレート';
- const baseWeights={};
- for(const id of metaWeightRows)baseWeights[id]=1.0;
- if(trend==='rise'){
-  baseWeights[targetId]=5.0;
-  const others=metaWeightRows.filter(x=>x!==targetId).slice(0,4);
-  others.forEach(id=>{baseWeights[id]=3.0;});
- }else if(trend==='counters'){
-  baseWeights[targetId]=2.5;
-  const others=metaWeightRows.filter(x=>x!==targetId).slice(0,5);
-  others.forEach(id=>{baseWeights[id]=4.5;});
- }else if(trend==='decline'){
-  baseWeights[targetId]=0.5;
-  const others=metaWeightRows.filter(x=>x!==targetId).slice(0,4);
-  others.forEach(id=>{baseWeights[id]=2.5;});
- }
- metaWeightValues=baseWeights;
- renderMetaWeightRows();
- $('scenarioManageStatus').textContent='「'+scenarioName+'」の重みを自動設定しました。「新しい未来シナリオとして保存」を押すと保存されます。';
-};
 const INFO_TEXTS={
- main:'【見せ合い6体・未来メタ補完】\n見せ合い6体の登録・自動補完・パーティ評価を行います。全20組の3体選出診断（推奨・回避理由）や未来シナリオの比較を同一の対面キャッシュで高速に計算します。\n※Battle Ratingは静的耐性診断であり実戦3v3勝率そのものではありません。',
+ main:'【見せ合い6体・未来メタ補完】\n見せ合い6体の登録・自動補完・パーティ評価を行います。元メタ（またはあなたが重要度を変更した環境）を起点に、Phase 1（起点）→ Phase 2（対策集中）→ Phase 3（再適応）の3段階を自動予測し、全段階の平均と最悪ケース耐性の両方で総合評価します。\n※Battle Ratingは静的耐性診断であり実戦3v3勝率そのものではありません。',
  roster:'【自分の6体】\nカードをタップすると技や個体値（IV）を設定するモーダルが開きます。背景タップで素早く閉じられます。\n右上の「固定」を押すと、そのポケモンの技やIVを維持したまま残りの枠を「自動補完」できます。0体・一部・6体どれからでも実行可能です。',
- meta:'【メタ・未来メタ選択】\n基準メタ（現行環境）に対し、特定のポケモンが増加・対策された未来環境（シナリオ）を個別に設定・比較できます。重みの変更は選択中のシナリオにのみ保存され、他には波及しません。',
+ meta:'【メタ・環境変化設定】\n対象メタの重要度（初期値）をベースに、増えそう・重視したいポケモン（複数体OK）の重要度を変更するだけで環境変化を表せます。\n計算実行時に、その重要度分布を起点とした「Phase 1（起点）→ Phase 2（対策集中）→ Phase 3（再適応）」の3段階が対面相性から自動展開され、全段階の平均と最悪ケース耐性が出力されます。重要度を変更しない場合は現行メタ上位を起点に自動展開されます。',
 };
 document.querySelectorAll('.info-btn').forEach(btn=>{
  btn.onclick=()=>{
