@@ -120,8 +120,14 @@ function compareMirrorForks(newSession, startingOpponentShields, lead, {threeWay
       return summarizeArm(alternatives[action], lead.species, opponentLead, target);
     });
     if (threeWay) {
+      // Only own reserve HP at the shared decision, reduced to fixed 25-point bands.
+      const [skarmoryBand, quagsireBand] = switchActions.map(action => {
+        const {hp, max_hp: maxHp} = view.own.team[Number(action.slice("switch_".length))];
+        return Math.min(3, Math.floor(4 * hp / maxHp));
+      });
       return {...result, switch_targets: {switch_skarmory: requiredTargets[0],
-        switch_quagsire: requiredTargets[1]}, switch_skarmory: switchResults[0], switch_quagsire: switchResults[1]};
+        switch_quagsire: requiredTargets[1]}, reserve_hp_bands: {skarmory: skarmoryBand, quagsire: quagsireBand},
+        switch_skarmory: switchResults[0], switch_quagsire: switchResults[1]};
     }
     return {...result, switch_to: switchDestination(view, switchActions[0]), switch: switchResults[0]};
   });
