@@ -1,0 +1,13 @@
+model = "gpt-6.2-sol"
+model_reasoning_effort = "high"
+
+[agents]
+max_concurrent_threads_per_session = 2
+
+[agents.test_advisor]
+description = "公開観測・合法行動・終端と打ち切りを中心に、境界と回帰のテストを独立して分析する。"
+config_file = "agents/test_advisor.toml"
+
+[agents.reviewer]
+description = "対戦計算と学習設計の正しさ、情報漏洩、互換性を独立してレビューする。"
+config_file = "agents/reviewer.toml"
