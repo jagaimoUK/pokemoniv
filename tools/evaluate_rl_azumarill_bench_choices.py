@@ -93,17 +93,20 @@ def summarize(rows):
     return {"matched_forks": len(rows), "actions": summary}
 
 
-def evaluate_bench_choices(*, windows=WINDOWS):
-    windows = tuple(windows)
-    if not windows or len(windows) != len(set(windows)) or not set(windows) <= set(WINDOWS):
-        raise ValueError("Use one or both distinct bench-comparison windows")
-    batches = {window: window_cases(window) for window in windows}
+def replay_bench_cases(batches):
     with TemporaryDirectory(prefix="quagsire-bench-choices-") as temp:
         path = Path(temp) / "strategy_gamemaster_shadow.json"
         path.write_text(json.dumps(shadow_gamemaster()), encoding="utf-8")
         with _SwitchRlWorkerTransport(ROOT / "vendor/pvpoke", path) as worker:
-            rows = [{**compare_case(worker, case), "window": window}
+            return [{**compare_case(worker, case), "window": window}
                     for window, cases in batches.items() for case in cases]
+
+
+def evaluate_bench_choices(*, windows=WINDOWS):
+    windows = tuple(windows)
+    if not windows or len(windows) != len(set(windows)) or not set(windows) <= set(WINDOWS):
+        raise ValueError("Use one or both distinct bench-comparison windows")
+    rows = replay_bench_cases({window: window_cases(window) for window in windows})
     return {
         "ruleset_id": RULESET_ID,
         "ruleset_distinction": ruleset_distinction(),
