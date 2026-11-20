@@ -37,9 +37,12 @@ textarea{min-height:90px;resize:vertical}details{min-width:0;max-width:100%}summ
 .fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;min-width:0;max-width:100%}
 .fields label:first-child{grid-column:1/-1}
 .card-footer{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;margin-top:10px;min-width:0}
-.mon[open] > .modal-backdrop{position:fixed;inset:0;background:rgba(8,18,22,0.75);backdrop-filter:blur(3px);z-index:100;display:flex;align-items:center;justify-content:center;padding:16px}
-.mon:not([open]) > .modal-backdrop{display:none}
-.mon-modal-body{width:min(440px,calc(100vw - 24px));max-height:86dvh;overflow-y:auto;border:1px solid #639282;border-radius:20px;padding:18px;background:#192c31;color:#e2f1e9;box-shadow:0 10px 30px rgba(0,0,0,0.5)}
+#members > .mon[open] > .modal-backdrop{position:fixed;inset:0;background:rgba(8,18,22,0.75);backdrop-filter:blur(3px);z-index:100;display:flex;align-items:center;justify-content:center;padding:16px}
+#members > .mon:not([open]) > .modal-backdrop{display:none}
+#members .mon-modal-body{width:min(440px,calc(100vw - 24px));max-height:86dvh;overflow-y:auto;border:1px solid #639282;border-radius:20px;padding:18px;background:#192c31;color:#e2f1e9;box-shadow:0 10px 30px rgba(0,0,0,0.5)}
+.mon:not(#members > .mon) > .modal-backdrop{display:block;position:static;background:none;backdrop-filter:none;z-index:auto;padding:0}
+.mon:not(#members > .mon) .modal-backdrop-close{display:none}
+.mon:not(#members > .mon) .mon-modal-body{width:100%;max-height:none;overflow:visible;border:none;border-radius:0;padding:8px 0 0;background:transparent;box-shadow:none}
 dialog.info-modal{position:fixed;inset:0;margin:auto;width:min(440px,calc(100vw - 24px));max-height:80dvh;overflow-y:auto;border:1px solid #558575;border-radius:20px;padding:20px;background:#192c31;color:#e2f1e9;z-index:60}
 dialog.info-modal::backdrop{background:rgba(8,18,22,0.7);backdrop-filter:blur(3px)}
 .modal-header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}
