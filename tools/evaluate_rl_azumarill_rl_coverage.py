@@ -40,8 +40,13 @@ OWN_CONTINUATIONS = (
 )
 
 
+ATTACK_ACTIONS = frozenset(("fast", "charge_0", "charge_1"))
+
+
 class CpuFallbackMonteCarloPolicy(GeneralizedMonteCarloPolicy):
     """Evaluation-only v2 overlay: break exact ties using choose_team_cpu, keeping wait guard."""
+
+    suppress_voluntary_wait = False
 
     def choose(self, view, *, epsilon=0.2):
         encoded = self.encode_state(view)
@@ -53,10 +58,9 @@ class CpuFallbackMonteCarloPolicy(GeneralizedMonteCarloPolicy):
         self._rng.random()
         table = self._values["tactics"].get(key, {})
         candidates = legal
-        if ("wait" in legal and
-                any(a == "fast" or a.startswith("charge_") for a in legal)):
+        if "wait" in legal and not ATTACK_ACTIONS.isdisjoint(legal):
             observed_wait = table.get("wait")
-            if observed_wait is None or observed_wait[1] <= 0:
+            if self.suppress_voluntary_wait or observed_wait is None or observed_wait[1] <= 0:
                 candidates = tuple(a for a in legal if a != "wait")
         estimates = {a: table[a][1] if a in table else 0.0 for a in candidates}
         best = max(estimates.values())

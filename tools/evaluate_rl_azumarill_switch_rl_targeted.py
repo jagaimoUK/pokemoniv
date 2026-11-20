@@ -13,7 +13,7 @@ from pvpoke_rl_mc_generalized import GeneralizedMonteCarloPolicy
 from pvpoke_rl_step_client import NativeStepError
 from pvpoke_rl_team_preview import SixToThreeSelection
 from tools.evaluate_rl_azumarill_mirror_followup import trace_arm
-from tools.evaluate_rl_azumarill_rl_coverage import CpuFallbackMonteCarloPolicy
+from tools.evaluate_rl_azumarill_rl_coverage import ATTACK_ACTIONS, CpuFallbackMonteCarloPolicy
 from tools.evaluate_rl_azumarill_sensitivity import (
     _public_charge_state, _verified_native_ko_reward, choose_team_cpu,
 )
@@ -60,6 +60,10 @@ def window_cases(window):
     """Build single-factor HP/shield batches at fixed 150s remaining clock."""
     if type(window) is not int or window not in WINDOWS:
         raise ValueError("Use a predeclared 150s targeted RL window")
+    return build_targeted_window_cases(window)
+
+
+def build_targeted_window_cases(window):
     base_cases = build_window_cases(window, (RULESET_ID,), ROSTERS, 3, own_selection="0,2,4|2")
     cases = []
     for row in base_cases:
@@ -79,7 +83,8 @@ def window_cases(window):
 
 
 def train_targeted_switch_policy(
-    worker, *, seed=TARGETED_TRAIN_SEED, episodes=TRAIN_EPISODES
+    worker, *, seed=TARGETED_TRAIN_SEED, episodes=TRAIN_EPISODES,
+    policy_class=GeneralizedMonteCarloPolicy,
 ):
     """Train on Worlds-legal mid-battle HP/shield distributions over full 240s clock."""
     if type(episodes) is not int or not 0 <= episodes <= 120:
@@ -91,7 +96,7 @@ def train_targeted_switch_policy(
     hp_levels = (20, 40, 60, 85)
     shield_levels = (0, 1, 2)
     other_enemy_slots = [idx for idx in range(len(enemy_base)) if idx != 2]
-    policy = GeneralizedMonteCarloPolicy(seed=seed)
+    policy = policy_class(seed=seed)
     counts = Counter()
 
     for ep in range(episodes):
@@ -165,8 +170,8 @@ def train_targeted_switch_policy(
     }
 
 
-def _restore_frozen_policy(own_continuation, snapshots):
-    regime, cls = CONTINUATION_SPECS[own_continuation]
+def _restore_frozen_policy(own_continuation, snapshots, continuation_specs):
+    regime, cls = continuation_specs[own_continuation]
     if regime is None:
         return None, None
     snap = snapshots.get(regime)
@@ -175,9 +180,9 @@ def _restore_frozen_policy(own_continuation, snapshots):
     return cls.restore(snap, seed=EVAL_POLICY_SEED), snap
 
 
-def _run_arm(worker, case, own_continuation, snapshots, arm):
+def _run_arm(worker, case, own_continuation, snapshots, arm, continuation_specs):
     action_name, target_slot = ARM_ACTIONS[arm]
-    policy, snapshot = _restore_frozen_policy(own_continuation, snapshots)
+    policy, snapshot = _restore_frozen_policy(own_continuation, snapshots, continuation_specs)
     tactic_table = snapshot["values"]["tactics"] if snapshot is not None else {}
 
     res = worker.reset(
@@ -198,6 +203,7 @@ def _run_arm(worker, case, own_continuation, snapshots, arm):
         "learned_state_hits": 0,
         "diverged_on_seen_states": 0,
         "diverged_on_unseen_states": 0,
+        "waits_with_legal_attack": 0,
         "low_hp_shield_yes": 0,
         "low_hp_shield_no": 0,
         "low_hp_shield_seen_states": 0,
@@ -227,6 +233,8 @@ def _run_arm(worker, case, own_continuation, snapshots, arm):
                         rl_stats["diverged_on_seen_states"] += 1
                     else:
                         rl_stats["diverged_on_unseen_states"] += 1
+        if action == "wait" and not ATTACK_ACTIONS.isdisjoint(view["legal_actions"]):
+            rl_stats["waits_with_legal_attack"] += 1
         if "shield_yes" in view["legal_actions"]:
             active = view["own"]["team"][view["own"]["active_slot"]]
             if active["hp"] / active["max_hp"] < 0.25:
@@ -270,9 +278,9 @@ def _run_arm(worker, case, own_continuation, snapshots, arm):
     }
 
 
-def _compare_case(worker, case, own_continuation, snapshots):
-    arm_skarmory = _run_arm(worker, case, own_continuation, snapshots, "switch_skarmory")
-    arm_quagsire = _run_arm(worker, case, own_continuation, snapshots, "switch_quagsire")
+def _compare_case(worker, case, own_continuation, snapshots, *, continuation_specs=CONTINUATION_SPECS):
+    arm_skarmory = _run_arm(worker, case, own_continuation, snapshots, "switch_skarmory", continuation_specs)
+    arm_quagsire = _run_arm(worker, case, own_continuation, snapshots, "switch_quagsire", continuation_specs)
     if arm_skarmory["fork_view"] != arm_quagsire["fork_view"]:
         raise RuntimeError("Fork views differ before switching")
     view = arm_skarmory["fork_view"]
@@ -313,6 +321,7 @@ def summarize_group(rows):
         "learned_state_hits",
         "diverged_on_seen_states",
         "diverged_on_unseen_states",
+        "waits_with_legal_attack",
         "low_hp_shield_yes",
         "low_hp_shield_no",
         "low_hp_shield_seen_states",
@@ -338,6 +347,7 @@ def summarize_group(rows):
         "diverged_on_seen_states": totals["diverged_on_seen_states"],
         "diverged_on_unseen_states": totals["diverged_on_unseen_states"],
         "total_diverged_from_cpu": totals["diverged_on_seen_states"] + totals["diverged_on_unseen_states"],
+        "waits_with_legal_attack": totals["waits_with_legal_attack"],
     }
     return report
 
@@ -429,6 +439,19 @@ def summarize_results(rows, own_continuations):
     }
 
 
+def ruleset_distinction():
+    pokemon_by_id = {
+        entry["speciesId"]: entry
+        for entry in json.loads(GAME_DATA.read_text(encoding="utf-8"))["pokemon"]
+    }
+    return {
+        "worlds_2026_mimikyu": evaluate_tournament_eligibility("mimikyu", RULESET_ID),
+        "cs_2026_11_16_mimikyu": evaluate_tournament_eligibility("mimikyu", "play-pokemon-cs-2026-11-16-gl"),
+        "open_gl_mimikyu": evaluate_tournament_eligibility("mimikyu", "great-league-v1"),
+        "simulator_analyzability_azumarill": evaluate_simulator_analyzability("azumarill", pokemon_by_id),
+    }
+
+
 def evaluate_rl_switch_targeted(
     *,
     windows=WINDOWS,
@@ -439,17 +462,6 @@ def evaluate_rl_switch_targeted(
     for cont in own_continuations:
         if cont not in OWN_CONTINUATIONS:
             raise ValueError(f"Unknown continuation: {cont!r}")
-
-    pokemon_by_id = {
-        entry["speciesId"]: entry
-        for entry in json.loads(GAME_DATA.read_text(encoding="utf-8"))["pokemon"]
-    }
-    ruleset_distinction = {
-        "worlds_2026_mimikyu": evaluate_tournament_eligibility("mimikyu", RULESET_ID),
-        "cs_2026_11_16_mimikyu": evaluate_tournament_eligibility("mimikyu", "play-pokemon-cs-2026-11-16-gl"),
-        "open_gl_mimikyu": evaluate_tournament_eligibility("mimikyu", "great-league-v1"),
-        "simulator_analyzability_azumarill": evaluate_simulator_analyzability("azumarill", pokemon_by_id),
-    }
 
     cases = [case for window in windows for case in window_cases(window)]
     needed_regimes = {
@@ -496,7 +508,7 @@ def evaluate_rl_switch_targeted(
         "battle_clock_ms": BATTLE_CLOCK_MS,
         "remaining_seconds": REMAINING_SECONDS,
         "study": "synthetic_150s_targeted_vs_generic_public_rl",
-        "ruleset_distinction": ruleset_distinction,
+        "ruleset_distinction": ruleset_distinction(),
         "windows": list(windows),
         "own_continuations": list(own_continuations),
         "training": training_summaries,
