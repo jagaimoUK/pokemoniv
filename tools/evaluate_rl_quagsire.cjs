@@ -4,39 +4,12 @@ const {readFileSync} = require("node:fs");
 const {isDeepStrictEqual} = require("node:util");
 const {createTeamSession, chooseTeamCpu} = require("../pvpoke_rl_team_native.js");
 const {chooseOpponentAction} = require("./rl_azumarill_sensitivity_worker.cjs");
+const {createPublicReplayRecorder} = require("./rl_public_replay.cjs");
+const {compareMirrorForks} = require("./rl_azumarill_mirror.cjs");
 const {compareChargeFork, publicChargeState, runBankedChargeArm, summarizeChargeArm} =
   require("./rl_charge_branches.cjs");
 
 const RULESETS = new Set(["play-pokemon-worlds-2026-gl", "play-pokemon-cs-2026-11-16-gl"]);
-const REPLAY_FIELDS = new Map([
-  ["switch", ["previous_species", "forced"]],
-  ["charge_announced", []],
-  ["charged", ["move_id", "shielded"]],
-  ["faint", []],
-]);
-// The native clock charges 10 seconds per resolved charged move, including shields.
-const CHARGE_MS = 10000;
-
-function publicReplay(events, clock) {
-  let step = 0;
-  let chargedMs = 0;
-  const timeline = [];
-  for (const event of events) {
-    const fields = REPLAY_FIELDS.get(event.kind);
-    if (!fields) continue;
-    while (clock[step].through < event.seq) step++;
-    const {kind, seq, turn, species} = event;
-    // Multiple events can share one step interval; these are not per-event timestamps.
-    const {start_ms, end_ms} = clock[step];
-    if (kind === "charged") chargedMs += CHARGE_MS;
-    timeline.push({kind, seq, turn, species, side: event.actor === 0 ? "self" : "opponent",
-      start_ms, end_ms, ...Object.fromEntries(fields.map(key => [key, event[key]]))});
-  }
-  const {start_ms, end_ms} = clock.at(-1);
-  if (chargedMs > end_ms) throw Error("Resolved charges exceed the observed clock");
-  return {elapsed_ms: end_ms, charged_ms: chargedMs, clock_remainder_ms: end_ms - chargedMs,
-    terminal_step: {start_ms, end_ms}, events: timeline};
-}
 
 function compareCase({handoff, seed, roster, opponent_shields: opponentShields}, gamemasterPath, mode) {
   const lead = handoff.own_team[0];
@@ -50,23 +23,22 @@ function compareCase({handoff, seed, roster, opponent_shields: opponentShields},
     ruleset_id: handoff.ruleset_id, seed, roster, species: lead.species,
     second_move: lead.charged2, starting_opponent_shields: opponentShields,
   };
+  const newSession = () => createTeamSession(handoff, {gamemasterPath, seed, shields: [2, opponentShields]});
+  if (mode === "mirror") {
+    return {...metadata, mirror_forks: compareMirrorForks(newSession, opponentShields, lead)};
+  }
+
   const withReplay = mode !== "charges";
   function fork(policy) {
     return compareChargeFork(choice => {
-      const clock = [];
-      const session = createTeamSession(handoff, {gamemasterPath, seed, shields: [2, opponentShields]});
+      const replay = withReplay ? createPublicReplayRecorder() : null;
+      const session = newSession();
       const rolled = runBankedChargeArm(session, chooseTeamCpu, 0, opponentShields, choice, {
         chooseOpponentAction: view => chooseOpponentAction(view, policy),
-        onStep: withReplay ? (before, after) => {
-          // The engine publishes no observation after termination. Its audit event
-          // stream supplies the remaining events to the same public projection.
-          const through = after.observation
-            ? (after.observation.recent_events.at(-1)?.seq ?? 0)
-            : Infinity;
-          clock.push({through, start_ms: before.elapsed_ms, end_ms: after.info.elapsed_ms});
-        } : undefined,
+        onStep: replay?.onStep,
       });
-      if (withReplay && rolled.chargeFork) rolled.replay = publicReplay(rolled.audit.events, clock);
+      if (replay && rolled.chargeFork) rolled.replay = replay.summarize(rolled.audit.events);
+
       return rolled;
     }, ["charge_1"]);
   }
@@ -98,7 +70,7 @@ function compareCase({handoff, seed, roster, opponent_shields: opponentShields},
 try {
   const cases = JSON.parse(readFileSync(0, "utf8"));
   const [, , gamemasterPath, mode = "charges"] = process.argv;
-  if (!gamemasterPath || !["charges", "historical", "shielding"].includes(mode) ||
+  if (!gamemasterPath || !["charges", "historical", "shielding", "mirror"].includes(mode) ||
       !Array.isArray(cases) || cases.length < 1 || cases.length > 144) {
     throw Error("Invalid study input");
   }

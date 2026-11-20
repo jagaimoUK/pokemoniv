@@ -12,7 +12,8 @@ function compareChargeFork(run, alternatives) {
     if (!isDeepStrictEqual(immediate, run("immediate"))) {
       throw Error("Immediate charge A/A replay differs");
     }
-    for (const action of alternatives) {
+    const actions = typeof alternatives === "function" ? alternatives(fork) : alternatives;
+    for (const action of actions) {
       if (action === fork.baselineAction || !fork.view.legal_actions.includes(action)) continue;
       const result = run(action);
       if (!isDeepStrictEqual(fork, result.chargeFork)) {
@@ -48,6 +49,17 @@ function verifiedNativeReward(response) {
   return response.reward;
 }
 
+function bankedChargeAction(view, expectedOpponentShields) {
+  const legal = view.legal_actions;
+  if (legal.includes("charge_0") && legal.includes("charge_1")) {
+    if (expectedOpponentShields !== null && view.opponent.shields !== expectedOpponentShields) {
+      throw Error("Banking changed opponent shields");
+    }
+    return "charge_0";
+  }
+  return legal.includes("fast") ? "fast" : "wait";
+}
+
 function runBankedChargeArm(session, chooseAction, targetSlot, expectedOpponentShields, choice, {
   chooseOpponentAction = chooseAction, onStep,
 } = {}) {
@@ -60,17 +72,13 @@ function runBankedChargeArm(session, chooseAction, targetSlot, expectedOpponentS
       return {excluded: "target_fainted_before_fork"};
     }
     if (!chargeFork && view.phase === "turn" && view.own.active_slot === targetSlot) {
-      const legal = view.legal_actions;
-      if (legal.includes("charge_0") && legal.includes("charge_1")) {
-        if (expectedOpponentShields !== null && view.opponent.shields !== expectedOpponentShields) {
-          throw Error("Banking changed opponent shields");
-        }
+      action = bankedChargeAction(view, expectedOpponentShields);
+      if (action === "charge_0") {
         chargeFork = {view, audit: session.privateReplay(), baselineAction: "charge_0"};
-        action = choice === "immediate" ? "charge_0" : choice;
-      } else {
-        action = legal.includes("fast") ? "fast" : "wait";
+        action = choice === "immediate" ? action : choice;
       }
     }
+
     response = session.step([action, chooseOpponentAction(session.observe(1))]);
     onStep?.(view, response);
   }
@@ -88,4 +96,4 @@ function summarizeChargeArm(rolled, requestedMove) {
 }
 
 module.exports = {compareChargeFork, publicChargeState, ownChargesFromFork, verifiedNativeReward,
-  runBankedChargeArm, summarizeChargeArm};
+  bankedChargeAction, runBankedChargeArm, summarizeChargeArm};
