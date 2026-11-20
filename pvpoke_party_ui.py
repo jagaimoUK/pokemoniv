@@ -37,9 +37,9 @@ textarea{min-height:90px;resize:vertical}details{min-width:0;max-width:100%}summ
 .fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;min-width:0;max-width:100%}
 .fields label:first-child{grid-column:1/-1}
 .card-footer{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;margin-top:10px;min-width:0}
-.card-clear{min-height:36px;padding:4px 12px;font-size:13px;background:#3a3542;border-color:#7d718c}
-dialog.mon-modal{position:fixed;inset:0;margin:auto;width:min(440px,calc(100vw - 24px));max-height:86dvh;overflow-y:auto;border:1px solid #639282;border-radius:20px;padding:18px;background:#192c31;color:#e2f1e9;z-index:50}
-dialog.mon-modal::backdrop{background:rgba(8,18,22,0.75);backdrop-filter:blur(3px)}
+.mon[open] > .modal-backdrop{position:fixed;inset:0;background:rgba(8,18,22,0.75);backdrop-filter:blur(3px);z-index:100;display:flex;align-items:center;justify-content:center;padding:16px}
+.mon:not([open]) > .modal-backdrop{display:none}
+.mon-modal-body{width:min(440px,calc(100vw - 24px));max-height:86dvh;overflow-y:auto;border:1px solid #639282;border-radius:20px;padding:18px;background:#192c31;color:#e2f1e9;box-shadow:0 10px 30px rgba(0,0,0,0.5)}
 dialog.info-modal{position:fixed;inset:0;margin:auto;width:min(440px,calc(100vw - 24px));max-height:80dvh;overflow-y:auto;border:1px solid #558575;border-radius:20px;padding:20px;background:#192c31;color:#e2f1e9;z-index:60}
 dialog.info-modal::backdrop{background:rgba(8,18,22,0.7);backdrop-filter:blur(3px)}
 .modal-header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}

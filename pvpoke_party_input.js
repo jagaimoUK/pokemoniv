@@ -29,23 +29,28 @@ function createMon(data={}){
  lockLabel.onclick=e=>e.stopPropagation();
  summary.append(headMain,lockLabel);
 
- const modal=node('dialog',null,'mon-modal');
+ const modalBackdrop=node('div',null,'modal-backdrop');
+ modalBackdrop.onclick=e=>{
+  if(e.target===modalBackdrop)box.open=false;
+ };
+
+ const body=node('div',null,'fields mon-modal-body');
  const modalHeader=node('div',null,'modal-header');
  modalHeader.append(node('h3','ポケモン設定・技・IV','modal-title'));
- const modalClose=node('button','✕','small-btn secondary');modalClose.type='button';modalClose.onclick=()=>modal.close();
+ const modalClose=node('button','✕','small-btn secondary');modalClose.type='button';modalClose.onclick=()=>{box.open=false;};
  modalHeader.append(modalClose);
- modal.append(modalHeader);
+ body.append(modalHeader);
 
- const body=node('div',null,'fields');modal.append(body);
  const label=node('label','ポケモン名（日本語・英語）'),input=node('input');input.dataset.field='species';input.autocomplete='off';input.placeholder='例：サニーゴ / Corsola';input.value=data.species?partyDisplay(data.species):'';input.dataset.species=data.species||'';input.setAttribute('role','combobox');input.setAttribute('aria-expanded','false');
  const suggestions=node('div',null,'suggestions');suggestions.hidden=true;const hint=node('p');hint.style.gridColumn='1/-1';hint.style.fontSize='12px';label.append(input,suggestions);body.append(label);
  for(const [k,title] of [['fast','通常技'],['charged1','ゲージ技1'],['charged2','ゲージ技2']]){const l=node('label',title),select=node('select');select.dataset.field=k;select.setAttribute('aria-label',title);select.onchange=()=>{syncMoves();updateBadges();if(typeof markDirty==='function')markDirty();inputRevision++;};l.append(select);body.append(l);}
  for(const [k,title] of [['atk','攻撃IV（任意）'],['def','防御IV（任意）'],['hp','HP IV（任意）'],['level_override','指定レベル（任意）']]){const l=node('label',title),x=node('input');x.type='number';x.dataset.field=k;x.value=data[k]??'';x.min=k==='level_override'?1:0;x.max=k==='level_override'?50:15;x.step=k==='level_override'?'.5':'1';x.onchange=()=>{updateBadges();if(typeof markDirty==='function')markDirty();inputRevision++;};l.append(x);body.append(l);}
  body.append(hint);
  const clearBtn=node('button','クリア','card-clear');clearBtn.type='button';
- const doneBtn=node('button','完了','small-btn primary');doneBtn.type='button';doneBtn.onclick=()=>modal.close();
+ const doneBtn=node('button','完了','small-btn primary');doneBtn.type='button';doneBtn.onclick=()=>{box.open=false;};
  const cardFooter=node('div',null,'card-footer');cardFooter.append(clearBtn,doneBtn);body.append(cardFooter);
- box.append(modal);
+ modalBackdrop.append(body);
+ box.append(modalBackdrop);
 
  function updateBadges(){
   badgesDiv.replaceChildren();
@@ -88,12 +93,7 @@ function createMon(data={}){
  let composing=false;input.oncompositionstart=()=>composing=true;input.oncompositionend=()=>{composing=false;suggest();};input.oninput=()=>{if(!composing)suggest();};input.onfocus=()=>{if(!input.dataset.species)suggest();};input.onkeydown=e=>{if(e.isComposing||composing)return;if(e.key==='Escape'){suggestions.hidden=true;input.setAttribute('aria-expanded','false');}if(e.key==='ArrowDown'&&!suggestions.hidden){e.preventDefault();suggestions.querySelector('button')?.focus();}if(e.key==='Enter'){e.preventDefault();try{choose(resolvePartyName(input.value));if(typeof markDirty==='function')markDirty();inputRevision++;}catch(err){hint.textContent=err.message;}}};input.onchange=()=>{if(!input.value.trim()){clearBtn.onclick();return;}try{choose(resolvePartyName(input.value));if(typeof markDirty==='function')markDirty();inputRevision++;}catch(err){input.setCustomValidity(err.message);hint.textContent=err.message;}};
 
  summary.onclick=e=>{
-  if(e.target.closest('.lock-toggle'))return;
-  e.preventDefault();
-  if(!modal.open)modal.showModal();
- };
- modal.onclick=e=>{
-  if(e.target===modal)modal.close();
+  if(e.target.closest('.lock-toggle'))e.preventDefault();
  };
 
  if(data.species)choose(data.species,true);else updateSummary();
