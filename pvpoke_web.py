@@ -736,8 +736,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(403, {'error': 'Local host required'})
         path = urlparse(self.path).path
         if path not in ('/api/prepare','/api/run','/api/prepare24','/api/run24','/api/cancel','/api/meta/sync','/api/meta/preview','/api/meta/presets',
-                        '/api/party/list','/api/party/get','/api/party/save',
+                        '/api/party/list','/api/party/get','/api/party/save','/api/party/rename',
                         '/api/party/start','/api/party/status','/api/party/cancel','/api/party/meta-weights',
+                        '/api/party/scoped-weights','/api/party/scenario-list','/api/party/scenario-get',
+                        '/api/party/scenario-save','/api/party/scenario-delete',
                          '/api/battles/simulate', MISSING_API_PATH, SANDBOX_API_PATH):
             return self.respond(404, {'error': '見つかりません'})
         # Only same-origin JS with the random session token can start a job.
@@ -851,21 +853,53 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, {'state': 'cancelling', 'cancelled': True})
             if path.startswith('/api/party/'):
                 action = path.rsplit('/', 1)[-1]
+                # Owner scope comes exclusively from the trusted loopback header, never payload.
+                owner_scope = self.headers.get('X-PvPoke-Owner') or 'owner'
                 if action == 'meta-weights':
-                    return self.respond(200, PARTY.meta_weights(payload.get('changes')))
+                    return self.respond(200, PARTY.meta_weights(
+                        payload.get('changes'),
+                        scope_key=payload.get('scope_key'),
+                        owner_scope=owner_scope))
+                if action == 'scoped-weights':
+                    return self.respond(200, PARTY.scoped_weights(
+                        payload.get('scope_key'),
+                        payload.get('changes'),
+                        owner_scope=owner_scope))
+                if action == 'scenario-list':
+                    return self.respond(200, PARTY.list_scenarios(owner_scope=owner_scope))
+                if action == 'scenario-get':
+                    return self.respond(200, PARTY.get_scenario(payload.get('id'), owner_scope=owner_scope))
+                if action == 'scenario-save':
+                    try:
+                        return self.respond(200, PARTY.save_scenario(payload, owner_scope=owner_scope))
+                    except RuntimeError as exc:
+                        return self.respond(409, {'error': str(exc)})
+                if action == 'scenario-delete':
+                    try:
+                        return self.respond(200, PARTY.delete_scenario(
+                            payload.get('id'), payload.get('revision'), owner_scope=owner_scope))
+                    except RuntimeError as exc:
+                        return self.respond(409, {'error': str(exc)})
                 if action == 'list':
-                    return self.respond(200, PARTY.list_parties())
+                    return self.respond(200, PARTY.list_parties(owner_scope=owner_scope))
                 if action == 'get':
-                    return self.respond(200, PARTY.get_party(payload.get('id')))
+                    return self.respond(200, PARTY.get_party(payload.get('id'), owner_scope=owner_scope))
+                if action == 'rename':
+                    try:
+                        return self.respond(200, PARTY.rename_party(
+                            payload.get('id'), payload.get('name'), payload.get('revision'),
+                            owner_scope=owner_scope))
+                    except RuntimeError as exc:
+                        return self.respond(409, {'error': str(exc)})
                 if action == 'save':
                     try:
-                        return self.respond(200, PARTY.save_party(payload))
+                        return self.respond(200, PARTY.save_party(payload, owner_scope=owner_scope))
                     except RuntimeError as exc:
                         return self.respond(409, {'error': str(exc)})
                 if action == 'status':
-                    return self.respond(200, PARTY.run_status(payload.get('job_id')))
+                    return self.respond(200, PARTY.run_status(payload.get('job_id'), owner_scope=owner_scope))
                 if action == 'cancel':
-                    return self.respond(200, PARTY.cancel(payload.get('job_id')))
+                    return self.respond(200, PARTY.cancel(payload.get('job_id'), owner_scope=owner_scope))
                 if action == 'start':
                     if not CATALOG.get('ready'):
                         raise ValueError('ゲームデータを読み込み中です')
@@ -877,7 +911,8 @@ class Handler(BaseHTTPRequestHandler):
                         response = PARTY.start(payload, catalog=CATALOG['species'],
                             species=full_species, cpms=cpms, engine=engine, work=WORK,
                             global_lock=LOCK, global_status=STATUS,
-                            release_owner=lambda: release_compute(token))
+                            release_owner=lambda: release_compute(token),
+                            owner_scope=owner_scope)
                     except Exception as exc:
                         release_compute(token)
                         if isinstance(exc, RuntimeError):

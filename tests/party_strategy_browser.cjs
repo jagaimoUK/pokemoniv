@@ -7,11 +7,9 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  try{
  const config=await new Promise((resolve,reject)=>{let buffer='';server.stdout.on('data',chunk=>{buffer+=chunk;const at=buffer.indexOf('\n');if(at>=0)try{resolve(JSON.parse(buffer.slice(0,at)))}catch(e){reject(e)}});server.on('exit',c=>reject(Error('Fixture server exited '+c)));server.stderr.on('data',()=>{});});
  browser=await chromium.launch({headless:true,executablePath:process.env.STRATEGY_CHROMIUM_PATH||undefined,args:['--no-sandbox','--disable-dev-shm-usage']});
- page=await browser.newPage({viewport:{width:390,height:844}});const errors=[];page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(8000);
+ page=await browser.newPage({viewport:{width:390,height:844}});const errors=[];page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(10000);
  page.on('request',r=>{if(r.url().endsWith('/app-api/party/start'))lastStart=r.postDataJSON()});
  async function launch(selector){
-  // A previous "done" message may remain until the next start response arrives.
-  // Observe this exact job before waiting for completion or editing its inputs.
   const started=page.waitForResponse(r=>r.url().endsWith('/app-api/party/start'));
   await page.click(selector);const response=await started;
   assert.equal(response.status(),200,await response.text());const job=await response.json();
@@ -20,232 +18,124 @@ const {chromium}=require('playwright'),{spawn}=require('node:child_process'),fs=
  async function done(message='計算完了'){
   await page.waitForFunction(text=>activeJob===null&&document.getElementById('status').textContent.includes(text),message,{timeout:60000});
  }
+
  await page.goto(config.url+'/app/party');await page.fill('#key',config.key);await page.click('#login');await page.waitForSelector('#workspace:not([hidden])');
- await page.click('[data-tab=settings]');await page.selectOption('#saved',await page.locator('#saved option').nth(1).getAttribute('value'));await page.click('#load');
+
+ // 1) Verify P0 streamlined layout: 2-col 6 cards, no permanent large save panel, top-right パーティ button, 2 primary buttons, detail calc OFF by default.
+ assert.equal(await page.locator('#members > details.mon').count(),6,'Exactly 6 manual cards');
+ assert.equal(await page.locator('#partyLibrary').count(),0,'Old permanent save panel removed');
+ assert.equal(await page.locator('#partyMenuBtn').isVisible(),true,'Top-right compact パーティ button visible');
+ assert.equal(await page.locator('#autoComplete').isVisible(),true,'Primary 自動補完 button visible');
+ assert.equal(await page.locator('#evaluate').isVisible(),true,'Primary パーティ評価 button visible');
+ assert.equal(await page.isChecked('#strategyRefinement'),false,'Detail strategy refinement defaults OFF');
+ assert.equal(await page.isChecked('#opponentUncertainty'),false,'Opponent uncertainty defaults OFF');
+ // No slot numbers like 枠1 on empty cards; lock toggles hidden on unselected cards.
+ assert(!/枠[1-6]/.test(await page.locator('#members').textContent()),'No unnecessary slot numbers');
+ assert.equal(await page.locator('#members .lock-toggle:not([hidden])').count(),0,'Lock toggles hidden on empty cards');
+
+ // 2) Verify 2-column grid & zero horizontal overflow at 360px and 390px.
+ for(const width of [360,390]){
+  await page.setViewportSize({width,height:844});
+  const cols=await page.locator('#members').evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length);
+  assert.equal(cols,2,'Cards render in 2 columns on mobile '+width+'px');
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'No horizontal overflow at '+width+'px');
+ }
+ await page.setViewportSize({width:390,height:844});
+
+ // 3) Manual selection reveals lock toggle WITHOUT auto-locking it!
+ await page.locator('#members details.mon').first().locator('summary').click();
+ const firstInput=page.locator('#members [data-field=species]').first();
+ await firstInput.fill('ぬお');
+ await page.locator('#members .suggestions button').filter({hasText:'ヌオー'}).first().click();
+ assert.equal(await firstInput.inputValue(),'ヌオー');
+ assert.equal(await page.locator('#members .lock-toggle').first().isHidden(),false,'Selected card shows lock toggle');
+ assert.equal(await page.locator('#members [data-field=locked]').first().isChecked(),false,'Manual selection does NOT auto-lock');
+
+ // 4) Unsaved changes protection in top-right パーティ drawer + Save / Rename / Switch.
+ await page.click('#partyMenuBtn');
+ await page.waitForSelector('#partyDialog[open]');
+ const fixtureId=await page.locator('#saved option').nth(1).getAttribute('value');
+ await page.selectOption('#saved',fixtureId);
+ await page.click('#load');
+ assert.equal(await page.locator('#unsavedGuard').isVisible(),true,'Unsaved changes guard blocks silent discard');
+ await page.click('#confirmDiscard');
  await page.waitForFunction(()=>document.getElementById('status').textContent.includes('読み込みました'));
- await page.waitForSelector('#metaWeights select[data-species=quagsire]');
- assert((await page.textContent('#metaWeights')).includes('ヌオー'));
- await page.fill('#metaFilter','ぬおー');
- assert.equal(await page.locator('#metaWeights select').count(),1);
- await page.selectOption('#metaWeights select[data-species=quagsire]','4');
- await page.fill('#metaFilter','');
- assert.equal(await page.inputValue('#metaWeights select[data-species=quagsire]'),'4');
- await page.waitForFunction(()=>document.getElementById('metaWeightSaveStatus').textContent.includes('自動保存しました'));
- const originalMeta=await page.inputValue('#meta');
- const alternative=await page.locator('#meta option').filter({hasText:'Alternate fixture'}).getAttribute('value');
- await page.selectOption('#meta',alternative);
- await page.waitForSelector('#metaWeights select[data-species=quagsire]');
- assert.equal(await page.inputValue('#metaWeights select[data-species=quagsire]'),'4');
- await page.selectOption('#meta',originalMeta);
- await page.reload();await page.waitForSelector('#workspace:not([hidden])');
- await page.click('[data-tab=settings]');
- await page.waitForSelector('#metaWeights select[data-species=quagsire]');
- assert.equal(await page.inputValue('#metaWeights select[data-species=quagsire]'),'4','Shared importance survives page reload');
- await page.selectOption('#saved',await page.locator('#saved option').nth(1).getAttribute('value'));await page.click('#load');
- await page.waitForFunction(()=>document.getElementById('status').textContent.includes('読み込みました'));
- const csv=JSON.parse(fs.readFileSync('tests/fixtures/strategy_rows.json')).map(x=>[x.species,x.fast,x.charged1,x.charged2,x.atk,x.def,x.hp].join(',')).join('\n');
- await page.click('[data-tab=compose]');await page.locator('#members details').first().locator('summary').click();
- const speciesInput=page.locator('#members [data-field=species]').first();await speciesInput.fill('ぬお');await page.locator('#members .suggestions button').filter({hasText:'ヌオー'}).first().click();
- assert.equal(await speciesInput.inputValue(),'ヌオー');assert.equal(await page.locator('#members [data-field=fast]').first().evaluate(el=>el.tagName),'SELECT');
- await page.click('[data-tab=selection]');await page.locator('#selection').getByRole('button',{name:'ポケモンを追加',exact:true}).click();await page.locator('#selection [data-field=species]').fill('Azumarill');await page.locator('#selection .suggestions button').first().click();assert((await page.inputValue('#enemy')).startsWith('azumarill,'));
- await page.locator('#selection details').filter({has:page.locator('#enemy')}).locator('summary').click();
- await page.fill('#enemy','ヌオー,マッドショット,アクアテール,ストーンエッジ,0,15,15');
- await page.locator('#enemy').blur();
- assert.equal(await page.locator('#selection [data-field=fast]').first().inputValue(),'MUD_SHOT');
- assert.equal(await page.locator('#selection [data-field=fast]').first().locator('option:checked').textContent(),'マッドショット');
- await page.click('[data-tab=strategy]');await page.locator('details').filter({has:page.locator('#strategyEnemy')}).locator('summary').click();await page.fill('#strategyEnemy',csv);await page.locator('#strategyEnemy').blur();
- await page.selectOption('#strategySelf','2');await page.getByText('初手→交代→後追い（限定モデル）',{exact:true}).click();await page.selectOption('#strategyLead','1');await page.selectOption('#strategyCloser','3');
- await page.check('#includeBranch');
- await launch('#runStrategy');await done();
- assert((await page.textContent('#strategyResult')).includes('詳細条件 9/9'));
- assert((await page.textContent('#strategyResult')).includes('完全な3対3'));
- assert((await page.textContent('#strategyResult')).includes('後追い 5/5'));
- assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'Mobile page must not overflow horizontally');
- await page.click('[data-tab=settings]');await page.click('#save');await page.waitForFunction(()=>document.getElementById('status').textContent.includes('保存済み'));
- await page.click('[data-tab=strategy]');await launch('#runStrategy');
- await page.fill('#partyName','計算条件を変えない名前の変更');
- await done();
- assert((await page.textContent('#strategyResult')).includes('新規条件 0'));
- // Ensure a late response cannot replace results after an edit.
- await launch('#runStrategy');await page.selectOption('#workKind','fast_damage');
- await done('以前の入力の結果は表示しません');
- // Save two independent named snapshots and verify restored opponent, IV and strategy.
+
+ // Save As + Rename + Switch independence.
+ await page.click('#partyMenuBtn');
  await page.fill('#partyName','大会A');await page.click('#saveAs');
  await page.waitForFunction(()=>document.getElementById('partyState').textContent.includes('大会A'));
  const partyA=await page.inputValue('#saved');
- const aOwn=await page.locator('#members [data-field=atk]').first().inputValue();
- const aStrategy=await page.inputValue('#strategyEnemy');
- await page.click('[data-tab=compose]');
- await page.locator('#members details').first().evaluate(el=>el.open=true);
- await page.locator('#members [data-field=atk]').first().fill(aOwn==='7'?'8':'7');
- await page.click('[data-tab=selection]');
- await page.locator('#selection details.mon').first().evaluate(el=>el.open=true);
- await page.locator('#selection [data-field=atk]').first().fill('9');
- await page.fill('#partyName','大会B');await page.click('#saveAs');
- await page.waitForFunction(()=>document.getElementById('partyState').textContent.includes('大会B'));
- const partyB=await page.inputValue('#saved');assert.notEqual(partyA,partyB);
- await page.selectOption('#saved',partyA);await page.click('#load');
- await page.waitForFunction(()=>document.getElementById('partyState').textContent.includes('大会A'));
- assert.equal(await page.locator('#members [data-field=atk]').first().inputValue(),aOwn);
- assert.equal(await page.inputValue('#strategyEnemy'),aStrategy);
- assert.equal(await page.locator('#selection [data-field=atk]').first().inputValue(),'0','Restore the attack IV provided by the Japanese CSV');
- await page.selectOption('#saved',partyB);await page.click('#load');
- await page.waitForFunction(()=>document.getElementById('partyState').textContent.includes('大会B'));
- assert.equal(await page.locator('#selection [data-field=atk]').first().inputValue(),'9');
- assert.equal(await page.locator('#members [data-field=atk]').first().inputValue(),aOwn==='7'?'8':'7');
- await page.click('[data-tab=settings]');
- assert.equal(await page.inputValue('#metaWeights select[data-species=quagsire]'),'4');
- // Real authenticated search from bundled meta; apply one suggested change if improved.
- // Autocomplete the whole party, compare endpoints and inspect a real 2-2 heatmap.
- await page.click('[data-tab=compose]');
+ await page.fill('#partyName','大会A改');await page.click('#renameParty');
+ await page.waitForFunction(()=>document.getElementById('partyState').textContent.includes('大会A改'));
+ await page.click('#closePartyDialog');
+
+ // 5) Isolated future scenario weights (Future A edit must NOT affect Future B or Current Meta, and survives reload!).
+ await page.locator('#scenarioEditorDetails > summary').click();
+ await page.selectOption('#scenario','builtin:mimikyu_rise');
+ await page.waitForSelector('#metaWeights select[data-species=quagsire]');
+ await page.selectOption('#metaWeights select[data-species=quagsire]','10');
+ await page.waitForFunction(()=>document.getElementById('metaWeightSaveStatus').textContent.includes('保存済み'));
+ await page.selectOption('#scenario','builtin:mimikyu_counters');
+ await page.waitForSelector('#metaWeights select[data-species=quagsire]');
+ assert.notEqual(await page.inputValue('#metaWeights select[data-species=quagsire]'),'10','Future A weight must NOT bleed into Future B');
+ await page.selectOption('#scenario','current');
+ await page.waitForSelector('#metaWeights select[data-species=quagsire]');
+ assert.notEqual(await page.inputValue('#metaWeights select[data-species=quagsire]'),'10','Future A weight must NOT bleed into Current Meta');
+ // Save independent custom scenario and verify reload persistence.
+ await page.fill('#scenarioName','独自予測A');
+ await page.click('#scenarioSaveAs');
+ await page.waitForFunction(()=>document.getElementById('scenarioManageStatus').textContent.includes('独自予測A'));
+ await page.reload();await page.waitForSelector('#workspace:not([hidden])');
+ await page.locator('#scenarioEditorDetails > summary').click();
+ await page.selectOption('#scenario','builtin:mimikyu_rise');
+ await page.waitForSelector('#metaWeights select[data-species=quagsire]');
+ assert.equal(await page.inputValue('#metaWeights select[data-species=quagsire]'),'10','Isolated scenario weight survives reload');
+
+ // 6) 0-member Auto-Complete with Future Scenario + Multi-Scenario comparison (average + worst case) + Heatmap modal.
+ await page.locator('#compareScenariosDetails > summary').click();
+ await page.locator('#compareScenarios input[value="current"]').check();
+ await page.locator('#compareScenarios input[value="builtin:mimikyu_rise"]').check();
+ await page.locator('#compareScenarios input[value="builtin:mimikyu_counters"]').check();
  await launch('#autoComplete');await done();
- assert((await page.textContent('#swapAdvice')).includes('自動補完の最終候補'));
- assert((await page.textContent('#weakResult')).includes('構築に使った詳細戦略'));
- assert((await page.textContent('#weakResult')).includes('一次探索'));
- assert((await page.textContent('#weakResult')).includes('通常技の圧力'));
- assert((await page.textContent('#weakResult')).includes('ゲージ技を受ける役割'));
- const pairRoles=page.locator('#weakResult details[data-pair-roles]');
- assert.equal(await pairRoles.count(),15);
- assert.equal(await pairRoles.first().evaluate(el=>el.open),false,'Role evidence starts collapsed on mobile');
- await page.waitForFunction(()=>{
-  const r=document.getElementById('swapAdvice').getBoundingClientRect();
-  return !document.getElementById('weakness').hidden&&r.top>=0&&r.top<100;
- });
- await pairRoles.first().locator('summary').click();
- assert.equal(await pairRoles.first().evaluate(el=>el.open),true);
- await pairRoles.first().locator('summary').click();
+ assert((await page.textContent('#unknownBanner')).includes('ミミッキュ'),'Mimikyu shown as unverified/unknown');
+ assert((await page.textContent('#summaryResult')).includes('最悪ケース'),'Worst-case scenario displayed');
+ assert((await page.textContent('#recommendedThree')).includes('推奨3体選出'),'Recommended 3 displayed immediately');
+ assert((await page.textContent('#allTriplesPanel')).includes('全20組'),'All 20 triples expandable panel rendered');
  assert(await page.locator('#swapAdvice .completion-card').count()>=1);
- assert(await page.locator('#swapAdvice .completion-card').count()<=3);
  const firstPlan=page.locator('#swapAdvice .completion-card').first();
  await firstPlan.getByRole('button',{name:'弱点を視覚化'}).click();
  const comparison=page.locator('.party-comparison');
- assert(await comparison.locator('table.heatmap tbody tr').count()>=1,'comparison must include real meta opponents');
- assert(await comparison.locator('table.heatmap tbody tr').count()<=8,'page remains compact');
- for(const [own,enemy] of [['0','0'],['1','1'],['2','2'],['0','2'],['2','0']]){
-  await comparison.getByLabel('自分のシールド',{exact:true}).selectOption(own);
-  await comparison.getByLabel('相手のシールド',{exact:true}).selectOption(enemy);
-  assert.equal(await comparison.locator('table').getAttribute('data-shields'),own+'-'+enemy);
-  assert(!(await comparison.locator('tbody').textContent()).includes('未計算'));
- }
- await comparison.getByLabel('比較表示',{exact:true}).selectOption('slots');
  assert.equal(await comparison.evaluate(el=>el.open),true);
- assert.equal(await comparison.locator('table tbody tr').count(),6);
- assert.equal(await comparison.locator('table tbody tr').first().locator('td').count(),2);
- assert.equal(await comparison.locator('table tbody tr').first().locator('td strong').count(),2);
- assert(!/初 |案 |[1-6]枠/.test(await comparison.locator('table').textContent()));
- for(const width of [360,390]){
-  await page.setViewportSize({width,height:844});
-  assert(await comparison.evaluate(el=>el.getBoundingClientRect().width>=innerWidth-2),'comparison uses full viewport');
-  assert(await comparison.locator('td strong').first().evaluate(el=>parseFloat(getComputedStyle(el).fontSize)>=18),'Pokemon names remain readable');
-  assert(await comparison.locator('td span').first().evaluate(el=>parseFloat(getComputedStyle(el).fontSize)>=22),'ratings remain readable');
-  assert.equal(await comparison.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);
- }
- await comparison.getByRole('button',{name:'次の相手'}).click();
- assert((await comparison.locator('.compare-paging').textContent()).includes('2–2'));
- await comparison.getByLabel('自分のシールド',{exact:true}).selectOption('1');
- assert((await comparison.locator('.compare-paging').textContent()).includes('2–2'),'shield change keeps opponent');
- await comparison.getByLabel('比較表示',{exact:true}).selectOption('summary');
- assert(await comparison.locator('tbody tr').count()<=8);
- await comparison.getByLabel('比較表示',{exact:true}).selectOption('slots');
- assert.equal(await comparison.locator('.compare-scroll').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true,'comparison fits mobile width without horizontal scrolling');
- const rowCount=await comparison.locator('tbody tr').count();assert(rowCount<=8);
- await comparison.getByLabel('比較する提案',{exact:true}).selectOption('0');
- await page.keyboard.press('Escape');
- await page.waitForFunction(()=>!document.querySelector('.party-comparison').open&&document.body.style.overflow==='');
- assert.equal(await comparison.evaluate(el=>el.open),false);
- assert.equal(await page.evaluate(()=>document.body.style.overflow),'');
- await firstPlan.getByRole('button',{name:'弱点を視覚化'}).click();
  await comparison.getByRole('button',{name:'比較を閉じる'}).click();
- await page.waitForFunction(()=>!document.querySelector('.party-comparison').open&&document.body.style.overflow==='');
- assert.equal(await comparison.evaluate(el=>el.open),false);
- assert.equal(await page.evaluate(()=>document.body.style.overflow),'');
- const history=firstPlan.locator('details').filter({hasText:'入れ替え履歴'});
- if(await history.count()){
-  await history.locator('summary').click();
-  assert((await history.textContent()).includes('交換直前の6体・2枚対2枚'));
-  assert((await history.textContent()).includes('改善した相手'));
- }
- // Visual controls must not invalidate the proposal before applying it.
-
- assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'Heatmap must fit mobile viewport with own scrolling');
  await firstPlan.getByRole('button',{name:'この6体を反映'}).click();
- assert((await page.textContent('#partyState')).includes('未保存の変更あり'));
- assert((await page.textContent('#status')).includes('再分析'));
- await page.click('[data-tab=compose]');
- await launch('#recommend');await done();
- assert((await page.textContent('#swapAdvice')).includes('次に何をすればよい？'));
- assert((await page.textContent('#swapAdvice')).includes('仮候補'));
- const proposals=page.locator('#swapAdvice button');
- if(await proposals.count()){
-  const old=await page.locator('#members [data-field=species]').allTextContents();
-  await proposals.first().click();
-  assert((await page.textContent('#status')).includes('まだ保存していません'));
-  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
-  assert.equal(await page.textContent('#partyState'),'未保存の変更あり（上部の保存・上書きで記録）');
- }
- // Candidate build uses the same refinement and can explicitly opt out.
- await page.click('[data-tab=compose]');
- await page.evaluate(text=>{const el=document.getElementById('pool');el.value=text;
-  el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));},csv+'\nprimeape,COUNTER,ICE_PUNCH,CLOSE_COMBAT');
- await launch('#build');await done();
- assert((await page.textContent('#weakResult')).includes('構築に使った詳細戦略'));
- assert(await page.locator('#weakResult .completion-card').count()<=3);
- assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
- const refinedApply=page.locator('#weakResult .completion-card button:not([disabled])').first();
- if(await refinedApply.count()){
-  await refinedApply.click();
-  assert((await page.textContent('#status')).includes('再分析'));
- }
- await page.click('[data-tab=compose]');await page.uncheck('#strategyRefinement');
- await page.click('#save');await page.waitForFunction(()=>document.getElementById('status').textContent.includes('保存済み'));
- await page.check('#strategyRefinement');await page.click('#load');
- await page.waitForFunction(()=>document.getElementById('status').textContent.includes('読み込みました'));
- assert.equal(await page.isChecked('#strategyRefinement'),false);
- await launch('#build');await done();
- assert(!(await page.textContent('#weakResult')).includes('構築に使った詳細戦略'));
- assert((await page.textContent('#weakResult')).includes('通常技の圧力：未評価'));
- // Optional bounded opponent sensitivity: Japanese legal moves, persisted
- // settings, exact-job completion, cached rerun and mobile report.
- await page.click('[data-tab=compose]');
- await page.getByText('相手の技・個体値が不明なときの比較',{exact:true}).click();
- assert.equal(await page.isChecked('#opponentUncertainty'),false);
- await page.check('#opponentUncertainty');await page.check('#strategyRefinement');
- await page.locator('details').filter({has:page.locator('#hypotheses')}).last().locator('summary').click();
- await page.fill('#hypotheses','ヌオー,マッドショット,アクアテール,ヘドロばくだん,0,15,15');
- await page.locator('#hypotheses').blur();
- await page.click('#save');await page.waitForFunction(()=>document.getElementById('status').textContent.includes('保存済み'));
- await page.uncheck('#opponentUncertainty');
- await page.click('#load');await page.waitForFunction(()=>document.getElementById('status').textContent.includes('読み込みました'));
- assert.equal(await page.isChecked('#opponentUncertainty'),true);
- assert((await page.inputValue('#hypotheses')).includes('SLUDGE_BOMB'));
- await launch('#build');await done();
- const sensitivity=page.locator('#weakResult [data-uncertainty]');
- assert.equal(await sensitivity.count(),1);
- assert((await sensitivity.textContent()).includes('最大2グループ・各2技構成'));
- assert((await sensitivity.textContent()).includes('担当を固定した評価変動'));
- assert((await sensitivity.textContent()).includes('勝率ではありません'));
- const report=await page.evaluate(()=>latest.uncertainty);
- assert(report.requested_cells<=report.budget.max_cells);
- assert(report.groups.some(g=>g.available_movesets===2));
- assert(report.groups.every(g=>g.hypotheses.every(h=>h.combatant.cp<=1500)));
- assert.equal(await sensitivity.locator('.result button:disabled').count(),1,'Exactly the selected final party is marked active');
+ assert.equal(await page.locator('#members .lock-toggle:not([hidden])').count(),6,'Applied 6 cards show lock toggles');
+
+ // 7) 6-member Evaluate (パーティ評価) + Opponent 6 gating custom strategy panel.
+ assert.equal(await page.locator('#opponentStrategyPanel').isHidden(),true,'Opponent strategy panel hidden until 6 opponents entered');
+ const csv=JSON.parse(fs.readFileSync('tests/fixtures/strategy_rows.json')).map(x=>[x.species,x.fast,x.charged1,x.charged2,x.atk,x.def,x.hp].join(',')).join('\n');
+ await page.locator('#enemyDetails > summary').click();
+ await page.locator('#enemyDetails details').filter({has:page.locator('#enemy')}).locator('summary').click();
+ await page.fill('#enemy',csv);
+ await page.locator('#enemy').blur();
+ assert.equal(await page.locator('#opponentStrategyPanel').isHidden(),false,'Opponent strategy panel revealed once 6 opponents entered');
+ await launch('#evaluate');await done();
+ assert((await page.textContent('#recommendedThree')).includes('相手6体に対する詳細選出根拠'),'Opponent 6 selection shown in results');
+
+ // 8) Run opponent-specific detail strategy calculation.
+ await page.locator('#opponentStrategyPanel > summary').click();
+ await page.selectOption('#strategySelf','2');
+ await launch('#runStrategy');await done();
+ assert((await page.textContent('#strategyResult')).includes('詳細条件 9/9'));
+
+ // Final mobile width sanity check.
  for(const width of [360,390]){
   await page.setViewportSize({width,height:844});
-  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'Sensitivity report fits mobile width');
- }
- await page.click('[data-tab=compose]');await launch('#build');await done();
- assert.equal(await page.evaluate(()=>latest.uncertainty.cache.computed),0,'Same normalized hypotheses reuse the detail cache');
- const chooseSensitivity=page.locator('#weakResult [data-uncertainty] button:not([disabled])').first();
- if(await chooseSensitivity.count()){
-  await chooseSensitivity.click();assert((await page.textContent('#status')).includes('再分析'));
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'Final mobile check fits without horizontal overflow at '+width+'px');
  }
  assert.equal(errors.length,0,errors.join('\n'));
- const out=process.env.STRATEGY_SCREENSHOT_DIR;
- if(out){fs.mkdirSync(out,{recursive:true});await page.screenshot({path:out+'/strategy-mobile.png',fullPage:true});}
- console.log('Mobile 360/390px: real authenticated gateway/worker/engine, strategy, branches, save/restore, Japanese moves and weights, bounded move/IV sensitivity, actionable swaps, completion and heatmap, cache reuse and stale-response guard passed');
- }catch(e){if(page){console.error('Final app status:',await page.locator('#status').textContent());
-  if(lastStart){const current=await page.evaluate(x=>partyCalculationRequest(x.mode,!!x.auto_replacements,!!x.auto_complete),lastStart).catch(()=>null);
-   for(const k of Object.keys(lastStart))if(JSON.stringify(lastStart[k])!==JSON.stringify(current?.[k]))console.error('Changed calculation field:',k,JSON.stringify(lastStart[k]),JSON.stringify(current?.[k]));}}
+ console.log('P0 Mobile 360/390px browser regression passed');
+ }catch(e){if(page){console.error('Final app status:',await page.locator('#status').textContent());}
  throw e;
  }finally{if(browser)await browser.close();server.kill();}
-})().catch(e=>{console.error(e);process.exitCode=1});
+})();

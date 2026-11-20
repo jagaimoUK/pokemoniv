@@ -52,9 +52,15 @@ def request(path, payload=None, **kwargs):
         m['moveId']:{'name':m['name'],'name_ja':public_catalog()['moves'].get(m['moveId'],{}).get('ja')}
         for m in gm['moves']}}
     action = path.rsplit('/',1)[-1]
-    if action == 'meta-weights':return party.meta_weights(args.get('changes'))
+    if action == 'meta-weights':return party.meta_weights(args.get('changes'), scope_key=args.get('scope_key'))
+    if action == 'scoped-weights':return party.scoped_weights(args.get('scope_key'), args.get('changes'))
+    if action == 'scenario-list':return party.list_scenarios()
+    if action == 'scenario-get':return party.get_scenario(args['id'])
+    if action == 'scenario-save':return party.save_scenario(args)
+    if action == 'scenario-delete':return party.delete_scenario(args['id'], args['revision'])
     if action == 'list':return party.list_parties()
     if action == 'get':return party.get_party(args['id'])
+    if action == 'rename':return party.rename_party(args['id'], args['name'], args['revision'])
     if action == 'save':return party.save_party(args)
     if action == 'start':return party.start(args,catalog=catalog,species=species,cpms=cpms,
         engine=engine,work=work,global_lock=lock,global_status=state)
