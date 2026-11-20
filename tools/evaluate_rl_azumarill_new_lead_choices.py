@@ -26,12 +26,16 @@ LEADS = {1: "clodsire", 4: "skarmory"}
 def window_cases(window, lead):
     if type(window) is not int or window not in WINDOWS or lead not in LEADS:
         raise ValueError("Use a predeclared lead and seed window")
+    return build_lead_cases(window, lead, SEEDS_PER_WINDOW)
+
+
+def build_lead_cases(window, lead, seeds_per_window):
     _, _, enemy = fixture_teams()
     cases = []
     for left, right in combinations([slot for slot in range(6) if slot != lead], 2):
         name = f'{enemy[left]["species"]}_{enemy[right]["species"]}'
         roster = (name, "0,3,5|0", lead, (left, right, lead))
-        cases.extend(case for case in build_history_cases(window, (roster,), SEEDS_PER_WINDOW)
+        cases.extend(case for case in build_history_cases(window, (roster,), seeds_per_window)
                      if case["handoff"]["own_team"][0]["species"] == "quagsire_shadow")
     return cases
 
