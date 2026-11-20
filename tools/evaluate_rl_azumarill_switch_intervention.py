@@ -67,25 +67,27 @@ def find_switch_fork(worker, case, models, tables):
     raise RuntimeError("Shared policy prefix exceeded the step budget")
 
 
-def _play_switch(worker, case, fork, action):
+def play_one_action(worker, case, fork, action):
+    """Apply one legal action, then let both sides continue with CPU play."""
     result = replay_fork(worker, case, fork)
     view = result["observation"]
-    if not action.startswith("switch_") or action not in view["legal_actions"]:
-        raise RuntimeError("Illegal intervention switch")
-    own = view["own"]
-    active = own["team"][own["active_slot"]]["species"]
-    target = own["team"][int(action[-1])]["species"]
-    before_seq = view["recent_events"][-1]["seq"] if view["recent_events"] else 0
+    if action not in view["legal_actions"]:
+        raise RuntimeError("Illegal intervention action")
 
-    # Check the public events immediately so a later forced replacement does
-    # not count as execution of the requested switch.
     result = worker.step(action)
-    switch_resolved = any(
-        event["seq"] > before_seq and event["kind"] == "switch" and event["side"] == "self"
-        and event["previous_species"] == active and event["species"] == target
-        and event["forced"] == (view["phase"] == "replace")
-        for event in worker.public_replay()["events"]
-    )
+    target, switch_resolved = None, None
+    if action.startswith("switch_"):
+        own = view["own"]
+        active = own["team"][own["active_slot"]]["species"]
+        target = own["team"][int(action[-1])]["species"]
+        before_seq = view["recent_events"][-1]["seq"] if view["recent_events"] else 0
+        # A later forced replacement must not count as executing this switch.
+        switch_resolved = any(
+            event["seq"] > before_seq and event["kind"] == "switch" and event["side"] == "self"
+            and event["previous_species"] == active and event["species"] == target
+            and event["forced"] == (view["phase"] == "replace")
+            for event in worker.public_replay()["events"]
+        )
     for _ in range(MAX_STEPS):
         view_after = result["observation"]
         if view_after is None:
@@ -103,6 +105,12 @@ def _play_switch(worker, case, fork, action):
     }
 
 
+def public_view_sha256(view):
+    return hashlib.sha256(
+        json.dumps(view, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def _run_case(worker, case, models, tables):
     metadata = {
         "seed": case["seed"], "roster": case["roster"],
@@ -112,8 +120,8 @@ def _run_case(worker, case, models, tables):
     if found is None:
         return {**metadata, "excluded": excluded}
     fork, actions = found
-    arms = {name: _play_switch(worker, case, fork, action) for name, action in actions.items()}
-    if arms["v2"] != _play_switch(worker, case, fork, actions["v2"]):
+    arms = {name: play_one_action(worker, case, fork, action) for name, action in actions.items()}
+    if arms["v2"] != play_one_action(worker, case, fork, actions["v2"]):
         raise RuntimeError("Identical switch A/A replay produced a different result")
     _, view = fork
     own = view["own"]
@@ -124,9 +132,7 @@ def _run_case(worker, case, models, tables):
             "turn": view["turn"], "phase": view["phase"], "elapsed_ms": view["elapsed_ms"],
             "own_active": active["species"], "opponent_active": view["opponent"]["active_species"],
             "own_hp_pct": 100 * active["hp"] / active["max_hp"],
-            "public_view_sha256": hashlib.sha256(
-                json.dumps(view, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            ).hexdigest(),
+            "public_view_sha256": public_view_sha256(view),
         },
         **arms,
     }

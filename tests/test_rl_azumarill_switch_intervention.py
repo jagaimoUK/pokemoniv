@@ -9,7 +9,7 @@ from test_rl_mc_train import preview
 from tools.evaluate_rl_azumarill_natural_energy import POLICY_CLASSES, _forks
 from tools.evaluate_rl_azumarill_shared_history import EVAL_WINDOWS, TRAIN_WINDOW, _validate_split
 from tools.evaluate_rl_azumarill_switch_intervention import (
-    ROSTERS, WINDOWS, _play_switch, _run_case, find_switch_fork, summarize, training_cases, window_cases,
+    ROSTERS, WINDOWS, _run_case, find_switch_fork, play_one_action, summarize, training_cases, window_cases,
 )
 from tools.evaluate_rl_azumarill_switch_rl_150s import _SwitchRlWorkerTransport
 from tools.evaluate_rl_azumarill_switch_rl_targeted import ROOT
@@ -86,7 +86,7 @@ class SwitchInterventionTests(unittest.TestCase):
         ]
         with (patch(f"{MODULE}.replay_fork", return_value={"observation": view}),
               patch(f"{MODULE}.choose_team_cpu", return_value="fast") as cpu):
-            result = _play_switch(worker, {}, ((), view), "switch_1")
+            result = play_one_action(worker, {}, ((), view), "switch_1")
         cpu.assert_called_once_with(post_switch)
         self.assertEqual(worker.step.call_args_list, [call("switch_1"), call("fast")])
         self.assertTrue(result["switch_resolved"])
