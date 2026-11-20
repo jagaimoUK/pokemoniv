@@ -59,7 +59,7 @@ def window_cases(window):
     return build_window_cases(window, RULESET_IDS, ROSTERS, SEEDS_PER_ROSTER)
 
 
-def build_window_cases(window, rulesets, rosters, seeds_per_roster):
+def build_window_cases(window, rulesets, rosters, seeds_per_roster, *, own_selection=OWN_SELECTION):
     """Build prepared inputs for a predeclared study condition grid."""
     own_base, _, enemy_base = fixture_teams()
     cases = []
@@ -76,7 +76,7 @@ def build_window_cases(window, rulesets, rosters, seeds_per_roster):
                     own = [{**own_base[0], "species": species, "charged2": move}, *own_base[1:]]
                     validate_team_for_ruleset(own, ruleset)
                     preview = SixToThreeSelection(own, public, enemy, trio, lead, ruleset_id=ruleset)
-                    preview.choose(OWN_SELECTION)
+                    preview.choose(own_selection)
                     handoff = preview._private_engine_input()
                     for seed in range(seed_start, seed_start + seeds_per_roster):
                         for shields in STARTING_OPPONENT_SHIELDS:
@@ -85,12 +85,12 @@ def build_window_cases(window, rulesets, rosters, seeds_per_roster):
     return cases
 
 
-def run_cases(cases, *, mode=None):
+def run_cases(cases, *, mode=None, worker="evaluate_rl_quagsire.cjs"):
     """Run one fixed window (or a smoke-test slice) against an ephemeral fixture."""
     with TemporaryDirectory(prefix="quagsire-study-") as temp:
         fixture = Path(temp) / "strategy_gamemaster_shadow.json"
         fixture.write_text(json.dumps(shadow_gamemaster()), encoding="utf-8")
-        command = ["node", str(ROOT / "tools/evaluate_rl_quagsire.cjs"), str(fixture)]
+        command = ["node", str(ROOT / "tools" / worker), str(fixture)]
         if mode is not None:
             command.append(mode)
         result = subprocess.run(
