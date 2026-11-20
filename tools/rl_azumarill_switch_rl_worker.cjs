@@ -49,9 +49,19 @@ async function main() {
         const options = {gamemasterPath: input.gamemaster_path, seed: input.seed, shields: input.shields};
         if (input.hp_percent !== undefined) {
           if (![20, 40, 60, 85].includes(input.hp_percent)) throw Error("Invalid hp_percent");
-          const maxHp = createTeamSession(input.handoff, options).observe().own.team[1].max_hp;
-          const hp = Math.floor(maxHp * input.hp_percent / 100);
-          options.initial = [[AZUMARILL_START, {hp_points: hp}], [AZUMARILL_START]];
+          const probe = createTeamSession(input.handoff, options);
+          const ownTeam = probe.observe().own.team;
+          const oppTeam = probe.observe(1).own.team;
+          const hp = Math.floor(ownTeam[1].max_hp * input.hp_percent / 100);
+          const ownLead = {
+            hp_points: Math.min(AZUMARILL_START.hp_points, ownTeam[0].max_hp),
+            energy_points: AZUMARILL_START.energy_points,
+          };
+          const oppLead = {
+            hp_points: Math.min(AZUMARILL_START.hp_points, oppTeam[0].max_hp),
+            energy_points: AZUMARILL_START.energy_points,
+          };
+          options.initial = [[ownLead, {hp_points: hp}], [oppLead]];
         }
         session = createTeamSession(input.handoff, options);
         replay = createPublicReplayRecorder();
