@@ -498,6 +498,49 @@ class BackendIntegrationP0Tests(unittest.TestCase):
         self.assertGreater(p3["weights"]["D"], p2["weights"]["D"])
         self.assertGreater(p3["weights"]["U"], 0.0)
 
+    def test_scoped_weights_removal_and_custom_meta_delete(self):
+        import hashlib
+        import pvpoke_meta_presets as meta_presets
+
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            store = PartyBuilder(work)
+            # Add extra species weight then remove it via None
+            added = store.scoped_weights("meta:test", {"corsola": 3.0, "quagsire": 2.0})
+            self.assertEqual(added["weights"]["corsola"], 3.0)
+            after = store.scoped_weights("meta:test", {"corsola": None})
+            self.assertNotIn("corsola", after["weights"])
+            self.assertEqual(after["weights"]["quagsire"], 2.0)
+
+            # Custom meta create + delete works; builtin delete is blocked
+            species_fixture = {
+                "quagsire": {
+                    "speciesId": "quagsire", "speciesName": "Quagsire",
+                    "fastMoves": ["MUD_SHOT"], "chargedMoves": ["AQUA_TAIL", "STONE_EDGE"],
+                }
+            }
+            csv_text = "quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE\n"
+            sha = hashlib.sha256(csv_text.encode()).hexdigest()
+            created = meta_presets.save(
+                work,
+                {"action": "create", "name": "大会用テストメタ", "csv": csv_text, "expected_sha256": sha, "revision": 0},
+                species_fixture,
+            )
+            saved_id = created["saved_id"]
+            self.assertTrue(any(p["id"] == saved_id for p in created["items"]))
+            deleted = meta_presets.save(
+                work,
+                {"action": "delete", "id": saved_id, "revision": created["revision"]},
+                species_fixture,
+            )
+            self.assertFalse(any(p["id"] == saved_id for p in deleted["items"]))
+            with self.assertRaises(ValueError):
+                meta_presets.save(
+                    work,
+                    {"action": "delete", "id": "pvpoke:great", "revision": deleted["revision"]},
+                    species_fixture,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

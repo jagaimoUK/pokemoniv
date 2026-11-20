@@ -121,10 +121,27 @@ class PartyBuilder:
         owner = _owner(owner_scope)
         if not isinstance(scope_key, str) or not SCOPE_KEY_RE.fullmatch(scope_key):
             raise ValueError("重要度の保存スコープが不正です")
-        clean = None
+        clean = {}
+        removals = []
         if changes is not None:
-            clean = future_meta.validate_weights(changes)
+            if not isinstance(changes, dict):
+                raise ValueError("重要度の形式が不正です")
+            to_validate = {}
+            for k, v in changes.items():
+                if v is None:
+                    sid = str(k or "").strip().lower()
+                    if sid:
+                        removals.append(sid)
+                else:
+                    to_validate[k] = v
+            if to_validate:
+                clean = future_meta.validate_weights(to_validate)
         with self._lock, self._db() as db:
+            if removals:
+                db.executemany(
+                    "DELETE FROM scoped_meta_weights WHERE owner_scope=? AND scope_key=? AND species=?",
+                    [(owner, scope_key, sid) for sid in removals],
+                )
             if clean:
                 db.executemany(
                     """INSERT INTO scoped_meta_weights(owner_scope,scope_key,species,weight)
@@ -626,29 +643,29 @@ class PartyBuilder:
             scenario_id = None
         active_scenario = self.get_scenario(scenario_id, owner_scope=owner) if scenario_id else None
 
-        # Append validated scenario custom entries or catalog-present scenario targets (e.g. Mimikyu).
-        meta_species_present = {str(r.get("species") or "").strip().lower() for r in meta_raw}
-        extra_meta_raw = []
-        if active_scenario:
-            for entry in active_scenario.get("custom_entries") or []:
-                extra_meta_raw.append(entry)
-            for sid, w in (active_scenario.get("weights") or {}).items():
-                if w > 0 and sid not in meta_species_present and sid in catalog:
-                    default_row = self._default_row_for_species(sid, catalog, species)
-                    if default_row:
-                        extra_meta_raw.append(default_row)
-                        meta_species_present.add(sid)
-        meta_all_raw = meta_raw + extra_meta_raw
-        if len(meta_all_raw) > MAX_META:
-            raise ValueError(f"メタは最大{MAX_META}技構成です。プリセットを絞ってください")
-        meta_all = self._unique(self._normalize(meta_all_raw, catalog, species, cpms, engine, "メタ"))
-
         # Resolve effective weights strictly within the active scenario boundary (no double counting).
         explicit_weights = args.get("group_weights")
         if active_scenario is not None:
             effective_group_weights = future_meta.resolve_effective_weights(active_scenario, explicit_weights)
         else:
             effective_group_weights = future_meta.validate_weights(explicit_weights)
+
+        # Append validated scenario custom entries or any positive-weight catalog species added by the user.
+        meta_species_present = {str(r.get("species") or "").strip().lower() for r in meta_raw}
+        extra_meta_raw = []
+        if active_scenario:
+            for entry in active_scenario.get("custom_entries") or []:
+                extra_meta_raw.append(entry)
+        for sid, w in effective_group_weights.items():
+            if w > 0 and sid not in meta_species_present and sid in catalog:
+                default_row = self._default_row_for_species(sid, catalog, species)
+                if default_row:
+                    extra_meta_raw.append(default_row)
+                    meta_species_present.add(sid)
+        meta_all_raw = meta_raw + extra_meta_raw
+        if len(meta_all_raw) > MAX_META:
+            raise ValueError(f"メタは最大{MAX_META}技構成です。プリセットを絞ってください")
+        meta_all = self._unique(self._normalize(meta_all_raw, catalog, species, cpms, engine, "メタ"))
         weights = core.weight_rows(meta_all, effective_group_weights)
         # Excluded groups need neither simulation nor search evaluation (unless needed for comparison).
         compare_ids_raw = args.get("compare_scenario_ids") or []

@@ -133,9 +133,14 @@ dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100
    <label>対象メタ<select id="meta"></select></label>
    <label>重要度セット<select id="scenario"></select></label>
   </div>
-  <details id="scenarioEditorDetails"><summary>重要度（重み）の調整・カスタム保存</summary>
+  <details id="scenarioEditorDetails"><summary>重要度（重み）の調整・ポケモンの追加/削除・保存</summary>
    <div id="scenarioEvidence" class="evidence-box" hidden></div>
-   <label for="metaFilter">ポケモンを絞り込む（日本語・英語）</label><input id="metaFilter" type="search" placeholder="例：マリルリ、Clodsire、トリデプス">
+   <div class="generator-box" style="margin-top:6px">
+    <label for="metaAddInput" style="margin-top:0">メタにポケモンを追加（日本語・英語）</label>
+    <input id="metaAddInput" type="search" autocomplete="off" placeholder="例：ミミッキュ、サニーゴ、Corsola">
+    <div id="metaAddSuggestions" class="suggestions" hidden></div>
+   </div>
+   <label for="metaFilter">一覧を絞り込む（日本語・英語）</label><input id="metaFilter" type="search" placeholder="例：マリルリ、Clodsire、トリデプス">
    <p id="metaWeightStatus" role="status">メタのポケモン一覧を読み込みます。</p>
    <div id="metaWeights" aria-label="メタの重要度"></div>
    <p id="metaWeightSaveStatus" role="status"></p>
@@ -152,6 +157,17 @@ dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100
     </div>
     <p id="scenarioManageStatus" role="status"></p>
    </div>
+  </details>
+  <details id="customMetaDetails"><summary>カスタムメタを追加・削除（厳選機能と共通）</summary>
+   <label for="customMetaName">カスタムメタ名</label>
+   <input id="customMetaName" maxlength="60" placeholder="例：大会用カスタムメタ">
+   <label for="customMetaCsv">メタを貼り付け（species,fast,charged1,charged2）</label>
+   <textarea id="customMetaCsv" spellcheck="false" placeholder="quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE"></textarea>
+   <div class="tools" style="margin-top:8px">
+    <button id="customMetaSave" type="button" class="small-btn primary">カスタムメタを追加</button>
+    <button id="customMetaDelete" type="button" class="small-btn danger" hidden>選択中のカスタムメタを削除</button>
+   </div>
+   <p id="customMetaStatus" role="status"></p>
   </details>
  </section>
 
@@ -256,7 +272,7 @@ dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100
 <script>
 'use strict';
 const $=id=>document.getElementById(id);
-let key='',catalog={},metaItems=[],scenarioItems=[],observations=null;
+let key='',catalog={},metaItems=[],metaRevision=0,scenarioItems=[],observations=null;
 let partyId=null,revision=0,activeJob=null,latest=null,inputRevision=0,lastReportRevision=-1,dirty=false;
 const name=id=>partyDisplay(id);
 let partyMoveNames={},rosterEditors={};
@@ -341,19 +357,34 @@ function renderScenarioEvidence(sc){
   root.hidden=true;
  }
 }
+function syncCustomMetaDeleteBtn(){
+ const selected=metaItems.find(x=>x.id===$('meta').value);
+ const delBtn=$('customMetaDelete');
+ if(delBtn)delBtn.hidden=!(selected&&selected.source==='custom');
+}
+function renderMetaDropdown(selectedId){
+ const sel=$('meta');sel.replaceChildren();
+ for(const m of metaItems.filter(x=>x.available!==false)){
+  sel.append(new Option(m.name+' ('+m.rows+'件)',m.id));
+ }
+ if(selectedId&&[...sel.options].some(o=>o.value===selectedId))sel.value=selectedId;
+ syncCustomMetaDeleteBtn();
+}
 function renderMetaWeightRows(){
  const root=$('metaWeights');root.replaceChildren();
  if(!metaWeightReady){$('metaWeightStatus').textContent='メタ一覧を確認できません。';return;}
  const sc=currentScenarioObj();
- const extraSpecies=Object.keys(sc?.weights||{}).filter(id=>!metaWeightRows.includes(id));
- const allIds=[...metaWeightRows,...extraSpecies];
+ const extraSpecies=Object.keys(metaWeightValues).filter(id=>!metaWeightRows.includes(id)&&catalog[id]);
+ const allIds=[...extraSpecies,...metaWeightRows];
  const query=normalizePartyName($('metaFilter').value);
  const filtered=allIds.filter(id=>!query||[id,catalog[id]?.name,catalog[id]?.name_ja,...(catalog[id]?.aliases||[])].some(x=>x&&normalizePartyName(x).includes(query)));
- $('metaWeightStatus').textContent='対象 '+allIds.length+'種 / 表示 '+filtered.length+'種（保存先: '+(sc?sc.name:'現行メタ')+' に独立保存）';
+ $('metaWeightStatus').textContent='対象 '+allIds.length+'種（うち追加 '+extraSpecies.length+'種） / 表示 '+filtered.length+'種（保存先: '+(sc?sc.name:'現行メタ')+' に独立保存）';
  if(!filtered.length){root.append(node('p','一致するポケモンはありません'));return;}
  for(const id of filtered){
+  const isExtra=!metaWeightRows.includes(id);
   const div=node('div',null,'weight-row'),span=node('span');
   const ja=node('strong',partyDisplay(id));
+  if(isExtra)span.append(node('span','追加','badge'),document.createTextNode(' '));
   const sub=catalog[id]?.name||id;
   span.append(ja,node('small',sub+(id.startsWith('mimikyu')?' / ばけのかわ未検証(unknown)':'')));
   const select=node('select');select.dataset.species=id;select.setAttribute('aria-label',partyDisplay(id)+' の重要度');
@@ -366,7 +397,25 @@ function renderMetaWeightRows(){
    $('metaWeightSaveStatus').textContent='この重要度セットに保存中…';
    clearTimeout(weightSaveTimer);weightSaveTimer=setTimeout(()=>flushScopedWeights().catch(()=>{}),200);
   };
-  div.append(span,select);root.append(div);
+  const del=node('button','✕','small-btn danger');del.type='button';del.style.minWidth='38px';del.style.padding='4px 8px';
+  del.title=isExtra?'この追加ポケモンを削除':'このポケモンを対象外（重要度0）にする';
+  del.setAttribute('aria-label',partyDisplay(id)+' を削除');
+  del.onclick=()=>{
+   inputRevision++;
+   if(isExtra){
+    delete metaWeightValues[id];
+    pendingScopedWeights[id]=null;
+    $('metaWeightSaveStatus').textContent=partyDisplay(id)+' を削除しています…';
+    renderMetaWeightRows();
+   }else{
+    metaWeightValues[id]=0;
+    pendingScopedWeights[id]=0;
+    select.value='0';
+    $('metaWeightSaveStatus').textContent=partyDisplay(id)+' を対象外（0）に設定中…';
+   }
+   clearTimeout(weightSaveTimer);weightSaveTimer=setTimeout(()=>flushScopedWeights().catch(()=>{}),150);
+  };
+  div.append(span,select,del);root.append(div);
  }
 }
 async function flushScopedWeights(){
@@ -380,7 +429,10 @@ async function flushScopedWeights(){
    try{
     await api('party/scoped-weights',{scope_key:scopeKey,changes});
     const sc=currentScenarioObj();
-    if(sc)sc.weights={...(sc.weights||{}),...changes};
+    if(sc){
+     sc.weights={...(sc.weights||{})};
+     for(const [k,v] of Object.entries(changes)){if(v===null)delete sc.weights[k];else sc.weights[k]=v;}
+    }
     $('metaWeightSaveStatus').textContent='保存済み（'+scopeKey+' のみに独立保存）';
    }catch(e){
     pendingScopedWeights={...changes,...pendingScopedWeights};
@@ -393,6 +445,7 @@ async function flushScopedWeights(){
 }
 async function loadMetaAndScenarioWeights(){
  const selected=metaItems.find(x=>x.id===$('meta').value),ticket=++metaWeightTicket;
+ syncCustomMetaDeleteBtn();
  metaWeightReady=false;metaWeightRows=[];$('metaWeights').replaceChildren();
  $('metaWeightStatus').textContent='メタ一覧とシナリオ専用重要度を読み込み中…';
  if(!selected){$('metaWeightStatus').textContent='メタプリセットを選択してください';return;}
@@ -421,14 +474,75 @@ function getWeights(){
  if(!metaWeightReady)throw Error('メタの重要度一覧が準備できていません。メタ設定を確認してください');
  const result={};
  const sc=currentScenarioObj();
- const allIds=[...new Set([...metaWeightRows,...Object.keys(sc?.weights||{})])];
+ const allIds=[...new Set([...metaWeightRows,...Object.keys(metaWeightValues)])];
  for(const id of allIds){
+  const isExtra=!metaWeightRows.includes(id);
   const v=metaWeightValues[id]??1;
-  if(sc){result[id]=v;}else if(v!==1){result[id]=v;}
+  if(sc||isExtra){result[id]=v;}else if(v!==1){result[id]=v;}
  }
  if(allIds.every(id=>(metaWeightValues[id]??1)===0))throw Error('重要度がすべて0です。少なくとも1体を対象にしてください');
  return result;
 }
+function addMetaSpecies(id){
+ if(!id||!catalog[id])return;
+ const currentVal=metaWeightValues[id];
+ if(currentVal===undefined||currentVal===0){
+  metaWeightValues[id]=2;
+  pendingScopedWeights[id]=2;
+  inputRevision++;
+  $('metaWeightSaveStatus').textContent=partyDisplay(id)+' を追加（重要度2）して保存中…';
+  clearTimeout(weightSaveTimer);weightSaveTimer=setTimeout(()=>flushScopedWeights().catch(()=>{}),150);
+ }
+ $('metaAddInput').value='';$('metaAddSuggestions').hidden=true;
+ renderMetaWeightRows();
+}
+$('metaAddInput').addEventListener('input',e=>{
+ e.stopPropagation();
+ const q=$('metaAddInput').value.trim(),box=$('metaAddSuggestions');
+ if(!q){box.hidden=true;box.replaceChildren();return;}
+ const matches=partySearch(q).slice(0,8);
+ box.replaceChildren();
+ for(const r of matches){
+  const b=node('button',partyDisplay(r.id)+' / '+(r.p.name||r.id));b.type='button';
+  b.onmousedown=ev=>ev.preventDefault();
+  b.onclick=()=>addMetaSpecies(r.id);
+  box.append(b);
+ }
+ box.hidden=!matches.length;
+});
+$('metaAddInput').addEventListener('keydown',e=>{
+ if(e.key==='Enter'){
+  e.preventDefault();
+  try{addMetaSpecies(resolvePartyName($('metaAddInput').value));}catch(err){$('metaWeightSaveStatus').textContent=err.message;}
+ }else if(e.key==='Escape'){$('metaAddSuggestions').hidden=true;}
+});
+$('customMetaSave').onclick=async()=>{
+ const nameVal=$('customMetaName').value.trim(),csvVal=$('customMetaCsv').value.trim();
+ if(!nameVal){$('customMetaStatus').textContent='カスタムメタ名を入力してください';return;}
+ if(!csvVal){$('customMetaStatus').textContent='メタのCSVを貼り付けてください';return;}
+ $('customMetaStatus').textContent='メタ内容を検証して保存しています…';
+ try{
+  const preview=await api('meta-preview',{csv:csvVal});
+  const saved=await api('meta-preset-save',{action:'create',name:nameVal,csv:csvVal,expected_sha256:preview.sha256,revision:metaRevision});
+  metaItems=saved.items||metaItems;metaRevision=saved.revision??metaRevision;
+  renderMetaDropdown(saved.saved_id);
+  $('customMetaName').value='';$('customMetaCsv').value='';
+  await loadMetaAndScenarioWeights();
+  $('customMetaStatus').textContent='カスタムメタ「'+nameVal+'」（'+preview.rows+'件）を追加し選択しました';
+ }catch(e){$('customMetaStatus').textContent=e.message;}
+};
+$('customMetaDelete').onclick=async()=>{
+ const selected=metaItems.find(x=>x.id===$('meta').value);
+ if(!selected||selected.source!=='custom')return;
+ $('customMetaStatus').textContent='カスタムメタを削除しています…';
+ try{
+  const updated=await api('meta-preset-save',{action:'delete',id:selected.id,revision:metaRevision});
+  metaItems=updated.items||metaItems;metaRevision=updated.revision??metaRevision;
+  renderMetaDropdown(updated.default_id);
+  await loadMetaAndScenarioWeights();
+  $('customMetaStatus').textContent='カスタムメタ「'+selected.name+'」を削除しました';
+ }catch(e){$('customMetaStatus').textContent=e.message;}
+};
 $('meta').addEventListener('change',async()=>{await flushScopedWeights().catch(()=>{});inputRevision++;await loadMetaAndScenarioWeights();});
 $('scenario').addEventListener('change',async()=>{await flushScopedWeights().catch(()=>{});inputRevision++;updateScenarioEditorMeta();await loadMetaAndScenarioWeights();});
 $('metaFilter').addEventListener('input',e=>{e.stopPropagation();renderMetaWeightRows()});
@@ -959,11 +1073,9 @@ $('load').onclick=()=>guardUnsaved('未保存の変更があります。保存�
 async function setup(){
  const [cat,presets,saved,scList]=await Promise.all([api('catalog'),api('meta-presets'),api('party/list'),api('party/scenario-list')]);
  if(!cat.ready)throw Error('ゲームデータがまだ準備中です');
- catalog=cat.species;partyMoveNames=cat.moves||{};metaItems=presets.items;
+ catalog=cat.species;partyMoveNames=cat.moves||{};metaItems=presets.items;metaRevision=presets.revision||0;
  scenarioItems=scList.items||[];observations=scList.observations||null;
- $('meta').replaceChildren();
- for(const m of metaItems.filter(x=>x.available!==false)){$('meta').append(new Option(m.name+' ('+m.rows+'件)',m.id));}
- $('meta').value=presets.default_id;
+ renderMetaDropdown(presets.default_id);
  renderScenarioDropdown('current');
  populateSaved(saved.items);renderMon();
  await loadMetaAndScenarioWeights();
@@ -981,7 +1093,7 @@ async function setup(){
 const INFO_TEXTS={
  main:'【見せ合い6体・未来メタ補完】\n見せ合い6体の登録・自動補完・パーティ評価を行います。元メタ（またはあなたが重要度を変更した環境）を起点に、Phase 1（起点）→ Phase 2（対策集中）→ Phase 3（再適応）の3段階を自動予測し、全段階の平均と最悪ケース耐性の両方で総合評価します。\n※Battle Ratingは静的耐性診断であり実戦3v3勝率そのものではありません。',
  roster:'【自分の6体】\nカードをタップすると技や個体値（IV）を設定するモーダルが開きます。背景タップで素早く閉じられます。\n右上の「固定」を押すと、そのポケモンの技やIVを維持したまま残りの枠を「自動補完」できます。0体・一部・6体どれからでも実行可能です。',
- meta:'【メタ・環境変化設定】\n対象メタの重要度（初期値）をベースに、増えそう・重視したいポケモン（複数体OK）の重要度を変更するだけで環境変化を表せます。\n計算実行時に、その重要度分布を起点とした「Phase 1（起点）→ Phase 2（対策集中）→ Phase 3（再適応）」の3段階が対面相性から自動展開され、全段階の平均と最悪ケース耐性が出力されます。重要度を変更しない場合は現行メタ上位を起点に自動展開されます。',
+ meta:'【メタ・環境変化設定】\n対象メタの重要度（初期値）をベースに、増えそう・重視したいポケモン（複数体OK）の追加・重要度変更・削除ができます。厳選機能と共通のカスタムメタの追加・削除も可能です。\n計算実行時に、その重要度分布を起点とした「Phase 1（起点）→ Phase 2（対策集中）→ Phase 3（再適応）」の3段階が対面相性から自動展開され、全段階の平均と最悪ケース耐性が出力されます。',
 };
 document.querySelectorAll('.info-btn').forEach(btn=>{
  btn.onclick=()=>{
@@ -995,7 +1107,7 @@ $('closeInfoDialog').onclick=()=>$('infoDialog').close();
 $('infoDialog').onclick=e=>{if(e.target===$('infoDialog'))$('infoDialog').close();};
 $('login').onclick=async()=>{key=$('key').value.trim();try{await setup();if(key)await api('session',{}).catch(()=>{})}catch(e){$('workspace').hidden=false;status(e.message)}};
 $('workspace').addEventListener('input',e=>{
- if(e.target.closest('#scenarioEditorDetails'))return;
+ if(e.target.closest('#scenarioEditorDetails,#customMetaDetails'))return;
  inputRevision++;markDirty();
  const root=$('strategyResult');
  if(root.dataset.calculated&&!root.querySelector('[data-stale]')){const msg=node('p','入力が変更されています。以下は以前の条件の結果です。再計算してください。');msg.dataset.stale='true';root.prepend(msg)}
