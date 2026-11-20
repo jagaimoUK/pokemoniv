@@ -7,14 +7,17 @@ const {compareChargeFork, publicChargeState, verifiedNativeReward} = require("./
 const {createPublicReplayRecorder} = require("./rl_public_replay.cjs");
 
 const AZUMARILL_START = Object.freeze({hp_points: 120, energy_points: 55});
-const WAIT_TURNS = 300;
-const FORK_CLOCK_MS = 150000;
+const BATTLE_CLOCK_MS = 240000;
+const TURN_MS = 500;
+const ALLOWED_REMAINING_SECONDS = [90, 120, 150];
 const SWITCH_SKARMORY = "switch_2";
 const SWITCH_QUAGSIRE = "switch_1";
 
-function runArm(session, choice) {
+function runArm(session, choice, remainingSeconds = 90) {
   let response = session.response();
   const replay = createPublicReplayRecorder();
+  const forkClockMs = BATTLE_CLOCK_MS - remainingSeconds * 1000;
+  const waitTurns = forkClockMs / TURN_MS;
   function step(action, opponentAction) {
     const before = response.observation;
     response = session.step([action, opponentAction]);
@@ -22,9 +25,9 @@ function runArm(session, choice) {
   }
 
   // Tick the ordinary clock with no battle actions or resource changes.
-  for (let i = 0; i < WAIT_TURNS; i++) step("wait", "wait");
+  for (let i = 0; i < waitTurns; i++) step("wait", "wait");
   const view = response.observation;
-  if (view?.phase !== "turn" || view.elapsed_ms !== FORK_CLOCK_MS ||
+  if (view?.phase !== "turn" || view.elapsed_ms !== forkClockMs ||
       view.own.team[view.own.active_slot].species !== "azumarill" ||
       view.opponent.active_species !== "azumarill" ||
       !["charge_0", SWITCH_SKARMORY, SWITCH_QUAGSIRE].every(action => view.legal_actions.includes(action))) {
@@ -57,14 +60,16 @@ function summarizeArm(rolled, target) {
     elapsed_ms: rolled.replay.elapsed_ms, replay: rolled.replay};
 }
 
-function compareCase({handoff, seed, roster, hp_percent: hpPercent, own_shields: ownShields}, gamemasterPath) {
+function compareCase({handoff, seed, roster, hp_percent: hpPercent, own_shields: ownShields,
+    remaining_seconds: remainingSeconds = 90}, gamemasterPath) {
   const [azumarill, quagsire, skarmory] = handoff.own_team;
+  const changedFactors = Number(hpPercent !== 20) + Number(ownShields !== 0) + Number(remainingSeconds !== 90);
   if (handoff.ruleset_id !== "play-pokemon-worlds-2026-gl" ||
       azumarill.species !== "azumarill" || azumarill.charged1 !== "ICE_BEAM" ||
       handoff.opponent_team[0].species !== "azumarill" || handoff.opponent_team[0].charged1 !== "ICE_BEAM" ||
       !["quagsire", "quagsire_shadow"].includes(quagsire.species) || skarmory.species !== "skarmory" ||
       ![20, 40, 60, 85].includes(hpPercent) || ![0, 1, 2].includes(ownShields) ||
-      (ownShields !== 0 && hpPercent !== 20)) {
+      !ALLOWED_REMAINING_SECONDS.includes(remainingSeconds) || changedFactors > 1) {
     throw Error("Unexpected synthetic switch condition");
   }
   const options = {gamemasterPath, seed, shields: [ownShields, 0]};
@@ -72,12 +77,13 @@ function compareCase({handoff, seed, roster, hp_percent: hpPercent, own_shields:
   const hp = Math.floor(maxHp * hpPercent / 100);
   const initial = [[AZUMARILL_START, {hp_points: hp}], [AZUMARILL_START]];
   const {immediate, alternatives} = compareChargeFork(
-    choice => runArm(createTeamSession(handoff, {...options, initial}), choice),
+    choice => runArm(createTeamSession(handoff, {...options, initial}), choice, remainingSeconds),
     [SWITCH_QUAGSIRE],
   );
   const {view} = immediate.chargeFork;
   return {seed, roster, species: quagsire.species, second_move: quagsire.charged2,
-    hp_percent: hpPercent, own_shields: view.own.shields, public_state: publicChargeState(view),
+    hp_percent: hpPercent, own_shields: view.own.shields, remaining_seconds: remainingSeconds,
+    public_state: publicChargeState(view),
     reserve_hp_bands: {skarmory: 3, quagsire: Math.floor(4 * hp / maxHp)},
     switch_targets: {switch_skarmory: skarmory.species, switch_quagsire: quagsire.species},
     after_event_seq: 0, switch_skarmory: summarizeArm(immediate, skarmory.species),
