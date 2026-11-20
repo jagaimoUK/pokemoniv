@@ -3,9 +3,13 @@ HTML = r'''<!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>パーティ作成</title><style>
 :root{font:16px system-ui,sans-serif;background:#122126;color:#e2f1e9;color-scheme:dark;overflow-x:clip}*{box-sizing:border-box}
-body{margin:0;overflow-x:clip}main{max-width:1040px;margin:auto;padding:12px 12px 110px;min-width:0}h1{margin:6px 0;font-size:21px}h2{font-size:18px;margin:0 0 10px}h3{font-size:15px;margin:12px 0 6px}
+body{margin:0;overflow-x:clip}main{max-width:980px;margin:auto;padding:16px 14px 100px;min-width:0}h1{margin:6px 0;font-size:21px;display:flex;align-items:center;gap:8px}h2{font-size:18px;margin:0 0 10px}h3{font-size:15px;margin:12px 0 6px}
 p{line-height:1.6;color:#b6cac4;margin:6px 0;overflow-wrap:anywhere}a{color:#bbebd4}
-section{margin-top:12px;padding:14px;border:1px solid #47645d;border-radius:18px;background:#203138;min-width:0;max-width:100%;overflow-wrap:anywhere}
+section{margin-top:18px;padding:18px;border:1px solid #3d5852;border-radius:20px;background:#1a2a30;min-width:0;max-width:100%;overflow-wrap:anywhere}
+.section-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+.section-head h2{margin:0}
+.info-btn{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;min-height:unset;padding:0;border-radius:50%;font-size:12px;font-weight:700;border:1px solid #578577;background:#203834;color:#aee0d0;cursor:pointer;flex-shrink:0}
+.info-btn:hover{background:#30524a}
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
 nav,.tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center;min-width:0}
 button,nav a{border:1px solid #76a797;border-radius:14px;min-height:44px;padding:9px 13px;background:#385c50;color:#edf8f1;font:inherit;cursor:pointer;text-decoration:none;max-width:100%;overflow-wrap:anywhere}
@@ -14,19 +18,32 @@ button.secondary{background:#294743;border-color:#6a9688}
 button.small-btn{min-height:38px;padding:6px 12px;font-size:14px;border-radius:12px}
 button.danger{background:#663344;border-color:#b06880}
 button:disabled{opacity:.45;cursor:not-allowed}
+.primary-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:16px}
+.big-action-btn{min-height:52px;font-size:16px;font-weight:700;border-radius:16px;box-shadow:0 4px 12px rgba(0,0,0,0.25)}
 input,select,textarea{width:100%;min-width:0;max-width:100%;border:1px solid #67887d;border-radius:12px;padding:10px;min-height:44px;background:#12252b;color:inherit;font:inherit}
 input[type=checkbox]{width:auto;min-height:unset}label{font-size:13px;display:block;margin:8px 0 4px;min-width:0;max-width:100%;overflow-wrap:anywhere}
 textarea{min-height:90px;resize:vertical}details{min-width:0;max-width:100%}summary{cursor:pointer;min-height:42px;padding:8px 0;font-weight:bold;overflow-wrap:anywhere}
-.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;min-width:0;max-width:100%}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;min-width:0;max-width:100%}
 .suggestions{display:flex;flex-direction:column;gap:5px;margin-top:6px;max-height:240px;overflow:auto}.suggestions button{text-align:left;width:100%;font-size:13px}
-.mon{padding:8px;border-radius:14px;background:#29413f;border:1px solid #557769;min-width:0;max-width:100%;overflow:hidden}
+.mon{border-radius:16px;background:#233735;border:1px solid #4a6c62;min-width:0;max-width:100%;overflow:hidden;transition:border-color .15s,box-shadow .15s}
 .mon[data-locked=true]{border-color:#9edbc2;box-shadow:0 0 0 1px #9edbc2 inset}
-.mon>summary{font-size:14px;padding:4px 0;min-height:36px;overflow-wrap:anywhere}
+.mon-summary{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;cursor:pointer;min-height:64px;list-style:none;user-select:none}
+.mon-summary::-webkit-details-marker{display:none}
+.mon-header-main{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}
+.mon-name{font-size:15px;font-weight:600;color:#edf8f1;overflow-wrap:anywhere}
+.mon-badges{display:flex;flex-wrap:wrap;gap:4px}
+.move-badge{font-size:11px;padding:1px 6px;background:#2d4841;border:1px solid #577d71;border-radius:6px;color:#d0ebd0}
+.lock-toggle{display:inline-flex;align-items:center;gap:4px;padding:6px 9px;border-radius:10px;background:#182827;border:1px solid #4c7267;font-size:12px;cursor:pointer;flex-shrink:0}
 .fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;min-width:0;max-width:100%}
 .fields label:first-child{grid-column:1/-1}
-.card-footer{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;margin-top:4px;min-width:0}
-.lock-toggle{display:inline-flex;align-items:center;gap:5px;margin:0;font-size:13px;cursor:pointer}
-.card-clear{min-height:34px;padding:4px 10px;font-size:12px;background:#3a3542;border-color:#7d718c}
+.card-footer{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;margin-top:10px;min-width:0}
+.card-clear{min-height:36px;padding:4px 12px;font-size:13px;background:#3a3542;border-color:#7d718c}
+dialog.mon-modal{position:fixed;inset:0;margin:auto;width:min(440px,calc(100vw - 24px));max-height:86dvh;overflow-y:auto;border:1px solid #639282;border-radius:20px;padding:18px;background:#192c31;color:#e2f1e9;z-index:50}
+dialog.mon-modal::backdrop{background:rgba(8,18,22,0.75);backdrop-filter:blur(3px)}
+dialog.info-modal{position:fixed;inset:0;margin:auto;width:min(440px,calc(100vw - 24px));max-height:80dvh;overflow-y:auto;border:1px solid #558575;border-radius:20px;padding:20px;background:#192c31;color:#e2f1e9;z-index:60}
+dialog.info-modal::backdrop{background:rgba(8,18,22,0.7);backdrop-filter:blur(3px)}
+.modal-header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}
+.modal-header h3{margin:0;font-size:17px}
 section[hidden],div[hidden],details[hidden],label[hidden],button[hidden]{display:none}
 #status{white-space:pre-wrap;border-radius:12px;background:#2a4140;padding:10px 12px;overflow-wrap:anywhere;font-size:14px}
 .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:#355952;border:1px solid #6fa192;margin:2px 4px 2px 0}
@@ -47,9 +64,20 @@ section[hidden],div[hidden],details[hidden],label[hidden],button[hidden]{display
 .obs-table th:first-child,.obs-table td:first-child{text-align:left}
 .obs-scroll{overflow-x:auto;max-width:100%}
 .alert-box{border:1px solid #c9a267;background:#3a2f20;color:#ffedd2;border-radius:12px;padding:10px 12px;margin:8px 0;font-size:13px;min-width:0;max-width:100%;overflow-wrap:anywhere}
-.result-card{padding:11px;margin:8px 0;border:1px solid #5c8376;border-radius:14px;background:#263d3d;min-width:0;max-width:100%;overflow-wrap:anywhere}
-.triple-card{padding:10px;margin:7px 0;border:1px solid #4d7066;border-radius:12px;background:#1d3236;min-width:0;max-width:100%;overflow-wrap:anywhere}
+.result-card{padding:14px;margin:10px 0;border:1px solid #5c8376;border-radius:16px;background:#233a3a;min-width:0;max-width:100%;overflow-wrap:anywhere}
+.triple-card{padding:12px;margin:8px 0;border:1px solid #4d7066;border-radius:14px;background:#1d3236;min-width:0;max-width:100%;overflow-wrap:anywhere}
 .triple-card.unfavorable{border-color:#8a5568;background:#2c222a}
+.triples-carousel-wrapper{margin:12px 0}
+.carousel-tabs{display:flex;gap:8px;margin-bottom:10px}
+.carousel-tab-btn{flex:1;min-height:42px;padding:6px 12px;font-size:14px;border-radius:12px;border:1px solid #537a6e;background:#223835;color:#d6ebe3;cursor:pointer;transition:background .15s,border-color .15s}
+.carousel-tab-btn.active{background:#3d6859;border-color:#8acbb3;font-weight:700;color:#fff}
+.carousel-track{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;gap:12px;padding-bottom:6px;-webkit-overflow-scrolling:touch}
+.carousel-slide{flex:0 0 100%;min-width:100%;scroll-snap-align:start;box-sizing:border-box}
+.matrix-card{border:1px solid #4f7367;border-radius:14px;padding:12px;margin:8px 0;background:#203538}
+.matrix-cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:6px}
+.matrix-win-box{background:#1a322e;border:1px solid #3f6e5e;border-radius:10px;padding:8px}
+.matrix-loss-box{background:#36232c;border:1px solid #6f3b4f;border-radius:10px;padding:8px}
+.generator-box{border:1px solid #527c6f;border-radius:14px;padding:12px;background:#22373a;margin:12px 0}
 #strategyResult,#weakResult,#summaryResult,#swapAdvice,#recommendedThree,#allTriplesPanel{min-width:0;max-width:100%;overflow-wrap:anywhere}
 footer{position:fixed;bottom:0;left:0;right:0;background:#172d2cf5;border-top:1px solid #638276;padding:10px;z-index:20}
 footer .tools{max-width:700px;margin:auto}footer button{flex:1}
@@ -76,26 +104,28 @@ dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100
 .heatmap th:first-child{min-width:95px;position:sticky;left:0;background:#203138;z-index:1;text-align:left}
 .heatmap td{white-space:pre-line;font-variant-numeric:tabular-nums;padding:8px 2px;border-radius:8px}
 .heat-win{background:#236e96;color:#fff}.heat-mid{background:#85819e;color:#fff}.heat-loss{background:#953276;color:#fff}.heat-unknown{background:#52615d;color:#fff}
-@media(max-width:550px){main{padding:10px 8px 110px}section{padding:11px}.mon{padding:7px}.fields{grid-template-columns:1fr}.meta-row{grid-template-columns:1fr}}
+@media(max-width:550px){main{padding:10px 8px 110px}section{padding:14px}.fields{grid-template-columns:1fr}.meta-row{grid-template-columns:1fr}.matrix-cols{grid-template-columns:1fr}}
 </style></head><body><main>
 <div class="topbar">
  <nav><a href="/app">← 個体値厳選</a><a href="/flashcards">フラッシュカード</a></nav>
  <button id="partyMenuBtn" type="button" class="small-btn secondary" hidden>パーティ</button>
 </div>
-<h1>見せ合い6体・未来メタ補完</h1>
-<p>6体構築の自動補完・評価、推奨3体選出（先発・引き先・控え）、未来メタ比較をまとめて行います。静的Battle Ratingは実戦3対3勝率ではありません。</p>
+<h1>見せ合い6体・未来メタ補完 <button id="infoBtnMain" type="button" class="info-btn" data-info="main" title="ヘルプ">ⓘ</button></h1>
 
 <section id="auth"><h2>アプリに接続</h2><p>ログイン済みのブラウザでは自動接続します。</p><div class="tools"><input id="key" type="password" autocomplete="off" placeholder="接続キー"><button id="login">接続する</button></div></section>
 
 <div id="workspace" hidden>
  <section>
-  <h2>自分の6体</h2>
-  <p>カードをタップして日本語・英語名、フォルム、技、IVを編集。0体・1〜5体・6体どれでも「自動補完」可能。選択済みカードのみ「固定」できます。</p>
+  <div class="section-head"><h2>自分の6体</h2><button id="infoBtnRoster" type="button" class="info-btn" data-info="roster" title="ヘルプ">ⓘ</button></div>
   <div class="grid" id="members"></div>
+  <div class="primary-actions">
+   <button id="autoComplete" class="primary big-action-btn" disabled>自動補完</button>
+   <button id="evaluate" class="secondary big-action-btn" disabled>パーティ評価</button>
+  </div>
  </section>
 
  <section>
-  <h2>メタ・未来メタ選択</h2>
+  <div class="section-head"><h2>メタ・未来メタ選択</h2><button id="infoBtnMeta" type="button" class="info-btn" data-info="meta" title="ヘルプ">ⓘ</button></div>
   <div class="meta-row">
    <label>基準メタ（現行）<select id="meta"></select></label>
    <label>評価シナリオ<select id="scenario"></select></label>
@@ -105,8 +135,17 @@ dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100
    <div id="compareScenarios" class="compare-checks"></div>
   </details>
   <details id="scenarioEditorDetails"><summary>未来メタの重み編集・根拠・シナリオ管理</summary>
-   <p>重要度の変更は選択中のシナリオ（または基準メタ）にのみ保存され、他の未来シナリオや現行メタには波及しません。</p>
    <div id="scenarioEvidence" class="evidence-box"></div>
+   <div class="generator-box">
+    <h3 style="margin-top:0">選択中メタから未来シナリオを自動生成</h3>
+    <div class="fields">
+     <label>軸にするポケモン<select id="genSpecies"></select></label>
+     <label>変化予測<select id="genTrend"><option value="rise">台頭・増加（対策枠も連鎖増加）</option><option value="counters">対策枠の台頭（鋼・耐性枠等）</option><option value="decline">減少・下火</option></select></label>
+    </div>
+    <div class="tools" style="margin-top:8px">
+     <button id="generateScenarioBtn" type="button" class="small-btn primary">この条件で未来シナリオを生成</button>
+    </div>
+   </div>
    <label for="metaFilter">ポケモンを絞り込む（日本語・英語）</label><input id="metaFilter" type="search" placeholder="例：メルメタル、Florges、ミミッキュ">
    <p id="metaWeightStatus" role="status">メタのポケモン一覧を読み込みます。</p>
    <div id="metaWeights" aria-label="シナリオ別の重要度"></div>
@@ -213,11 +252,17 @@ dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100
  </div>
 </dialog>
 
-<footer><div class="tools">
- <button id="autoComplete" class="primary" disabled>自動補完</button>
- <button id="evaluate" class="secondary" disabled>パーティ評価</button>
- <button id="cancel" class="danger" disabled hidden>中止</button>
-</div></footer>
+<dialog id="infoDialog" class="info-modal" aria-label="説明">
+ <div class="modal-header">
+  <h3 id="infoTitle" style="margin:0">説明</h3>
+  <button id="closeInfoDialog" type="button" class="small-btn secondary">閉じる</button>
+ </div>
+ <div id="infoBody" style="line-height:1.7;font-size:14px;color:#cde0d8;margin-top:10px"></div>
+</dialog>
+
+<div id="cancelContainer" style="max-width:980px;margin:10px auto;text-align:center" hidden>
+ <button id="cancel" class="danger small-btn" disabled>計算を中止する</button>
+</div>
 
 <script>
 'use strict';
@@ -384,6 +429,15 @@ function renderMetaWeightRows(){
   };
   div.append(span,select);root.append(div);
  }
+ updateGenSpeciesOptions();
+}
+function updateGenSpeciesOptions(){
+ const select=$('genSpecies');if(!select)return;
+ const cur=select.value;select.replaceChildren();
+ for(const id of metaWeightRows){
+  select.append(new Option(partyDisplay(id),id));
+ }
+ if(cur&&metaWeightRows.includes(cur))select.value=cur;
 }
 async function flushScopedWeights(){
  clearTimeout(weightSaveTimer);
@@ -526,10 +580,23 @@ function renderOverallSummary(result){
 function renderRecommendedThree(result){
  const root=$('recommendedThree');root.replaceChildren();
  const recs=result.recommended_three||[];
- if(!recs.length)return;
+ const all=result.triples||[];
+ if(!recs.length&&!all.length)return;
  const card=node('div',null,'result-card');
- card.append(node('h3','推奨3体選出（先発・引き先・控え）'));
- addLine(card,'公開6体に対する静的耐性ベースの推奨案です（大会中のリアルタイム助言や3対3実戦勝率ではありません）。');
+ card.append(node('h3','推奨3体選出と控えるべき選出（勝ち筋・負け筋の診断）'));
+
+ const wrapper=node('div',null,'triples-carousel-wrapper');
+ const nav=node('div',null,'carousel-tabs');
+ const tabWin=node('button','🏆 推奨3体選出（勝ち筋 TOP3）','carousel-tab-btn active');
+ const tabLoss=node('button','⚠️ 控えるべき選出（負け筋 ワースト3）','carousel-tab-btn');
+ tabWin.type='button';tabLoss.type='button';
+ nav.append(tabWin,tabLoss);
+ wrapper.append(nav);
+
+ const track=node('div',null,'carousel-track');
+ const slideWin=node('div',null,'carousel-slide');
+ const slideLoss=node('div',null,'carousel-slide');
+
  for(const item of recs){
   const box=node('div',null,'triple-card');
   const r=item.roles;
@@ -537,13 +604,67 @@ function renderRecommendedThree(result){
   addLine(box,'D0 '+pct(item.summary.d0)+' / D1 '+pct(item.summary.d1)+' / 補完度 '+pct(item.summary.coverage)+(item.vs_enemy?' / 対相手6体 最悪比較値 '+item.vs_enemy.worst.toFixed(3):''));
   if(item.favorable?.length)addLine(box,'有利な場面: '+item.favorable.map(f=>name(result.labels[f.opponent]?.species||f.opponent)+'('+f.answers+'体対応)').join('、'));
   if(item.avoid_reasons?.length)addLine(box,'避ける場面・負け筋: '+item.avoid_reasons.map(x=>x.detail).join(' / '));
-  card.append(box);
+  slideWin.append(box);
  }
- if(result.selection?.status==='計算済み'){
-  const d=node('details');d.append(node('summary','相手6体に対する詳細選出根拠（共有シールド2枚比較）'));
-  addLine(d,result.selection.interpretation);
-  for(const x of result.selection.recommendations||[]){
-   addLine(d,'先発 '+label(x.selection[0])+' / 控え '+label(x.selection[1])+'・'+label(x.selection[2])+'（最悪比較値 '+x.worst+' / 最悪相手 '+x.worst_opponent.map(label).join('・')+'）');
+
+ const worstTriples=all.slice().reverse().slice(0,3);
+ if(worstTriples.length){
+  for(const item of worstTriples){
+   const box=node('div',null,'triple-card unfavorable');
+   const r=item.roles||{lead:item.members[0],safe_switch:item.members[1],closer:item.members[2]};
+   const head=node('div');
+   head.append(node('strong','ワースト#'+item.rank+' 先発 '+label(r.lead)+' / 引き先 '+label(r.safe_switch)+' / 控え '+label(r.closer)),document.createTextNode(' '),node('span','控えるべき3体','badge danger'));
+   box.append(head);
+   addLine(box,'D0 '+pct(item.summary.d0)+' / D1 '+pct(item.summary.d1)+' / 補完度 '+pct(item.summary.coverage)+' / unknown '+pct(item.summary.unknown_weight));
+   if(item.avoid_reasons?.length)addLine(box,'控えるべき理由: '+item.avoid_reasons.map(x=>x.detail).join(' / '));
+   slideLoss.append(box);
+  }
+ }else{
+  addLine(slideLoss,'極端に不利な選出は見つかりませんでした。');
+ }
+
+ track.append(slideWin,slideLoss);
+ wrapper.append(track);
+ card.append(wrapper);
+
+ tabWin.onclick=()=>{
+  track.scrollTo({left:0,behavior:'smooth'});
+  tabWin.className='carousel-tab-btn active';tabLoss.className='carousel-tab-btn';
+ };
+ tabLoss.onclick=()=>{
+  track.scrollTo({left:track.scrollWidth/2,behavior:'smooth'});
+  tabLoss.className='carousel-tab-btn active';tabWin.className='carousel-tab-btn';
+ };
+ track.onscroll=()=>{
+  const isLoss=track.scrollLeft>track.clientWidth/3;
+  tabLoss.className='carousel-tab-btn'+(isLoss?' active':'');
+  tabWin.className='carousel-tab-btn'+(!isLoss?' active':'');
+ };
+
+ if(result.selection?.status==='計算済み'||(recs[0]&&recs[0].vs_enemy)){
+  const d=node('details');d.style.marginTop='12px';d.open=true;
+  d.append(node('summary','相手6体に対する詳細選出根拠（勝ち選出 vs 負け選出マトリクス）'));
+  if(result.selection?.interpretation)addLine(d,result.selection.interpretation);
+  for(const x of result.selection?.recommendations||[]){
+   const mCard=node('div',null,'matrix-card');
+   const enemyLabel=x.worst_opponent.map(label).join('・');
+   mCard.append(node('strong','相手想定選出: '+enemyLabel));
+   const cols=node('div',null,'matrix-cols');
+   const winBox=node('div',null,'matrix-win-box');
+   winBox.append(node('span','勝てる選出（推奨）','badge'));
+   addLine(winBox,'先発 '+label(x.selection[0])+' / 控え '+label(x.selection[1])+'・'+label(x.selection[2])+'（最悪比較値 '+x.worst+'）');
+   const lossBox=node('div',null,'matrix-loss-box');
+   lossBox.append(node('span','危険な選出（回避）','badge danger'));
+   const badOne=worstTriples[0];
+   if(badOne){
+    const br=badOne.roles||{lead:badOne.members[0],safe_switch:badOne.members[1],closer:badOne.members[2]};
+    addLine(lossBox,'先発 '+label(br.lead)+' / 控え '+label(br.safe_switch)+'・'+label(br.closer)+'（穴が重なるため不利）');
+   }else{
+    addLine(lossBox,'極端に危険な選出はありません');
+   }
+   cols.append(winBox,lossBox);
+   mCard.append(cols);
+   d.append(mCard);
   }
   card.append(d);
  }
@@ -902,6 +1023,47 @@ async function setup(){
  $('autoComplete').disabled=false;$('evaluate').disabled=false;
  status('準備完了。0体から「自動補完」、または6体入力後に「パーティ評価」を実行できます。');
 }
+$('generateScenarioBtn').onclick=()=>{
+ const targetId=$('genSpecies').value;if(!targetId)return;
+ const trend=$('genTrend').value;
+ const targetName=partyDisplay(targetId);
+ const scenarioName=(trend==='rise'?'予測：'+targetName+'台頭':trend==='counters'?'予測：'+targetName+'対策強化':'予測：'+targetName+'減少');
+ $('scenarioName').value=scenarioName;
+ $('scenarioSummary').value='選択中のメタを基点に'+targetName+'の'+(trend==='rise'?'普及と対抗枠台頭':trend==='counters'?'対策枠増加':'減少')+'をシミュレート';
+ const baseWeights={};
+ for(const id of metaWeightRows)baseWeights[id]=1.0;
+ if(trend==='rise'){
+  baseWeights[targetId]=5.0;
+  const others=metaWeightRows.filter(x=>x!==targetId).slice(0,4);
+  others.forEach(id=>{baseWeights[id]=3.0;});
+ }else if(trend==='counters'){
+  baseWeights[targetId]=2.5;
+  const others=metaWeightRows.filter(x=>x!==targetId).slice(0,5);
+  others.forEach(id=>{baseWeights[id]=4.5;});
+ }else if(trend==='decline'){
+  baseWeights[targetId]=0.5;
+  const others=metaWeightRows.filter(x=>x!==targetId).slice(0,4);
+  others.forEach(id=>{baseWeights[id]=2.5;});
+ }
+ metaWeightValues=baseWeights;
+ renderMetaWeightRows();
+ $('scenarioManageStatus').textContent='「'+scenarioName+'」の重みを自動設定しました。「新しい未来シナリオとして保存」を押すと保存されます。';
+};
+const INFO_TEXTS={
+ main:'【見せ合い6体・未来メタ補完】\n見せ合い6体の登録・自動補完・パーティ評価を行います。全20組の3体選出診断（推奨・回避理由）や未来シナリオの比較を同一の対面キャッシュで高速に計算します。\n※Battle Ratingは静的耐性診断であり実戦3v3勝率そのものではありません。',
+ roster:'【自分の6体】\nカードをタップすると技や個体値（IV）を設定するモーダルが開きます。背景タップで素早く閉じられます。\n右上の「固定」を押すと、そのポケモンの技やIVを維持したまま残りの枠を「自動補完」できます。0体・一部・6体どれからでも実行可能です。',
+ meta:'【メタ・未来メタ選択】\n基準メタ（現行環境）に対し、特定のポケモンが増加・対策された未来環境（シナリオ）を個別に設定・比較できます。重みの変更は選択中のシナリオにのみ保存され、他には波及しません。',
+};
+document.querySelectorAll('.info-btn').forEach(btn=>{
+ btn.onclick=()=>{
+  const k=btn.dataset.info||'main';
+  $('infoTitle').textContent=btn.parentElement?.textContent?.replace('ⓘ','').trim()||'説明';
+  $('infoBody').textContent=INFO_TEXTS[k]||INFO_TEXTS.main;
+  $('infoDialog').showModal();
+ };
+});
+$('closeInfoDialog').onclick=()=>$('infoDialog').close();
+$('infoDialog').onclick=e=>{if(e.target===$('infoDialog'))$('infoDialog').close();};
 $('login').onclick=async()=>{key=$('key').value.trim();try{await setup();if(key)await api('session',{}).catch(()=>{})}catch(e){$('workspace').hidden=false;status(e.message)}};
 $('workspace').addEventListener('input',e=>{
  if(e.target.closest('#scenarioEditorDetails'))return;

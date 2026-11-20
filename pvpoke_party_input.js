@@ -16,23 +16,63 @@ function resolvePartyMove(value, allowed, moveNames=partyMoveNames){
  throw Error(matches.length?'同じ名前の技が複数あります。英語名または技IDを指定してください':'技「'+value+'」は選択したポケモンの習得技にありません');
 }
 function createMon(data={}){
- const box=node('details',null,'mon'),summary=node('summary',data.species?partyDisplay(data.species):'ポケモンを選ぶ');box.append(summary);
- const body=node('div',null,'fields');box.append(body);
+ const box=node('details',null,'mon');
+ const summary=node('summary',null,'mon-summary');box.append(summary);
+ const headMain=node('div',null,'mon-header-main');
+ const nameSpan=node('span',data.species?partyDisplay(data.species):'＋ ポケモンを選ぶ','mon-name');
+ const badgesDiv=node('div',null,'mon-badges');
+ headMain.append(nameSpan,badgesDiv);
+ const lockLabel=node('label',null,'lock-toggle');
+ const locked=node('input');locked.type='checkbox';locked.dataset.field='locked';locked.checked=Boolean(data.species&&data.locked);
+ lockLabel.append(locked,node('span','固定','lock-text'));
+ lockLabel.hidden=true;
+ lockLabel.onclick=e=>e.stopPropagation();
+ summary.append(headMain,lockLabel);
+
+ const modal=node('dialog',null,'mon-modal');
+ const modalHeader=node('div',null,'modal-header');
+ modalHeader.append(node('h3','ポケモン設定・技・IV','modal-title'));
+ const modalClose=node('button','✕','small-btn secondary');modalClose.type='button';modalClose.onclick=()=>modal.close();
+ modalHeader.append(modalClose);
+ modal.append(modalHeader);
+
+ const body=node('div',null,'fields');modal.append(body);
  const label=node('label','ポケモン名（日本語・英語）'),input=node('input');input.dataset.field='species';input.autocomplete='off';input.placeholder='例：サニーゴ / Corsola';input.value=data.species?partyDisplay(data.species):'';input.dataset.species=data.species||'';input.setAttribute('role','combobox');input.setAttribute('aria-expanded','false');
  const suggestions=node('div',null,'suggestions');suggestions.hidden=true;const hint=node('p');hint.style.gridColumn='1/-1';hint.style.fontSize='12px';label.append(input,suggestions);body.append(label);
- for(const [k,title] of [['fast','通常技'],['charged1','ゲージ技1'],['charged2','ゲージ技2']]){const l=node('label',title),select=node('select');select.dataset.field=k;select.setAttribute('aria-label',title);select.onchange=()=>{syncMoves();if(typeof markDirty==='function')markDirty();inputRevision++;};l.append(select);body.append(l);}
- for(const [k,title] of [['atk','攻撃IV（任意）'],['def','防御IV（任意）'],['hp','HP IV（任意）'],['level_override','指定レベル（任意）']]){const l=node('label',title),x=node('input');x.type='number';x.dataset.field=k;x.value=data[k]??'';x.min=k==='level_override'?1:0;x.max=k==='level_override'?50:15;x.step=k==='level_override'?'.5':'1';l.append(x);body.append(l);}
+ for(const [k,title] of [['fast','通常技'],['charged1','ゲージ技1'],['charged2','ゲージ技2']]){const l=node('label',title),select=node('select');select.dataset.field=k;select.setAttribute('aria-label',title);select.onchange=()=>{syncMoves();updateBadges();if(typeof markDirty==='function')markDirty();inputRevision++;};l.append(select);body.append(l);}
+ for(const [k,title] of [['atk','攻撃IV（任意）'],['def','防御IV（任意）'],['hp','HP IV（任意）'],['level_override','指定レベル（任意）']]){const l=node('label',title),x=node('input');x.type='number';x.dataset.field=k;x.value=data[k]??'';x.min=k==='level_override'?1:0;x.max=k==='level_override'?50:15;x.step=k==='level_override'?'.5':'1';x.onchange=()=>{updateBadges();if(typeof markDirty==='function')markDirty();inputRevision++;};l.append(x);body.append(l);}
  body.append(hint);
- const lockLabel=node('label',null,'lock-toggle');const locked=node('input');locked.type='checkbox';locked.dataset.field='locked';locked.checked=Boolean(data.species&&data.locked);lockLabel.append(locked,document.createTextNode(' 固定'));
  const clearBtn=node('button','クリア','card-clear');clearBtn.type='button';
- const cardFooter=node('div',null,'card-footer');cardFooter.append(lockLabel,clearBtn);body.append(cardFooter);
+ const doneBtn=node('button','完了','small-btn primary');doneBtn.type='button';doneBtn.onclick=()=>modal.close();
+ const cardFooter=node('div',null,'card-footer');cardFooter.append(clearBtn,doneBtn);body.append(cardFooter);
+ box.append(modal);
+
+ function updateBadges(){
+  badgesDiv.replaceChildren();
+  const id=input.dataset.species;
+  if(!id||!catalog[id])return;
+  const f=body.querySelector('[data-field=fast]')?.value;
+  const c1=body.querySelector('[data-field=charged1]')?.value;
+  const c2=body.querySelector('[data-field=charged2]')?.value;
+  if(f)badgesDiv.append(node('span',partyMoveLabel(f),'badge move-badge'));
+  if(c1)badgesDiv.append(node('span',partyMoveLabel(c1),'badge move-badge'));
+  if(c2)badgesDiv.append(node('span',partyMoveLabel(c2),'badge move-badge'));
+ }
+
  function updateSummary(){
   const id=input.dataset.species;
   const hasMon=Boolean(id&&catalog[id]);
-  lockLabel.hidden=!hasMon;clearBtn.hidden=!hasMon;
-  if(!hasMon){locked.checked=false;summary.textContent='ポケモンを選ぶ';box.dataset.locked='false';return;}
+  lockLabel.hidden=!hasMon;
+  if(!hasMon){
+   locked.checked=false;
+   nameSpan.textContent='＋ ポケモンを選ぶ';
+   box.dataset.locked='false';
+   badgesDiv.replaceChildren();
+   return;
+  }
   box.dataset.locked=String(locked.checked);
-  summary.textContent=(locked.checked?'🔒 ':'')+partyDisplay(id);
+  nameSpan.textContent=(locked.checked?'🔒 ':'')+partyDisplay(id);
+  updateBadges();
  }
  locked.onchange=()=>{updateSummary();if(typeof markDirty==='function')markDirty();inputRevision++;};
  clearBtn.onclick=()=>{
@@ -46,6 +86,16 @@ function createMon(data={}){
  function choose(id,preserve=false){const p=catalog[id];if(!p)return;input.value=partyDisplay(id);input.dataset.species=id;input.setCustomValidity('');const rec=partyDefaultMoves(p);for(const k of ['fast','charged1','charged2']){const select=body.querySelector('[data-field='+k+']');select.replaceChildren();for(const m of k==='fast'?p.fastMoves:p.chargedMoves)select.append(new Option(partyMoveLabel(m),m));select.value=preserve&&data[k]&&(k==='fast'?p.fastMoves:p.chargedMoves).includes(data[k])?data[k]:rec.moves[k];}syncMoves();hint.textContent=rec.recommended?'初期技：スーパーリーグ推奨。大会・パーティによって最適な技は変わります。':'推奨構成が未登録のため、覚えられる技を仮入力しています。技を確認してください。';suggestions.hidden=true;input.setAttribute('aria-expanded','false');if(!preserve)locked.checked=false;updateSummary();}
  function suggest(){input.dataset.species='';locked.checked=false;updateSummary();const matches=partySearch(input.value);suggestions.replaceChildren();for(const r of matches){const b=node('button',partyDisplay(r.id)+' / '+(r.p.name||r.id));b.type='button';b.onmousedown=e=>e.preventDefault();b.onclick=()=>{choose(r.id);if(typeof markDirty==='function')markDirty();inputRevision++;};suggestions.append(b);}suggestions.hidden=!matches.length;input.setAttribute('aria-expanded',String(matches.length>0));}
  let composing=false;input.oncompositionstart=()=>composing=true;input.oncompositionend=()=>{composing=false;suggest();};input.oninput=()=>{if(!composing)suggest();};input.onfocus=()=>{if(!input.dataset.species)suggest();};input.onkeydown=e=>{if(e.isComposing||composing)return;if(e.key==='Escape'){suggestions.hidden=true;input.setAttribute('aria-expanded','false');}if(e.key==='ArrowDown'&&!suggestions.hidden){e.preventDefault();suggestions.querySelector('button')?.focus();}if(e.key==='Enter'){e.preventDefault();try{choose(resolvePartyName(input.value));if(typeof markDirty==='function')markDirty();inputRevision++;}catch(err){hint.textContent=err.message;}}};input.onchange=()=>{if(!input.value.trim()){clearBtn.onclick();return;}try{choose(resolvePartyName(input.value));if(typeof markDirty==='function')markDirty();inputRevision++;}catch(err){input.setCustomValidity(err.message);hint.textContent=err.message;}};
+
+ summary.onclick=e=>{
+  if(e.target.closest('.lock-toggle'))return;
+  e.preventDefault();
+  if(!modal.open)modal.showModal();
+ };
+ modal.onclick=e=>{
+  if(e.target===modal)modal.close();
+ };
+
  if(data.species)choose(data.species,true);else updateSummary();
  return box;
 }
