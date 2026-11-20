@@ -61,15 +61,20 @@ function summarizeArm(rolled, target) {
 }
 
 function compareCase({handoff, seed, roster, hp_percent: hpPercent, own_shields: ownShields,
-    remaining_seconds: remainingSeconds = 90}, gamemasterPath) {
+    remaining_seconds: remainingSeconds}, gamemasterPath, mode) {
   const [azumarill, quagsire, skarmory] = handoff.own_team;
-  const changedFactors = Number(hpPercent !== 20) + Number(ownShields !== 0) + Number(remainingSeconds !== 90);
+  const isClock150s = mode === "clock_150s";
+  const clock = remainingSeconds === undefined ? (isClock150s ? 150 : 90) : remainingSeconds;
+  const invalidClock = isClock150s ? clock !== 150 : !ALLOWED_REMAINING_SECONDS.includes(clock);
+  const changedFactors = isClock150s
+    ? Number(hpPercent !== 20) + Number(ownShields !== 0)
+    : Number(hpPercent !== 20) + Number(ownShields !== 0) + Number(clock !== 90);
   if (handoff.ruleset_id !== "play-pokemon-worlds-2026-gl" ||
       azumarill.species !== "azumarill" || azumarill.charged1 !== "ICE_BEAM" ||
       handoff.opponent_team[0].species !== "azumarill" || handoff.opponent_team[0].charged1 !== "ICE_BEAM" ||
       !["quagsire", "quagsire_shadow"].includes(quagsire.species) || skarmory.species !== "skarmory" ||
       ![20, 40, 60, 85].includes(hpPercent) || ![0, 1, 2].includes(ownShields) ||
-      !ALLOWED_REMAINING_SECONDS.includes(remainingSeconds) || changedFactors > 1) {
+      invalidClock || changedFactors > 1) {
     throw Error("Unexpected synthetic switch condition");
   }
   const options = {gamemasterPath, seed, shields: [ownShields, 0]};
@@ -77,12 +82,12 @@ function compareCase({handoff, seed, roster, hp_percent: hpPercent, own_shields:
   const hp = Math.floor(maxHp * hpPercent / 100);
   const initial = [[AZUMARILL_START, {hp_points: hp}], [AZUMARILL_START]];
   const {immediate, alternatives} = compareChargeFork(
-    choice => runArm(createTeamSession(handoff, {...options, initial}), choice, remainingSeconds),
+    choice => runArm(createTeamSession(handoff, {...options, initial}), choice, clock),
     [SWITCH_QUAGSIRE],
   );
   const {view} = immediate.chargeFork;
   return {seed, roster, species: quagsire.species, second_move: quagsire.charged2,
-    hp_percent: hpPercent, own_shields: view.own.shields, remaining_seconds: remainingSeconds,
+    hp_percent: hpPercent, own_shields: view.own.shields, remaining_seconds: clock,
     public_state: publicChargeState(view),
     reserve_hp_bands: {skarmory: 3, quagsire: Math.floor(4 * hp / maxHp)},
     switch_targets: {switch_skarmory: skarmory.species, switch_quagsire: quagsire.species},
@@ -93,10 +98,12 @@ function compareCase({handoff, seed, roster, hp_percent: hpPercent, own_shields:
 try {
   const cases = JSON.parse(readFileSync(0, "utf8"));
   const gamemasterPath = process.argv[2];
-  if (!gamemasterPath || !Array.isArray(cases) || cases.length < 1 || cases.length > 144) {
+  const mode = process.argv[3];
+  if (!gamemasterPath || ![undefined, "clock_150s"].includes(mode) ||
+      !Array.isArray(cases) || cases.length < 1 || cases.length > 144) {
     throw Error("Invalid synthetic study input");
   }
-  process.stdout.write(JSON.stringify(cases.map(row => compareCase(row, gamemasterPath))));
+  process.stdout.write(JSON.stringify(cases.map(row => compareCase(row, gamemasterPath, mode))));
 } catch (error) {
   process.stderr.write(`Synthetic switch study failed: ${error.message}\n`);
   process.exitCode = 1;
