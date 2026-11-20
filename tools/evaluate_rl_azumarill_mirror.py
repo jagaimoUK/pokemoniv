@@ -24,9 +24,9 @@ def run_window(window):
     return run_mirror_cases(window_cases(window))
 
 
-def run_mirror_cases(battle_specs):
+def run_mirror_cases(battle_specs, *, mode="mirror"):
     cases = []
-    for row in run_cases(battle_specs, mode="mirror"):
+    for row in run_cases(battle_specs, mode=mode):
         forks = row.pop("mirror_forks")
         cases.extend({**row, **fork} for fork in forks)
     return cases

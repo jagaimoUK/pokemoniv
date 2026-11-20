@@ -34,6 +34,7 @@ def event_marker(event):
 def trace_arm(row, arm):
     """Read the actual target of a resolved foe charge from public event order."""
     result = row[arm]
+    switch_to = row["switch_to"] if arm == "switch" else row.get("switch_targets", {}).get(arm)
     own_active = "azumarill"
     opening_switch = None
     first_charge = None
@@ -45,8 +46,8 @@ def trace_arm(row, arm):
         side = event["side"]
         if event["kind"] == "switch" and side == "self":
             own_active = event["species"]
-            if (arm == "switch" and event["turn"] == row["public_state"]["turn"]
-                    and not event["forced"] and event["species"] == row["switch_to"]):
+            if (switch_to is not None and event["turn"] == row["public_state"]["turn"]
+                    and not event["forced"] and event["species"] == switch_to):
                 opening_switch = {**event_marker(event), "species": own_active}
         elif event["kind"] == "charged" and side == "opponent":
             received = {

@@ -24,8 +24,10 @@ function compareCase({handoff, seed, roster, opponent_shields: opponentShields},
     second_move: lead.charged2, starting_opponent_shields: opponentShields,
   };
   const newSession = () => createTeamSession(handoff, {gamemasterPath, seed, shields: [2, opponentShields]});
-  if (mode === "mirror") {
-    return {...metadata, mirror_forks: compareMirrorForks(newSession, opponentShields, lead)};
+  if (mode === "mirror" || mode === "mirror_three_way") {
+    return {...metadata, mirror_forks: compareMirrorForks(
+      newSession, opponentShields, lead, {threeWay: mode === "mirror_three_way"},
+    )};
   }
 
   const withReplay = mode !== "charges";
@@ -70,7 +72,7 @@ function compareCase({handoff, seed, roster, opponent_shields: opponentShields},
 try {
   const cases = JSON.parse(readFileSync(0, "utf8"));
   const [, , gamemasterPath, mode = "charges"] = process.argv;
-  if (!gamemasterPath || !["charges", "historical", "shielding", "mirror"].includes(mode) ||
+  if (!gamemasterPath || !["charges", "historical", "shielding", "mirror", "mirror_three_way"].includes(mode) ||
       !Array.isArray(cases) || cases.length < 1 || cases.length > 144) {
     throw Error("Invalid study input");
   }

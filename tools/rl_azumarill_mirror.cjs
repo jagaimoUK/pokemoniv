@@ -6,12 +6,17 @@ const {
 } = require("./rl_charge_branches.cjs");
 const {CHARGE_MS, createPublicReplayRecorder} = require("./rl_public_replay.cjs");
 
-function runMirrorArm(session, startingOpponentShields, openingAction, choice) {
+function switchDestination(view, action) {
+  return view.own.team[Number(action.slice("switch_".length))].species;
+}
+
+function runMirrorArm(session, startingOpponentShields, openingAction, choice, requiredTargets) {
   let response = session.response();
   const opponentLead = response.observation?.opponent.active_species;
   let openingChosen = false;
   let mirrorSeen = false;
-  let iceBeamLegal = false;
+  let iceBeamAvailable = false;
+  let oneSwitchAvailable = false;
   let chargeFork = null;
   const replay = createPublicReplayRecorder();
 
@@ -34,11 +39,16 @@ function runMirrorArm(session, startingOpponentShields, openingAction, choice) {
       if (iceSlot === -1) throw Error("Mirror fixture has no Ice Beam");
       const iceBeam = "charge_" + iceSlot;
       // Engine legal switches are enumerated in own team slot order.
-      const switchAction = view.legal_actions.find(candidate => candidate.startsWith("switch_"));
       if (view.legal_actions.includes(iceBeam)) {
-        iceBeamLegal = true;
-        if (switchAction) {
-          chargeFork = {view, audit: session.privateReplay(), baselineAction: iceBeam, switchAction};
+        iceBeamAvailable = true;
+        const switches = view.legal_actions.filter(candidate => candidate.startsWith("switch_"));
+        if (switches.length) oneSwitchAvailable = true;
+        const selected = requiredTargets.length
+          ? requiredTargets.map(species => switches.find(item => switchDestination(view, item) === species))
+          : switches.slice(0, 1);
+        if (selected.length && selected.every(Boolean)) {
+          chargeFork = {view, audit: session.privateReplay(), baselineAction: iceBeam,
+            switchActions: selected};
           action = choice === "immediate" ? iceBeam : choice;
         }
       }
@@ -52,7 +62,8 @@ function runMirrorArm(session, startingOpponentShields, openingAction, choice) {
     let excluded = "no_simultaneous_switch_in_mirror";
     if (!openingChosen) excluded = "opening_not_reached";
     else if (!mirrorSeen) excluded = "mirror_not_reached";
-    else if (!iceBeamLegal) excluded = "ice_beam_never_legal_in_mirror";
+    else if (!iceBeamAvailable) excluded = "ice_beam_never_legal_in_mirror";
+    else if (requiredTargets.length && oneSwitchAvailable) excluded = "only_one_switch_available";
     return {excluded, outcome: response.info.outcome};
   }
   const audit = session.privateReplay();
@@ -87,24 +98,32 @@ function summarizeArm(rolled, ownLead, opponentLead, switchTo) {
     mirror_charge_ms_after_fork: mirrorCharges * CHARGE_MS, replay: rolled.replay};
 }
 
-function compareMirrorForks(newSession, startingOpponentShields, lead) {
+function compareMirrorForks(newSession, startingOpponentShields, lead, {threeWay = false} = {}) {
+  const requiredTargets = threeWay ? ["skarmory", lead.species] : [];
   return ["charge_0", "charge_1"].map((openingAction, slot) => {
     const {immediate, alternatives} = compareChargeFork(
-      choice => runMirrorArm(newSession(), startingOpponentShields, openingAction, choice),
-      fork => [fork.switchAction],
+      choice => runMirrorArm(newSession(), startingOpponentShields, openingAction, choice, requiredTargets),
+      fork => fork.switchActions,
     );
     const openingMove = slot === 0 ? lead.charged1 : lead.charged2;
     const {chargeFork} = immediate;
     if (!chargeFork) {
       return {opening_move: openingMove, excluded: immediate.excluded, outcome: immediate.outcome};
     }
-    const {view, switchAction, audit} = chargeFork;
-    const switchTo = view.own.team[Number(switchAction.slice("switch_".length))].species;
+    const {view, switchActions, audit} = chargeFork;
     const {opponentLead} = immediate;
-    return {opening_move: openingMove, public_state: publicChargeState(view),
-      own_shields: view.own.shields, switch_to: switchTo, after_event_seq: audit.events.length,
-      ice_beam: summarizeArm(immediate, lead.species, opponentLead, null),
-      switch: summarizeArm(alternatives[switchAction], lead.species, opponentLead, switchTo)};
+    const result = {opening_move: openingMove, public_state: publicChargeState(view),
+      own_shields: view.own.shields, after_event_seq: audit.events.length,
+      ice_beam: summarizeArm(immediate, lead.species, opponentLead, null)};
+    const switchResults = switchActions.map(action => {
+      const target = switchDestination(view, action);
+      return summarizeArm(alternatives[action], lead.species, opponentLead, target);
+    });
+    if (threeWay) {
+      return {...result, switch_targets: {switch_skarmory: requiredTargets[0],
+        switch_quagsire: requiredTargets[1]}, switch_skarmory: switchResults[0], switch_quagsire: switchResults[1]};
+    }
+    return {...result, switch_to: switchDestination(view, switchActions[0]), switch: switchResults[0]};
   });
 }
 
