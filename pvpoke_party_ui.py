@@ -2,29 +2,29 @@
 HTML = r'''<!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>パーティ作成</title><style>
-:root{font:16px system-ui,sans-serif;background:#122126;color:#e2f1e9;color-scheme:dark}*{box-sizing:border-box}
-body{margin:0}main{max-width:1040px;margin:auto;padding:12px 12px 110px}h1{margin:6px 0;font-size:21px}h2{font-size:18px;margin:0 0 10px}h3{font-size:15px;margin:12px 0 6px}
-p{line-height:1.6;color:#b6cac4;margin:6px 0}a{color:#bbebd4}
-section{margin-top:12px;padding:14px;border:1px solid #47645d;border-radius:18px;background:#203138}
+:root{font:16px system-ui,sans-serif;background:#122126;color:#e2f1e9;color-scheme:dark;overflow-x:clip}*{box-sizing:border-box}
+body{margin:0;overflow-x:clip}main{max-width:1040px;margin:auto;padding:12px 12px 110px;min-width:0}h1{margin:6px 0;font-size:21px}h2{font-size:18px;margin:0 0 10px}h3{font-size:15px;margin:12px 0 6px}
+p{line-height:1.6;color:#b6cac4;margin:6px 0;overflow-wrap:anywhere}a{color:#bbebd4}
+section{margin-top:12px;padding:14px;border:1px solid #47645d;border-radius:18px;background:#203138;min-width:0;max-width:100%;overflow-wrap:anywhere}
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
-nav,.tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-button,nav a{border:1px solid #76a797;border-radius:14px;min-height:44px;padding:9px 13px;background:#385c50;color:#edf8f1;font:inherit;cursor:pointer;text-decoration:none}
+nav,.tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center;min-width:0}
+button,nav a{border:1px solid #76a797;border-radius:14px;min-height:44px;padding:9px 13px;background:#385c50;color:#edf8f1;font:inherit;cursor:pointer;text-decoration:none;max-width:100%;overflow-wrap:anywhere}
 button.primary{background:#4b7f6b;border-color:#98cdb9;font-weight:700}
 button.secondary{background:#294743;border-color:#6a9688}
 button.small-btn{min-height:38px;padding:6px 12px;font-size:14px;border-radius:12px}
 button.danger{background:#663344;border-color:#b06880}
 button:disabled{opacity:.45;cursor:not-allowed}
-input,select,textarea{width:100%;border:1px solid #67887d;border-radius:12px;padding:10px;min-height:44px;background:#12252b;color:inherit;font:inherit}
-input[type=checkbox]{width:auto;min-height:unset}label{font-size:13px;display:block;margin:8px 0 4px}
-textarea{min-height:90px;resize:vertical}summary{cursor:pointer;min-height:42px;padding:8px 0;font-weight:bold}
-.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+input,select,textarea{width:100%;min-width:0;max-width:100%;border:1px solid #67887d;border-radius:12px;padding:10px;min-height:44px;background:#12252b;color:inherit;font:inherit}
+input[type=checkbox]{width:auto;min-height:unset}label{font-size:13px;display:block;margin:8px 0 4px;min-width:0;max-width:100%;overflow-wrap:anywhere}
+textarea{min-height:90px;resize:vertical}details{min-width:0;max-width:100%}summary{cursor:pointer;min-height:42px;padding:8px 0;font-weight:bold;overflow-wrap:anywhere}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;min-width:0;max-width:100%}
 .suggestions{display:flex;flex-direction:column;gap:5px;margin-top:6px;max-height:240px;overflow:auto}.suggestions button{text-align:left;width:100%;font-size:13px}
-.mon{padding:8px;border-radius:14px;background:#29413f;border:1px solid #557769;min-width:0}
+.mon{padding:8px;border-radius:14px;background:#29413f;border:1px solid #557769;min-width:0;max-width:100%;overflow:hidden}
 .mon[data-locked=true]{border-color:#9edbc2;box-shadow:0 0 0 1px #9edbc2 inset}
 .mon>summary{font-size:14px;padding:4px 0;min-height:36px;overflow-wrap:anywhere}
-.fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;min-width:0;max-width:100%}
 .fields label:first-child{grid-column:1/-1}
-.card-footer{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:4px}
+.card-footer{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;margin-top:4px;min-width:0}
 .lock-toggle{display:inline-flex;align-items:center;gap:5px;margin:0;font-size:13px;cursor:pointer}
 .card-clear{min-height:34px;padding:4px 10px;font-size:12px;background:#3a3542;border-color:#7d718c}
 section[hidden],div[hidden],details[hidden],label[hidden],button[hidden]{display:none}
@@ -41,15 +41,16 @@ section[hidden],div[hidden],details[hidden],label[hidden],button[hidden]{display
 .weight-row span{flex:1;min-width:0;overflow-wrap:anywhere}
 .weight-row select{width:115px;flex:0 0 115px;min-height:42px}
 .weight-row small{display:block;color:#abc8bd;font-size:11px;margin-top:2px}
-.evidence-box{border:1px solid #4c6a5f;border-radius:12px;padding:10px;background:#182a30;margin-top:8px;font-size:13px}
+.evidence-box{border:1px solid #4c6a5f;border-radius:12px;padding:10px;background:#182a30;margin-top:8px;font-size:13px;min-width:0;max-width:100%;overflow-wrap:anywhere}
 .obs-table{width:100%;border-collapse:collapse;font-size:12px;margin:6px 0}
 .obs-table th,.obs-table td{border-bottom:1px solid #3c5952;padding:5px 4px;text-align:right;white-space:nowrap}
 .obs-table th:first-child,.obs-table td:first-child{text-align:left}
 .obs-scroll{overflow-x:auto;max-width:100%}
-.alert-box{border:1px solid #c9a267;background:#3a2f20;color:#ffedd2;border-radius:12px;padding:10px 12px;margin:8px 0;font-size:13px}
-.result-card{padding:11px;margin:8px 0;border:1px solid #5c8376;border-radius:14px;background:#263d3d}
-.triple-card{padding:10px;margin:7px 0;border:1px solid #4d7066;border-radius:12px;background:#1d3236}
+.alert-box{border:1px solid #c9a267;background:#3a2f20;color:#ffedd2;border-radius:12px;padding:10px 12px;margin:8px 0;font-size:13px;min-width:0;max-width:100%;overflow-wrap:anywhere}
+.result-card{padding:11px;margin:8px 0;border:1px solid #5c8376;border-radius:14px;background:#263d3d;min-width:0;max-width:100%;overflow-wrap:anywhere}
+.triple-card{padding:10px;margin:7px 0;border:1px solid #4d7066;border-radius:12px;background:#1d3236;min-width:0;max-width:100%;overflow-wrap:anywhere}
 .triple-card.unfavorable{border-color:#8a5568;background:#2c222a}
+#strategyResult,#weakResult,#summaryResult,#swapAdvice,#recommendedThree,#allTriplesPanel{min-width:0;max-width:100%;overflow-wrap:anywhere}
 footer{position:fixed;bottom:0;left:0;right:0;background:#172d2cf5;border-top:1px solid #638276;padding:10px;z-index:20}
 footer .tools{max-width:700px;margin:auto}footer button{flex:1}
 .result{padding-top:10px;border-top:1px solid #557769;margin-top:10px}li{padding:3px 0}
