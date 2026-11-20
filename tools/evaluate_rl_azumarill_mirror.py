@@ -1,4 +1,4 @@
-"""Compare Ice Beam and a legal switch at the first Azumarill mirror decision."""
+"""Compare Ice Beam and switching at the first Azumarill mirror turn offering both."""
 from __future__ import annotations
 
 import argparse
@@ -21,8 +21,12 @@ def window_cases(window):
 
 
 def run_window(window):
+    return run_mirror_cases(window_cases(window))
+
+
+def run_mirror_cases(battle_specs):
     cases = []
-    for row in run_cases(window_cases(window), mode="mirror"):
+    for row in run_cases(battle_specs, mode="mirror"):
         forks = row.pop("mirror_forks")
         cases.extend({**row, **fork} for fork in forks)
     return cases
@@ -63,12 +67,12 @@ def summarize(rows):
     }
 
 
-def summarize_conditions(rows):
+def summarize_conditions(rows, rosters=ROSTERS):
     return {
         "overall": summarize(rows),
         "by_roster": {
             name: summarize([row for row in rows if row["roster"] == name])
-            for name, *_ in ROSTERS
+            for name, *_ in rosters
         },
         "by_switch_destination": {
             species: summarize([row for row in rows if row.get("switch_to") == species])
@@ -84,8 +88,10 @@ def summarize_conditions(rows):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--window", type=int, choices=WINDOWS, help="Run just one fixed seed window")
+    parser = argparse.ArgumentParser(
+        description="マリルリ同士で、れいとうビームと交代がどちらも選択肢にある最初の場面を比較します。"
+    )
+    parser.add_argument("--window", type=int, choices=WINDOWS, help="指定したシード窓だけを実行")
     args = parser.parse_args()
     windows = WINDOWS if args.window is None else (args.window,)
     results = {window: run_window(window) for window in windows}
