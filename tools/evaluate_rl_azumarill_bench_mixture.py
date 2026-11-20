@@ -57,10 +57,18 @@ def bench_weights(draw_pct, win_pct):
 
 
 def score_mixture(by_roster, draw_pct, win_pct):
+    return {
+        "draw_bench_pct": draw_pct,
+        "win_benches_pct": win_pct,
+        **score_bench_weights(by_roster, bench_weights(draw_pct, win_pct)),
+    }
+
+
+def score_bench_weights(by_roster, weights):
     """Apply the same hidden-bench distribution to every action before ranking."""
-    weighted_benches = [(by_roster[name], weight) for name, weight in bench_weights(draw_pct, win_pct).items()
+    weighted_benches = [(by_roster[name], weight) for name, weight in weights.items()
                         if weight]
-    actions = by_roster[DRAW_BENCH]["actions"]
+    actions = weighted_benches[0][0]["actions"]
     scores = {}
     for action in actions:
         outcomes = {
@@ -77,8 +85,6 @@ def score_mixture(by_roster, draw_pct, win_pct):
     objectives = ("self_ko_win", "verified_non_loss")
     best = {metric: max(row[metric] for row in scores.values()) for metric in objectives}
     return {
-        "draw_bench_pct": draw_pct,
-        "win_benches_pct": win_pct,
         "best_actions": {
             metric: [action for action, row in scores.items() if row[metric] == best[metric]]
             for metric in objectives

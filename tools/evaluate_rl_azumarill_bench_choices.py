@@ -45,6 +45,10 @@ def compare_case(worker, case):
     fork = _forks(worker, case).get("hp_60")
     if fork is None or public_view_sha256(fork[1]) != EXPECTED_PUBLIC_FORK:
         raise RuntimeError("The prior public fork was not reproduced")
+    return compare_fork(worker, case, fork)
+
+
+def compare_fork(worker, case, fork):
     _, view = fork
     cpu = choose_team_cpu(view)
     switches = [action for action in view["legal_actions"] if action.startswith("switch_")]
