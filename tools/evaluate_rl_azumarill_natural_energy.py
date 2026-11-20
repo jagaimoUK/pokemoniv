@@ -95,13 +95,19 @@ def _difference_source(hits):
     return "v2_hit_energy_miss"
 
 
-def _continue(worker, case, fork, name, models, tables):
+def replay_fork(worker, case, fork):
+    """Replay the exact actions and require equality of the entire public view."""
     history, expected_view = fork
     result = _reset(worker, case)
     for action in history:
         result = worker.step(action)
     if result["observation"] != expected_view:
         raise RuntimeError("Native replay did not reproduce the public fork")
+    return result
+
+
+def _continue(worker, case, fork, name, models, tables):
+    result = replay_fork(worker, case, fork)
 
     first_differences, stats = {}, Counter()
     for _ in range(MAX_STEPS):

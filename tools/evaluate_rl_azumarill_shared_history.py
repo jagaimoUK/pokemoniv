@@ -45,11 +45,17 @@ def window_cases(window):
         raise ValueError("Use a predeclared shared-history window")
     training = window == TRAIN_WINDOW
     seeds_per_roster = TRAIN_SEEDS_PER_ROSTER if training else EVAL_SEEDS_PER_ROSTER
+    rosters = [(name, selection, lead, train_trio if training else eval_trio)
+               for name, selection, lead, train_trio, eval_trio in ROSTERS]
+    return build_history_cases(window, rosters, seeds_per_roster, training=training)
+
+
+def build_history_cases(window, rosters, seeds_per_roster, *, training=False):
+    """Build native 2/2 cases with both Quagsire forms and a committed selection."""
     own_base, public, enemy = fixture_teams()
     validate_team_for_ruleset(enemy, RULESET_ID)
     cases = []
-    for index, (roster, selection, lead, train_trio, eval_trio) in enumerate(ROSTERS):
-        trio = train_trio if training else eval_trio
+    for index, (roster, selection, lead, trio) in enumerate(rosters):
         for species, move in BUILDS.items():
             own = [{**own_base[0], "species": species, "charged2": move}, *own_base[1:]]
             validate_team_for_ruleset(own, RULESET_ID)
