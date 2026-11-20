@@ -1,13 +1,44 @@
 "use strict";
-// Offline 3v3 worker. Only the public fork state and verified outcomes leave it.
+// Offline 3v3 worker. Private audits stay inside matching and replay projection.
 const {readFileSync} = require("node:fs");
+const {isDeepStrictEqual} = require("node:util");
 const {createTeamSession, chooseTeamCpu} = require("../pvpoke_rl_team_native.js");
+const {chooseOpponentAction} = require("./rl_azumarill_sensitivity_worker.cjs");
 const {compareChargeFork, publicChargeState, runBankedChargeArm, summarizeChargeArm} =
   require("./rl_charge_branches.cjs");
 
 const RULESETS = new Set(["play-pokemon-worlds-2026-gl", "play-pokemon-cs-2026-11-16-gl"]);
+const REPLAY_FIELDS = new Map([
+  ["switch", ["previous_species", "forced"]],
+  ["charge_announced", []],
+  ["charged", ["move_id", "shielded"]],
+  ["faint", []],
+]);
+// The native clock charges 10 seconds per resolved charged move, including shields.
+const CHARGE_MS = 10000;
 
-function compareCase({handoff, seed, roster, opponent_shields: opponentShields}, gamemasterPath) {
+function publicReplay(events, clock) {
+  let step = 0;
+  let chargedMs = 0;
+  const timeline = [];
+  for (const event of events) {
+    const fields = REPLAY_FIELDS.get(event.kind);
+    if (!fields) continue;
+    while (clock[step].through < event.seq) step++;
+    const {kind, seq, turn, species} = event;
+    // Multiple events can share one step interval; these are not per-event timestamps.
+    const {start_ms, end_ms} = clock[step];
+    if (kind === "charged") chargedMs += CHARGE_MS;
+    timeline.push({kind, seq, turn, species, side: event.actor === 0 ? "self" : "opponent",
+      start_ms, end_ms, ...Object.fromEntries(fields.map(key => [key, event[key]]))});
+  }
+  const {start_ms, end_ms} = clock.at(-1);
+  if (chargedMs > end_ms) throw Error("Resolved charges exceed the observed clock");
+  return {elapsed_ms: end_ms, charged_ms: chargedMs, clock_remainder_ms: end_ms - chargedMs,
+    terminal_step: {start_ms, end_ms}, events: timeline};
+}
+
+function compareCase({handoff, seed, roster, opponent_shields: opponentShields}, gamemasterPath, mode) {
   const lead = handoff.own_team[0];
   if (!RULESETS.has(handoff.ruleset_id) || !["quagsire", "quagsire_shadow"].includes(lead.species) ||
       lead.roster_clause_id !== "quagsire" || lead.fast !== "MUD_SHOT" ||
@@ -19,26 +50,59 @@ function compareCase({handoff, seed, roster, opponent_shields: opponentShields},
     ruleset_id: handoff.ruleset_id, seed, roster, species: lead.species,
     second_move: lead.charged2, starting_opponent_shields: opponentShields,
   };
-  const {immediate, alternatives} = compareChargeFork(
-    choice => runBankedChargeArm(
-      createTeamSession(handoff, {gamemasterPath, seed, shields: [2, opponentShields]}),
-      chooseTeamCpu, 0, opponentShields, choice,
-    ),
-    ["charge_1"],
-  );
-  if (!immediate.chargeFork) return {...metadata, excluded: immediate.excluded};
-  return {...metadata, public_state: publicChargeState(immediate.chargeFork.view),
-    aqua_tail: summarizeChargeArm(immediate, lead.charged1),
-    second_charge: summarizeChargeArm(alternatives.charge_1, lead.charged2)};
+  const withReplay = mode !== "charges";
+  function fork(policy) {
+    return compareChargeFork(choice => {
+      const clock = [];
+      const session = createTeamSession(handoff, {gamemasterPath, seed, shields: [2, opponentShields]});
+      const rolled = runBankedChargeArm(session, chooseTeamCpu, 0, opponentShields, choice, {
+        chooseOpponentAction: view => chooseOpponentAction(view, policy),
+        onStep: withReplay ? (before, after) => {
+          // The engine publishes no observation after termination. Its audit event
+          // stream supplies the remaining events to the same public projection.
+          const through = after.observation
+            ? (after.observation.recent_events.at(-1)?.seq ?? 0)
+            : Infinity;
+          clock.push({through, start_ms: before.elapsed_ms, end_ms: after.info.elapsed_ms});
+        } : undefined,
+      });
+      if (withReplay && rolled.chargeFork) rolled.replay = publicReplay(rolled.audit.events, clock);
+      return rolled;
+    }, ["charge_1"]);
+  }
+
+  const baseline = fork("cpu_always");
+  const other = mode === "shielding" ? fork("save_high_hp") : null;
+  if (other && (!isDeepStrictEqual(baseline.immediate.chargeFork, other.immediate.chargeFork) ||
+      !isDeepStrictEqual(baseline.immediate.excluded, other.immediate.excluded) ||
+      (opponentShields === 0 && !isDeepStrictEqual(baseline, other)))) {
+    throw Error("Shield policies changed a shared history or a zero-shield replay");
+  }
+  if (!baseline.immediate.chargeFork) return {...metadata, excluded: baseline.immediate.excluded};
+
+  function summarizePair({immediate, alternatives}) {
+    const second = alternatives.charge_1;
+    return {
+      aqua_tail: {...summarizeChargeArm(immediate, lead.charged1),
+        ...(withReplay && {replay: immediate.replay})},
+      second_charge: {...summarizeChargeArm(second, lead.charged2),
+        ...(withReplay && {replay: second.replay})},
+    };
+  }
+  const state = {...metadata, public_state: publicChargeState(baseline.immediate.chargeFork.view)};
+  if (!withReplay) return {...state, ...summarizePair(baseline)};
+  return {...state, by_policy: {cpu_always: summarizePair(baseline),
+    ...(other && {save_high_hp: summarizePair(other)})}};
 }
 
 try {
   const cases = JSON.parse(readFileSync(0, "utf8"));
-  const gamemasterPath = process.argv[2];
-  if (!gamemasterPath || !Array.isArray(cases) || cases.length < 1 || cases.length > 144) {
+  const [, , gamemasterPath, mode = "charges"] = process.argv;
+  if (!gamemasterPath || !["charges", "historical", "shielding"].includes(mode) ||
+      !Array.isArray(cases) || cases.length < 1 || cases.length > 144) {
     throw Error("Invalid study input");
   }
-  process.stdout.write(JSON.stringify(cases.map(row => compareCase(row, gamemasterPath))));
+  process.stdout.write(JSON.stringify(cases.map(row => compareCase(row, gamemasterPath, mode))));
 } catch (error) {
   process.stderr.write(`Quagsire study failed: ${error.message}\n`);
   process.exitCode = 1;

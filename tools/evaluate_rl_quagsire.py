@@ -56,16 +56,21 @@ def window_cases(window):
     """Precommit rosters, selection, seed, shields, forms and moves before replay."""
     if type(window) is not int or window not in WINDOWS:
         raise ValueError("Use a predeclared Quagsire seed window")
+    return build_window_cases(window, RULESET_IDS, ROSTERS, SEEDS_PER_ROSTER)
+
+
+def build_window_cases(window, rulesets, rosters, seeds_per_roster):
+    """Build prepared inputs for a predeclared study condition grid."""
     own_base, _, enemy_base = fixture_teams()
     cases = []
-    for ruleset in RULESET_IDS:
-        for index, (name, replaced, trio, lead) in enumerate(ROSTERS):
+    for ruleset in rulesets:
+        for index, (name, replaced, trio, lead) in enumerate(rosters):
             enemy = [dict(row) for row in enemy_base]
             if replaced is not None:
                 enemy[replaced].update(PRIMEAPE)
             validate_team_for_ruleset(enemy, ruleset)
             public = [{key: row[key] for key in ("species", "roster_clause_id")} for row in enemy]
-            seed_start = window + index * SEEDS_PER_ROSTER
+            seed_start = window + index * seeds_per_roster
             for species in SPECIES:
                 for move in SECOND_MOVES:
                     own = [{**own_base[0], "species": species, "charged2": move}, *own_base[1:]]
@@ -73,20 +78,23 @@ def window_cases(window):
                     preview = SixToThreeSelection(own, public, enemy, trio, lead, ruleset_id=ruleset)
                     preview.choose(OWN_SELECTION)
                     handoff = preview._private_engine_input()
-                    for seed in range(seed_start, seed_start + SEEDS_PER_ROSTER):
+                    for seed in range(seed_start, seed_start + seeds_per_roster):
                         for shields in STARTING_OPPONENT_SHIELDS:
                             cases.append({"handoff": handoff, "roster": name, "seed": seed,
                                           "opponent_shields": shields})
     return cases
 
 
-def run_cases(cases):
+def run_cases(cases, *, mode=None):
     """Run one fixed window (or a smoke-test slice) against an ephemeral fixture."""
     with TemporaryDirectory(prefix="quagsire-study-") as temp:
         fixture = Path(temp) / "strategy_gamemaster_shadow.json"
         fixture.write_text(json.dumps(shadow_gamemaster()), encoding="utf-8")
+        command = ["node", str(ROOT / "tools/evaluate_rl_quagsire.cjs"), str(fixture)]
+        if mode is not None:
+            command.append(mode)
         result = subprocess.run(
-            ["node", str(ROOT / "tools/evaluate_rl_quagsire.cjs"), str(fixture)],
+            command,
             input=json.dumps(cases), capture_output=True, encoding="utf-8", cwd=ROOT, timeout=180,
             env=child_environment({"PVP_PVPOKE_SOURCE": str(ROOT / "vendor/pvpoke")}),
         )

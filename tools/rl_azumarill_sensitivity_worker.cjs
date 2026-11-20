@@ -101,4 +101,7 @@ async function main() {
   }
 }
 
-main().catch(() => { process.exitCode = 1; });
+if (require.main === module) {
+  main().catch(() => { process.exitCode = 1; });
+}
+module.exports = {chooseOpponentAction};

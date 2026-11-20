@@ -48,7 +48,9 @@ function verifiedNativeReward(response) {
   return response.reward;
 }
 
-function runBankedChargeArm(session, chooseAction, targetSlot, expectedOpponentShields, choice) {
+function runBankedChargeArm(session, chooseAction, targetSlot, expectedOpponentShields, choice, {
+  chooseOpponentAction = chooseAction, onStep,
+} = {}) {
   let response = session.response();
   let chargeFork = null;
   for (let steps = 0; response.observation && steps < 2000; steps++) {
@@ -69,7 +71,8 @@ function runBankedChargeArm(session, chooseAction, targetSlot, expectedOpponentS
         action = legal.includes("fast") ? "fast" : "wait";
       }
     }
-    response = session.step([action, chooseAction(session.observe(1))]);
+    response = session.step([action, chooseOpponentAction(session.observe(1))]);
+    onStep?.(view, response);
   }
   if (response.observation) throw Error("Charge study exceeded its step budget");
   if (!chargeFork) return {excluded: `${response.info.outcome}_before_fork`};
