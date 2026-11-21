@@ -460,8 +460,9 @@ class PartyBuilder:
                 raise ValueError(label + ": 技構成が不正です " + sid)
             ivs = [raw.get(k) for k in ("atk", "def", "hp")]
             if all(x is None for x in ivs):
+                iv_mode = "default" if (species[sid].get("defaultIVs") or {}).get("cp1500") else "rank1"
                 atk, defense, hp, _ = iv_modes.select_opponent_ivs(
-                    species[sid], cpms, "default", moves=moves,
+                    species[sid], cpms, iv_mode, moves=moves,
                     cp_cap=engine.CP_CAP, level_cap=engine.MAX_LEVEL)
                 ivs = [atk, defense, hp]
             if any(type(v) is not int or not 0 <= v <= 15 for v in ivs):
@@ -585,6 +586,10 @@ class PartyBuilder:
             reason = core.unverified_mechanic_reason(sid)
             if reason and sid not in seen:
                 seen[sid] = {"species": sid, "status": "unknown", "reason": reason}
+            else:
+                prov = core.provisional_mechanic_reason(sid)
+                if prov and sid not in seen:
+                    seen[sid] = {"species": sid, "status": "provisional", "reason": prov}
         if scenario:
             for sid, w in (scenario.get("weights") or {}).items():
                 if w > 0:
@@ -596,6 +601,15 @@ class PartyBuilder:
                             "status": "unknown" if in_cat else "not_in_gamemaster_unknown",
                             "reason": reason if in_cat else (reason + "（現在のGameMasterに未登録のため数値計算対象外）"),
                         }
+                    else:
+                        prov = core.provisional_mechanic_reason(sid)
+                        if prov and sid not in seen:
+                            in_cat = bool(catalog and sid in catalog)
+                            seen[sid] = {
+                                "species": sid,
+                                "status": "provisional" if in_cat else "not_in_gamemaster_unknown",
+                                "reason": prov if in_cat else (prov + "（現在のGameMasterに未登録のため数値計算対象外）"),
+                            }
         return list(seen.values())
 
     def _compute(self, jid, args, catalog, species, cpms, engine, work, *, owner_scope=DEFAULT_OWNER):
@@ -1106,13 +1120,15 @@ class PartyBuilder:
                 evo_cmp["note"] = evolution_plan["note"]
                 meta_evolution = evo_cmp
         unverified_mechanics = self._collect_unverified(self._unique(pool + meta + enemy), active_scenario, catalog)
+        mimikyu_conservative = core.mimikyu_conservative_summary(ids, meta, matrix, weights)
 
         labels = {p["id"]: {"species": p["species"],
                   "moves": [p["fast"], p["charged1"], p["charged2"]],
                   "ivs": [p["atk"], p["def"], p["hp"]],
                   "cp": p["cp"], "level": p["level"],
                   "provisional": p["id"] in provisional_ids,
-                  "unverified_mechanic": core.unverified_mechanic_reason(p["species"])}
+                  "unverified_mechanic": core.unverified_mechanic_reason(p["species"]),
+                  "provisional_mechanic": core.provisional_mechanic_reason(p["species"])}
                   for p in self._unique(pool + meta + enemy)}
         not_calculated = list(refinement["unknown"]) if refinement else [
             "通常技限定の圧力", "受け後の仕事", "観測ベースのシールド温存",
@@ -1147,6 +1163,7 @@ class PartyBuilder:
                 "scenario": scenario_meta,
                 "scenario_comparison": scenario_comparison,
                 "meta_evolution": meta_evolution,
+                "mimikyu_conservative": mimikyu_conservative,
                 "unverified_mechanics": unverified_mechanics,
                 "labels": labels, "team": whole, "scenarios": scenarios,
                 "condition_weights": {"2-2": .50, "1-1": .20, "0-0": .10,

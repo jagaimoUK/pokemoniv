@@ -325,8 +325,9 @@ class BackendIntegrationP0Tests(unittest.TestCase):
             self.assertEqual(len(res0["roster"]), 6)
             self.assertEqual(len(res0["triples"]), 20)
             self.assertEqual(len(res0["recommended_three"]), 3)
-            self.assertGreater(res0["team"]["unknown_weight"], 0)
-            self.assertTrue(any(u["species"] == "mimikyu" and u["status"] == "unknown" for u in res0["unverified_mechanics"]))
+            self.assertEqual(res0["team"]["unknown_weight"], 0)
+            self.assertTrue(any(u["species"] == "mimikyu" and u["status"] == "provisional" for u in res0["unverified_mechanics"]))
+            self.assertIsNotNone(res0["mimikyu_conservative"])
             self.assertIsNotNone(res0["scenario_comparison"])
             self.assertIn("worst_case", res0["scenario_comparison"])
             self.assertIsNone(res0["refinement"])  # Extra detail is OFF by default!
@@ -404,8 +405,9 @@ class BackendIntegrationP0Tests(unittest.TestCase):
         self.assertEqual(len({self.species[res["labels"][x]["species"]]["dex"] for x in res["roster"]}), 6)
         self.assertEqual(len(res["triples"]), 20)
         self.assertEqual(len(res["recommended_three"]), 3)
-        self.assertGreater(res["team"]["unknown_weight"], 0)
-        self.assertTrue(any(u["species"] == "mimikyu" for u in res["unverified_mechanics"]))
+        self.assertEqual(res["team"]["unknown_weight"], 0)
+        self.assertTrue(any(u["species"] == "mimikyu" and u["status"] == "provisional" for u in res["unverified_mechanics"]))
+        self.assertIsNotNone(res["mimikyu_conservative"])
         self.assertIsNotNone(res["scenario_comparison"])
 
     def test_http_backend_ignores_payload_owner_scope_and_enforces_header_isolation(self):

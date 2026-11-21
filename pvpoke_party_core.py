@@ -20,10 +20,16 @@ EVALUATION_VERSION = "party-static-v1"
 def unverified_mechanic_reason(species_id):
     """Return explicit reason when a species' core battle mechanic is unverified/unsupported."""
     sid = str(species_id or "").strip().lower()
-    if sid == "mimikyu" or sid.startswith("mimikyu_"):
-        return "ミミッキュの「ばけのかわ」は現行エンジンで未検証のためunknown（勝敗未断定）として扱います"
     if sid == "minior" or sid.startswith("minior_"):
         return "メテノのリミットシールド/対面別最良戦略は現行エンジン未対応のためunknown（勝敗未断定）として扱います"
+    return None
+
+
+def provisional_mechanic_reason(species_id):
+    """Return explicit notice when a species is simulated with a provisional engine mechanic."""
+    sid = str(species_id or "").strip().lower()
+    if sid == "mimikyu" or sid.startswith("mimikyu_"):
+        return "ミミッキュの「ばけのかわ」はPvPoke仮仕様（最初のゲージ技をダメージ1で防ぐ）で計算しています"
     return None
 
 
@@ -994,4 +1000,52 @@ def evolve_meta_phases(meta_rows, base_weights, matrix, *, shields=STANDARD, alp
         "combined_weights": combined,
         "note": "対面マトリクスに基づく汎用3段階メタ遷移（Phase 1→2→3）を自動展開し、全段階の平均と最悪ケース耐性の両方で評価します。",
     }
+
+
+def mimikyu_conservative_summary(roster, meta_rows, matrix, weights):
+    """Compare standard PvPoke Disguise calculation vs conservative +1-shield equivalent.
+
+    When Mimikyu appears in the meta (or enemy), evaluates roster resilience at:
+    - standard (1-1 / 0-0 / 2-2)
+    - conservative (+1 shield on Mimikyu side: 1-2 for 1-1, 0-1 for 0-0)
+    """
+    mim_targets = [
+        r for r in meta_rows
+        if (r["species"] == "mimikyu" or r["species"].startswith("mimikyu_"))
+        and weights.get(r["id"], 0) > 0
+    ]
+    if not mim_targets:
+        return None
+    target = mim_targets[0]
+    tid = target["id"]
+    std_11 = max((lookup(matrix, own, tid, (1, 1)) for own in roster if lookup(matrix, own, tid, (1, 1)) is not None), default=None)
+    con_12 = max((lookup(matrix, own, tid, (1, 2)) for own in roster if lookup(matrix, own, tid, (1, 2)) is not None), default=None)
+    std_00 = max((lookup(matrix, own, tid, (0, 0)) for own in roster if lookup(matrix, own, tid, (0, 0)) is not None), default=None)
+    con_01 = max((lookup(matrix, own, tid, (0, 1)) for own in roster if lookup(matrix, own, tid, (0, 1)) is not None), default=None)
+    std_22 = max((lookup(matrix, own, tid, (2, 2)) for own in roster if lookup(matrix, own, tid, (2, 2)) is not None), default=None)
+
+    opponents = [r["id"] for r in meta_rows]
+    std_summary = team_summary(roster, opponents, matrix, weights, (1, 1))
+    # Build conservative matrix where Mimikyu targets use +1 shield rating if worse
+    con_matrix = dict(matrix)
+    for own in roster:
+        for t in mim_targets:
+            r_11 = lookup(matrix, own, t["id"], (1, 1))
+            r_12 = lookup(matrix, own, t["id"], (1, 2))
+            if r_11 is not None and r_12 is not None:
+                con_matrix[(own, t["id"], (1, 1))] = min(r_11, r_12)
+    con_summary = team_summary(roster, opponents, con_matrix, weights, (1, 1))
+    return {
+        "target_id": tid,
+        "target_species": target["species"],
+        "standard_1_1_best": std_11,
+        "conservative_1_2_best": con_12,
+        "standard_0_0_best": std_00,
+        "conservative_0_1_best": con_01,
+        "standard_2_2_best": std_22,
+        "standard_team_1_1": {"d0": std_summary["d0"], "coverage": std_summary["coverage"]},
+        "conservative_team_1_1": {"d0": con_summary["d0"], "coverage": con_summary["coverage"]},
+        "note": "通常計算（PvPoke標準 ばけのかわ仮仕様）に加え、相手ミミッキュ側のシールド+1枚相当（1-2 / 0-1）での保守的耐性を併記しています。",
+    }
+
 

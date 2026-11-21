@@ -386,7 +386,7 @@ function renderMetaWeightRows(){
   const ja=node('strong',partyDisplay(id));
   if(isExtra)span.append(node('span','追加','badge'),document.createTextNode(' '));
   const sub=catalog[id]?.name||id;
-  span.append(ja,node('small',sub+(id.startsWith('mimikyu')?' / ばけのかわ未検証(unknown)':'')));
+  span.append(ja,node('small',sub+(id.startsWith('mimikyu')?' / ばけのかわ仮仕様計算':'')));
   const select=node('select');select.dataset.species=id;select.setAttribute('aria-label',partyDisplay(id)+' の重要度');
   let options=[0,0.5,1,1.5,2,2.5,3,3.5,4,5,10,20],value=metaWeightValues[id]??1;
   if(!options.includes(value))options=[...options,value].sort((a,b)=>a-b);
@@ -590,11 +590,27 @@ $('scenarioDelete').onclick=async()=>{
 function renderUnknownBanner(result){
  const root=$('unknownBanner');root.replaceChildren();
  const items=result.unverified_mechanics||[];
- if(!items.length)return;
- const box=node('div',null,'alert-box');
- box.append(node('strong','未検証メカニクス（unknown表示・勝敗未断定）'));
- for(const item of items){addLine(box,partyDisplay(item.species)+'：'+item.reason);}
- root.append(box);
+ const unknownItems=items.filter(x=>x.status!=='provisional');
+ const provItems=items.filter(x=>x.status==='provisional');
+ if(unknownItems.length){
+  const box=node('div',null,'alert-box');
+  box.append(node('strong','未検証メカニクス（unknown表示・勝敗未断定）'));
+  for(const item of unknownItems){addLine(box,partyDisplay(item.species)+'：'+item.reason);}
+  root.append(box);
+ }
+ if(provItems.length||result.mimikyu_conservative){
+  const box=node('div',null,'evidence-box');
+  const head=node('div');
+  head.append(node('span','仮仕様ベース計算','badge warn'),document.createTextNode(' '),node('strong','ミミッキュ（ばけのかわ）'));
+  box.append(head);
+  for(const item of provItems){addLine(box,partyDisplay(item.species)+'：'+item.reason);}
+  const mc=result.mimikyu_conservative;
+  if(mc){
+   addLine(box,'通常計算（PvPoke標準 ばけのかわ仮仕様）: 1-1最良Rating '+(mc.standard_1_1_best??'—')+' / 0-0最良Rating '+(mc.standard_0_0_best??'—')+' / 2-2最良Rating '+(mc.standard_2_2_best??'—'));
+   addLine(box,'保守的評価（相手+1シールド相当）: 1-2最良Rating '+(mc.conservative_1_2_best??'—')+' / 0-1最良Rating '+(mc.conservative_0_1_best??'—')+' / 全体1-1補完度 '+pct(mc.standard_team_1_1.coverage)+' → '+pct(mc.conservative_team_1_1.coverage));
+  }
+  root.append(box);
+ }
 }
 function renderOverallSummary(result){
  const root=$('summaryResult');root.replaceChildren();
