@@ -69,7 +69,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          git add -- pvpoke_data_snapshot.py data/pvpoke_recommended_moves.json
+          git add -- pvpoke_data_snapshot.py
+          if [ -f data/pvpoke_recommended_moves.json ]; then
+            git add -- data/pvpoke_recommended_moves.json
+          fi
           if git diff --cached --quiet; then
             echo "No meaningful PvPoke source changes."
             exit 0
