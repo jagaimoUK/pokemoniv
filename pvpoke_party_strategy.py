@@ -8,7 +8,7 @@ import json
 import hashlib
 import math
 import time
-from pvpoke_party_core import digest, lookup, rank_partial, team_summary
+from pvpoke_party_core import digest, lookup, rank_partial, team_summary, unverified_mechanic_reason
 from pvpoke_direct_backend import DirectMatrixClient
 
 SCHEMA = 'strategy-detail-v1'
@@ -289,8 +289,9 @@ class StrategyAnalysis:
             for pid in own:
                 for target in selected:
                     tid = target['id']
-                    if any(rows[x]['species'].startswith('minior') for x in (pid, tid)):
-                        cells[pid, tid] = {'status': 'unknown', 'reason': 'メテノの固定戦略は未対応'}
+                    reason = next((r for x in (pid, tid) if (r := unverified_mechanic_reason(rows[x]['species']))), None)
+                    if reason:
+                        cells[pid, tid] = {'status': 'unknown', 'reason': reason}
                         continue
                     standard = {'kind': 'standard'}
                     base = {'self': combat(rows[pid]), 'opponent': combat(target), 'shields': [2, 2],

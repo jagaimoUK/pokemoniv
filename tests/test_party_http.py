@@ -43,7 +43,11 @@ class PartyHTTPTests(unittest.TestCase):
         self.assertNotIn(gateway.API_KEY, text)
 
     def test_all_mutation_and_read_operations_require_login(self):
-        for action in ("list", "get", "save", "start", "status", "cancel", "meta-weights"):
+        for action in (
+            "list", "get", "save", "rename", "start", "status", "cancel",
+            "meta-weights", "scoped-weights",
+            "scenario-list", "scenario-get", "scenario-save", "scenario-delete",
+        ):
             code, _ = self.request("/app-api/party/" + action, {}, authorized=False)
             self.assertEqual(code, 401)
 
