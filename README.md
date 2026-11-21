@@ -5,11 +5,17 @@ Current implementation: a single-user PvPoke calculation server, an authenticate
 - [Current development handoff (Japanese)](docs/development-handoff.md)
 - [Browser input, recommendation and copy behavior](docs/app-selection.md)
 
-The handoff and app documentation describe the current deployed behavior. The original deployment outline and limitations below are historical setup notes and may not describe the current implementation.
+## Deployment status: verify the current production target
 
-## Deployment outline
+**Railway is a historical hosting environment, not the current production hosting environment (per the project owner's 2026-11-21 clarification).** The current production provider, production URL, and deployed commit have **not** been independently verified in this document. Do not infer them from an old URL, a deployment guide, the `RAILWAY_VOLUME_MOUNT_PATH` compatibility variable, or an earlier GitHub PR/comment.
+
+Before describing or changing production, confirm the actual active service and deployment revision from its current hosting configuration. Development PRs and CI success do not establish production deployment. Never deploy to a historical Railway target based on this README. Do not merge PRs or deploy to production without explicit approval.
+
+The links and instructions below include **historical Railway examples**. They are retained for compatibility and provenance, not as evidence of today's production topology. The dated development handoff is a history of earlier implementations, not a live deployment inventory.
+
+## Historical deployment outline (Railway example; not current production)
 1. Upload these files to a private GitHub repository, or use a host that supports directory/Dockerfile deployments.
-2. Connect that repo to Railway (or an equivalent host) and create a Dockerfile-backed service.
+2. Historical example: connect that repo to Railway (or an equivalent host) and create a Dockerfile-backed service. This is **not** a current production deployment instruction.
 3. In the host's *secret environment variables* create `PVP_API_KEY`: a random string of **32 or more characters**. Do not put it in a source file, plugin ZIP, or ChatGPT message.
 4. Allocate about **2 GB RAM or more** for Chromium. A 512 MB free tier is unlikely to be reliable; check billing before deploying.
 5. Enable HTTPS on the host, retain exactly one application replica and stable `PORT`. The platform sets `PORT` if needed.
@@ -35,7 +41,7 @@ Then send `POST /mcp` with the Authorization header. Requests with missing or in
 
 ## Auth0 OAuth integration (experimental)
 
-See `AUTH0_SETUP.md` for how to configure Auth0 and Railway safely. The existing API key remains usable for testing.
+See `AUTH0_SETUP.md` for historical Auth0/Railway configuration notes; do not assume they match the current deployment. The existing API key remains usable for testing.
 
 
 ## 24-condition curated meta batch (experimental)
@@ -70,7 +76,7 @@ The default command is **read-only** and returns exit code 1 if the lists differ
 `--apply` preserves row order, repeated move sets, shadow spelling and all
 four columns. Unexpected extra columns, including embedded IVs, are rejected
 rather than silently discarded. After review, commit
-`pvpoke_meta_opponents.csv` to GitHub and verify Railway's deployment.
+`pvpoke_meta_opponents.csv` to GitHub and verify deployment on the **confirmed current hosting environment** (historically Railway).
 There is **no automatic synchronization** from ChatGPT Project storage: the
 current source file must be provided to this command explicitly.
 
@@ -109,7 +115,7 @@ changes ownership of **that directory only** to `appuser`.
 It immediately executes the existing `start.sh` as unprivileged
 `appuser` through `gosu`; the web server and Chromium never run as root.
 The mount directory is read from `RAILWAY_VOLUME_MOUNT_PATH` and must be
-an absolute path, not the filesystem root. Production mounts at `/data`.
+an absolute path, not the filesystem root. The historical Railway deployment mounted a volume at `/data`; **the current production mount path is unverified here**.
 
 ## One-switch meta batch modes
 
@@ -167,7 +173,7 @@ successfully saved, verified ZIP.
 
 # ブラウザだけで個体値厳選
 
-[アプリ版を開く](https://pokemoniv-production.up.railway.app/app)。既存の接続キーで接続し、
+**現在の本番URLはこのREADMEでは未確認です。** 以前のRailway URLを現行アプリとして案内しません。アクセス先は最新の本番デプロイ設定で確認してください。確認済みの環境で既存の接続キーを使用し、
 ポケモン・技・個体値を入力すると、全条件の計算から推薦理由と英語検索式まで表示する。
 GPT評価は従来どおり使用できる。自動判定の基準と接続方法は [アプリ推薦](docs/app-selection.md) を参照。
 
