@@ -1,0 +1,91 @@
+name: PvPoke event-aware data proposals
+
+on:
+  schedule:
+    # Calendar checks at 10:17 and 18:17 JST; upstream data is only fetched
+    # around event starts or on the Monday fallback.
+    - cron: '17 1,9 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Check upstream regardless of calendar events
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - 'tools/pvpoke_event_sync.py'
+      - 'tests/test_pvpoke_event_sync.py'
+      - 'pvpoke_app_catalog.py'
+      - '.github/workflows/pvpoke-event-sync.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pvpoke-event-data-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s tests -p 'test_pvpoke_event_sync.py' -v
+      - run: python -m py_compile tools/pvpoke_event_sync.py pvpoke_app_catalog.py
+
+  propose:
+    if: github.event_name != 'pull_request' && github.repository == 'jagaimoUK/pokemoniv'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check calendars and upstream; stage a proposed data revision
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          if [ "$FORCE" = "true" ]; then
+            python tools/pvpoke_event_sync.py --force --apply > /tmp/pvpoke-event-report.json
+          else
+            python tools/pvpoke_event_sync.py --apply > /tmp/pvpoke-event-report.json
+          fi
+          cat /tmp/pvpoke-event-report.json
+          echo "### PvPoke data check" >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/pvpoke-event-report.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify generated data
+        run: |
+          python -m unittest discover -s tests -p 'test_pvpoke_event_sync.py' -v
+          python -m py_compile tools/pvpoke_event_sync.py pvpoke_app_catalog.py pvpoke_data_snapshot.py
+      - name: Open draft proposal (never auto-merge or deploy)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          git add -- pvpoke_data_snapshot.py data/pvpoke_recommended_moves.json
+          if git diff --cached --quiet; then
+            echo "No meaningful PvPoke source changes."
+            exit 0
+          fi
+          existing="$(gh pr list --state open --json headRefName --jq \
+            '.[] | select(.headRefName | startswith("automation/pvpoke-update-")) | .headRefName' | head -n 1)"
+          if [ -n "$existing" ]; then
+            echo "Existing proposal $existing is still open. No new branch created."
+            exit 0
+          fi
+          branch="automation/pvpoke-update-$(date -u +%Y%m%d-%H%M%S)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -m "data: propose latest PvPoke GameMaster and GL recommended moves"
+          git push -u origin HEAD:"$branch"
+          gh pr create --base main --head "$branch" --draft \
+            --title "data: update PvPoke GameMaster and GL recommendations" \
+            --body "Automated upstream data proposal. Not deployed. Verify new moves, battle engine compatibility, recommended moves, and regression tests before manually merging. Personal saved presets and archives are not modified."
