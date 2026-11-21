@@ -12,6 +12,7 @@ from pvpoke_party_backend import PartyBuilder
 from pvpoke_rl_team_env import OUTCOME_REWARD, SCHEMA, SixToThreeEnvironment
 from pvpoke_rl_team_preview import FIELDS, six, prepared
 
+PAGE_PATH = "/app/team-battle"
 APP_PATH = "/app-api/team-battle/"
 API_PATH = "/api/team-battle/"
 OPERATIONS = ("start", "state", "step", "close")

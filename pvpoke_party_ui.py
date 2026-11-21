@@ -50,7 +50,7 @@ dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100
 .heatmap td{white-space:pre-line;font-variant-numeric:tabular-nums;padding:8px 2px;border-radius:8px}
 .heat-win{background:#236e96;color:#fff}.heat-mid{background:#85819e;color:#fff}.heat-loss{background:#953276;color:#fff}.heat-unknown{background:#52615d;color:#fff}
 @media(max-width:550px){main{padding:12px 10px 110px}section{padding:12px}.mon{padding:8px}.fields{grid-template-columns:1fr}}
-</style></head><body><main><nav><a href="/app">← 個体値厳選</a><a href="/flashcards">フラッシュカード</a></nav>
+</style></head><body><main><nav><a href="/app">← 個体値厳選</a><a href="/flashcards">フラッシュカード</a><!--TEAM_BATTLE_NAV--></nav>
 <h1>見せ合い6体・選出3体</h1><p>重要メタへの穴、15ペアの補完、20組の3体、相手6体への選出を分析するにぇ。Battle Ratingは実戦勝率ではありません。</p>
 <section id="auth"><h2>アプリに接続</h2><p>ログイン済みのブラウザでは自動接続します。</p><div class="tools"><input id="key" type="password" autocomplete="off" placeholder="接続キー"><button id="login">接続する</button></div></section>
 <div id="workspace" hidden>

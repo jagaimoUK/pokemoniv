@@ -113,6 +113,25 @@ class TeamBattleHTTPTests(unittest.TestCase):
         self.assertEqual(code, 200, next_state)
         return next_state
 
+    def test_practice_page_and_navigation_follow_the_api_flag(self):
+        def get(path):
+            connection = http.client.HTTPConnection(*self.gateway.server_address, timeout=5)
+            try:
+                connection.request("GET", path)
+                response = connection.getresponse()
+                return response.status, response.getheader("Content-Security-Policy"), response.read()
+            finally:
+                connection.close()
+
+        status, csp, document = get(battle.PAGE_PATH)
+        self.assertEqual(status, 200)
+        self.assertIn("script-src 'sha256-", csp)
+        self.assertIn(b'id="select-three"', document)
+        self.assertIn(b'href="/app/team-battle"', get("/app/party")[2])
+        with patch.dict(os.environ, {"PVP_TEAM_BATTLE_ENABLED": "0"}):
+            self.assertEqual(get(battle.PAGE_PATH)[0], 404)
+            self.assertNotIn(b'href="/app/team-battle"', get("/app/party")[2])
+
     def test_saved_party_to_native_ko_without_private_fields_or_writes(self):
         before = self.store.path.read_bytes()
         state = self.start()

@@ -225,6 +225,7 @@ jobs:
           docker run --rm -v "$PWD:/work" -w /work -e CHROME_BIN=/usr/bin/chromium --entrypoint node pokemoniv-browser-ci tests/browser_meta_editor_smoke.cjs
           docker run --rm -v "$PWD:/work" -w /work -e CHROME_BIN=/usr/bin/chromium --entrypoint node pokemoniv-browser-ci tests/browser_missing_analysis.cjs
           docker run --rm -v "$PWD:/work" -w /work -e CHROME_BIN=/usr/bin/chromium --entrypoint node pokemoniv-browser-ci tests/browser_sandbox.cjs
+          docker run --rm -v "$PWD:/work" -w /work -e CHROME_BIN=/usr/bin/chromium --entrypoint node pokemoniv-browser-ci tests/browser_team_battle.cjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

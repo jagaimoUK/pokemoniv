@@ -630,8 +630,14 @@ class Handler(BaseHTTPRequestHandler):
             page = browser_migration.page()
         elif self.path == '/flashcards':
             page = flashcards.page()
+        elif self.path == team_battle.PAGE_PATH:
+            if not team_battle.enabled():
+                return self.respond(404, {'error': 'Not found'})
+            from pvpoke_team_battle_ui import HTML as battle_html
+            page = battle_html
         elif self.path == '/app/party':
-            page = PARTY_HTML
+            link = '<a href="/app/team-battle">練習対戦</a>' if team_battle.enabled() else ''
+            page = PARTY_HTML.replace('<!--TEAM_BATTLE_NAV-->', link)
         else:
             tools = ('<a href="/app/missing">不足分析</a>' if missing_enabled() else '')
             if sandbox_enabled():
@@ -877,7 +883,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != '/health':
             is_app_shell = (
                 self.path in ('/', '/app', '/app/party', '/app/migration',
-                              MISSING_PAGE_PATH, SANDBOX_PAGE_PATH, SANDBOX_PAGE_PATH + '?observed=1')
+                              MISSING_PAGE_PATH, team_battle.PAGE_PATH, SANDBOX_PAGE_PATH, SANDBOX_PAGE_PATH + '?observed=1')
                 or self.path.startswith('/app?')
             )
             bucket = 'public-get' if is_app_shell else 'public-reader-get'
@@ -898,7 +904,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        if self.path in ('/flashcards', '/app/party', '/app/migration', MISSING_PAGE_PATH, SANDBOX_PAGE_PATH,
+        if self.path in ('/flashcards', '/app/party', '/app/migration', MISSING_PAGE_PATH, team_battle.PAGE_PATH, SANDBOX_PAGE_PATH,
                          SANDBOX_PAGE_PATH + '?observed=1'):
             return self.app_page()
         # This one read-only route contains only global, fixed PvP rankings
