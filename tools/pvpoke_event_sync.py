@@ -194,7 +194,12 @@ def candidate(now: datetime, *, fetch=download) -> dict:
     recommended = load_recommended(data["rankings"], gm)
     sha = {key: hashlib.sha256(data[key]).hexdigest() for key in ("gamemaster.json", "Pokemon.js")}
     old_source = SNAPSHOT.read_text(encoding="utf-8")
-    new_source = updated_snapshot(old_source, commit, sha)
+    # Do not change the pinned source merely because upstream changed docs or UI.
+    pins_match = all(
+        ("'" + name + "': ('" + UPSTREAM[name] + "', '" + sha[name] + "')" in old_source)
+        for name in ("gamemaster.json", "Pokemon.js")
+    )
+    new_source = old_source if pins_match else updated_snapshot(old_source, commit, sha)
     payload = {"schema": 1, "league": "great", "source_commit": commit,
                "source_sha256": hashlib.sha256(data["rankings"]).hexdigest(),
                "moves": recommended}
