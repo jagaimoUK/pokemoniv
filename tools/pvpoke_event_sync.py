@@ -205,6 +205,10 @@ def candidate(now: datetime, *, fetch=download) -> dict:
                "moves": recommended}
     raw_recommended = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
     old_recommended = RECOMMENDATIONS.read_text(encoding="utf-8") if RECOMMENDATIONS.exists() else ""
+    # Explicit verification target for the Nov 2026 Pawniard Community Day.
+    kingambit = next((p for p in gm["pokemon"] if p.get("speciesId") == "kingambit"), None)
+    kingambit_has_kowtow = bool(kingambit and
+                                "KOWTOW_CLEAVE" in kingambit.get("chargedMoves", []))
     # Rankings may be re-generated without changing recommendations; avoid noisy proposals.
     old_moves = json.loads(old_recommended).get("moves") if old_recommended else None
     if old_moves == recommended:
@@ -213,6 +217,8 @@ def candidate(now: datetime, *, fetch=download) -> dict:
             "game_changed": new_source != old_source,
             "recommendations_changed": raw_recommended != old_recommended,
             "commit": commit, "recommended_count": len(recommended),
+            "kingambit_has_kowtow_cleave": kingambit_has_kowtow,
+            "kingambit_recommended": recommended.get("kingambit"),
             "snapshot_content": new_source, "recommendations_content": raw_recommended}
 
 
@@ -242,7 +248,8 @@ def main(argv=None) -> int:
         return 0
     result = candidate(now)
     report.update({k: result[k] for k in ("changed", "game_changed", "recommendations_changed",
-                                          "commit", "recommended_count")})
+                                          "commit", "recommended_count",
+                                          "kingambit_has_kowtow_cleave", "kingambit_recommended")})
     if args.apply and result["changed"]:
         if result["game_changed"]:
             SNAPSHOT.write_text(result["snapshot_content"], encoding="utf-8")
