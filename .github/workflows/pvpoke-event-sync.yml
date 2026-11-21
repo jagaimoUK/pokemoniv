@@ -36,6 +36,8 @@ jobs:
           python-version: '3.12'
       - run: python -m unittest discover -s tests -p 'test_pvpoke_event_sync.py' -v
       - run: python -m py_compile tools/pvpoke_event_sync.py pvpoke_app_catalog.py
+      - name: Read-only upstream GameMaster and rankings compatibility check
+        run: python tools/pvpoke_event_sync.py --force
 
   propose:
     if: github.event_name != 'pull_request' && github.repository == 'jagaimoUK/pokemoniv'
