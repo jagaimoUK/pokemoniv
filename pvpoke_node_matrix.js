@@ -140,9 +140,10 @@ function loadMaster(filename) {
     gmDataFile = filename;
     gmDataHash = hash;
   }
+  return hash;
 }
 
-function createPokemon(row, index, battle) {
+function createPokemon(row, index, battle, {prepareSpecialForms = true, strictPreparation = false} = {}) {
   const required = ["species","fast","charged1","charged2","atk","def","hp","level","cp"];
   for (const key of required) {
     if (row[key] === undefined || row[key] === null) {
@@ -151,6 +152,9 @@ function createPokemon(row, index, battle) {
   }
   const poke = new Pokemon(row.species, index, battle);
   if (!poke || !poke.speciesId) throw Error("No species: " + row.species);
+  if (strictPreparation && (row.level < poke.baseLevelFloor || row.level > poke.baseLevelCap)) {
+    throw Error("Prepared level is outside the Pokemon's level bounds");
+  }
   poke.ivs.atk = Number(row.atk);
   poke.ivs.def = Number(row.def);
   poke.ivs.hp = Number(row.hp);
@@ -160,6 +164,10 @@ function createPokemon(row, index, battle) {
   if (poke.cp !== Number(row.cp)) {
     throw Error("CP mismatch: " + row.species + " " + poke.cp + " != " + row.cp);
   }
+  if (strictPreparation && (!poke.fastMovePool.some(m => m.moveId === row.fast) ||
+      ![row.charged1, row.charged2].every(id => poke.chargedMovePool.some(m => m.moveId === id)))) {
+    throw Error("Moveset is not in the pinned Pokemon move pool");
+  }
   poke.selectMove("fast", row.fast);
   poke.selectMove("charged", row.charged1, 0);
   poke.selectMove("charged", row.charged2, 1);
@@ -168,7 +176,7 @@ function createPokemon(row, index, battle) {
       poke.chargedMoves[1]?.moveId !== row.charged2) {
     throw Error("Move import mismatch: " + row.species);
   }
-  minior.preparePokemon(poke, gm.data);
+  if (prepareSpecialForms) minior.preparePokemon(poke, gm.data);
   return poke;
 }
 
@@ -278,5 +286,5 @@ async function main() {
     }
   }
 }
-module.exports = {loadMaster,strategyRunner};
+module.exports = {loadMaster, strategyRunner, createPokemon};
 if (require.main === module) main().catch(e=>{console.error(e);process.exit(2)});
