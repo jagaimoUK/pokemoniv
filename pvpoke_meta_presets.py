@@ -169,6 +169,14 @@ def save(work: Path, args: dict, species: dict) -> dict:
             obj['favorite_ids'] = [x for x in obj['favorite_ids'] if x != preset_id]
             if args['favorite']:
                 obj['favorite_ids'].append(preset_id)
+    elif action == 'delete':
+        preset_id = args.get('id')
+        if not isinstance(preset_id, str) or not any(p['id'] == preset_id for p in obj['items']):
+            raise ValueError('削除できるのはカスタムメタのみです')
+        obj['items'] = [p for p in obj['items'] if p['id'] != preset_id]
+        obj['favorite_ids'] = [x for x in obj['favorite_ids'] if x != preset_id]
+        if obj.get('default_id') == preset_id:
+            obj['default_id'] = None
     else:
         raise ValueError('未対応のプリセット操作です')
     _write(work, obj)
