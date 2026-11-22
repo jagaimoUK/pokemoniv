@@ -551,6 +551,119 @@ async function showSavedHistory(parent,instance){
  more.onclick=loadPage;
  await loadPage();
 }
+
+function renderIndividualSync(root,instance){
+ const panel=node('details','',root);
+ node('summary','確認済み個体をAndroidと同期',panel);
+ const load=node('button','登録個体を読み込む',panel), status=node('p','',panel,'note');
+ const editor=node('div','',panel);
+ let current=null, pending=null;
+ const held=new Map();
+ const fields={nickname:'希望ニックネーム',memo:'個体の育成メモ'};
+ function showEditor(){
+  editor.replaceChildren();
+  const id=current.individual.instance_id,sid=current.individual.species_id;
+  const ivs=current.individual.ivs;
+  node('p',(catalog[sid]?.name_ja||sid)+' '+[ivs.attack,ivs.defense,ivs.hp].join('/')+
+   (current.individual.current_cp?' CP '+current.individual.current_cp:'')+' ｜ '+id,editor);
+  const values={};
+  for(const [field,label] of Object.entries(fields)){
+   const titled=node('label',label,editor);
+   const input=node(field==='memo'?'textarea':'input','',titled);
+   input.maxLength=field==='memo'?400:12;
+   input.value=pending?.changes[field]?.value??current.fields[field].value;
+   input.disabled=Boolean(pending)||held.has(field);
+   values[field]=input;
+   if(held.has(field)){
+    const resolution=node('div','',editor);
+    node('p',label+'｜未適用の入力 '+held.get(field),resolution,'note');
+    function resolve(useDraft){
+     if(pending)return;
+     input.value=useDraft?held.get(field):current.fields[field].value;
+     held.delete(field);
+     input.disabled=false;
+     resolution.remove();
+     load.disabled=held.size>0;
+    }
+    node('button','この項目はWebの値を使う',resolution,'secondary').onclick=()=>resolve(false);
+    node('button','この項目は未適用の入力を使う',resolution,'secondary').onclick=()=>resolve(true);
+   }
+  }
+  const save=node('button','個体の項目を保存',editor);
+  save.onclick=async()=>{
+   if(!pending){
+    const changes={};
+    for(const [field,input] of Object.entries(values)){
+     if(!held.has(field)&&input.value!==current.fields[field].value)changes[field]={revision:current.fields[field].revision,value:input.value};
+    }
+    if(!Object.keys(changes).length)return;
+    pending={action:'individual_patch',instance_id:id,request_id:calculationRequestId(),changes};
+   }
+   save.disabled=true;load.disabled=true;
+   for(const input of Object.values(values))input.disabled=true;
+   try{
+    const result=await api('individual-sync',pending);
+    const conflicts=Object.keys(result.outcomes).filter(field=>result.outcomes[field]==='conflict');
+    for(const field of conflicts)held.set(field,pending.changes[field].value);
+    pending=null;current=result;
+    showEditor();
+    status.textContent=held.size
+     ? '競合を保留しました。Webの最新値と入力を見比べてください。'
+     : '保存しました。';
+   }catch(e){
+    status.textContent='応答を確認できません。同じ保存を再試行してください。';
+    save.disabled=false;
+   }finally{load.disabled=Boolean(pending)||held.size>0;}
+  };
+  const issue=node('button','この個体のAndroid接続コードを発行',editor,'secondary');
+  const codeArea=node('div','',editor);
+  issue.onclick=async()=>{
+   issue.disabled=true;
+   try{
+    const result=await api('individual-sync',{action:'issue',instance_id:id});
+    codeArea.replaceChildren();
+    const label=node('label','30日有効の接続コード。Androidの個体同期画面に貼り付けます。',codeArea);
+    const code=node('input','',label);code.readOnly=true;code.value=result.connection;
+   }catch(e){status.textContent=e.message;}
+   finally{issue.disabled=false;}
+  };
+ }
+ load.onclick=async()=>{
+  const id=instance.value.trim();
+  if(!id||pending||held.size)return;
+  load.disabled=true;editor.replaceChildren();status.textContent='';
+  try{
+   current=await api('individual-sync',{action:'individual_get',instance_id:id});
+   showEditor();
+  }catch(e){status.textContent=e.message;}
+  finally{load.disabled=false;}
+ };
+ const connections=node('details','',panel);
+ node('summary','Android接続を管理',connections);
+ const refresh=node('button','有効な接続を表示',connections,'secondary'), list=node('div','',connections);
+ refresh.onclick=async()=>{
+  refresh.disabled=true;
+  try{
+   const data=await api('individual-sync',{action:'connections'});
+   list.replaceChildren();
+   if(!data.items.length)node('p','有効な接続はありません。',list);
+   for(const item of data.items){
+    const row=node('div','',list);
+    node('p','発行 '+new Date(item.created*1000).toLocaleString()+' ｜ '+item.id.slice(0,12),row);
+    const revoke=node('button','この接続を解除',row,'secondary');
+    revoke.onclick=async()=>{
+     revoke.disabled=true;
+     try{
+      await api('individual-sync',{action:'revoke',id:item.id});
+      row.remove();
+     }catch(e){status.textContent=e.message;revoke.disabled=false;}
+    };
+   }
+  }catch(e){status.textContent=e.message;}
+  finally{refresh.disabled=false;}
+ };
+}
+
 function openSavedSelections(){
  const root=el('savedSelectionPanel');
  root.hidden=false;
@@ -590,6 +703,7 @@ function openSavedSelections(){
   try{await showSavedHistory(records,instance.value.trim());}
   finally{history.disabled=false;}
  };
+ renderIndividualSync(root,instance);
 }
 function renderSaveSelection(result,parent){
  const species=result.candidate.species;
@@ -1585,7 +1699,7 @@ el('resume').onclick=async()=>{
   else{const result=await finish(await api('result',{run_ref:runRef,wait_seconds:2}));renderSelectionResults([result]);runRef=null;sessionStorage.removeItem('pvpoke-app-run');el('resume').hidden=true;message('計算と結果の確認が完了しました。');}
  }catch(e){handleCalculationError(e);}finally{calculating=false;setBusy(false);}
 };
-el('disconnect').onclick=async()=>{try{await api('logout');}catch(e){message('ログアウトできませんでした。再試行してください。',true);return;}credential='';catalog={};metaState=null;selectedMetaId=null;clearMetaExport();nameEntries=[];opponentLabels.clear();displayedResults=[];nicknameBindings=[];presets=[];lastResult=null;setImportedJobs(null);batchState=null;el('results').replaceChildren();el('workspace').hidden=true;el('selectionSettingsOpen').hidden=true;el('selectionSettings').hidden=true;el('login').hidden=false;resetMetaUpload();message('接続を解除しました。このブラウザのログイン情報も削除しました。');};
+el('disconnect').onclick=async()=>{try{await api('logout');}catch(e){message('ログアウトできませんでした。再試行してください。',true);return;}credential='';catalog={};metaState=null;selectedMetaId=null;clearMetaExport();nameEntries=[];opponentLabels.clear();displayedResults=[];nicknameBindings=[];presets=[];lastResult=null;setImportedJobs(null);batchState=null;el('savedSelectionPanel').replaceChildren();el('savedSelectionPanel').hidden=true;el('results').replaceChildren();el('workspace').hidden=true;el('selectionSettingsOpen').hidden=true;el('selectionSettings').hidden=true;el('login').hidden=false;resetMetaUpload();message('接続を解除しました。このブラウザのログイン情報も削除しました。');};
 // Opt-in reader automation uses the existing authenticated browser and selected meta.
 let readerAutomation=null;
 try{readerAutomation=JSON.parse(sessionStorage.getItem('pokemoniv-reader-automation')||'null');}catch{}
