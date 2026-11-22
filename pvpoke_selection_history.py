@@ -5,7 +5,7 @@ import re
 from pvpoke_battle_service import _canonical_json, _integer, _items, _object
 from pvpoke_ownership import Ownership, OwnershipConflict, _id, _now
 
-ACTIONS = ('selection_save', 'selection_latest', 'selection_history')
+ACTIONS = ('selection_save', 'selection_latest', 'selection_history', 'selection_pool')
 FORM = r'[a-z0-9_\-]{1,100}'
 IV = r'(?:[0-9]|1[0-5])/(?:[0-9]|1[0-5])/(?:[0-9]|1[0-5])'
 SCHEMA = (
@@ -107,6 +107,32 @@ def _save(store, payload, species_ids):
         return {'revision': revision}
 
 
+def _latest_row(db, owner, species):
+    return db.execute(
+        """SELECT revision,saved_at,body FROM selection_snapshots_v1
+           WHERE owner_scope=? AND species_id=? ORDER BY revision DESC LIMIT 1""",
+        (owner, species)).fetchone()
+
+
+def _pool(db, owner, species_ids):
+    snapshots = {}
+    for species in species_ids:
+        row = _latest_row(db, owner, species)
+        if row is None:
+            continue
+        snapshot = json.loads(row[2])
+        if (snapshot['species_id'], snapshot['league'], snapshot['cp_cap']) != (species, 'great', 1500):
+            raise ValueError('Saved selection form or league differs')
+        candidates = snapshot['candidates']
+        snapshots[species] = {
+            'revision': row[0],
+            'ivs': list(dict.fromkeys(candidate['ivs'] for candidate in candidates)),
+            'links': [{key: candidate[key] for key in ('ivs', 'instance_id', 'goal')}
+                      for candidate in candidates if candidate['instance_id'] is not None],
+        }
+    return {'snapshots': snapshots}
+
+
 def app_operation(store, payload, species_ids=()):
     action = payload['action']
     if action == 'selection_save':
@@ -114,23 +140,26 @@ def app_operation(store, payload, species_ids=()):
     if action == 'selection_latest':
         _object(payload, 'latest selection', ('action', 'species_id'))
         key = _species(payload['species_id'])
+    elif action == 'selection_pool':
+        _object(payload, 'selection pool', ('action', 'species_ids'))
+        keys = dict.fromkeys(_species(value) for value in _items(payload['species_ids'], 'forms', 1, 128))
     elif action == 'selection_history':
         _object(payload, 'individual evaluation history', ('action', 'instance_id'), ('before',))
         key = _id(payload['instance_id'])
         before = _integer(payload.get('before', (1 << 63) - 1), 'before', 1, (1 << 63) - 1)
     else:
         raise ValueError('Unknown selection operation')
-    empty = {'snapshot': None} if action == 'selection_latest' else {'items': [], 'next_before': None}
+    empty = {'selection_latest': {'snapshot': None}, 'selection_pool': {'snapshots': {}},
+             'selection_history': {'items': [], 'next_before': None}}[action]
     if not store.path.exists():
         return empty
     with store._reader() as db:
         if not db.execute("SELECT 1 FROM sqlite_schema WHERE name='selection_snapshots_v1'").fetchone():
             return empty
+        if action == 'selection_pool':
+            return _pool(db, store.owner_scope, keys)
         if action == 'selection_latest':
-            row = db.execute(
-                """SELECT revision,saved_at,body FROM selection_snapshots_v1
-                   WHERE owner_scope=? AND species_id=? ORDER BY revision DESC LIMIT 1""",
-                (store.owner_scope, key)).fetchone()
+            row = _latest_row(db, store.owner_scope, key)
             return {'snapshot': dict(revision=row[0], saved_at=row[1], **json.loads(row[2])) if row else None}
         rows = db.execute(
             """SELECT s.revision,s.saved_at,s.body FROM selection_instances_v1 AS i

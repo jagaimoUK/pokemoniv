@@ -198,4 +198,36 @@ vm.runInContext("catalog={swadloon:{name:'Swadloon',name_ja:'クルマユ',nickn
  assert.equal(calls[0].data.request_id,calls[1].data.request_id);
  console.log('Explicit important/alternative save, individual goal and retry ID: OK');
 
+ // The standard run freezes the merged pool before planning, and force only disables the cache.
+ calls.length=0;
+ context.fetch=async(path,options)=>{
+  const data=JSON.parse(options.body);
+  calls.push({path,data});
+  if(data.action==='selection_pool')return {ok:true,json:async()=>({snapshots:{
+   swadloon:{revision:3,ivs:['1/2/3','0/12/11'],
+    links:[{ivs:'0/12/11',instance_id:'saved-alternative',goal:'PL 31'}]},
+   leavanny:{revision:9,ivs:['15/15/15'],links:[]},
+  }})};
+  return {ok:true,json:async()=>({...context.saved,run_ref:'diff-run'})};
+ };
+ vm.runInContext(`
+  catalog.swadloon.fastMoves=['FAST'];catalog.swadloon.chargedMoves=['CHARGE1','CHARGE2'];
+  selectedMetaId='fixture-meta';metaState={items:[{id:'fixture-meta',sha256:'a'.repeat(64)}]};
+  readerAutomation=null;importedJobs=null;batchState=null;runRef=null;
+  el('species').value='swadloon';el('fast').value='FAST';
+  el('charged1').value='CHARGE1';el('charged2').value='CHARGE2';
+  el('ivs').value='01、2、3';el('autoMoves').checked=false;
+  el('includeSaved').checked=true;el('forceRecalculate').checked=true;
+ `,context);
+ await vm.runInContext('startSelection()',context);
+ assert.deepEqual(calls.map(call=>call.path),['/app-api/missing-analysis','/app-api/run']);
+ assert.deepEqual(calls[0].data.species_ids,['swadloon']);
+ assert.equal(calls[1].data.ivs,'1,2,3\n0,12,11');
+ assert.equal(calls[1].data.force_recalculate,true);
+ assert.equal(vm.runInContext('lastResult.saved_selection.revision',context),3);
+ assert.deepEqual(JSON.parse(vm.runInContext('overlayExport([lastResult])',context)).items.map(item=>item.ivs),['1/2/3']);
+ const preserved=flat(els.results).filter(n=>n.value==='saved-alternative'||n.value==='PL 31');
+ assert.equal(preserved.length,2,'Previously confirmed ID and goal stay attached to the saved candidate');
+ console.log('Saved-and-new IV union, full recalculation toggle, preserved goal and safe export: OK');
+
 })();

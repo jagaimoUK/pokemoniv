@@ -120,6 +120,30 @@ class SelectionHistoryTests(unittest.TestCase):
             self.assertEqual(response['snapshot']['revision'], written['revision'])
             reserve.assert_not_called()
 
+    def test_pool_uses_only_latest_requested_forms_in_owner_scope(self):
+        query = dict(action='selection_pool', species_ids=['quagsire', 'wooper', 'wooper_paldean', 'quagsire'])
+        self.assertEqual(self.operation(query), {'snapshots': {}})
+        self.operation(self.payload())
+        latest = self.payload('new', goal='Current goal')
+        latest['candidates'][1]['ivs'] = '1/15/14'
+        latest['candidates'].append(dict(latest['candidates'][1]))
+        revision = self.operation(latest)['revision']
+        regional = self.payload('regional', species='wooper_paldean')
+        regional['candidates'] = regional['candidates'][1:]
+        self.operation(regional)
+
+        before = backup.sqlite_inventory(self.store.path)
+        pool = self.operation(query)['snapshots']
+        self.assertEqual(set(pool), {'quagsire', 'wooper_paldean'})
+        self.assertEqual(pool['quagsire'], {
+            'revision': revision, 'ivs': ['0/11/12', '1/15/14'],
+            'links': [{'ivs': '0/11/12', 'instance_id': 'confirmed-individual', 'goal': 'Current goal'}],
+        })
+        self.assertEqual(pool['wooper_paldean']['ivs'], ['0/12/11'])
+        foreign = BattleStore(self.store.path, owner_scope='another-owner')
+        self.assertEqual(self.operation(query, foreign), {'snapshots': {}})
+        self.assertEqual(backup.sqlite_inventory(self.store.path), before)
+
     def test_invalid_link_does_not_replace_latest_or_create_partial_history(self):
         first = self.operation(self.payload())
         for edits in ({'ivs': '15/15/15'}, {'instance_id': 'unknown'}, {'instance_id': None}):

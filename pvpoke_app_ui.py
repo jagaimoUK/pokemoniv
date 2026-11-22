@@ -83,7 +83,8 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <p id="movePlanSummary" class="note" aria-live="polite"></p>
 </details>
 <details><summary>自動推薦の基準を調整</summary><label for="lead">勝ち方向で採用するRating差（既定20）</label><input id="lead" type="number" min="1" max="1000" step="1" value="20"><p class="note">500の境界を越える役割は差にかかわらず確認します。負けたままのRating差は自動推薦にしません。</p></details>
-<label class="checkline" for="forceRecalculate"><input type="checkbox" id="forceRecalculate"> 保存結果を使わず再計算</label><p class="note">同じ対戦条件では過去の結果を再利用します。ゲームデータ・計算コードの更新時は自動で再計算します。</p>
+<label class="checkline" id="includeSavedLabel" for="includeSaved" hidden><input type="checkbox" id="includeSaved"> 同じ種族・フォルムの保存候補も比較</label>
+<label class="checkline" for="forceRecalculate"><input type="checkbox" id="forceRecalculate"> 対戦キャッシュを使わず全件再計算</label><p class="note">同じ対戦条件では過去の対戦結果を再利用します。ゲームデータ・計算コードの更新時は自動で再計算します。</p>
 <div class="actions"><button id="run">計算して推薦を表示</button><button id="cancelRun" class="secondary" type="button" hidden>計算を中止</button><button id="resume" class="secondary" hidden>前の計算を再開</button><button id="disconnect" class="secondary">接続を解除</button></div><p class="note">CP1500以下・最大Lv50。自分0/相手1、自分0/相手2、自分1/相手2も比較します。</p></section>
 <button id="savedSelectionOpen" type="button" class="secondary" hidden>保存済みの重要個体を見る</button>
 <section class="card" id="savedSelectionPanel" hidden></section>
@@ -263,7 +264,7 @@ function setCandidate(p){inputPokemonStatus=null;el('species').value=p.species;e
 function setPreset(){const p=presets.find(x=>presetKey(x)===el('preset').value);if(p)setCandidate(p);}
 function resolveTypedSpecies(){const raw=el('species').value.normalize('NFKC').trim().toLowerCase();if(['gourgeist','pumpkaboo','パンプジン','バケッチャ'].includes(raw)){message('このポケモンはサイズごとに能力が異なります。こだましゅ/XS、ちゅうだましゅ/通常、おおだましゅ/XL、ギガだましゅ/XXLを指定してください。',true);return;}const found=Object.entries(catalog).filter(([sid,p])=>[sid,p.name,p.name_ja,...(p.aliases||[])].some(x=>x&&String(x).normalize('NFKC').trim().toLowerCase()===raw));if(found.length===1)el('species').value=found[0][0];else if(found.length>1)message('複数のフォルムが一致しました。サイズやフォルムを指定してください。',true);}
 
-function setBusy(value){active=value;for(const id of ['bulkNormal','bulkShadow','bulkPurified','bulkStatusUndo'])el(id).disabled=value;for(const id of ['run','resume','disconnect','importInput','singleForm','forceRecalculate','autoMoves','moveStrategy','moveThreshold','fast','charged1','charged2'])el(id).disabled=value;for(const id of ['preset','allSpecies','species','ivs'])el(id).disabled=value||!!importedJobs;el('metaFile').disabled=value;el('metaApply').disabled=value||!metaPending||metaWorking;el('run').textContent=value?'計算を確認中…':'計算して結果を表示';el('cancelRun').hidden=!(value&&calculating);el('cancelRun').disabled=!(value&&calculating)||stopRequested;if(!el('selectionSettings').hidden)renderSelectionModes();syncMetaControls();if(!value&&readerImportPending&&!readerImportInFlight)Promise.resolve().then(autoImportReader);}
+function setBusy(value){active=value;for(const id of ['bulkNormal','bulkShadow','bulkPurified','bulkStatusUndo'])el(id).disabled=value;for(const id of ['run','resume','disconnect','importInput','singleForm','includeSaved','forceRecalculate','autoMoves','moveStrategy','moveThreshold','fast','charged1','charged2'])el(id).disabled=value;for(const id of ['preset','allSpecies','species','ivs'])el(id).disabled=value||!!importedJobs;el('metaFile').disabled=value;el('metaApply').disabled=value||!metaPending||metaWorking;el('run').textContent=value?'計算を確認中…':'計算して結果を表示';el('cancelRun').hidden=!(value&&calculating);el('cancelRun').disabled=!(value&&calculating)||stopRequested;if(!el('selectionSettings').hidden)renderSelectionModes();syncMetaControls();if(!value&&readerImportPending&&!readerImportInFlight)Promise.resolve().then(autoImportReader);}
 function node(tag,text,parent,cls=''){const n=document.createElement(tag);n.textContent=text;if(cls)n.className=cls;parent.append(n);return n;}
 async function copy(text,button){try{await navigator.clipboard.writeText(text);button.textContent='コピーしました';}catch{const root=el('message');message('コピーできませんでした。下の欄から選択してコピーしてください。',true);const area=node('textarea',text,root);area.value=text;area.readOnly=true;area.focus();area.select();}}
 // Result labels are resolved against the active catalog, including form names.
@@ -411,6 +412,7 @@ function xxlProtectedSearch(search){
  return parts.filter(term=>term.trim().toLowerCase()!=='!xxl').join('&');
 }
 function individualSearches(result,iv){
+ if(result.saved_selection?.added_ivs.includes(iv.ivs))return [];
  const matches=(result.source_records||[]).filter(r=>r.ivs===iv.ivs);
  // A size-group slot represents one owned Pokémon when the reader supplies CP.
  const records=result.gourgeist_group?matches.slice(0,1):matches;
@@ -431,6 +433,7 @@ async function copyOverlay(results,button){try{await copy(overlayExport(results)
 function recommendationExport(result){
  return (result.selection?.recommendations||[]).flatMap(row=>
   [row,...(row.equivalent_candidates||[])].flatMap(iv=>{
+   if(result.saved_selection?.added_ivs.includes(iv.ivs))return [];
    const nick=nicknameFor(result,row,iv.ivs);
    if(!nick)throw Error('ニックネームの生成に必要な個体値を確認できません。結果を再取得してください。');
    if(!iv.search_string)throw Error('検索式を確認できない個体があります。結果を再取得してください。');
@@ -441,9 +444,9 @@ function recommendationExport(result){
   })).join('\n');
 }
 function recommendationExportText(results){
- const available=results.filter(r=>r.selection?.recommendations?.length);
- if(!available.length)throw Error('共有する推薦個体がありません。');
- return available.map(recommendationExport).join('\n');
+ const exported=results.filter(hasExportableRecommendations).map(recommendationExport);
+ if(!exported.length)throw Error('共有する推薦個体がありません。');
+ return exported.join('\n');
 }
 async function copyRecommendations(results,button){try{await copy(recommendationExportText(results),button);}catch(e){message(e.message,true);}}
 // Chrome on Android can open an installed reader directly from the user's click.
@@ -478,7 +481,7 @@ async function shareRecommendations(results,button){
   message('Androidへの共有を開始できませんでした。既存の「すべてコピー」ボタンから取り込めます。',true);
  }
 }
-function renderSearch(row,parent,result){if(!row.search_string)return;for(const source of individualSearches(result||{},row)){node('label',source.cp?'検索式（読み取り時CP'+source.cp+'）':'検索式',parent);node('code',source.search,parent,'search');const b=node('button','検索式をコピー',parent);b.onclick=()=>copy(source.search,b);}}
+function renderSearch(row,parent,result){if(result?.saved_selection?.added_ivs.includes(row.ivs)){node('p','保存候補（今回の操作・共有の対象外）',parent,'note');return;}if(!row.search_string)return;for(const source of individualSearches(result||{},row)){node('label',source.cp?'検索式（読み取り時CP'+source.cp+'）':'検索式',parent);node('code',source.search,parent,'search');const b=node('button','検索式をコピー',parent);b.onclick=()=>copy(source.search,b);}}
 function refreshNicknames(){
  for(const item of nicknameBindings){
   const nick=nicknameFor(item.result,item.row,item.ivs);
@@ -497,8 +500,12 @@ function renderNickname(result,row,parent,ivs=row.ivs){
  nicknameBindings.push({result,row,ivs,label,code,button,note});
  button.onclick=()=>{const nick=nicknameFor(result,row,ivs);if(nick)copy(nick.text,button);};
 }
+function hasExportableRecommendations(result){
+ const rows=result.selection?.recommendations||[];
+ return rows.some(row=>[row,...(row.equivalent_candidates||[])].some(candidate=>!result.saved_selection?.added_ivs.includes(candidate.ivs)));
+}
 function updateAllCopy(){
- const available=displayedResults.filter(r=>r.selection?.recommendations?.length);
+ const available=displayedResults.filter(hasExportableRecommendations);
  const ordinary=available.filter(r=>!r.gourgeist_group).length;
  el('allCopyActions').hidden=ordinary+Number(ordinary<available.length)<2;
 }
@@ -515,6 +522,9 @@ function renderCopyActions(parent,results,all=false){
 
 function savedSelectionsEnabled(){
  return Boolean(document.querySelector?.('.quick-nav a[href="/app/missing"]'));
+}
+function isOrdinarySelectionForm(species){
+ return !/(?:^|[_-])(mega|primal)(?:$|[_-])/.test(species);
 }
 function savedBuildText(row){
  return row.ivs+'｜'+(row.role==='important'?'重要個体':'代替候補');
@@ -549,7 +559,7 @@ function openSavedSelections(){
  node('label','種族・フォルム',root).htmlFor='savedSelectionSpecies';
  const species=node('select','',root);species.id='savedSelectionSpecies';
  for(const sid of Object.keys(catalog).sort()){
-  if(/(?:^|[_-])(mega|primal)(?:$|[_-])/.test(sid))continue;
+  if(!isOrdinarySelectionForm(sid))continue;
   const option=node('option',(catalog[sid].name_ja||catalog[sid].name||sid)+' ('+sid+')',species);
   option.value=sid;
  }
@@ -583,7 +593,7 @@ function openSavedSelections(){
 }
 function renderSaveSelection(result,parent){
  const species=result.candidate.species;
- if(!savedSelectionsEnabled()||result.complete!==true||/(?:^|[_-])(mega|primal)(?:$|[_-])/.test(species))return;
+ if(!savedSelectionsEnabled()||result.complete!==true||!isOrdinarySelectionForm(species))return;
  const details=node('details','',parent);
  node('summary','この厳選結果を保存',details);
  node('p','個体別履歴に追加する場合は、不足分析の保有台帳で確認した登録個体IDを指定してください。IDが未入力の候補は、種族・フォルム別の結果にだけ保存します。',details,'note');
@@ -598,14 +608,20 @@ function renderSaveSelection(result,parent){
    if(!builds.has(item.ivs))builds.set(item.ivs,{ivs:item.ivs,role:'alternative',moves,evidence});
   }
  }
- const fields=[...builds.values()].map(row=>{
+ const savedLinks=new Map();
+ for(const link of result.saved_selection?.links||[]){
+  if(!savedLinks.has(link.ivs))savedLinks.set(link.ivs,[]);
+  savedLinks.get(link.ivs).push(link);
+ }
+ const fields=[...builds.values()].flatMap(row=>(savedLinks.get(row.ivs)||[null]).map(link=>{
   const group=node('div','',details);
   const idLabel=node('label',savedBuildText(row)+'の登録個体ID（任意）',group);
   const id=node('input','',idLabel);id.maxLength=100;
   const goalLabel=node('label','育成目標（任意）',group);
   const goal=node('input','',goalLabel);goal.maxLength=400;
+  if(link){id.value=link.instance_id;goal.value=link.goal;}
   return {row,id,goal};
- });
+ }));
  const save=node('button','最新結果として保存',details);
  let previous='',requestId='';
  save.onclick=async()=>{
@@ -637,7 +653,12 @@ function render(result,append=false){
  displayedResults.push(result);updateAllCopy();root.hidden=false;
  const panel=node('div','',root),sid=result.candidate.species;
  node('h2',result.display_name||catalog[sid]?.name_ja||result.selection?.english_name||sid,panel);
+ if(result.saved_selection){
+  node('p','保存版 '+result.saved_selection.revision+' を照合し、今回の候補に '+result.saved_selection.added_ivs.length+' 件の個体値を追加しました。',panel,'note');
+ }
  if(result.result_cache?.reused)node('p','過去の対戦結果を再利用しました。推薦は今回の条件で確認しています。',panel,'note');
+ else if(result.matchup_cache?.hits>0&&result.matchup_cache.bypassed===0&&!result.moveset_comparison)
+  node('p','対面を '+result.matchup_cache.hits+' 件再利用、'+result.matchup_cache.computed+' 件を計算しました。',panel,'note');
  if(result.meta_preset)node('p','対戦メタ：'+result.meta_preset.name+' / SHA256 '+result.meta_sha256.slice(0,12)+'…',panel,'note');
  node('p',[result.candidate.fast,result.candidate.charged1,result.candidate.charged2].join(' / '),panel,'note');const selection=result.selection;
  if(!selection){node('h2','GPT評価用の比較情報',panel);node('p','今回の比較情報をコピーしてGPTに評価を依頼できます。',panel);const b=node('button','比較情報をコピー',panel);b.onclick=()=>copy('以下のPvPoke実測比較を、個体値厳選の基準で評価してください。おすすめ個体と英語検索式を示してください。\n'+JSON.stringify(result),b);return;}
@@ -650,7 +671,7 @@ function render(result,append=false){
  if(selection.policy?.version&&selection.policy.version!=='box-first-v3'){
   node('p','保存済みの結果は以前の推薦基準です。最新のS本命・少数厳選を使うには、同じ入力を再計算してください。',panel,'note');
  }
- if(selection.recommendations.length){renderCopyActions(panel,[result]);node('p','検索式→改行→ニックネームの順で、同じ性能の代替個体も含めてコピーします。Androidへの送信は共有先で「厳選コピーリスト」を選んでください。Android Chromeではインストール済みの読み取りアプリを直接開きます。その他は共有メニューを使います。個体値の見出しを引き継ぐ場合は「Androidへ送る」か「オーバーレイ用にコピー」を使ってください。',panel,'note');}
+ if(hasExportableRecommendations(result)){renderCopyActions(panel,[result]);node('p','検索式→改行→ニックネームの順で、同じ性能の代替個体も含めてコピーします。Androidへの送信は共有先で「厳選コピーリスト」を選んでください。Android Chromeではインストール済みの読み取りアプリを直接開きます。その他は共有メニューを使います。個体値の見出しを引き継ぐ場合は「Androidへ送る」か「オーバーレイ用にコピー」を使ってください。',panel,'note');}
  if(selection.excluded&&(!Array.isArray(selection.excluded)||selection.excluded.length))node('p','計算対象から除外された対面があります：'+JSON.stringify(selection.excluded),panel);
  const searchCounts=new Map();for(const r of selection.recommendations)for(const item of [r,...(r.equivalent_candidates||[])]){for(const source of individualSearches(result,item)){const v=searchCounts.get(source.search)||new Set();v.add(item.ivs);searchCounts.set(source.search,v);}}if([...searchCounts.values()].some(x=>x.size>1))node('p','注意：同じ検索式に異なる個体値が含まれます。検索式は範囲指定なので、名前を付ける前に各個体の攻撃・防御・HPを確認してください。',panel,'note');
  if(selection.unmatched_focus.length)node('p','一致しなかった重要相手：'+selection.unmatched_focus.map(x=>opponentLabel(x).name).join('、'),panel);
@@ -1354,11 +1375,13 @@ function renderGourgeist(group,pending,root){
   node('p','比較用の候補データが揃っていない保存済み結果です。全候補を比較するには再計算してください。',panel,'note');
  const keep=selected.map(({result,row})=>({...result,gourgeist_group:true,selection:{...result.selection,recommendations:[row]}}));
  displayedResults.push(...keep);
- if(keep.length){
-  renderCopyActions(panel,keep);
-  if(keep.some(r=>!individualSearches(r,r.selection.recommendations[0])[0]?.cp))
+ const exportable=keep.filter(hasExportableRecommendations);
+ if(exportable.length){
+  renderCopyActions(panel,exportable);
+  if(exportable.some(r=>!individualSearches(r,r.selection.recommendations[0])[0]?.cp))
    node('p','読み取り時のCPがない検索式は、GO上で複数の個体に一致することがあります。',panel,'note');
- }else node('p','保存候補に該当する個体はありません。',panel,'note');
+ }
+ if(!keep.length)node('p','保存候補に該当する個体はありません。',panel,'note');
  for(const result of keep)renderRecommendation(result.selection.recommendations[0],panel,result);
  for(const source of group.filter((result,index)=>group.findIndex(r=>r.candidate.species===result.candidate.species)===index)){
   const recommendations=keep.filter(r=>r.candidate.species===source.candidate.species).flatMap(r=>r.selection.recommendations);
@@ -1434,6 +1457,7 @@ async function executeBatch(){
   result.display_name=job.name;
   result.source_sections=job.source_sections||[];result.source_records=job.source_records||[];result.pokemon_status=job.pokemon_status;
   result.moveset_group=job.moveset_group;result.moveset_plan=job.moveset_plan;
+  if(job.saved_selection)result.saved_selection=job.saved_selection;
   batchState.meta_sha256=result.meta_sha256;await honorStop();batchState.results.push(result);batchState.index++;
   batchState.run_ref=null;delete batchState.start_request_id;runRef=null;sessionStorage.removeItem('pvpoke-app-run');cacheBatch();
   renderBatchResults();
@@ -1443,7 +1467,7 @@ async function executeBatch(){
  if(readerAutomation)returnReaderAutomation(batchState.results);
  sessionStorage.removeItem('pvpoke-app-batch');batchState=null;runRef=null;el('resume').hidden=true;
 }
-async function connect(auto=false){credential=auto?'':el('credential').value.trim();if(!auto&&!credential){message('接続キーを入力してください。',true);return;}el('connect').disabled=true;try{if(!auto&&el('remember').checked){try{await api('session');credential='';}catch(e){if(e.status!==401)throw e;el('remember').checked=false;}}const cat=await api('catalog');if(!cat.ready)throw Error(cat.error||'ゲームデータを読込中です。少し待って接続してください。');catalog=cat.species;el('savedSelectionOpen').hidden=!savedSelectionsEnabled();el('savedSelectionOpen').onclick=openSavedSelections;moveCatalog=cat.moves||{};prepareLabels();presets=cat.app_presets||cat.presets;el('credential').value='';el('login').hidden=true;el('workspace').hidden=false;el('selectionSettingsOpen').hidden=false;updateLowScorePanelVisibility();const opts=el('preset');opts.replaceChildren();const custom=document.createElement('option');custom.value='';custom.textContent='直接指定・貼り付け';opts.append(custom);for(const p of presets){const o=document.createElement('option');o.value=presetKey(p);o.textContent=p.name+' / '+p.fast+' / '+p.charged1+' / '+p.charged2;opts.append(o);}el('presetHint').textContent='登録済みの技構成 '+presets.length+'件。プリセット外も、全ポケモンの選択・CSV貼り付けから計算できます。';const speciesOptions=Object.keys(catalog).sort((a,b)=>(catalog[a].name_ja||catalog[a].name||a).localeCompare(catalog[b].name_ja||catalog[b].name||b,'ja'));el('allSpecies').replaceChildren();el('speciesList').replaceChildren();for(const sid of speciesOptions){const label=(catalog[sid].name_ja||catalog[sid].name||sid)+' ('+sid+')';const o=document.createElement('option');o.value=sid;o.textContent=label;el('allSpecies').append(o);const hint=document.createElement('option');hint.value=sid;hint.label=label;el('speciesList').append(hint);}const preferred=presets.find(p=>p.species==='quagsire'&&p.charged2==='STONE_EDGE')||presets[0];if(preferred)setCandidate(preferred);runRef=sessionStorage.getItem('pvpoke-app-run');try{batchState=JSON.parse(sessionStorage.getItem('pvpoke-app-batch')||'null');}catch{batchState=null;}if(batchState?.jobs){const jobs=batchState.jobs.every(j=>j.moveset_group!==undefined)?batchState.jobs.filter((j,i,a)=>a.findIndex(x=>x.moveset_group===j.moveset_group)===i):batchState.jobs;setImportedJobs(jobs);if(batchState.auto_moves!==undefined)el('autoMoves').checked=batchState.auto_moves;if(batchState.move_threshold!==undefined)el('moveThreshold').value=batchState.move_threshold_setting??batchState.move_threshold;if(batchState.move_strategy)el('moveStrategy').value=batchState.move_strategy;}if(batchState?.results?.length)renderBatchResults();el('resume').hidden=!(runRef||batchState);message('接続できました。');if(new URLSearchParams(location.search||'').get('tool')==='low-score'){el('lowScorePanel').scrollIntoView?.();await loadLowScores();}await refreshMetaStatus(true);if(readerAutomation&&batchState&&batchState.reader_automation_digest!==readerAutomation.digest)throw Error('別の計算が残っています。既存の計算を完了または中止してください');await autoImportReader();if(readerAutomation&&batchState&&!active)Promise.resolve().then(()=>el('resume').onclick());}catch(e){credential='';if(!auto||e.status!==401)message(e.message,true);}finally{el('connect').disabled=false;}}
+async function connect(auto=false){credential=auto?'':el('credential').value.trim();if(!auto&&!credential){message('接続キーを入力してください。',true);return;}el('connect').disabled=true;try{if(!auto&&el('remember').checked){try{await api('session');credential='';}catch(e){if(e.status!==401)throw e;el('remember').checked=false;}}const cat=await api('catalog');if(!cat.ready)throw Error(cat.error||'ゲームデータを読込中です。少し待って接続してください。');catalog=cat.species;el('savedSelectionOpen').hidden=!savedSelectionsEnabled();el('includeSavedLabel').hidden=!savedSelectionsEnabled();el('savedSelectionOpen').onclick=openSavedSelections;moveCatalog=cat.moves||{};prepareLabels();presets=cat.app_presets||cat.presets;el('credential').value='';el('login').hidden=true;el('workspace').hidden=false;el('selectionSettingsOpen').hidden=false;updateLowScorePanelVisibility();const opts=el('preset');opts.replaceChildren();const custom=document.createElement('option');custom.value='';custom.textContent='直接指定・貼り付け';opts.append(custom);for(const p of presets){const o=document.createElement('option');o.value=presetKey(p);o.textContent=p.name+' / '+p.fast+' / '+p.charged1+' / '+p.charged2;opts.append(o);}el('presetHint').textContent='登録済みの技構成 '+presets.length+'件。プリセット外も、全ポケモンの選択・CSV貼り付けから計算できます。';const speciesOptions=Object.keys(catalog).sort((a,b)=>(catalog[a].name_ja||catalog[a].name||a).localeCompare(catalog[b].name_ja||catalog[b].name||b,'ja'));el('allSpecies').replaceChildren();el('speciesList').replaceChildren();for(const sid of speciesOptions){const label=(catalog[sid].name_ja||catalog[sid].name||sid)+' ('+sid+')';const o=document.createElement('option');o.value=sid;o.textContent=label;el('allSpecies').append(o);const hint=document.createElement('option');hint.value=sid;hint.label=label;el('speciesList').append(hint);}const preferred=presets.find(p=>p.species==='quagsire'&&p.charged2==='STONE_EDGE')||presets[0];if(preferred)setCandidate(preferred);runRef=sessionStorage.getItem('pvpoke-app-run');try{batchState=JSON.parse(sessionStorage.getItem('pvpoke-app-batch')||'null');}catch{batchState=null;}if(batchState?.jobs){const jobs=batchState.jobs.every(j=>j.moveset_group!==undefined)?batchState.jobs.filter((j,i,a)=>a.findIndex(x=>x.moveset_group===j.moveset_group)===i):batchState.jobs;setImportedJobs(jobs);if(batchState.auto_moves!==undefined)el('autoMoves').checked=batchState.auto_moves;if(batchState.move_threshold!==undefined)el('moveThreshold').value=batchState.move_threshold_setting??batchState.move_threshold;if(batchState.move_strategy)el('moveStrategy').value=batchState.move_strategy;}if(batchState?.results?.length)renderBatchResults();el('resume').hidden=!(runRef||batchState);message('接続できました。');if(new URLSearchParams(location.search||'').get('tool')==='low-score'){el('lowScorePanel').scrollIntoView?.();await loadLowScores();}await refreshMetaStatus(true);if(readerAutomation&&batchState&&batchState.reader_automation_digest!==readerAutomation.digest)throw Error('別の計算が残っています。既存の計算を完了または中止してください');await autoImportReader();if(readerAutomation&&batchState&&!active)Promise.resolve().then(()=>el('resume').onclick());}catch(e){credential='';if(!auto||e.status!==401)message(e.message,true);}finally{el('connect').disabled=false;}}
 el('connect').onclick=()=>connect(false);
 el('preset').onchange=()=>{bulkStatusUndo=null;el('bulkStatusUndo').hidden=true;setPreset();};el('species').onchange=()=>{inputPokemonStatus=null;bulkStatusUndo=null;el('bulkStatusUndo').hidden=true;resolveTypedSpecies();el('allSpecies').value=el('species').value;el('preset').value='';moves();};
 el('allSpecies').onchange=()=>{inputPokemonStatus=null;bulkStatusUndo=null;el('bulkStatusUndo').hidden=true;el('species').value=el('allSpecies').value;el('preset').value='';moves();};
@@ -1494,6 +1518,34 @@ el('cancelRun').onclick=async()=>{
   }
  }
 };
+
+async function includeSavedCandidates(jobs){
+ const speciesIds=[...new Set(jobs.map(job=>job.candidate.species).filter(isOrdinarySelectionForm))];
+ const snapshots=new Map();
+ for(let i=0;i<speciesIds.length;i+=128){
+  await honorStop();
+  const data=await api('missing-analysis',{action:'selection_pool',species_ids:speciesIds.slice(i,i+128)});
+  for(const [species,snapshot] of Object.entries(data.snapshots))snapshots.set(species,snapshot);
+ }
+ await honorStop();
+ return jobs.map(job=>{
+  const saved=snapshots.get(job.candidate.species);
+  if(!saved?.ivs.length)return job;
+  const incoming=job.ivs.replace(/[，、]/g,',').split(/\r?\n/).filter(line=>line.trim()).map(line=>{
+   const parts=line.split(',').map(part=>part.trim());
+   if(parts.length!==3||parts.some(part=>!/^\d{1,2}$/.test(part)||Number(part)>15))
+    throw Error(job.name+'の個体値を確認してください。');
+   return parts.map(Number).join('/');
+  });
+  const seen=new Set(incoming);
+  if(!incoming.length||seen.size!==incoming.length)throw Error(job.name+'の個体値が空欄または重複しています。');
+  const added=saved.ivs.filter(iv=>!seen.has(iv));
+  return {...job,ivs:[...incoming,...added].map(iv=>iv.replaceAll('/',',')).join('\n'),
+   candidate_count:incoming.length+added.length,
+   saved_selection:{revision:saved.revision,links:saved.links,added_ivs:added}};
+ });
+}
+
 async function startSelection(){
  el('evaluation').value='app';
  if(active||metaWorking||metaDraft)return;
@@ -1509,7 +1561,10 @@ async function startSelection(){
   const auto_moves=el('autoMoves').checked===true,threshold=Number(el('moveThreshold').value);
   if(auto_moves&&(!Number.isFinite(threshold)||threshold<0||threshold>1000))throw Error('技の平均Rating下限は0〜1000で指定してください');
   if(auto_moves&&el('evaluation').value!=='app')throw Error('自動の技比較は「アプリで自動推薦」で使用してください');
-  const mode=auto_moves?el('moveStrategy').value:'manual',jobs=planMovesets(freezeSelectionModes(inputJobs),mode);
+  const mode=auto_moves?el('moveStrategy').value:'manual';
+  const compareSaved=!readerAutomation&&savedSelectionsEnabled()&&el('includeSaved').checked===true;
+  const candidates=compareSaved?await includeSavedCandidates(inputJobs):inputJobs;
+  const jobs=planMovesets(freezeSelectionModes(candidates),mode);
   const compare_moves=el('evaluation').value==='app'&&(auto_moves||jobs.some((j,i,a)=>a.filter(x=>x.moveset_group===j.moveset_group).length>1));
   const plans=[...new Map(jobs.map(j=>[j.moveset_group,j.moveset_plan])).values()];
   el('movePlanSummary').textContent=plans.map(p=>p.selected+' / '+p.total+'構成を計算'+(p.omitted?'（選外 '+p.omitted+'構成は未計算）':'')+(p.incomplete?'。技性能データが不足しているため、自動候補の追加を省略しました。':'')).join(' / ');
