@@ -8,7 +8,8 @@ The MIT copyright, permission notice and disclaimer are retained in
 `vendor/pvpoke/LICENSE`.
 
 Local `Battle.js` modifications add actionPolicy, shieldPolicy and
-onMoveResolved hooks for strategy comparison and move event reporting.
+onMoveResolved hooks for strategy comparison and move event reporting. The
+local 3v3 runner opts into turn suspension, ordering and seeded buff hooks.
 The vendored engine is therefore not an entirely unmodified upstream copy.
 Game data fetched separately is not implied to be covered by this engine snapshot.
 Approved game data and CP-multiplier source snapshot:

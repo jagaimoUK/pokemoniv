@@ -39,6 +39,7 @@ import pvpoke_meta_presets as meta_presets
 import pvpoke_flashcards as flashcards
 import pvpoke_meta_variants as meta_variants
 from pvpoke_party_backend import PartyBuilder
+import pvpoke_team_battle as team_battle
 from pvpoke_battle_service import BattleService, MAX_REQUEST_BYTES as MAX_BATTLE_REQUEST_BYTES, _unique_object, _reject_constant
 from pvpoke_battle_store import BattleStore, BattleStoreError
 from pvpoke_missing_analysis import AnalysisUnavailable
@@ -69,6 +70,7 @@ BATCH_OUTPUT = WORK / 'batch24_results'
 MAX_CAND = MAX_CANDIDATES
 MAX_OPPS = 100
 PARTY = PartyBuilder(WORK)
+TEAM_BATTLES = team_battle.BattleSessions()
 PRESETS = [
     ('マリルリ', 'azumarill', 'BUBBLE', 'ICE_BEAM', 'PLAY_ROUGH'),
     ('オーダイル', 'feraligatr', 'SHADOW_CLAW', 'HYDRO_CANNON', 'ICE_BEAM'),
@@ -730,12 +732,48 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.respond(404, {'error': '見つかりません'})
 
+    def team_battle_request(self, operation, payload):
+        if not team_battle.enabled():
+            return self.respond(503, {'error': 'Team battle API is disabled'})
+        scopes = self.headers.get_all(team_battle.SCOPE_HEADER, [])
+        if len(scopes) != 1 or not team_battle.SCOPE.fullmatch(scopes[0]):
+            return self.respond(403, {'error': 'Battle scope required'})
+        scope = scopes[0]
+        try:
+            if operation == 'start':
+                with LOCK:
+                    ready, catalog = CATALOG['ready'], CATALOG['species']
+                if not ready:
+                    return self.respond(503, {'error': 'Game data unavailable'})
+                _, cpms, full_species = engine.game_data()
+                own, opponent = team_battle.saved_rosters(
+                    payload, PARTY.get_party, catalog=catalog, species=full_species,
+                    cpms=cpms, engine=engine)
+                result = TEAM_BATTLES.start(scope, engine.DATA / 'gamemaster.json', own, opponent)
+            elif operation == 'step':
+                token = try_reserve_compute('team_battle')
+                if token is None:
+                    return self.respond(409, {'error': 'Another calculation is running'})
+                try:
+                    result = TEAM_BATTLES.operate(scope, operation, payload)
+                finally:
+                    release_compute(token)
+            else:
+                result = TEAM_BATTLES.operate(scope, operation, payload)
+        except team_battle.BattleRequestError as exc:
+            return self.respond(exc.status, {'error': str(exc)})
+        except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
+            logging.warning('Team battle service failed: %s', type(exc).__name__)
+            return self.respond(503, {'error': 'Team battle service unavailable'})
+        return self.respond(200, result)
+
     def do_POST(self):
         global CANCEL_REQUESTED, BATTLE_RUNNING
         if not self._trusted_local_host():
             return self.respond(403, {'error': 'Local host required'})
         path = urlparse(self.path).path
-        if path not in ('/api/prepare','/api/run','/api/prepare24','/api/run24','/api/cancel','/api/meta/sync','/api/meta/preview','/api/meta/presets',
+        is_team_battle = path in team_battle.API_ROUTES
+        if not is_team_battle and path not in ('/api/prepare','/api/run','/api/prepare24','/api/run24','/api/cancel','/api/meta/sync','/api/meta/preview','/api/meta/presets',
                         '/api/party/list','/api/party/get','/api/party/save',
                         '/api/party/start','/api/party/status','/api/party/cancel','/api/party/meta-weights',
                          '/api/battles/simulate', MISSING_API_PATH, SANDBOX_API_PATH):
@@ -757,6 +795,8 @@ class Handler(BaseHTTPRequestHandler):
             n = int(self.headers.get('Content-Length','0'))
             limit = {MISSING_API_PATH: MAX_MISSING_REQUEST_BYTES}.get(
                 path, MAX_BATTLE_REQUEST_BYTES if common_battle else MAX_APP_REQUEST_BYTES)
+            if is_team_battle:
+                limit = team_battle.MAX_REQUEST_BYTES
             if n < 2 or n > limit:
                 raise ValueError('入力が大きすぎるか空です')
             raw = self.rfile.read(n)
@@ -764,6 +804,8 @@ class Handler(BaseHTTPRequestHandler):
                                  parse_constant=_reject_constant)
             if not isinstance(payload, dict):
                 raise ValueError('入力はJSONオブジェクトで指定してください')
+            if is_team_battle:
+                return self.team_battle_request(path.removeprefix(team_battle.API_PATH), payload)
             if common_battle:
                 enabled = {MISSING_API_PATH: missing_enabled, SANDBOX_API_PATH: sandbox_enabled}.get(path)
                 allowed = enabled() if enabled else os.environ.get('PVP_BATTLE_API_ENABLED') == '1'

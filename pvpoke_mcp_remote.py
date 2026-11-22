@@ -16,6 +16,8 @@ import os
 import hmac
 import time
 from functools import lru_cache
+from http.cookies import SimpleCookie
+from urllib.error import HTTPError
 from urllib.parse import urlparse
 try:
     import jwt
@@ -43,6 +45,7 @@ from pvpoke_score_search import search_low_scores
 from pvpoke_reader_cleanup import reader_cleanup_payload
 import pvpoke_flashcards as flashcards
 import pvpoke_browser_migration as browser_migration
+import pvpoke_team_battle as team_battle
 
 APP_ACCESS = AppAccess()
 
@@ -627,8 +630,14 @@ class Handler(BaseHTTPRequestHandler):
             page = browser_migration.page()
         elif self.path == '/flashcards':
             page = flashcards.page()
+        elif self.path == team_battle.PAGE_PATH:
+            if not team_battle.enabled():
+                return self.respond(404, {'error': 'Not found'})
+            from pvpoke_team_battle_ui import HTML as battle_html
+            page = battle_html
         elif self.path == '/app/party':
-            page = PARTY_HTML
+            link = '<a href="/app/team-battle">練習対戦</a>' if team_battle.enabled() else ''
+            page = PARTY_HTML.replace('<!--TEAM_BATTLE_NAV-->', link)
         else:
             tools = ('<a href="/app/missing">不足分析</a>' if missing_enabled() else '')
             if sandbox_enabled():
@@ -643,15 +652,38 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def app_request(self):
+    def team_battle_request(self, args, scope):
+        operation = self.path.removeprefix(team_battle.APP_PATH)
+        try:
+            result = backend._request(team_battle.API_PATH + operation, args, headers={
+                'X-PvPoke-Token': backend._token(),
+                team_battle.SCOPE_HEADER: scope,
+            }, timeout=20)
+        except (backend.BridgeError, TimeoutError) as exc:
+            cause = exc.__cause__
+            status = cause.code if isinstance(cause, HTTPError) else 503
+            messages = {
+                400: '対戦リクエストの入力を確認してください',
+                404: '保存パーティまたは対戦セッションが見つかりません',
+                409: '別の操作が先に進みました。対戦状態を取得し直してください',
+                422: '6体の編成または現在の合法行動を確認してください',
+                503: '対戦枠または対戦エンジンを利用できません',
+            }
+            if status not in messages:
+                status = 503
+            return self.respond(status, {'error': messages[status]})
+        return self.respond(200, result)
+
+    def app_request(self, *, battle_scope=None):
         """Only explicit app operations; never proxy arbitrary backend paths."""
-        if self.path not in ('/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result', '/app-api/cancel',
+        if self.path not in team_battle.APP_ROUTES and self.path not in ('/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result', '/app-api/cancel',
                              '/app-api/session', '/app-api/logout', '/app-api/visual-backup-connections', '/app-api/visual-backup-revoke', '/app-api/meta-status',
                              '/app-api/meta-preview', '/app-api/meta-apply', '/app-api/meta-presets', '/app-api/meta-preset-save', '/app-api/meta-preset-export', '/app-api/low-score', '/app-api/visual-backup-token', '/app-api/flashcards',
                              '/app-api/party/list', '/app-api/party/get', '/app-api/party/save',
                              '/app-api/party/start', '/app-api/party/status', '/app-api/party/cancel',
                              '/app-api/party/meta-weights', '/app-api/battles/simulate', MISSING_APP_PATH, SANDBOX_APP_PATH):
             return self.respond(404, {'error': 'Not found'})
+        is_team_battle = self.path in team_battle.APP_ROUTES
         origin = self.headers.get('Origin')
         if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'):
             return self.respond(403, {'error': 'Origin not allowed'})
@@ -663,6 +695,8 @@ class Handler(BaseHTTPRequestHandler):
             battle = self.path in ('/app-api/battles/simulate', SANDBOX_APP_PATH)
             limit = {MISSING_APP_PATH: MAX_MISSING_REQUEST_BYTES}.get(
                 self.path, MAX_BATTLE_REQUEST_BYTES if battle else MAX_APP_REQUEST_BYTES)
+            if is_team_battle:
+                limit = team_battle.MAX_REQUEST_BYTES
             if not 0 < size <= limit:
                 return self.respond(413, {'error': 'Invalid body size'})
             raw = self.read_body(size)
@@ -673,6 +707,12 @@ class Handler(BaseHTTPRequestHandler):
                               parse_constant=_reject_constant)
             if not isinstance(args, dict):
                 raise ValueError('入力はJSONオブジェクトで指定してください')
+            if is_team_battle:
+                if not team_battle.enabled():
+                    return self.respond(503, {'error': 'Team battle API is disabled'})
+                if self.path == team_battle.APP_PATH + 'start' and not self.rate_allowed('compute-owner', 12, 60):
+                    return
+                return self.team_battle_request(args, battle_scope)
             if workspace:
                 sandbox = self.path == SANDBOX_APP_PATH
                 if sandbox and args.get('action') in ('search_start', 'search_step') and os.environ.get(
@@ -843,7 +883,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != '/health':
             is_app_shell = (
                 self.path in ('/', '/app', '/app/party', '/app/migration',
-                              MISSING_PAGE_PATH, SANDBOX_PAGE_PATH, SANDBOX_PAGE_PATH + '?observed=1')
+                              MISSING_PAGE_PATH, team_battle.PAGE_PATH, SANDBOX_PAGE_PATH, SANDBOX_PAGE_PATH + '?observed=1')
                 or self.path.startswith('/app?')
             )
             bucket = 'public-get' if is_app_shell else 'public-reader-get'
@@ -864,7 +904,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        if self.path in ('/flashcards', '/app/party', '/app/migration', MISSING_PAGE_PATH, SANDBOX_PAGE_PATH,
+        if self.path in ('/flashcards', '/app/party', '/app/migration', MISSING_PAGE_PATH, team_battle.PAGE_PATH, SANDBOX_PAGE_PATH,
                          SANDBOX_PAGE_PATH + '?observed=1'):
             return self.app_page()
         # This one read-only route contains only global, fixed PvP rankings
@@ -984,11 +1024,22 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path in ('/app-api/session', '/app-api/visual-backup-token') and not self.rate_allowed('issue-owner', 12, 60):
             return
+        battle_scope = None
+        if self.path in team_battle.APP_ROUTES:
+            if bearer_ok:
+                credential = 'bearer:' + token
+            else:
+                cookies = SimpleCookie(self.headers.get('Cookie', ''))
+                credential = 'cookie:' + cookies[BROWSER_LOGIN.COOKIE_NAME].value
+            # Derive the scope from the credential that actually authenticated.
+            # Client-provided headers and the raw credential never reach the battle worker.
+            battle_scope = hmac.new(
+                API_KEY.encode(), ('team-battle:' + credential).encode(), 'sha256').hexdigest()
         if is_app:
             if not APP_REQUEST_SLOTS.acquire(blocking=False):
                 return self.respond(503, {'error': '処理中です。少し待って再試行してください'})
             try:
-                self.app_request()
+                self.app_request(battle_scope=battle_scope)
             finally:
                 APP_REQUEST_SLOTS.release()
             return
