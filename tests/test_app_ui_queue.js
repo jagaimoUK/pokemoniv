@@ -173,4 +173,29 @@ vm.runInContext("catalog={swadloon:{name:'Swadloon',name_ja:'クルマユ',nickn
  assert.equal(redundant.selected.length,1,'Do not fill a fixed quota for equivalent roles');
  console.log('Gourgeist: one family shortlist, no interim copies, useful extra roles, no filler, exact eight-copy ceiling: OK');
 
+ // Saving is explicit and includes equivalent builds plus a confirmed linkage.
+ context.document.querySelector=()=>({});
+ context.crypto=require('crypto').webcrypto;
+ context.saved.selection.recommendations[0].equivalent_candidates=[{ivs:'0/12/11'}];
+ context.fetch=async(path,options)=>{
+  calls.push({path,data:JSON.parse(options.body)});
+  return {ok:true,json:async()=>({revision:1})};
+ };
+ calls.length=0;
+ const target=element();
+ context.savePanel=target;
+ vm.runInContext('renderSaveSelection(saved,savePanel)',context);
+ const fields=target.children[0].children.filter(n=>n.children.length===2);
+ fields[0].children[0].children[0].value='confirmed-individual';
+ fields[0].children[1].children[0].value='PL 29.5';
+ const save=flat(target).find(n=>n.textContent==='最新結果として保存');
+ await save.onclick();
+ await save.onclick();
+ assert.equal(calls[0].path,'/app-api/missing-analysis');
+ assert.equal(calls[0].data.action,'selection_save');
+ assert.deepEqual(calls[0].data.candidates.map(r=>[r.role,r.instance_id,r.goal]),
+  [['important','confirmed-individual','PL 29.5'],['alternative',null,'']]);
+ assert.equal(calls[0].data.request_id,calls[1].data.request_id);
+ console.log('Explicit important/alternative save, individual goal and retry ID: OK');
+
 })();
