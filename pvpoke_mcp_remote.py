@@ -73,6 +73,8 @@ VERSION = '2025-06-18'
 MCP_URL = os.environ.get('PVP_MCP_URL', 'https://pokemoniv-production.up.railway.app/mcp').rstrip('/')
 APP_ORIGIN = '{0.scheme}://{0.netloc}'.format(urlparse(MCP_URL))
 ALLOWED_ORIGINS.add(APP_ORIGIN)
+EXTRA_ORIGINS = {orig.strip() for orig in os.environ.get('PVP_EXTRA_ORIGINS', '').split(',') if orig.strip()}
+ALLOWED_ORIGINS.update(EXTRA_ORIGINS)
 AUTH0_ISSUER_RAW = os.environ.get('AUTH0_ISSUER', '').strip().rstrip('/')
 AUTH0_ISSUER = AUTH0_ISSUER_RAW + '/' if AUTH0_ISSUER_RAW else ''
 JWT_AUDIENCE = os.environ.get('JWT_AUDIENCE', MCP_URL).strip()
@@ -695,7 +697,7 @@ class Handler(BaseHTTPRequestHandler):
                              WEB_SYNC_PATH, READER_SYNC_PATH):
             return self.respond(404, {'error': 'Not found'})
         origin = self.headers.get('Origin')
-        if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'):
+        if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}', *EXTRA_ORIGINS):
             return self.respond(403, {'error': 'Origin not allowed'})
         if self.headers.get('Content-Type', '').split(';')[0].strip().lower() != 'application/json':
             return self.respond(415, {'error': 'Content-Type must be application/json'})
@@ -854,7 +856,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def visual_backup_request(self):
         origin = self.headers.get('Origin')
-        if origin and origin != APP_ORIGIN:
+        if origin and origin != APP_ORIGIN and origin not in EXTRA_ORIGINS:
             return self.respond(403, {'error': 'Origin not allowed'})
         if self.headers.get('Content-Type', '').split(';')[0].strip().lower() != 'application/json':
             return self.respond(415, {'error': 'Content-Type must be application/json'})

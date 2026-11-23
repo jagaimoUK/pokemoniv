@@ -64,17 +64,37 @@ jobs:
             --tag "$TAG" \
             --allow-unauthenticated \
             --port 8080 \
-            --set-env-vars PVP_MISSING_ANALYSIS_ENABLED=1,PVP_API_KEY=pokemoniv-preview-key-32chars-exact-min,PVP_PREVIEW_SEED=1,PVP_ARCHIVE_DIR=/tmp \
+            --set-env-vars PVP_MISSING_ANALYSIS_ENABLED=1,PVP_API_KEY=pokemoniv-preview-key-32chars-exact-min,PVP_PREVIEW_SEED=1,PVP_ARCHIVE_DIR=/tmp,PVP_MCP_URL=https://pokemoniv-preview-lq4d56znoa-an.a.run.app/mcp,PVP_EXTRA_ORIGINS=https://pokemoniv-preview-lq4d56znoa-an.a.run.app \
             --quiet
 
-          # Retrieve the tagged URL or service URL
-          URL=$(gcloud run services describe pokemoniv-preview --region asia-northeast1 --format="value(status.traffic[?tag=='${TAG}'].url)")
-          if [ -z "$URL" ]; then
-            URL=$(gcloud run services describe pokemoniv-preview --region asia-northeast1 --format="value(status.url)")
-          fi
+          # Retrieve the service URL
+          URL=$(gcloud run services describe pokemoniv-preview --region asia-northeast1 --format="value(status.url)")
           echo "PREVIEW_URL=${URL}" >> $GITHUB_ENV
           echo "PREVIEW_URL=${URL}" >> $GITHUB_OUTPUT
           echo "Deployed Preview URL: $URL"
+
+      - name: Verify preview health endpoint
+        run: |
+          echo "Checking preview health at ${PREVIEW_URL}/health..."
+          for i in $(seq 1 20); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${PREVIEW_URL}/health" || true)
+            echo "Attempt $i: HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "Preview service is healthy!"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Service failed to become healthy. Dumping logs:"
+          gcloud run services logs read pokemoniv-preview --region asia-northeast1 --limit 50 || true
+          exit 1
+
+      - name: Issue Smoke Test Connection Code
+        id: token
+        run: |
+          CODE=$(python3 -c "from pvpoke_individual_sync import IndividualConnections; print(IndividualConnections('pokemoniv-preview-key-32chars-exact-min').issue('smoke-known-1'))")
+          echo "SMOKE_CODE=${CODE}" >> $GITHUB_ENV
+          echo "SMOKE_CODE=${CODE}" >> $GITHUB_OUTPUT
 
       - name: Post Preview URL Comment to PR
         if: github.event_name == 'pull_request'
@@ -82,7 +102,8 @@ jobs:
         with:
           script: |
             const url = process.env.PREVIEW_URL;
-            const body = `### 🚀 Cloud Run Preview 環境がデプロイされました！\n\n- **プレビューURL (Staging)**: ${url}\n- **対象コミット**: \`${context.sha}\`\n- **設定**: \`PVP_MISSING_ANALYSIS_ENABLED=1\`, 合成個体（ヌオー 0/11/12 CP1498）シード済み\n\n#### 実機テスト（S1〜S4）の進め方\n1. 上記URLをブラウザで開き、ヌオーの画面から接続コードを発行（またはログから取得）\n2. Androidアプリ「PokemonIVReader (Debug)」の「確認済み個体の同期」画面下部にある **「隔離テスト用HTTPSオリジン」** に上記URL（ \`${url}\` ）を入力して「隔離HTTPSオリジンを適用」をタップ\n3. 接続コードを貼り付けてS1〜S4のテストを開始！`;
+            const code = process.env.SMOKE_CODE;
+            const body = `### 🚀 Cloud Run Preview 環境がデプロイされました！\n\n- **プレビューURL (Staging)**: ${url}\n- **対象コミット**: \`${context.sha}\`\n- **設定**: \`PVP_MISSING_ANALYSIS_ENABLED=1\`, 合成個体（ヌオー 0/11/12 CP1498）シード済み\n\n#### 実機テスト（S1〜S4）用 接続コード\n\`\`\`text\n${code}\n\`\`\`\n\n#### 実機テスト（S1〜S4）の進め方\n1. Androidアプリ「PokemonIVReader (Debug)」の「確認済み個体の同期」画面下部にある **「隔離テスト用HTTPSオリジン」** に上記URL（ \`${url}\` ）を入力して「隔離HTTPSオリジンを適用」をタップ\n2. 上記の **接続コード** を貼り付けて「接続して読み込み」をタップ（S1: ヌオー CP1498 0/11/12 が表示されれば成功！）\n3. S2〜S4のシナリオを実施！`;
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
