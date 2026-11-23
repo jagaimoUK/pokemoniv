@@ -2,13 +2,13 @@
 import os
 from pathlib import Path
 from pvpoke_archive import archive_dir
-from pvpoke_auth_store import CredentialStore
 from pvpoke_battle_store import BattleStore
-from pvpoke_individual_sync import IndividualConnections
 from pvpoke_ownership import Ownership
 
 
 def seed():
+    if os.environ.get('RAILWAY_VOLUME_MOUNT_PATH'):
+        raise RuntimeError('Refusing to seed preview data when RAILWAY_VOLUME_MOUNT_PATH is set')
     data_dir = archive_dir(Path('.'))
     data_dir.mkdir(parents=True, exist_ok=True)
     store = BattleStore.from_volume()
@@ -25,16 +25,6 @@ def seed():
         print('Cloud Run Preview: synthetic Quagsire seeded into', store.path, flush=True)
     except Exception as exc:
         print('Cloud Run Preview seed note:', type(exc).__name__, exc, flush=True)
-
-    api_key = os.environ.get('PVP_API_KEY', '')
-    if api_key:
-        try:
-            creds = CredentialStore()
-            connections = IndividualConnections(api_key, creds)
-            code = connections.issue('smoke-known-1')
-            print(f'=== PREVIEW_CONNECTION_CODE: {code} ===', flush=True)
-        except Exception as exc:
-            print('Could not issue startup preview code:', type(exc).__name__, exc, flush=True)
 
 
 if __name__ == '__main__':

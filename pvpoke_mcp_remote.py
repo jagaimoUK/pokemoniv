@@ -67,13 +67,33 @@ BACKUP_TOKENS = BackupTokens(API_KEY)
 INDIVIDUAL_CONNECTIONS = IndividualConnections(API_KEY)
 if VISUAL_BACKUP.enabled:
     threading.Thread(target=VISUAL_BACKUP.probe, daemon=True).start()
+def parse_extra_origins(raw):
+    origins = set()
+    for item in raw.split(','):
+        candidate = item.strip()
+        if not candidate:
+            continue
+        parsed = urlparse(candidate)
+        if parsed.scheme not in ('https', 'http') or not parsed.netloc or parsed.username or parsed.password:
+            raise ValueError(f'Invalid PVP_EXTRA_ORIGINS entry: {candidate!r}')
+        if parsed.path not in ('', '/') or parsed.params or parsed.query or parsed.fragment or '*' in parsed.netloc:
+            raise ValueError(f'Invalid PVP_EXTRA_ORIGINS entry: {candidate!r}')
+        if parsed.scheme == 'http' and parsed.hostname not in ('127.0.0.1', 'localhost'):
+            raise ValueError(f'Non-local PVP_EXTRA_ORIGINS entry must use HTTPS: {candidate!r}')
+        origins.add(f'{parsed.scheme}://{parsed.netloc}')
+    return origins
+
+
 ALLOWED_ORIGINS = {'https://chatgpt.com', 'https://chat.openai.com', f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'}
 VERSION = '2025-06-18'
 # OAuth is enabled only when the authenticated user's Auth0 tenant is configured.
 MCP_URL = os.environ.get('PVP_MCP_URL', 'https://pokemoniv-production.up.railway.app/mcp').rstrip('/')
 APP_ORIGIN = '{0.scheme}://{0.netloc}'.format(urlparse(MCP_URL))
 ALLOWED_ORIGINS.add(APP_ORIGIN)
-EXTRA_ORIGINS = {orig.strip() for orig in os.environ.get('PVP_EXTRA_ORIGINS', '').split(',') if orig.strip()}
+try:
+    EXTRA_ORIGINS = parse_extra_origins(os.environ.get('PVP_EXTRA_ORIGINS', ''))
+except ValueError as exc:
+    raise SystemExit(str(exc)) from exc
 ALLOWED_ORIGINS.update(EXTRA_ORIGINS)
 AUTH0_ISSUER_RAW = os.environ.get('AUTH0_ISSUER', '').strip().rstrip('/')
 AUTH0_ISSUER = AUTH0_ISSUER_RAW + '/' if AUTH0_ISSUER_RAW else ''

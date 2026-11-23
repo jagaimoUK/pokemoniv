@@ -6,11 +6,28 @@ on:
     branches:
       - main
       - fix/*
+    paths:
+      - 'Dockerfile'
+      - 'start.sh'
+      - 'volume_bootstrap.sh'
+      - 'nginx.conf.template'
+      - 'requirements.lock'
+      - '**.py'
+      - '**.js'
+      - '**.html'
+      - 'data/**'
+      - 'vendor/**'
+      - '.github/workflows/cloud-run-preview.yml'
   workflow_dispatch:
+    inputs:
+      deploy_reason:
+        description: 'Reason for manual preview deployment'
+        required: false
+        default: 'manual-smoke'
 
 concurrency:
-  group: cloud-run-preview-${{ github.ref }}
-  cancel-in-progress: true
+  group: cloud-run-preview-service
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -18,12 +35,43 @@ permissions:
 
 jobs:
   deploy-preview:
-    if: github.repository == 'jagaimoUK/pokemoniv'
+    if: >
+      github.repository == 'jagaimoUK/pokemoniv' &&
+      (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python for pre-deploy checks
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Pre-deploy static checks and synthetic unit tests
+        run: |
+          sh -n start.sh volume_bootstrap.sh
+          python3 -m py_compile pvpoke_mcp_remote.py pvpoke_seed_preview.py pvpoke_individual_sync.py
+          python3 -m unittest tests/test_preview_security.py tests/test_individual_sync.py tests/test_proxy_gateway.py tests/test_security_regressions.py
+
+      - name: Validate required preview secrets
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          PREVIEW_PVP_API_KEY: ${{ secrets.PREVIEW_PVP_API_KEY }}
+        run: |
+          set -eu
+          if [ -z "$GCP_PROJECT_ID" ] || [ -z "$GCP_SA_KEY" ]; then
+            echo "::error::GCP_PROJECT_ID and GCP_SA_KEY secrets are required."
+            exit 1
+          fi
+          if [ "${#PREVIEW_PVP_API_KEY}" -lt 32 ]; then
+            echo "::error::PREVIEW_PVP_API_KEY secret (32+ chars, separate from production) must be configured in GitHub Secrets."
+            exit 1
+          fi
 
       - name: Authenticate to Google Cloud
         id: auth
@@ -47,66 +95,204 @@ jobs:
         env:
           IMAGE_TAG: asia-northeast1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/pokemoniv-preview/app:${{ github.sha }}
         run: |
-          docker build -t "$IMAGE_TAG" -t asia-northeast1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/pokemoniv-preview/app:latest .
+          docker build -t "$IMAGE_TAG" .
           docker push "$IMAGE_TAG"
 
-      - name: Deploy revision to Cloud Run with PR tag
+      - name: Deploy revision to Cloud Run
         id: deploy
         env:
           IMAGE_TAG: asia-northeast1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/pokemoniv-preview/app:${{ github.sha }}
-          PR_NUM: ${{ github.event.pull_request.number || '124' }}
+          PREVIEW_PVP_API_KEY: ${{ secrets.PREVIEW_PVP_API_KEY }}
         run: |
-          TAG="pr-${PR_NUM}"
-          # Deploy dedicated preview service with revision tag
+          set -eu
+          EXISTING_URL=$(gcloud run services describe pokemoniv-preview --region asia-northeast1 --format='value(status.url)' 2>/dev/null || true)
+          ENV_FILE=$(mktemp)
+          chmod 600 "$ENV_FILE"
+          trap 'rm -f "$ENV_FILE"' EXIT
+          EXISTING_URL="$EXISTING_URL" python3 - "$ENV_FILE" <<'PY'
+          import json, os, sys
+          env = {
+              'PVP_MISSING_ANALYSIS_ENABLED': '1',
+              'PVP_API_KEY': os.environ['PREVIEW_PVP_API_KEY'],
+              'PVP_PREVIEW_SEED': '1',
+              'PVP_ARCHIVE_DIR': '/tmp',
+          }
+          existing_url = os.environ.get('EXISTING_URL', '').strip().rstrip('/')
+          if existing_url:
+              env['PVP_MCP_URL'] = f'{existing_url}/mcp'
+              env['PVP_EXTRA_ORIGINS'] = existing_url
+          with open(sys.argv[1], 'w', encoding='utf-8') as f:
+              for k, v in env.items():
+                  f.write(f'{k}: {json.dumps(v)}\n')
+          PY
+
           gcloud run deploy pokemoniv-preview \
             --image "$IMAGE_TAG" \
             --region asia-northeast1 \
-            --tag "$TAG" \
             --allow-unauthenticated \
             --port 8080 \
-            --set-env-vars PVP_MISSING_ANALYSIS_ENABLED=1,PVP_API_KEY=pokemoniv-preview-key-32chars-exact-min,PVP_PREVIEW_SEED=1,PVP_ARCHIVE_DIR=/tmp,PVP_MCP_URL=https://pokemoniv-preview-lq4d56znoa-an.a.run.app/mcp,PVP_EXTRA_ORIGINS=https://pokemoniv-preview-lq4d56znoa-an.a.run.app \
+            --min-instances 0 \
+            --max-instances 1 \
+            --concurrency 20 \
+            --cpu 1 \
+            --memory 1Gi \
+            --timeout 120 \
+            --env-vars-file "$ENV_FILE" \
             --quiet
 
-          # Retrieve the service URL
           URL=$(gcloud run services describe pokemoniv-preview --region asia-northeast1 --format="value(status.url)")
-          echo "PREVIEW_URL=${URL}" >> $GITHUB_ENV
-          echo "PREVIEW_URL=${URL}" >> $GITHUB_OUTPUT
+          if [ -z "$EXISTING_URL" ] && [ -n "$URL" ]; then
+            gcloud run services update pokemoniv-preview \
+              --region asia-northeast1 \
+              --update-env-vars "PVP_MCP_URL=${URL}/mcp,PVP_EXTRA_ORIGINS=${URL}" \
+              --quiet
+          fi
+          echo "PREVIEW_URL=${URL}" >> "$GITHUB_ENV"
+          echo "PREVIEW_URL=${URL}" >> "$GITHUB_OUTPUT"
           echo "Deployed Preview URL: $URL"
 
-      - name: Verify preview health endpoint
+      - name: Post-deploy health and synthetic API smoke test
+        env:
+          PREVIEW_PVP_API_KEY: ${{ secrets.PREVIEW_PVP_API_KEY }}
         run: |
+          set -eu
           echo "Checking preview health at ${PREVIEW_URL}/health..."
+          READY=0
           for i in $(seq 1 20); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${PREVIEW_URL}/health" || true)
+            STATUS=$(curl -s -o /tmp/health.json -w "%{http_code}" "${PREVIEW_URL}/health" || true)
             echo "Attempt $i: HTTP $STATUS"
             if [ "$STATUS" = "200" ]; then
-              echo "Preview service is healthy!"
-              exit 0
+              READY=1
+              break
             fi
             sleep 2
           done
-          echo "Service failed to become healthy. Dumping logs:"
-          gcloud run services logs read pokemoniv-preview --region asia-northeast1 --limit 50 || true
-          exit 1
+          if [ "$READY" -ne 1 ]; then
+            echo "Service failed to become healthy. Dumping logs:"
+            gcloud run services logs read pokemoniv-preview --region asia-northeast1 --limit 50 || true
+            exit 1
+          fi
 
-      - name: Issue Smoke Test Connection Code
-        id: token
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+          from pvpoke_individual_sync import IndividualConnections
+
+          base = os.environ['PREVIEW_URL'].rstrip('/')
+
+          with open('/tmp/health.json', 'r', encoding='utf-8') as f:
+              health = json.load(f)
+          assert health.get('ok') is True, f'Unexpected health payload: {health}'
+          assert health.get('visual_backup', {}).get('enabled') is False, 'Preview must not enable production visual backup'
+
+          with urllib.request.urlopen(f'{base}/app', timeout=15) as resp:
+              assert resp.status == 200, f'/app returned {resp.status}'
+
+          req_unauth = urllib.request.Request(
+              f'{base}/app-api/reader-sync',
+              data=json.dumps({'action': 'individual_get', 'instance_id': 'smoke-known-1'}).encode('utf-8'),
+              headers={'Content-Type': 'application/json'},
+              method='POST',
+          )
+          try:
+              urllib.request.urlopen(req_unauth, timeout=15)
+              raise AssertionError('Unauthenticated reader-sync call must be rejected')
+          except urllib.error.HTTPError as exc:
+              assert exc.code == 401, f'Expected 401, got {exc.code}'
+
+          # Issue short-lived (120s) synthetic token in memory; never print or log the token.
+          token = IndividualConnections(os.environ['PREVIEW_PVP_API_KEY'], ttl=120).issue('smoke-known-1')
+          headers = {
+              'Content-Type': 'application/json',
+              'Authorization': f'Bearer {token}',
+          }
+          req_ok = urllib.request.Request(
+              f'{base}/app-api/reader-sync',
+              data=json.dumps({'action': 'individual_get', 'instance_id': 'smoke-known-1'}).encode('utf-8'),
+              headers=headers,
+              method='POST',
+          )
+          with urllib.request.urlopen(req_ok, timeout=15) as resp:
+              assert resp.status == 200
+              data = json.load(resp)
+          ind = data.get('individual', {})
+          assert ind.get('instance_id') == 'smoke-known-1'
+          assert ind.get('species_id') == 'quagsire'
+          assert ind.get('current_cp') == 1498
+          assert ind.get('ivs') == {'attack': 0, 'defense': 11, 'hp': 12}
+
+          req_cross = urllib.request.Request(
+              f'{base}/app-api/reader-sync',
+              data=json.dumps({'action': 'individual_get', 'instance_id': 'other-id'}).encode('utf-8'),
+              headers=headers,
+              method='POST',
+          )
+          try:
+              urllib.request.urlopen(req_cross, timeout=15)
+              raise AssertionError('Cross-instance access must be rejected')
+          except urllib.error.HTTPError as exc:
+              assert exc.code == 403, f'Expected 403, got {exc.code}'
+          print('Post-deploy synthetic smoke tests: PASS')
+          PY
+
+      - name: Prune older unused Cloud Run revisions (best-effort)
         run: |
-          CODE=$(python3 -c "from pvpoke_individual_sync import IndividualConnections; print(IndividualConnections('pokemoniv-preview-key-32chars-exact-min').issue('smoke-known-1'))")
-          echo "SMOKE_CODE=${CODE}" >> $GITHUB_ENV
-          echo "SMOKE_CODE=${CODE}" >> $GITHUB_OUTPUT
+          ACTIVE_REV=$(gcloud run services describe pokemoniv-preview --region asia-northeast1 --format='value(status.traffic[].revisionName)' | tr ';' '\n' | sort -u)
+          ALL_REVS=$(gcloud run revisions list --service=pokemoniv-preview --region asia-northeast1 --sort-by='~creationTimestamp' --format='value(metadata.name)')
+          COUNT=0
+          for rev in $ALL_REVS; do
+            COUNT=$((COUNT + 1))
+            if [ "$COUNT" -le 3 ]; then
+              continue
+            fi
+            if echo "$ACTIVE_REV" | grep -Fxq "$rev"; then
+              continue
+            fi
+            gcloud run revisions delete "$rev" --region asia-northeast1 --quiet || true
+          done
 
-      - name: Post Preview URL Comment to PR
+      - name: Upsert Preview URL Comment on PR
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
+            const marker = '<!-- cloud-run-preview-status -->';
             const url = process.env.PREVIEW_URL;
-            const code = process.env.SMOKE_CODE;
-            const body = `### 🚀 Cloud Run Preview 環境がデプロイされました！\n\n- **プレビューURL (Staging)**: ${url}\n- **対象コミット**: \`${context.sha}\`\n- **設定**: \`PVP_MISSING_ANALYSIS_ENABLED=1\`, 合成個体（ヌオー 0/11/12 CP1498）シード済み\n\n#### 実機テスト（S1〜S4）用 接続コード\n\`\`\`text\n${code}\n\`\`\`\n\n#### 実機テスト（S1〜S4）の進め方\n1. Androidアプリ「PokemonIVReader (Debug)」の「確認済み個体の同期」画面下部にある **「隔離テスト用HTTPSオリジン」** に上記URL（ \`${url}\` ）を入力して「隔離HTTPSオリジンを適用」をタップ\n2. 上記の **接続コード** を貼り付けて「接続して読み込み」をタップ（S1: ヌオー CP1498 0/11/12 が表示されれば成功！）\n3. S2〜S4のシナリオを実施！`;
-            github.rest.issues.createComment({
+            const body = [
+              marker,
+              '### 🚀 Cloud Run Preview 環境が更新されました',
+              '',
+              `- **プレビューURL (Staging)**: ${url}`,
+              `- **対象コミット**: \`${context.sha}\``,
+              '- **構成**: `PVP_MISSING_ANALYSIS_ENABLED=1`, `PVP_ARCHIVE_DIR=/tmp`（本番ボリューム非接続）, 合成個体（`smoke-known-1` ヌオー 0/11/12 CP1498）シード済み',
+              '',
+              '#### 実機テスト（S1〜S4）の進め方',
+              `1. ブラウザで \`${url}/app\` を開き、GitHub Secrets に登録した \`PREVIEW_PVP_API_KEY\` でログインします`,
+              '2. 個体同期欄に `smoke-known-1` を入力して読み込み、**「この個体のAndroid接続コードを発行」** から接続コードを取得します（※セキュリティ保護のため、接続コードやAPIキーはこのPRコメントには記載しません）',
+              `3. Androidアプリ「PokemonIVReader (Debug)」の「確認済み個体の同期」画面下部にある **「隔離テスト用HTTPSオリジン」** に \`${url}\` を入力して適用し、発行した接続コードを貼り付けて S1〜S4 を実施します`,
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: body
+              per_page: 100
             });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body
+              });
+            }
