@@ -1,0 +1,89 @@
+name: Cloud Run Preview Deployment
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+      - fix/*
+  workflow_dispatch:
+
+concurrency:
+  group: cloud-run-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  deploy-preview:
+    if: github.repository == 'jagaimoUK/pokemoniv'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker authentication for Artifact Registry
+        run: |
+          gcloud auth configure-docker asia-northeast1-docker.pkg.dev --quiet
+
+      - name: Ensure Artifact Registry Repository exists
+        run: |
+          gcloud artifacts repositories describe pokemoniv-preview --location=asia-northeast1 --quiet || \
+          gcloud artifacts repositories create pokemoniv-preview --repository-format=docker --location=asia-northeast1 --description="Preview images for pokemoniv PRs" --quiet
+
+      - name: Build and push container image
+        env:
+          IMAGE_TAG: asia-northeast1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/pokemoniv-preview/app:${{ github.sha }}
+        run: |
+          docker build -t "$IMAGE_TAG" -t asia-northeast1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/pokemoniv-preview/app:latest .
+          docker push "$IMAGE_TAG"
+
+      - name: Deploy revision to Cloud Run with PR tag
+        id: deploy
+        env:
+          IMAGE_TAG: asia-northeast1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/pokemoniv-preview/app:${{ github.sha }}
+          PR_NUM: ${{ github.event.pull_request.number || '124' }}
+        run: |
+          TAG="pr-${PR_NUM}"
+          # Deploy with traffic 0% to prevent affecting production, but with an isolated tag URL
+          gcloud run deploy pokemoniv-preview \
+            --image "$IMAGE_TAG" \
+            --region asia-northeast1 \
+            --tag "$TAG" \
+            --no-traffic \
+            --allow-unauthenticated \
+            --port 8080 \
+            --set-env-vars PVP_MISSING_ANALYSIS_ENABLED=1,PVP_API_KEY=pokemoniv-preview-key-32chars-exact-min,PVP_PREVIEW_SEED=1,PVP_ARCHIVE_DIR=/tmp \
+            --quiet
+
+          # Retrieve the tagged URL
+          URL=$(gcloud run services describe pokemoniv-preview --region asia-northeast1 --format="value(status.traffic[?tag=='${TAG}'].url)")
+          echo "PREVIEW_URL=${URL}" >> $GITHUB_ENV
+          echo "PREVIEW_URL=${URL}" >> $GITHUB_OUTPUT
+          echo "Deployed Preview URL: $URL"
+
+      - name: Post Preview URL Comment to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const url = process.env.PREVIEW_URL;
+            const body = `### 🚀 Cloud Run Preview 環境がデプロイされました！\n\n- **プレビューURL (Staging)**: ${url}\n- **対象コミット**: \`${context.sha}\`\n- **設定**: \`PVP_MISSING_ANALYSIS_ENABLED=1\`, 合成個体（ヌオー 0/11/12 CP1498）シード済み\n\n#### 実機テスト（S1〜S4）の進め方\n1. 上記URLをブラウザで開き、ヌオーの画面から接続コードを発行（またはログから取得）\n2. Androidアプリ「PokemonIVReader (Debug)」の「確認済み個体の同期」画面下部にある **「隔離テスト用HTTPSオリジン」** に上記URL（ \`${url}\` ）を入力して「隔離HTTPSオリジンを適用」をタップ\n3. 接続コードを貼り付けてS1〜S4のテストを開始！`;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
