@@ -57,19 +57,21 @@ jobs:
           PR_NUM: ${{ github.event.pull_request.number || '124' }}
         run: |
           TAG="pr-${PR_NUM}"
-          # Deploy with traffic 0% to prevent affecting production, but with an isolated tag URL
+          # Deploy dedicated preview service with revision tag
           gcloud run deploy pokemoniv-preview \
             --image "$IMAGE_TAG" \
             --region asia-northeast1 \
             --tag "$TAG" \
-            --no-traffic \
             --allow-unauthenticated \
             --port 8080 \
             --set-env-vars PVP_MISSING_ANALYSIS_ENABLED=1,PVP_API_KEY=pokemoniv-preview-key-32chars-exact-min,PVP_PREVIEW_SEED=1,PVP_ARCHIVE_DIR=/tmp \
             --quiet
 
-          # Retrieve the tagged URL
+          # Retrieve the tagged URL or service URL
           URL=$(gcloud run services describe pokemoniv-preview --region asia-northeast1 --format="value(status.traffic[?tag=='${TAG}'].url)")
+          if [ -z "$URL" ]; then
+            URL=$(gcloud run services describe pokemoniv-preview --region asia-northeast1 --format="value(status.url)")
+          fi
           echo "PREVIEW_URL=${URL}" >> $GITHUB_ENV
           echo "PREVIEW_URL=${URL}" >> $GITHUB_OUTPUT
           echo "Deployed Preview URL: $URL"
