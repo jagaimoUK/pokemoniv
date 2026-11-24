@@ -45,6 +45,8 @@ from pvpoke_missing_analysis import AnalysisUnavailable
 from pvpoke_missing_comparison import API_PATH as MISSING_API_PATH, MAX_REQUEST_BYTES as MAX_MISSING_REQUEST_BYTES
 from pvpoke_missing_comparison import app_operation as missing_operation, enabled as missing_enabled
 from pvpoke_ownership import OwnershipConflict, OwnershipUnavailable
+from pvpoke_individual_sync import ACTIONS as SYNC_ACTIONS, IndividualUnavailable, app_operation as sync_operation
+from pvpoke_selection_history import ACTIONS as SELECTION_ACTIONS, app_operation as selection_operation
 from pvpoke_sandbox_workspace import API_PATH as SANDBOX_API_PATH, TacticConflict, TacticUnavailable
 from pvpoke_tactic_search import TacticSearchError
 from pvpoke_tactic_evidence import TacticEvidenceUnavailable
@@ -776,6 +778,28 @@ class Handler(BaseHTTPRequestHandler):
                         return self.respond(503, {'error': 'Could not list saved tactics'})
                     except ValueError:
                         return self.respond(400, {'error': 'Invalid tactic list request'})
+                if path == MISSING_API_PATH and payload.get('action') in SYNC_ACTIONS:
+                    try:
+                        return self.respond(200, sync_operation(BattleStore.from_volume(), payload))
+                    except IndividualUnavailable:
+                        return self.respond(404, {'error': 'Confirmed individual required'})
+                    except OwnershipConflict:
+                        return self.respond(409, {'error': 'Sync request ID conflicts'})
+                    except (OwnershipUnavailable, BattleStoreError, OSError, sqlite3.Error):
+                        return self.respond(503, {'error': 'Individual storage unavailable'})
+                    except ValueError as exc:
+                        return self.respond(400, {'error': str(exc)})
+                if path == MISSING_API_PATH and payload.get('action') in SELECTION_ACTIONS:
+                    try:
+                        with LOCK:
+                            species_ids = frozenset(CATALOG.get('species', {}))
+                        return self.respond(200, selection_operation(BattleStore.from_volume(), payload, species_ids))
+                    except OwnershipConflict:
+                        return self.respond(409, {'error': 'Selection save conflicts with an earlier request'})
+                    except (OwnershipUnavailable, BattleStoreError, OSError, sqlite3.Error):
+                        return self.respond(503, {'error': 'Selection storage unavailable'})
+                    except ValueError as exc:
+                        return self.respond(400, {'error': str(exc)})
                 with LOCK:
                     catalog_ready = CATALOG.get('ready')
                 if not catalog_ready:

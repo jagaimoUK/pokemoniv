@@ -8,6 +8,7 @@ SQLite backup() gives database-level consistency, not cross-file consistency.
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -46,7 +47,7 @@ def _cell(value):
 
 def sqlite_inventory(path):
     """Call on an offline snapshot; returns no data values, only counts/hashes."""
-    with sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True) as db:
+    with closing(sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)) as db:
         check = [x[0] for x in db.execute("PRAGMA integrity_check")]
         if check != ["ok"]:
             raise ValueError("SQLite integrity check failed")
@@ -73,8 +74,8 @@ def sqlite_snapshot(source, target, timeout=120):
         if time.monotonic() > deadline:
             raise TimeoutError("SQLite backup exceeded time limit; retry after quiescing writes")
 
-    with sqlite3.connect(Path(source).resolve().as_uri() + "?mode=ro", uri=True) as src:
-        with sqlite3.connect(target) as dst:
+    with closing(sqlite3.connect(Path(source).resolve().as_uri() + "?mode=ro", uri=True)) as src:
+        with closing(sqlite3.connect(target)) as dst, dst:
             src.backup(dst, pages=256, progress=progress, sleep=0.05)
     return sqlite_inventory(target)
 

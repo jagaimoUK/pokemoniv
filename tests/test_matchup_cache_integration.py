@@ -1,17 +1,19 @@
 """Cross-job integration: exact overlap reuse through the real batch runner."""
-import csv
 import json
 import tempfile
 import unittest
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
+from zipfile import ZipFile
 
 import pvpoke_batch_v2 as engine
+from pvpoke_24_workflow import split_matrix
+from pvpoke_app_selection import recommendations_from_zip
 
 
 class CacheRunnerIntegrationTests(unittest.TestCase):
-    def test_adding_iv_only_simulates_new_pairs_and_reordering_is_browser_free(self):
+    def test_added_iv_reuses_only_valid_pairs_and_rebuilds_the_same_recommendation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             work = root / "work"
@@ -51,8 +53,8 @@ class CacheRunnerIntegrationTests(unittest.TestCase):
                               "Wins", "Losses", "Draws", "Average"]
                     rows = [header]
                     for x in a:
-                        ratings = [str(510 + x["atk"]*9 - y["atk"]*20 - shield[0]*2)
-                                   for y in b]
+                        scores = ((540, 470), (480, 560), (570, 530))
+                        ratings = [str(scores[x["atk"]][y["atk"]] - shield[0]*2) for y in b]
                         floats = [float(v) for v in ratings]
                         wld = [sum(v>500 for v in floats),
                                sum(v<500 for v in floats),
@@ -82,31 +84,63 @@ class CacheRunnerIntegrationTests(unittest.TestCase):
                 ):
                     stack.enter_context(c)
 
-                engine.run(shield_set="equal")
-                self.assertEqual(DummyPage.cells_evaluated, 12)
+                def calculate(name):
+                    engine.run(shield_set="all")
+                    raw = root / (name + "-raw")
+                    raw.mkdir()
+                    report_dir = root / (name + "-report")
+                    report_dir.mkdir()
+                    with ZipFile(work / "pvpoke_results_latest.zip") as archive:
+                        info = json.loads(archive.read("manifest.json"))
+                        for pair in engine.SCENARIOS["all"]:
+                            csv_name = engine.result_filename(pair)
+                            (raw / csv_name).write_bytes(archive.read(csv_name))
+                    report_files = split_matrix(raw, report_dir, [{"mode": "default"} for _ in opps],
+                                                config["selected"], full_modes=("default",))
+                    zip_path = report_dir / "selection.zip"
+                    with ZipFile(zip_path, "w") as archive:
+                        for path in report_files:
+                            archive.write(path, arcname=path.name)
+                    with ZipFile(zip_path) as archive:
+                        result = recommendations_from_zip(archive, cands[0], "Quagsire", "simple")
+                    return info, result
+
+                _, old = calculate("saved")
+                self.assertEqual(DummyPage.cells_evaluated, 24)
                 self.assertEqual(len(DummyPage.created), 1)
+                self.assertTrue(any(e["kind"] == "unique_gt500" for row in old["recommendations"]
+                                    for e in row["evidence"]))
+                self.assertFalse(old["dominated_by"])
 
                 config["selected"] = cands
-                engine.run(shield_set="equal")
-                self.assertEqual(DummyPage.cells_evaluated, 18)
+                info, incremental = calculate("incremental")
+                self.assertEqual(DummyPage.cells_evaluated, 36)
                 self.assertEqual(len(DummyPage.created), 2)
                 self.assertTrue((data.parent/"archives"/"matchups.sqlite3").is_file())
+                self.assertEqual(info["matchup_cache"], {"hits": 24, "misses": 12, "computed": 12, "bypassed": 0})
+                self.assertEqual(incremental["dominated_by"], {"0/11/8": ["2/11/8"]})
+                self.assertFalse(any(e["kind"] == "unique_gt500" for row in incremental["recommendations"]
+                                     for e in row["evidence"]))
+                self.assertNotEqual([row["ivs"] for row in old["recommendations"]],
+                                    [row["ivs"] for row in incremental["recommendations"]])
+
+                with patch.dict(engine.os.environ, {"PVP_FORCE_RECALCULATE": "1"}):
+                    info, full = calculate("forced")
+                self.assertEqual(DummyPage.cells_evaluated, 72)
+                self.assertEqual(info["matchup_cache"], {"enabled": False})
+                self.assertEqual(full, incremental)
 
                 config["selected"] = cands[::-1]
-                engine.run(shield_set="equal")
-                self.assertEqual(DummyPage.cells_evaluated, 18)
-                self.assertEqual(len(DummyPage.created), 2)
-                last = sorted((work/"results").glob("run_*/manifest.json"),
-                              key=lambda p:p.stat().st_mtime)[-1]
-                info = json.loads(last.read_text())
+                info, _ = calculate("reordered")
+                self.assertEqual(DummyPage.cells_evaluated, 72)
                 self.assertEqual(info["matchup_cache"]["computed"], 0)
-                self.assertEqual(info["matchup_cache"]["hits"], 18)
-                with (last.parent/"pvpoke_s0.csv").open(encoding="utf-8-sig") as fp:
-                    values = list(csv.reader(fp))
-                self.assertEqual(len(values), 4)
-                self.assertIn("2/11/8", values[1][0])
-                self.assertEqual(values[1][1:3], ["528","508"])
+                self.assertEqual(info["matchup_cache"]["hits"], 36)
 
-
-if __name__=="__main__":
-    unittest.main()
+                # A new calculation version must not reuse the previous cells.
+                config["selected"] = cands
+                (data/"gamemaster.json").write_text('{"timestamp":"updated"}')
+                info, updated = calculate("new-version")
+                self.assertEqual(DummyPage.cells_evaluated, 108)
+                self.assertEqual(info["matchup_cache"]["hits"], 0)
+                self.assertEqual(info["matchup_cache"]["computed"], 36)
+                self.assertEqual(updated, incremental)

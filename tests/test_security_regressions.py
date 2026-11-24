@@ -58,6 +58,24 @@ class GatewaySecurityTests(unittest.TestCase):
         c.close()
         return result
 
+    def test_individual_reader_credential_only_reaches_its_confirmed_id(self):
+        from pvpoke_individual_sync import IndividualConnections, WEB_PATH, READER_PATH
+
+        instances = IndividualConnections(remote.API_KEY, self.store)
+        auth = 'Bearer ' + instances.issue('confirmed-id')
+        request = {'action': 'individual_get', 'instance_id': 'confirmed-id'}
+        with (patch.object(remote, 'INDIVIDUAL_CONNECTIONS', instances),
+              patch.object(remote, 'missing_enabled', return_value=True),
+              patch.object(remote.backend, '_token', return_value='synthetic-local-auth'),
+              patch.object(remote.backend, '_request', return_value={'fields': {}}) as backend):
+            self.assertEqual(self.request(READER_PATH, auth, payload=request)[0], 200)
+            self.assertEqual(backend.call_args.args[1], request)
+            self.assertEqual(self.request(READER_PATH, auth, payload={**request, 'instance_id': 'other-id'})[0], 403)
+            self.assertEqual(self.request(READER_PATH, auth, payload={**request, 'action': 'issue'})[0], 403)
+            self.assertEqual(self.request(WEB_PATH, auth, payload=request)[0], 401)
+            self.assertEqual(self.request('/app-api/catalog', auth)[0], 401)
+            self.assertEqual(backend.call_count, 1)
+
     def test_short_token_cannot_mint_long_cookie_or_backup_connection(self):
         token = remote.APP_ACCESS.issue(remote.APP_ORIGIN)['url'].split('#access=')[1]
         for path in ('/app-api/session', '/app-api/visual-backup-token', '/app-api/visual-backup-connections'):

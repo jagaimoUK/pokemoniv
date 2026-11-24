@@ -32,8 +32,22 @@ python /app/pvpoke_proxy_config.py
 mkdir -p /tmp/pokemoniv-nginx/body /tmp/pokemoniv-nginx/proxy /tmp/pokemoniv-nginx/fastcgi /tmp/pokemoniv-nginx/uwsgi /tmp/pokemoniv-nginx/scgi
 # Nginx is not given the application's secrets.
 env -i PATH="$PATH" nginx -t -e stderr -c /tmp/pokemoniv-nginx.conf
-PVP_BIND_HOST=127.0.0.1 PORT=8788 python /app/pvpoke_mcp_remote.py &
+if [ "${PVP_PREVIEW_SEED:-0}" = "1" ]; then
+  python /app/pvpoke_seed_preview.py || true
+fi
+PVP_BIND_HOST=127.0.0.1 PORT=8788 python /app/pvpoke_mcp_remote.py >/tmp/pvpoke-app.log 2>&1 &
 APP_PID=$!
+for i in $(seq 1 30); do
+  if python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8788/health',timeout=2)" >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "$APP_PID" 2>/dev/null; then
+    echo 'App gateway exited unexpectedly:' >&2
+    tail -n 30 /tmp/pvpoke-app.log >&2 || true
+    exit 1
+  fi
+  sleep 1
+done
 env -i PATH="$PATH" nginx -e stderr -c /tmp/pokemoniv-nginx.conf -g 'daemon off;' &
 PROXY_PID=$!
 while kill -0 "$WEB_PID" && kill -0 "$APP_PID" && kill -0 "$PROXY_PID"; do
