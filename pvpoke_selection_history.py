@@ -39,15 +39,12 @@ def _hash(value):
 
 
 def _species(value):
-    species = _id(value, FORM)
-    if {'mega', 'primal'} & set(re.split('[_-]', species)):
-        raise ValueError('Only ordinary Great League forms can be saved')
-    return species
+    return _id(value, FORM)
 
 
 def _candidate(value):
     _object(value, 'selection candidate', ('ivs', 'role', 'moves', 'evidence'),
-            ('instance_id', 'goal'))
+            ('instance_id', 'goal', 'owned_species_id'))
     ivs = _id(value['ivs'], IV)
     if value['role'] not in ('important', 'alternative'):
         raise ValueError('Invalid selection role')
@@ -59,14 +56,18 @@ def _candidate(value):
         _id(instance_id)
     elif goal:
         raise ValueError('A goal requires a confirmed individual')
-    return dict(ivs=ivs, role=value['role'], moves=moves, evidence=evidence,
-                instance_id=instance_id, goal=goal)
+    row = dict(ivs=ivs, role=value['role'], moves=moves, evidence=evidence,
+               instance_id=instance_id, goal=goal)
+    if value.get('owned_species_id') is not None:
+        row['owned_species_id'] = _species(value['owned_species_id'])
+    return row
 
 
 def _save(store, payload, species_ids):
     _object(payload, 'selection save',
             ('action', 'species_id', 'request_id', 'meta_sha256', 'calculation_version',
-             'policy_version', 'candidates'))
+             'policy_version', 'candidates'),
+            ('ranking_source_date', 'ranking_sha256', 'rules_digest', 'owned_species_id'))
     species = _species(payload['species_id'])
     if species not in species_ids:
         raise ValueError('Unknown selection form')
@@ -75,11 +76,23 @@ def _save(store, payload, species_ids):
     linked = [row for row in rows if row['instance_id'] is not None]
     if len({row['instance_id'] for row in linked}) != len(linked):
         raise ValueError('The same individual occurs more than once')
-    body = _canonical_json(dict(
+    raw_body = dict(
         species_id=species, league='great', cp_cap=1500,
         meta_sha256=_hash(payload['meta_sha256']),
         calculation_version=_hash(payload['calculation_version']),
-        policy_version=_text(payload['policy_version'], 80), candidates=rows))
+        policy_version=_text(payload['policy_version'], 80), candidates=rows)
+    if payload.get('ranking_source_date') is not None:
+        raw_body['ranking_source_date'] = _text(payload['ranking_source_date'], 40)
+    if payload.get('ranking_sha256') is not None:
+        raw_body['ranking_sha256'] = _hash(payload['ranking_sha256'])
+    if payload.get('rules_digest') is not None:
+        raw_body['rules_digest'] = _hash(payload['rules_digest'])
+    if payload.get('owned_species_id') is not None:
+        owned_sid = _species(payload['owned_species_id'])
+        if species_ids and owned_sid not in species_ids:
+            raise ValueError('Unknown owned selection form')
+        raw_body['owned_species_id'] = owned_sid
+    body = _canonical_json(raw_body)
     inventory = Ownership(store)
     with store._writer(critical=True) as db:
         for statement in SCHEMA:
@@ -114,7 +127,18 @@ def _latest_row(db, owner, species):
         (owner, species)).fetchone()
 
 
-def _pool(db, owner, species_ids):
+def _annotate_freshness(entry, current_context):
+    if current_context is None or entry is None:
+        return entry
+    from pvpoke_mega import evaluate_selection_freshness
+
+    freshness = evaluate_selection_freshness(entry, current_context)
+    entry['freshness'] = freshness
+    entry['needs_reevaluation'] = freshness['needs_reevaluation']
+    return entry
+
+
+def _pool(db, owner, species_ids, current_context=None):
     snapshots = {}
     for species in species_ids:
         row = _latest_row(db, owner, species)
@@ -124,16 +148,23 @@ def _pool(db, owner, species_ids):
         if (snapshot['species_id'], snapshot['league'], snapshot['cp_cap']) != (species, 'great', 1500):
             raise ValueError('Saved selection form or league differs')
         candidates = snapshot['candidates']
-        snapshots[species] = {
+        entry = {
             'revision': row[0],
             'ivs': list(dict.fromkeys(candidate['ivs'] for candidate in candidates)),
             'links': [{key: candidate[key] for key in ('ivs', 'instance_id', 'goal')}
                       for candidate in candidates if candidate['instance_id'] is not None],
         }
+        if current_context is not None:
+            from pvpoke_mega import evaluate_selection_freshness
+
+            freshness = evaluate_selection_freshness(snapshot, current_context)
+            entry['freshness'] = freshness
+            entry['needs_reevaluation'] = freshness['needs_reevaluation']
+        snapshots[species] = entry
     return {'snapshots': snapshots}
 
 
-def app_operation(store, payload, species_ids=()):
+def app_operation(store, payload, species_ids=(), *, current_context=None, species_catalog=None):
     action = payload['action']
     if action == 'selection_save':
         return _save(store, payload, species_ids)
@@ -157,10 +188,23 @@ def app_operation(store, payload, species_ids=()):
         if not db.execute("SELECT 1 FROM sqlite_schema WHERE name='selection_snapshots_v1'").fetchone():
             return empty
         if action == 'selection_pool':
-            return _pool(db, store.owner_scope, keys)
+            return _pool(db, store.owner_scope, keys, current_context=current_context)
         if action == 'selection_latest':
             row = _latest_row(db, store.owner_scope, key)
-            return {'snapshot': dict(revision=row[0], saved_at=row[1], **json.loads(row[2])) if row else None}
+            snapshot = dict(revision=row[0], saved_at=row[1], **json.loads(row[2])) if row else None
+            if snapshot is not None:
+                _annotate_freshness(snapshot, current_context)
+                if species_catalog is not None:
+                    from pvpoke_mega import discover_reachable_forms
+
+                    owned_sid = snapshot.get('owned_species_id') or snapshot['species_id']
+                    snapshot['reachable_forms'] = discover_reachable_forms(
+                        owned_sid,
+                        species_catalog,
+                        species_ids or list(species_catalog),
+                        evaluated_species_id=snapshot['species_id'],
+                    )
+            return {'snapshot': snapshot}
         rows = db.execute(
             """SELECT s.revision,s.saved_at,s.body FROM selection_instances_v1 AS i
                JOIN selection_snapshots_v1 AS s USING(revision)
@@ -170,5 +214,7 @@ def app_operation(store, payload, species_ids=()):
         for revision, saved_at, body in rows[:20]:
             snapshot = json.loads(body)
             evaluation = next(c for c in snapshot.pop('candidates') if c['instance_id'] == key)
-            items.append(dict(revision=revision, saved_at=saved_at, **snapshot, evaluation=evaluation))
+            item = dict(revision=revision, saved_at=saved_at, **snapshot, evaluation=evaluation)
+            _annotate_freshness(item, current_context)
+            items.append(item)
         return {'items': items, 'next_before': items[-1]['revision'] if len(rows) > 20 else None}

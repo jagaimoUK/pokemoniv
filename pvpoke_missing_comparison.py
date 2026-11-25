@@ -3,8 +3,13 @@ import os
 
 from pvpoke_battle_service import _integer, _json_hash, _object
 from pvpoke_iv_search import BOUNDARY_NAMES, IVSearch, _pool
-from pvpoke_missing_analysis import AnalysisUnavailable, MissingAnalysis
-from pvpoke_ownership import Ownership, OwnershipConflict, build_id
+from pvpoke_missing_analysis import (
+    AnalysisUnavailable,
+    MissingAnalysis,
+    candidate_gl_mega_ranking,
+    candidate_training_goal,
+)
+from pvpoke_ownership import Ownership, OwnershipConflict, _unpack, build_id
 from pvpoke_role_evaluation import RoleEvaluation, _definition, _hash, condition_id
 from pvpoke_sandbox import SandboxService
 from pvpoke_sandbox_workspace import TacticStore, enabled as sandbox_enabled, search_enabled, observed_enabled
@@ -26,14 +31,25 @@ def _can_calculate():
 
 
 def _build(value):
-    return _object(value, 'candidate build', ('species_id', 'ivs', 'level', 'moves'))
+    return _object(
+        value,
+        'candidate build',
+        ('species_id', 'ivs', 'level', 'moves'),
+        ('mega_level', 'charged3', 'owned_species_id'),
+    )
 
 
 def _spec(candidate, opponent, shields, energy):
     combatants = []
     for build, shield, starting_energy in zip((candidate, opponent), shields, (energy, 0)):
-        combatants.append({**build, 'initial': {'hp': 'full', 'energy': starting_energy,
-                                              'shields': shield, 'stages': [0, 0]}})
+        clean = {k: v for k, v in build.items() if k not in ('owned_species_id', 'charged3')}
+        if build.get('charged3') and isinstance(clean.get('moves'), dict):
+            charged = list(clean['moves'].get('charged') or ())
+            if build['charged3'] not in charged:
+                charged.append(build['charged3'])
+            clean['moves'] = {**clean['moves'], 'charged': charged}
+        combatants.append({**clean, 'initial': {'hp': 'full', 'energy': starting_energy,
+                                               'shields': shield, 'stages': [0, 0]}})
     return {'schema': 'battle-spec-v1', 'mode': 'standard', 'rules': {'league': 'great', 'cp_cap': 1500},
             'combatants': combatants}
 
@@ -68,11 +84,18 @@ def _plan(service, payload):
     order = [build_id(combatant) for combatant in first]
     if len(set(order)) != len(order):
         raise ValueError('Duplicate candidate build')
-    return specs, definition, order
+    owned_by_build = {
+        bid: raw.get('owned_species_id')
+        for bid, raw in zip(order, builds)
+        if raw.get('owned_species_id') is not None
+    }
+    return specs, definition, order, owned_by_build
 
 
 def _comparison(service, payload):
-    specs, role, order = _plan(service, payload)
+    from pvpoke_mega import discover_reachable_forms
+
+    specs, role, order, owned_by_build = _plan(service, payload)
     analysis = MissingAnalysis(service.store)
     analysis_id = analysis.save_plan(service, specs)
     evidence = analysis.evidence(analysis_id, active_versions=service.versions, normalizer=service)
@@ -101,15 +124,32 @@ def _comparison(service, payload):
         else:
             status = 'unavailable' if result['meets'] is False else 'pending'
         inventory = first['inventory_matches']
+        owned_sid = owned_by_build.get(bid)
+        if owned_sid is None and inventory:
+            owned_sid = inventory[0].get('owned_species_id')
+        if owned_sid is None:
+            owned_sid = current['species_id']
+        reachable = discover_reachable_forms(
+            owned_sid,
+            service.species,
+            evaluated_species_id=current['species_id'],
+        )
         builds.append({**current, 'build_id': bid, 'status': status, 'party_substitution': 'pending',
+                       'owned_species_id': owned_sid,
+                       'form_distinct': owned_sid != current['species_id'],
+                       'reachable_forms': reachable,
                        'owned_instances': inventory[:32], 'inventory_match_count': len(inventory),
+                       'gl_mega_ranking': first.get('gl_mega_ranking'),
+                       'training_goal': first.get('training_goal'),
                        'conditions': conditions})
     reference = {'build_id': order[0], 'species_id': builds[0]['species_id']}
     for build in builds:
         build['comparison'] = 'same_species' if build['species_id'] == reference['species_id'] else 'cross_species'
     priority = {'sufficient': 0, 'conditional': 1, 'pending': 2, 'unavailable': 3}
     builds[1:] = sorted(builds[1:], key=lambda build: priority[build['status']])
-    return {'state': snapshot['state'], 'evaluation_id': snapshot['evaluation_id'], 'analysis_id': analysis_id,
+    return {'state': snapshot['state'], 'evidence_state': snapshot['evidence_state'],
+            'freshness': evidence.get('freshness'),
+            'evaluation_id': snapshot['evaluation_id'], 'analysis_id': analysis_id,
             'role': {key: role[key] for key in ('role_id', 'priority', 'revision')}, 'reference': reference,
             'candidates': builds, 'can_calculate': _can_calculate(), 'can_sandbox': sandbox_enabled()}
 
@@ -163,7 +203,7 @@ def _explore(service, payload):
     moves = step['candidate']['moves']
     owned_by_iv, species_confirmed_owned_count = Ownership(
         service.store, species_ids=service.species,
-    ).species_rows_by_iv(species_id)
+    ).species_rows_by_iv(species_id, species_catalog=service.species)
     qualifying_hex = coverage['qualifying_ivs'] or ''
     bits = int.from_bytes(bytes.fromhex(qualifying_hex), 'little') if qualifying_hex else 0
     count = bits.bit_count()
@@ -172,6 +212,7 @@ def _explore(service, payload):
     absent_recorded_count = 0
     unconfirmed_count = 0
     ranked_examples = []
+    ref_combatant = specs[0]['combatants'][0]
     if bits:
         rows, _ = _pool(service, specs[0], step['iv_floors'])
         while bits:
@@ -181,14 +222,31 @@ def _explore(service, payload):
             row = rows[index]
             ivs = {'attack': row['atk'], 'defense': row['def'], 'hp': row['hp']}
             raw_rows = owned_by_iv.get(index)
+            target_combatant = {
+                'species_id': species_id,
+                'ivs': ivs,
+                'level': row['level'],
+                'moves': moves,
+                **({'mega_level': ref_combatant['mega_level']} if ref_combatant.get('mega_level') is not None else {}),
+            }
             if raw_rows:
-                matches = Ownership._match_rows(
+                raw_matches = Ownership._match_rows(
                     raw_rows,
-                    {'species_id': species_id, 'ivs': ivs, 'level': row['level'], 'moves': moves},
+                    target_combatant,
                     row['cp'],
+                    species_catalog=service.species,
+                    cpms=service.cpms,
+                    rules=specs[0].get('rules'),
+                )
+                owned_records = {
+                    rec['instance_id']: rec
+                    for rec in (_unpack(r) for r in raw_rows)
+                }
+                training_goal, matches = candidate_training_goal(
+                    target_combatant, raw_matches, owned_records=owned_records,
                 )
             else:
-                matches = []
+                training_goal, matches = candidate_training_goal(target_combatant, ())
             has_exact = any(m['state'] == 'confirmed_owned' and m['build_match'] == 'exact' for m in matches)
             has_owned = any(m['state'] == 'confirmed_owned' for m in matches)
             has_unknown = any(m['state'] == 'unknown' for m in matches)
@@ -208,16 +266,27 @@ def _explore(service, payload):
                 'cp': row['cp'],
                 'owned_instances': matches[:16],
                 'inventory_match_count': len(matches),
+                'training_goal': training_goal,
             }))
     ranked_examples.sort(key=lambda item: (item[0], item[1]))
     examples = [entry for _, _, entry in ranked_examples[:32]]
     completed = coverage['all_completed_iv_count']
+    mega_level = ref_combatant.get('mega_level')
+    from pvpoke_mega import discover_reachable_forms
+
     return {'state': step['state'], 'new_battles': step['new_battles'],
             'retry_needed': any(status != 'complete' and attempts > 0
                                 for status, attempts in step['attempt_outcomes'].items()),
             'raw_iv_count': coverage['raw_iv_count'],
             'iv_floors': step['iv_floors'],
             'candidate': {'species_id': species_id, 'moves': moves},
+            'reachable_forms': discover_reachable_forms(species_id, service.species),
+            'freshness': evidence.get('freshness'),
+            'gl_mega_ranking': candidate_gl_mega_ranking(species_id, species_catalog=service.species),
+            'mega_condition': {
+                'mega_level': mega_level,
+                'super_max_pl_hypothesis_status': 'unconfirmed_deferred' if mega_level == 4 else 'not_applicable',
+            },
             'eligible_iv_count': coverage['eligible_iv_count'], 'qualifying_count': count,
             'completed_iv_count': completed,
             'fully_tested_nonqualifying_iv_count': completed - count,

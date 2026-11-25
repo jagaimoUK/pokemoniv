@@ -19,6 +19,10 @@ input,select,button{font:inherit;color:inherit;min-height:44px;border:1px solid 
 .status{padding:.65rem .85rem;border-left:3px solid var(--accent);background:var(--inset);white-space:pre-wrap}.status[data-error=true]{border-color:#ffaaa2;color:#ffd5d1}
 .check{display:flex;align-items:center;gap:.6rem;min-height:44px}.check input{width:1.15rem;height:1.15rem;min-height:0;flex:none}.comparisons,.inventory{padding-left:1.1rem;margin:0}.comparisons li+li,.inventory li+li{margin-top:.55rem}
 .record{padding:.45rem 0}.record summary{font-size:.875rem}.break{overflow-wrap:anywhere}.results{scroll-margin-top:1rem}
+.guide-banner{padding:.75rem .95rem;border:1px solid var(--accent);border-left:5px solid var(--accent);border-radius:.85rem;background:rgba(189,235,208,.09);font-size:.92rem}
+.step-pill{display:inline-block;padding:.1rem .55rem;margin-right:.4rem;border-radius:99px;background:var(--accent);color:#112b23;font-weight:800;font-size:.8rem}
+.guide-hint{display:inline-flex;align-items:center;gap:.3rem;padding:.25rem .6rem;margin:.35rem 0;border-radius:.6rem;background:rgba(189,235,208,.15);border-left:3px solid var(--accent);color:var(--accent);font-size:.84rem;font-weight:700}
+.focus-box{border:1px solid rgba(189,235,208,.45);border-radius:1rem}
 @media(min-width:40rem){.moves{grid-template-columns:repeat(3,minmax(0,1fr))}.moves .wide{grid-column:auto}}
 @media(max-width:24rem){.actions button{max-width:100%}.match{padding-left:.45rem;padding-right:.45rem}}
 </style></head>
@@ -28,6 +32,7 @@ input,select,button{font:inherit;color:inherit;min-height:44px;border:1px solid 
 <section id="login" hidden><form id="login-form" class="stack"><h2>アプリに接続</h2><label>接続キー<input id="credential" type="password" autocomplete="off" required></label><div class="actions"><button class="primary" data-action>接続する</button></div></form></section>
 <p id="status" class="status" role="status" aria-live="polite">接続を確認しています。</p>
 <div id="workspace" class="stack" hidden>
+<div class="guide-banner" role="note"><strong>👉 全体の流れ：</strong><span class="step-pill">Step 1</span>基準個体を入力 ➜ <span class="step-pill">Step 2</span>対面相手を追加 ➜ <span class="step-pill">Step 3</span>下の「保存済みの対面結果を照合」をタップ</div>
 <details id="evaluation-history-panel" class="edit"><summary>不足分析の評価履歴・推移</summary><div class="stack">
 <p class="muted">保存済み評価を読み取り専用で表示します。同じ分析計画・役割条件・計算バージョンの記録だけを推移として比較します。古い結果は現在の所持状態を保証しません。</p>
 <div class="actions"><button id="history-load" type="button" class="quiet" data-action>評価履歴を読み込む</button></div>
@@ -45,11 +50,12 @@ input,select,button{font:inherit;color:inherit;min-height:44px;border:1px solid 
 <ul id="meta-import-items" class="inventory"></ul>
 </div></details>
 <form id="analysis-form" class="stack">
-<section class="stack"><div><h2>探したいポケモンと役割</h2><p class="intro">基準にする個体のフォルム・個体値・レベル・技を指定します。</p></div>
+<section class="stack focus-box"><div><h2><span class="step-pill">Step 1</span>探したいポケモンと役割</h2><p class="intro">基準にする個体のフォルム・個体値・技を指定します（対戦時レベルはCP1500以下に自動調整）。</p><p class="guide-hint">👇 ここをタップして探したいポケモン名と個体値を入力（SL上限レベルは自動設定されます）</p></div>
 <div id="reference"></div><div class="grid"><label>役割<select id="role"><option value="lead">初手</option><option value="safe_switch">引き先</option><option value="closer">締め</option><option value="coverage">苦手対面の補完</option></select></label><label>優先度<select id="priority"><option value="1">標準</option><option value="2">高い</option><option value="3">最優先</option></select></label></div></section>
-<section class="stack"><div><h2>確認する対面</h2><p class="intro">相手の構成と、自分が果たす条件を指定します。最大6件です。</p></div><div id="scenarios" class="stack"></div><div class="actions"><button id="add-scenario" type="button" class="quiet" data-action>対面を追加</button></div></section>
-<section class="stack"><div><h2>比較する個体</h2><p class="intro">同じポケモンの別個体や、別のポケモンを最大7体追加できます。手持ちの確認は結果から行えます。</p></div><div id="alternatives" class="stack"></div><div class="actions"><button id="add-alternative" type="button" class="quiet" data-action>比較する個体を追加</button></div></section>
-<div class="actions"><button id="evaluate" class="primary" data-action>保存済みの対面結果を照合</button></div>
+<section class="stack focus-box"><div><h2><span class="step-pill">Step 2</span>確認する対面</h2><p class="intro">相手の構成と、自分が果たす条件を指定します。最大6件です。</p></div><div id="scenarios" class="stack"></div><p class="guide-hint">👇 ここをタップして確認したい相手対面を追加</p><div class="actions"><button id="add-scenario" type="button" class="quiet" data-action>対面を追加</button></div></section>
+<section class="stack"><div><h2>比較する個体（任意）</h2><p class="intro">同じポケモンの別個体や、別のポケモンを最大7体追加できます。手持ちの確認は結果から行えます。</p></div><div id="alternatives" class="stack"></div><div class="actions"><button id="add-alternative" type="button" class="quiet" data-action>比較する個体を追加</button></div></section>
+<p class="guide-hint">👇 入力が終わったらここをタップして照合を実行</p>
+<div class="actions"><button id="evaluate" class="primary" data-action>👉 保存済みの対面結果を照合</button></div>
 </form>
 <section id="tactic-evidence-panel" data-sandbox="0" data-tactic-search="0" data-observed-search="0" class="results stack" hidden><h2>Sandbox戦術の根拠・保存済み戦術</h2>
 <p>標準計算と指定戦術は別の結果です。実戦再現性は未検証で、所持・役割の判定は変更しません。</p>
@@ -118,12 +124,60 @@ const roles={lead:'初手',safe_switch:'引き先',closer:'締め',coverage:'苦
 const priorities={1:'標準',2:'高い',3:'最優先'};
 const metrics={hp:['自分の残りHP',10000],energy:['自分の残りゲージ',100],fast_damage:['通常技の総ダメージ',10000],charged_damage:['ゲージ技の総ダメージ',10000],charged_moves_resolved:['ゲージ技を撃った回数',2000],shields_forced:['相手に使わせたシールド',2],shields_remaining:['自分の残りシールド',2]};
 const assessment={sufficient:['条件を満たす','good'],conditional:['開始ゲージ条件付きで達成','wait'],unavailable:['条件を満たさない','fail'],pending:['未評価の対面あり','wait']};
-const gaps={covered:['所持確認済みの個体で充足','good'],gap:['比較した範囲で不足','fail'],ownership_confirmation_needed:['所持確認待ち','wait'],evidence_pending:['対戦証拠待ち','wait']};
+const gaps={covered:['所持確認済みの個体で充足','good'],gap:['比較した範囲で不足','fail'],ownership_confirmation_needed:['所持確認待ち','wait'],evidence_pending:['対戦証拠待ち','wait'],stale:['計算データ更新・再評価保留（旧結果を新結果として扱いません）','wait']};
 const substitutes={sufficient:['十分に代替（この役割）','good'],conditional:['条件付き代替','wait'],unavailable:['代替不可（指定条件）','fail'],pending:['判定保留','wait']};
 const outcomes={self_win:'勝ち',opponent_win:'負け',simultaneous_ko:'同時ひんし'};
 const ownership={confirmed_owned:'所持確認済み',confirmed_absent:'所持していないことを確認済み',unknown:'未確認'};
 const builds={exact:'個体値・CP・Lv・技が一致',unverified:'一致の判定に必要な情報が不足',different:'CP・Lv・技のいずれかが異なる'};
-let credential='',catalog=Object.create(null),moves={},speciesNames=new Map(),busy=false,editRevision=0,displayed=null,lastRequest=null;
+function megaStatusBadges(record,targetLevel,megaCondition){
+ const items=[];
+ if(record?.needs_evolution)items.push(['要進化','wait']);
+ if(record?.needs_power_up)items.push([targetLevel!=null?'PL'+targetLevel+'まで強化が必要':'目標PLまで強化が必要','wait']);
+ if(record?.mega_downscaled)items.push(['一時ダウンスケーリング可（未証明）','wait']);
+ if(record?.mega_rule_unverified)items.push(['大会ルール未確認','wait']);
+ const smStatus=record?.super_max_pl_hypothesis_status||megaCondition?.super_max_pl_hypothesis_status;
+ if(smStatus==='unconfirmed_deferred')items.push(['スーパー MAX PL+2 仮説保留','wait']);
+ return items;
+}
+function ranking70OrInfo(ranking){
+ if(!ranking)return null;
+ const normal=ranking.normal_gl_overall!=null?'通常GL '+Number(ranking.normal_gl_overall).toFixed(1)+'点':'通常GL 未掲載';
+ const mega=ranking.has_mega_form
+  ?(ranking.mega_gl_overall!=null?'メガGL '+Number(ranking.mega_gl_overall).toFixed(1)+'点':'メガGL 未取得（保留）')
+  :'メガ形態なし';
+ let label='ランキング未確定（自動除外保留）',tone='wait';
+ if(ranking.reason==='all_species_mode'){label='全種モード（70点除外なし）';tone='good';}
+ else if(ranking.reason==='meets_threshold_or'){
+  const matched=(ranking.matched_leagues||[]).map(x=>x==='mega_gl'?'メガGL':'通常GL').join('・')||'GL';
+  label='70点OR適合（'+matched+'）';tone='good';
+ }else if(ranking.reason==='below_threshold'){
+  label='通常GL/メガGL 70点未満（参考比較）';tone='fail';
+ }
+ const src=ranking.normal_gl_source_date?'（PvPoke '+ranking.normal_gl_source_date+'）':'';
+ return {label,tone,detail:normal+' ／ '+mega+src};
+}
+function trainingGoalLines(goal){
+ if(!goal)return [];
+ const lines=[];
+ const target=goal.target_level!=null?'目標 PL'+goal.target_level:'目標 PL未確認';
+ const cur=goal.current_level!=null?'現在 PL'+goal.current_level+(goal.current_cp!=null?' / CP '+goal.current_cp:''):'現在 PL未確認';
+ const flags=[goal.needs_evolution?'要進化':'',goal.downscaled?'一時ダウンスケーリング対象':''].filter(Boolean).join('・');
+ lines.push('育成目標：'+target+'（'+cur+(flags?' ／ '+flags:'')+'）');
+ if(goal.cost_verified===true){
+  if(goal.power_ups===0){
+   lines.push('強化不要（追加すな 0 / アメ 0 / アメXL 0）');
+  }else{
+   lines.push('必要リソース（'+goal.power_ups+'回強化）：すな '+Number(goal.stardust).toLocaleString('ja-JP')+' / アメ '+goal.candy+' / アメXL '+goal.candy_xl);
+  }
+ }else{
+  lines.push('必要リソース：現在PL未確認のため未確定'+(goal.uses_xl_candy?'（目標PL40超のためアメXLが必要になる可能性あり）':''));
+ }
+ if(goal.super_max_pl_hypothesis_status==='unconfirmed_deferred'){
+  lines.push(goal.super_max_pl_note||'スーパー MAX PL+2 仮説保留（仮補正なし）');
+ }
+ return lines;
+}
+let credential='',catalog=Object.create(null),moves={},cpms=[],speciesNames=new Map(),busy=false,editRevision=0,displayed=null,lastRequest=null;
 let inventoryLedgerRevision=null,inventoryCursor=null,inventoryLoaded=false,inventoryFilterKey='';
 let scopePrevious='',scopeEventId='';
 let reference;
@@ -217,6 +271,33 @@ function speciesList(entries){
 const ivText=ivs=>[ivs.attack,ivs.defense,ivs.hp].join('/');
 const moveText=build=>[build.moves.fast,...build.moves.charged].map(move).join('・');
 const buildText=build=>name(build.species_id)+' '+ivText(build.ivs)+(build.level==null?'':' / Lv'+build.level);
+const isMegaSpeciesId=sid=>Boolean(sid&&(/^(?:.*_(?:mega|primal)(?:_[xy])?)$/.test(sid)||(catalog[sid]?.tags||[]).includes('mega')));
+function cpmForLevel(lvl){
+ if(!Array.isArray(cpms)||!cpms.length)return null;
+ const doubled=Math.round(Number(lvl)*2);
+ if(!Number.isFinite(doubled)||Math.abs(Number(lvl)*2-doubled)>1e-6||doubled<2)return null;
+ const idx=doubled-2;
+ return idx>=0&&idx<cpms.length?Number(cpms[idx]):null;
+}
+function computeCpForSpecies(sid,ivsObj,lvl){
+ const stats=catalog[sid]?.baseStats,cpm=cpmForLevel(lvl);
+ if(!stats||cpm==null)return null;
+ const atk=Number(stats.atk)+Number(ivsObj.attack);
+ const def=Number(stats.def)+Number(ivsObj.defense);
+ const hp=Number(stats.hp)+Number(ivsObj.hp);
+ if(![atk,def,hp].every(Number.isFinite))return null;
+ return Math.max(10,Math.floor((atk*Math.sqrt(def)*Math.sqrt(hp)*cpm*cpm)/10));
+}
+function maxLevelForCap(sid,ivsObj,cpCap=1500,maxLvl=50){
+ if(!catalog[sid]?.baseStats||!Array.isArray(cpms)||!cpms.length)return null;
+ const top=Math.min(Math.round(maxLvl*2),cpms.length+1);
+ for(let d=top;d>=2;d--){
+  const lvl=d/2;
+  const cp=computeCpForSpecies(sid,ivsObj,lvl);
+  if(cp!=null&&cp<=cpCap)return {level:lvl,cp};
+ }
+ return null;
+}
 
 function buildEditor(parent,title,{open=false,removable,initial}={}){
  const el=detail(parent,title,'edit',open);
@@ -226,12 +307,59 @@ function buildEditor(parent,title,{open=false,removable,initial}={}){
  const ivGroup=node('fieldset',null,body);node('legend','個体値',ivGroup);
  const ivFields=node('div',null,ivGroup,'ivs');
  const ivs=Object.fromEntries([['attack','攻撃'],['defense','防御'],['hp','HP']].map(([id,label])=>[id,input(ivFields,label,{type:'number',min:0,max:15,step:1,required:true})]));
- const level=input(body,'対戦時のレベル（1〜50、0.5刻み）',{type:'number',min:1,max:50,step:.5,required:true});
+ const levelRow=node('div',null,body,'grid');
+ const level=input(levelRow,'対戦時のレベル（1〜50、0.5刻み／自動設定可）',{type:'number',min:1,max:50,step:.5,required:true});
+ const autoLevelBtn=button(levelRow,'SL上限(CP1500以下)に自動設定',()=>{levelAuto=true;syncAutoLevel(true);},'quiet');
+ const cpNote=node('p','種族と個体値を入力するとSL上限レベルを自動設定します。',body,'muted');
  const moveFields=node('div',null,body,'grid moves');
  const fast=select(moveFields,'通常技',[['','ポケモンを指定']],'wide');
  const charged=[select(moveFields,'ゲージ技1',[['','ポケモンを指定']]),select(moveFields,'ゲージ技2',[['','ポケモンを指定']])];
  for(const field of [fast,...charged])field.required=true;
  let speciesId='';
+ let levelAuto=(initial?.level==null);
+ const ownedSpeciesId=initial?.owned_species_id||null;
+ const ownedFormNote=node('p',null,body,'muted');
+ ownedFormNote.hidden=true;
+ const megaLevel=initial?.mega_level??null;
+ const charged3=initial?.charged3??null;
+ function currentIvs(){
+  const vals=Object.fromEntries(Object.entries(ivs).map(([k,f])=>[k,f.value===''?NaN:f.valueAsNumber]));
+  if(Object.values(vals).some(v=>!Number.isInteger(v)||v<0||v>15))return null;
+  return vals;
+ }
+ function updateCpDisplay(){
+  const ivVals=currentIvs();
+  const lvl=level.value===''?NaN:level.valueAsNumber;
+  if(!speciesId||!ivVals||!Number.isFinite(lvl)){
+   level.setCustomValidity('');
+   cpNote.textContent=Array.isArray(cpms)&&cpms.length?'種族と個体値を入力するとSL上限(CP1500以下)を自動設定します。':'';
+   cpNote.style.color='';
+   return;
+  }
+  const cp=computeCpForSpecies(speciesId,ivVals,lvl);
+  if(cp==null){cpNote.textContent='';cpNote.style.color='';level.setCustomValidity('');return;}
+  if(cp>1500){
+   const fit=maxLevelForCap(speciesId,ivVals,1500,50);
+   cpNote.textContent='⚠ 計算CP '+cp+'（上限1500超過）'+(fit?' → 「SL上限に自動設定」で Lv'+fit.level+' (CP'+fit.cp+') に調整できます':'');
+   cpNote.style.color='#ffaaa2';
+   level.setCustomValidity('CP1500を超えています。SL上限レベルに調整してください。');
+  }else{
+   level.setCustomValidity('');
+   cpNote.textContent='計算CP '+cp+'（SL 1500以下 OK'+(levelAuto?'・自動設定':'')+'）';
+   cpNote.style.color='';
+  }
+ }
+ function syncAutoLevel(force=false){
+  const ivVals=currentIvs();
+  if(speciesId&&ivVals&&(levelAuto||force||level.value==='')){
+   const fit=maxLevelForCap(speciesId,ivVals,1500,50);
+   if(fit){
+    level.value=String(fit.level);
+    levelAuto=true;
+   }
+  }
+  updateCpDisplay();
+ }
  function updateSpecies(preferred){
   const id=resolveSpecies(species.value);
   if(id!==speciesId||preferred){
@@ -246,19 +374,36 @@ function buildEditor(parent,title,{open=false,removable,initial}={}){
   }
   species.setCustomValidity(species.value&&!id?'一覧からフォルムまで選択してください。':'');
   el.firstElementChild.textContent=title+(id?' · '+name(id):'');
+  if(ownedSpeciesId&&id&&ownedSpeciesId!==id){
+   ownedFormNote.hidden=false;
+   ownedFormNote.textContent='所持形態：'+name(ownedSpeciesId)+' → 評価対象：'+name(id)+'（形態を区別）';
+  }else{
+   ownedFormNote.hidden=true;
+   ownedFormNote.textContent='';
+  }
+  syncAutoLevel(false);
  }
  function validateMoves(){charged[1].setCustomValidity(charged[0].value&&charged[0].value===charged[1].value?'異なるゲージ技を選んでください。':'');}
  species.addEventListener('input',()=>{updateSpecies();validateMoves();});
  species.addEventListener('change',()=>{updateSpecies();validateMoves();});
+ for(const field of Object.values(ivs)){
+  field.addEventListener('input',()=>syncAutoLevel(false));
+  field.addEventListener('change',()=>syncAutoLevel(false));
+ }
+ level.addEventListener('input',()=>{levelAuto=false;updateCpDisplay();});
+ level.addEventListener('change',()=>{levelAuto=false;updateCpDisplay();});
  for(const field of charged)field.addEventListener('change',validateMoves);
  if(initial){
   species.value=nameWithId(initial.species_id);
   if(initial.ivs)for(const [id,field] of Object.entries(ivs))field.value=initial.ivs[id];
-  if(initial.level!=null)level.value=initial.level;
+  if(initial.level!=null){level.value=initial.level;levelAuto=false;}
   updateSpecies(initial.moves);
  }
  if(removable)button(body,'この項目を削除',()=>removable(el),'quiet');
- return {el,body,species,fields:[species,...Object.values(ivs),level,fast,...charged],read:()=>({species_id:speciesId,ivs:Object.fromEntries(Object.entries(ivs).map(([id,field])=>[id,field.valueAsNumber])),level:level.valueAsNumber,moves:{fast:fast.value,charged:charged.map(field=>field.value)}})};
+ return {el,body,species,fields:[species,...Object.values(ivs),level,fast,...charged],read:()=>{
+  const isMega=isMegaSpeciesId(speciesId);
+  return {species_id:speciesId,ivs:Object.fromEntries(Object.entries(ivs).map(([id,field])=>[id,field.valueAsNumber])),level:level.valueAsNumber,moves:{fast:fast.value,charged:charged.map(field=>field.value)},...(isMega&&megaLevel!=null?{mega_level:megaLevel}:{}),...(isMega&&charged3?{charged3}:{}),...(ownedSpeciesId&&ownedSpeciesId!==speciesId?{owned_species_id:ownedSpeciesId}:{})};
+ }};
 }
 function removeEditor(list,el){list.splice(list.findIndex(item=>item.el===el),1);el.remove();markEdited();setBusy(false);}
 function addAlternative(initialCandidate=null){
@@ -484,11 +629,25 @@ async function loadOwnershipHistory(instanceId,target){
 function renderInventory(parent,candidate,request){
  const box=node('div',null,parent,'stack');
  node('h3','手持ちの確認',box);node('p',heldLabel(candidate),box);
+ for(const line of trainingGoalLines(candidate.training_goal)){
+  node('p',line,box,'muted break');
+ }
+ if(!candidate.owned_instances.length&&candidate.mega_condition?.super_max_pl_hypothesis_status==='unconfirmed_deferred'){
+  tag(node('div',null,box,'tags'),'スーパー MAX PL+2 仮説保留','wait');
+ }
  if(candidate.owned_instances.length){
   const list=node('ul',null,box,'inventory');
   for(const record of candidate.owned_instances){
    const row=node('li',null,list);
    node('p',(ownership[record.state]||'未確認')+' ／ '+(builds[record.build_match]||'構成の一致は未確認'),row);
+   const badges=megaStatusBadges(record,candidate.level,candidate.mega_condition);
+   if(badges.length){
+    const badgeRow=node('div',null,row,'tags');
+    for(const [label,tone] of badges)tag(badgeRow,label,tone);
+   }
+   for(const line of trainingGoalLines(record.training_goal)){
+    node('p',line,row,'muted break');
+   }
    const panel=detail(row,'この所持記録を更新・履歴を見る','record');
    node('small','記録ID '+record.instance_id+' · rev '+record.revision,panel,'break');
    const historyBox=node('div',null,panel,'stack');
@@ -613,6 +772,7 @@ function renderExploration(parent,result){
  for(const field of selfFloors.fields)field.addEventListener('input',syncPreset);
  const info=node('p','保存済みの対戦を照合し、役割の全条件を満たす個体値を確認します。',body,'muted');
  const floorInfo=node('p',null,body,'muted');
+ const rankingInfo=node('p',null,body,'muted');
  const ownershipInfo=node('p',null,body,'muted');
  const examples=node('p',null,body,'break');
  const qualifyingList=node('ul',null,body,'inventory');
@@ -626,6 +786,9 @@ function renderExploration(parent,result){
   const data=await api('missing-analysis',{action:'explore',evaluation_id:result.evaluation_id,build_id:result.reference.build_id,budget,iv_floors});
   info.textContent='全条件を計算済み '+data.completed_iv_count+' / '+data.eligible_iv_count+'通り ／ 達成確認済み '+data.qualifying_count+'通り ／ 全条件を検証して未達成 '+data.fully_tested_nonqualifying_iv_count+'通り ／ 全条件の検証が未完了 '+data.not_fully_tested_iv_count+'通り';
   floorInfo.textContent=Array.isArray(data.iv_floors)?'適用IV下限 '+data.iv_floors.join('/')+'（全'+(data.raw_iv_count??4096)+'通り中 '+data.eligible_iv_count+'通りが探索対象）':'';
+  const rInfo=ranking70OrInfo(data.gl_mega_ranking);
+  const exploreStale=data.freshness?.needs_reevaluation?'⚠ 再評価保留（'+(data.freshness.reasons||[]).join(', ')+'） ／ ':'';
+  rankingInfo.textContent=exploreStale+(rInfo?'ランキング70点OR基準：'+rInfo.label+'（'+rInfo.detail+'）':'');
   const ownSum=data.ownership_summary;
   if(ownSum){
    ownershipInfo.textContent=data.qualifying_count
@@ -646,7 +809,17 @@ function renderExploration(parent,result){
    const ownTone=matches.some(r=>r.state==='confirmed_owned'&&r.build_match==='exact')?'good'
     :matches.some(r=>r.state==='confirmed_owned')?'wait'
     :matches.some(r=>r.state==='confirmed_absent')?'fail':'muted';
-   tag(node('div',null,li,'tags'),ownLabel,ownTone);
+   const tagsWrap=node('div',null,li,'tags');
+   tag(tagsWrap,ownLabel,ownTone);
+   const seenBadges=new Set();
+   for(const record of matches){
+    for(const [label,tone] of megaStatusBadges(record,item.level,data.mega_condition)){
+     if(!seenBadges.has(label)){seenBadges.add(label);tag(tagsWrap,label,tone);}
+    }
+   }
+   for(const line of trainingGoalLines(item.training_goal)){
+    node('p',line,li,'muted break');
+   }
    if(template&&item.level!=null){
     const rowActions=node('div',null,li,'actions');
     button(rowActions,'比較候補へ追加',()=>{
@@ -687,13 +860,31 @@ function renderExploration(parent,result){
  }
  renderOpponentBoundaries(body,result);
 }
+function defaultBuildForForm(targetSid,sourceCandidate){
+ const pokemon=catalog[targetSid];
+ if(!pokemon)return null;
+ const fastPool=pokemon.fastMoves||[],chargePool=pokemon.chargedMoves||[],def=pokemon.default_moves||{};
+ const fast=fastPool.includes(def.fast)?def.fast:fastPool[0];
+ const c1=chargePool.includes(def.charged1)?def.charged1:chargePool[0];
+ const c2=(def.charged2&&def.charged2!==c1&&chargePool.includes(def.charged2))?def.charged2:chargePool.find(m=>m!==c1);
+ if(!fast||!c1||!c2||c1===c2)return null;
+ const out={species_id:targetSid,ivs:sourceCandidate.ivs,level:sourceCandidate.level??20,moves:{fast,charged:[c1,c2]}};
+ if(sourceCandidate.owned_species_id&&sourceCandidate.owned_species_id!==targetSid)out.owned_species_id=sourceCandidate.owned_species_id;
+ else if(sourceCandidate.species_id&&sourceCandidate.species_id!==targetSid)out.owned_species_id=sourceCandidate.species_id;
+ return out;
+}
 function renderResult(result,request,revision){
  const tree=$('result-tree');tree.replaceChildren();
  fixedEvidenceTargets.clear();$('tactic-evidence-results').replaceChildren();
  const species=detail(tree,name(result.reference.species_id),'edit',true);
  const role=detail(species,roles[result.role.role_id]||result.role.role_id,'role',true);
  const cards=node('div',null,role,'stack');
- tag(node('div',null,cards,'tags'),...(gaps[result.state]||gaps.evidence_pending));
+ const isStale=result.evidence_state==='stale'||Boolean(result.freshness?.needs_reevaluation);
+ tag(node('div',null,cards,'tags'),...(isStale?gaps.stale:(gaps[result.state]||gaps.evidence_pending)));
+ if(isStale){
+  const reasons=(result.freshness?.reasons||[]).filter(Boolean);
+  node('p','⚠ 再評価が必要（再評価保留）：計算データ・ランキング・ルール等の更新が検出されたため、旧結果を新結果として表示しません。'+(reasons.length?'（理由: '+reasons.join(', ')+'）':''),cards,'muted break');
+ }
  renderExploration(cards,result);
  const conditions=result.candidates.flatMap(item=>item.conditions);
  node('p','優先度 '+(priorities[result.role.priority]||result.role.priority)+' ／ 確認済みの対面 '+conditions.filter(item=>item.state==='complete').length+' / '+conditions.length,cards,'muted');
@@ -706,7 +897,23 @@ function renderResult(result,request,revision){
   const badges=baseline?assessment:substitutes;
   tag(tags,...(badges[candidate.status]||badges.pending));
   if(candidate.party_substitution==='pending')tag(tags,'パーティでの入替は未評価','wait');
+  const rankInfo=ranking70OrInfo(candidate.gl_mega_ranking);
+  if(rankInfo)tag(tags,rankInfo.label,rankInfo.tone);
   node('p','技構成　'+moveText(candidate),body,'muted');
+  if(candidate.owned_species_id&&candidate.owned_species_id!==candidate.species_id){
+   node('p','所持形態：'+name(candidate.owned_species_id)+' → 評価対象：'+name(candidate.species_id)+'（形態を区別して評価）',body,'muted');
+  }
+  const reach=candidate.reachable_forms;
+  const reachTargets=reach?[...(reach.evolutions||[]),...(reach.mega_forms||[])].filter(id=>id!==candidate.species_id&&catalog[id]):[];
+  if(reachTargets.length){
+   const reachBar=node('div',null,body,'actions');
+   node('span','到達可能な通常進化・メガ候補：',reachBar,'muted');
+   for(const targetSid of reachTargets){
+    const alt=defaultBuildForForm(targetSid,candidate);
+    if(alt)button(reachBar,'比較候補へ追加（'+name(targetSid)+'）',()=>addAlternative(alt),'quiet');
+   }
+  }
+  if(rankInfo)node('p','ランキング70点OR基準：'+rankInfo.detail,body,'muted');
   if(result.can_sandbox){
    fixedEvidenceTargets.set(candidate.build_id,
     node('p','固定戦術：保存済みの根拠は上のパネルから照合できます。',body,'muted'));
@@ -1134,7 +1341,11 @@ function readReferenceTransfer(){
      moveset.charged[0]===moveset.charged[1]||
      !moveset.charged.every(m=>pokemon.chargedMoves?.includes(m)))return null;
   if(value.ivs&&(!['attack','defense','hp'].every(k=>Number.isInteger(value.ivs[k])&&value.ivs[k]>=0&&value.ivs[k]<=15)))return null;
-  return {species_id:value.species_id,moves:moveset,...(value.ivs?{ivs:value.ivs}:{})};
+  const out={species_id:value.species_id,moves:moveset,...(value.ivs?{ivs:value.ivs}:{})};
+  if(typeof value.owned_species_id==='string'&&catalog[value.owned_species_id])out.owned_species_id=value.owned_species_id;
+  if(Number.isInteger(value.mega_level)&&value.mega_level>=1&&value.mega_level<=4)out.mega_level=value.mega_level;
+  if(typeof value.charged3==='string'&&Array.isArray(pokemon.extraChargedMoves)&&pokemon.extraChargedMoves.includes(value.charged3))out.charged3=value.charged3;
+  return out;
  }catch{return null;}
 }
 async function connect(manual){
@@ -1143,6 +1354,7 @@ async function connect(manual){
  try{
   const data=await api('catalog',{});
   if(!data.ready||!data.species)throw Error(data.error||'ポケモンの一覧を準備中です。');
+  cpms=Array.isArray(data.cpms)?data.cpms:[];
   moves=data.moves||{};speciesList(data.species);
   $('credential').value='';$('login').hidden=true;$('workspace').hidden=false;
   let savedForm=null;
@@ -1206,7 +1418,16 @@ $('analysis-form').addEventListener('submit',event=>{
  if(!scenarios.length){announce('確認する対面を1件以上追加してください。',true);$('add-scenario').focus();return;}
  const candidates=[reference,...alternatives].map(item=>item.read());
  if(new Set(candidates.map(item=>JSON.stringify(item))).size!==candidates.length){announce('同じ個体が複数あります。比較する個体の個体値・レベル・技を確認してください。',true);return;}
- const request={action:'evaluate',candidates,scenarios:scenarios.map(item=>item.scenario()),role:{role_id:$('role').value,revision:1,priority:Number($('priority').value)}};
+ const scenarioList=scenarios.map(item=>item.scenario());
+ for(const [label,entry] of [...candidates.map((c,i)=>[i===0?'基準個体':'比較個体'+i,c]),...scenarioList.map((s,i)=>['対面'+(i+1)+'の相手',s.opponent])]){
+  const cp=computeCpForSpecies(entry.species_id,entry.ivs,entry.level);
+  if(cp!=null&&cp>1500){
+   const fit=maxLevelForCap(entry.species_id,entry.ivs,1500,50);
+   announce(label+'（'+name(entry.species_id)+'）のCPが '+cp+' でスーパーリーグ上限（1500）を超えています。'+(fit?'「SL上限(CP1500以下)に自動設定」を押すか Lv'+fit.level+' 以下に調整してください。':'レベルを調整してください。'),true);
+   return;
+  }
+ }
+ const request={action:'evaluate',candidates,scenarios:scenarioList,role:{role_id:$('role').value,revision:1,priority:Number($('priority').value)}};
  const revision=editRevision;
  perform(async()=>{
   announce('保存済みの結果を照合しています。');await evaluate(request,revision);
