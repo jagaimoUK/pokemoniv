@@ -123,17 +123,18 @@ class MissingAnalysis:
                     if any(type(key) is not str for key in battle_keys):
                         raise ValueError('Invalid battle key in plan')
                     if has_inventory:
-                        from pvpoke_mega import base_species_id, is_mega_form
+                        from pvpoke_mega import eligible_pre_evolutions, is_mega_form
 
+                        catalog = getattr(normalizer, 'species', None)
                         seen_owner_keys = set()
                         for spec in specs.values():
                             combatant = spec['combatants'][0]
                             iv_idx = _iv_index(combatant['ivs'])
                             keys_to_fetch = [(combatant['species_id'], iv_idx)]
                             if is_mega_form(combatant['species_id']):
-                                base_id = base_species_id(combatant['species_id'])
-                                if base_id != combatant['species_id']:
-                                    keys_to_fetch.append((base_id, iv_idx))
+                                for ancestor in eligible_pre_evolutions(combatant['species_id'], catalog):
+                                    if ancestor != combatant['species_id']:
+                                        keys_to_fetch.append((ancestor, iv_idx))
                             for owner_key in keys_to_fetch:
                                 if owner_key not in seen_owner_keys:
                                     seen_owner_keys.add(owner_key)
@@ -175,23 +176,26 @@ class MissingAnalysis:
                 else:
                     cp = None
                 if has_inventory and versions == current:
-                    if build not in matches_by_build:
-                        from pvpoke_mega import base_species_id, is_mega_form
+                    match_cache_key = (build, _json_hash(spec.get('rules')))
+                    if match_cache_key not in matches_by_build:
+                        from pvpoke_mega import eligible_pre_evolutions, is_mega_form
 
+                        catalog = getattr(normalizer, 'species', None)
                         iv_idx = _iv_index(combatant['ivs'])
                         rows_for_match = list(owner_rows_by_key.get((combatant['species_id'], iv_idx), ()))
                         if is_mega_form(combatant['species_id']):
-                            base_id = base_species_id(combatant['species_id'])
-                            if base_id != combatant['species_id']:
-                                rows_for_match.extend(owner_rows_by_key.get((base_id, iv_idx), ()))
-                        matches_by_build[build] = Ownership._match_rows(
+                            for ancestor in eligible_pre_evolutions(combatant['species_id'], catalog):
+                                if ancestor != combatant['species_id']:
+                                    rows_for_match.extend(owner_rows_by_key.get((ancestor, iv_idx), ()))
+                        matches_by_build[match_cache_key] = Ownership._match_rows(
                             rows_for_match,
                             combatant,
                             cp,
-                            species_catalog=getattr(normalizer, 'species', None),
+                            species_catalog=catalog,
                             cpms=getattr(normalizer, 'cpms', None),
+                            rules=spec.get('rules'),
                         )
-                    cell['inventory_matches'] = matches_by_build[build]
+                    cell['inventory_matches'] = matches_by_build[match_cache_key]
                     if any(match['state'] == 'confirmed_owned' and match['build_match'] == 'exact'
                            for match in cell['inventory_matches']):
                         cell['ownership'] = 'confirmed_owned'

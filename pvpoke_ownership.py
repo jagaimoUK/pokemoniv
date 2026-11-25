@@ -444,8 +444,13 @@ class Ownership:
                 (self.owner, instance_id, limit, after_revision))]
 
     @staticmethod
-    def _match_rows(rows, combatant, cp, *, species_catalog=None, cpms=None):
-        from pvpoke_mega import base_species_id, can_mega_evolve, evaluate_owned_for_mega, is_mega_form
+    def _match_rows(rows, combatant, cp, *, species_catalog=None, cpms=None, rules=None, mega_level=3):
+        from pvpoke_mega import (
+            base_species_id,
+            can_mega_evolve,
+            evaluate_owned_for_mega,
+            is_mega_form,
+        )
 
         target_species = combatant['species_id']
         mega_mode = is_mega_form(target_species)
@@ -455,40 +460,59 @@ class Ownership:
             record = _unpack(row)
             rec_species = record['species_id']
             is_direct = rec_species == target_species
-            is_mega_link = mega_mode and can_mega_evolve(rec_species, target_species)
+            is_mega_link = mega_mode and can_mega_evolve(rec_species, target_species, species_catalog)
             if (not is_direct and not is_mega_link) or record['ivs'] != combatant['ivs']:
                 raise OwnershipUnavailable('Inventory match index is inconsistent')
             moves = record['current_moves'] or {}
+            mega_eval = None
             if is_mega_link:
-                mega_eval = None
                 if species_catalog and base_id in species_catalog and target_species in species_catalog:
-                    cap = 1500 if int(cp) <= 1500 else (2500 if int(cp) <= 2500 else 10000)
                     mega_eval = evaluate_owned_for_mega(
                         record,
                         mega_species_id=target_species,
                         base_stats=species_catalog[base_id]['baseStats'],
                         mega_stats=species_catalog[target_species]['baseStats'],
+                        species_catalog=species_catalog,
                         target_level=combatant['level'],
-                        cp_cap=cap,
                         cpms=cpms,
-                        allow_cp_downscaling=True,
+                        rules=rules,
+                        mega_level=mega_level,
                     )
-                if mega_eval is not None and not mega_eval['eligible']:
+                move_pairs = (
+                    (moves.get('fast'), combatant['moves']['fast']),
+                    (moves.get('charged'), combatant['moves']['charged']),
+                )
+                moves_mismatch = any(
+                    actual is not None and expected is not None and actual != expected
+                    for actual, expected in move_pairs
+                )
+                moves_missing = any(
+                    actual is None or expected is None
+                    for actual, expected in move_pairs
+                )
+                if mega_eval is None:
+                    match = 'different' if moves_mismatch else 'unverified'
+                elif mega_eval['eligible'] is False or mega_eval['needs_power_up'] is True:
                     match = 'different'
-                elif mega_eval is not None and mega_eval.get('needs_power_up'):
+                elif mega_eval['eligible'] is None:
+                    match = 'different' if moves_mismatch else 'unverified'
+                elif mega_eval['needs_evolution']:
+                    match = 'unverified'
+                elif mega_eval['downscaled']:
+                    match = 'different' if moves_mismatch else 'unverified'
+                elif moves_mismatch:
                     match = 'different'
                 else:
-                    move_pairs = (
-                        (moves.get('fast'), combatant['moves']['fast']),
-                        (moves.get('charged'), combatant['moves']['charged']),
-                    )
-                    if mega_eval is not None and mega_eval.get('downscaled'):
-                        pairs = move_pairs
-                    else:
-                        pairs = ((record['current_level'], combatant['level']),) + move_pairs
-                    if any(actual is not None and expected is not None and actual != expected for actual, expected in pairs):
+                    base_cap_cp = mega_eval['mega_theoretical']['base_equivalent_cp_at_target']
+                    level_ok = (record['current_level'] is not None
+                                and float(record['current_level']) == float(combatant['level']))
+                    cp_ok = (record['current_cp'] is not None
+                             and int(record['current_cp']) == int(base_cap_cp))
+                    if (record['current_level'] is not None and not level_ok) or (
+                        record['current_cp'] is not None and not cp_ok
+                    ):
                         match = 'different'
-                    elif any(actual is None or expected is None for actual, expected in pairs):
+                    elif not level_ok or not cp_ok or moves_missing:
                         match = 'unverified'
                     else:
                         match = 'exact'
@@ -506,33 +530,52 @@ class Ownership:
                      'revision': record['revision'], 'build_match': match}
             if is_mega_link:
                 entry['base_species_id'] = rec_species
-                if mega_eval and mega_eval.get('downscaled'):
-                    entry['mega_downscaled'] = True
-                if mega_eval and mega_eval.get('needs_power_up'):
-                    entry['needs_power_up'] = True
+                if mega_eval is not None:
+                    entry['eligible'] = mega_eval['eligible']
+                    if mega_eval.get('downscaled'):
+                        entry['mega_downscaled'] = True
+                    if mega_eval.get('needs_power_up'):
+                        entry['needs_power_up'] = True
+                    if mega_eval.get('needs_evolution'):
+                        entry['needs_evolution'] = True
+                    if mega_eval.get('reason') == 'cp_cap_rule_required':
+                        entry['mega_rule_unverified'] = True
+                else:
+                    entry['mega_rule_unverified'] = True
             matches.append(entry)
         return matches
 
-    def _matches(self, db, combatant, cp, *, species_catalog=None, cpms=None):
+    def _matches(self, db, combatant, cp, *, species_catalog=None, cpms=None, rules=None, mega_level=3):
         """Show exact and uncertain candidates without converting absence into a build-wide fact."""
-        from pvpoke_mega import base_species_id, is_mega_form
+        from pvpoke_mega import eligible_pre_evolutions, is_mega_form
 
         species_id = combatant['species_id']
         iv_idx = _iv_index(combatant['ivs'])
-        rows = list(db.execute('''SELECT body, digest FROM owned_instances_v1
-            WHERE owner_scope=? AND species_id=? AND iv_index=? ORDER BY instance_id''',
-            (self.owner, species_id, iv_idx)).fetchall())
+        query_species = [species_id]
         if is_mega_form(species_id):
-            base_id = base_species_id(species_id)
-            if base_id != species_id:
-                rows.extend(db.execute('''SELECT body, digest FROM owned_instances_v1
-                    WHERE owner_scope=? AND species_id=? AND iv_index=? ORDER BY instance_id''',
-                    (self.owner, base_id, iv_idx)).fetchall())
-        return self._match_rows(rows, combatant, cp, species_catalog=species_catalog, cpms=cpms)
+            for ancestor in eligible_pre_evolutions(species_id, species_catalog):
+                if ancestor not in query_species:
+                    query_species.append(ancestor)
+        placeholders = ','.join('?' for _ in query_species)
+        rows = list(db.execute(
+            f'''SELECT body, digest FROM owned_instances_v1
+                WHERE owner_scope=? AND species_id IN ({placeholders}) AND iv_index=? ORDER BY instance_id''',
+            (self.owner, *query_species, iv_idx),
+        ).fetchall())
+        return self._match_rows(
+            rows, combatant, cp, species_catalog=species_catalog, cpms=cpms, rules=rules, mega_level=mega_level,
+        )
 
-    def species_rows_by_iv(self, species_id):
+    def species_rows_by_iv(self, species_id, *, species_catalog=None):
         """Return validated inventory row pairs keyed by iv_index and confirmed-owned count."""
+        from pvpoke_mega import eligible_pre_evolutions, is_mega_form
+
         species = self._species(species_id)
+        query_species = [species]
+        if is_mega_form(species):
+            for ancestor in eligible_pre_evolutions(species, species_catalog):
+                if ancestor in self.species_ids and ancestor not in query_species:
+                    query_species.append(ancestor)
         if not self.store.path.exists():
             return {}, 0
         by_iv = {}
@@ -540,13 +583,14 @@ class Ownership:
         with self.store._reader() as db:
             if not self._exists(db):
                 return {}, 0
-            for iv_index, body, digest in db.execute(
-                '''SELECT iv_index, body, digest FROM owned_instances_v1
-                   WHERE owner_scope=? AND species_id=? ORDER BY iv_index, instance_id''',
-                (self.owner, species),
+            placeholders = ','.join('?' for _ in query_species)
+            for queried_species, iv_index, body, digest in db.execute(
+                f'''SELECT species_id, iv_index, body, digest FROM owned_instances_v1
+                    WHERE owner_scope=? AND species_id IN ({placeholders}) ORDER BY iv_index, instance_id''',
+                (self.owner, *query_species),
             ):
                 record = _unpack((body, digest))
-                if record['species_id'] != species or _iv_index(record['ivs']) != iv_index:
+                if record['species_id'] != queried_species or _iv_index(record['ivs']) != iv_index:
                     raise OwnershipUnavailable('Inventory match index is inconsistent')
                 if record['state'] == 'confirmed_owned':
                     confirmed_owned += 1

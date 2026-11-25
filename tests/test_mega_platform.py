@@ -1,19 +1,23 @@
-"""Tests for the common Mega Evolution foundation, CP1500 linking, and selection persistence."""
+"""Tests for Mega Evolution common foundation, explicit CP rules, ownership linking, and cache/history compatibility."""
 from pathlib import Path
 import tempfile
 import unittest
 
 from pvpoke_battle_store import BattleStore
+from pvpoke_matchup_cache import cache_namespace
 from pvpoke_mega import (
+    MEGA_MOVE_BONUSES,
     base_species_id,
     can_mega_evolve,
     compute_cp,
+    eligible_pre_evolutions,
     evaluate_owned_for_mega,
     is_mega_form,
     is_shadow_form,
     load_cpms,
     max_level_and_cp,
     mega_forms_for_base,
+    resolve_battle_rules,
 )
 from pvpoke_ownership import Ownership
 from pvpoke_selection_history import app_operation as selection_operation
@@ -23,20 +27,33 @@ class MegaPlatformTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.store = BattleStore(self.root / 'battle_analysis.sqlite3')
+        self.swablu_stats = {'atk': 76, 'def': 132, 'hp': 128}
         self.altaria_stats = {'atk': 141, 'def': 201, 'hp': 181}
         self.altaria_mega_stats = {'atk': 222, 'def': 218, 'hp': 181}
+        self.slowpoke_stats = {'atk': 109, 'def': 98, 'hp': 207}
+        self.slowbro_stats = {'atk': 177, 'def': 180, 'hp': 216}
+        self.slowbro_mega_stats = {'atk': 224, 'def': 259, 'hp': 216}
         self.catalog = {
-            'altaria': {'baseStats': self.altaria_stats},
+            'swablu': {'baseStats': self.swablu_stats, 'family': {'id': 'FAMILY_SWABLU', 'evolutions': ['altaria']}},
+            'swablu_shadow': {'baseStats': self.swablu_stats},
+            'altaria': {'baseStats': self.altaria_stats, 'family': {'id': 'FAMILY_SWABLU', 'parent': 'swablu'}},
             'altaria_mega': {'baseStats': self.altaria_mega_stats},
             'altaria_shadow': {'baseStats': self.altaria_stats},
-            'charizard': {'baseStats': {'atk': 223, 'def': 173, 'hp': 186}},
+            'charmander': {'baseStats': {'atk': 116, 'def': 93, 'hp': 118}, 'family': {'id': 'FAMILY_CHARMANDER', 'evolutions': ['charmeleon']}},
+            'charmeleon': {'baseStats': {'atk': 158, 'def': 126, 'hp': 151}, 'family': {'id': 'FAMILY_CHARMANDER', 'parent': 'charmander', 'evolutions': ['charizard']}},
+            'charizard': {'baseStats': {'atk': 223, 'def': 173, 'hp': 186}, 'family': {'id': 'FAMILY_CHARMANDER', 'parent': 'charmeleon'}},
             'charizard_mega_x': {'baseStats': {'atk': 273, 'def': 213, 'hp': 186}},
             'charizard_mega_y': {'baseStats': {'atk': 319, 'def': 212, 'hp': 186}},
             'kyogre_primal': {'baseStats': {'atk': 353, 'def': 268, 'hp': 218}},
+            'slowpoke': {'baseStats': self.slowpoke_stats, 'family': {'id': 'FAMILY_SLOWPOKE', 'evolutions': ['slowbro']}},
+            'slowpoke_galarian': {'baseStats': self.slowpoke_stats, 'family': {'id': 'FAMILY_SLOWPOKE_GALARIAN', 'evolutions': ['slowbro_galarian']}},
+            'slowbro': {'baseStats': self.slowbro_stats, 'family': {'id': 'FAMILY_SLOWPOKE', 'parent': 'slowpoke'}},
+            'slowbro_galarian': {'baseStats': self.slowbro_stats, 'family': {'id': 'FAMILY_SLOWPOKE_GALARIAN', 'parent': 'slowpoke_galarian'}},
+            'slowbro_mega': {'baseStats': self.slowbro_mega_stats},
         }
         self.cpms = load_cpms()
 
-    def test_species_mapping_and_shadow_exclusion(self):
+    def test_species_mapping_pre_evolutions_shadow_and_xy_distinction(self):
         self.assertTrue(is_mega_form('altaria_mega'))
         self.assertTrue(is_mega_form('charizard_mega_x'))
         self.assertTrue(is_mega_form('kyogre_primal'))
@@ -47,104 +64,210 @@ class MegaPlatformTests(unittest.TestCase):
         self.assertEqual(base_species_id('charizard_mega_x'), 'charizard')
         self.assertEqual(base_species_id('charizard_mega_y'), 'charizard')
         self.assertEqual(base_species_id('kyogre_primal'), 'kyogre')
-        self.assertEqual(base_species_id('altaria'), 'altaria')
 
         self.assertTrue(is_shadow_form('altaria_shadow'))
-        self.assertTrue(can_mega_evolve('altaria', 'altaria_mega'))
-        self.assertFalse(can_mega_evolve('altaria_shadow', 'altaria_mega'))
-        self.assertFalse(can_mega_evolve('charizard', 'altaria_mega'))
+        self.assertEqual(eligible_pre_evolutions('altaria_mega', self.catalog), ('altaria', 'swablu'))
+        self.assertEqual(eligible_pre_evolutions('charizard_mega_x', self.catalog), ('charizard', 'charmeleon', 'charmander'))
+
+        self.assertTrue(can_mega_evolve('altaria', 'altaria_mega', self.catalog))
+        self.assertTrue(can_mega_evolve('swablu', 'altaria_mega', self.catalog))
+        self.assertFalse(can_mega_evolve('altaria_shadow', 'altaria_mega', self.catalog))
+        self.assertFalse(can_mega_evolve('swablu_shadow', 'altaria_mega', self.catalog))
+        self.assertFalse(can_mega_evolve('charizard', 'altaria_mega', self.catalog))
+        # Regional form isolation: Galarian Slowpoke cannot become Mega Slowbro.
+        self.assertTrue(can_mega_evolve('slowpoke', 'slowbro_mega', self.catalog))
+        self.assertFalse(can_mega_evolve('slowpoke_galarian', 'slowbro_mega', self.catalog))
 
         self.assertEqual(
-            mega_forms_for_base('charizard', set(self.catalog)),
+            mega_forms_for_base('charmander', set(self.catalog), self.catalog),
             ['charizard_mega_x', 'charizard_mega_y'],
         )
-        self.assertEqual(mega_forms_for_base('altaria_shadow', set(self.catalog)), [])
+        self.assertEqual(mega_forms_for_base('swablu_shadow', set(self.catalog), self.catalog), [])
 
-    def test_gl_cp_cap_evaluation_for_pre_mega_individual(self):
+    def test_cp1500_2500_boundaries_and_explicit_league_rules_no_cp_guessing(self):
         ivs = {'attack': 0, 'defense': 14, 'hp': 15}
-        mega_cap = max_level_and_cp(self.altaria_mega_stats, ivs, cp_cap=1500, max_level=50.0, cpms=self.cpms)
-        self.assertIsNotNone(mega_cap)
-        mega_lvl, mega_cp = mega_cap
-        self.assertLessEqual(mega_cp, 1500)
+        gl_lvl, gl_cp = max_level_and_cp(self.altaria_mega_stats, ivs, cp_cap=1500, max_level=50.0, cpms=self.cpms)
+        ul_lvl, ul_cp = max_level_and_cp(self.altaria_mega_stats, ivs, cp_cap=2500, max_level=50.0, cpms=self.cpms)
+        self.assertLessEqual(gl_cp, 1500)
+        self.assertLessEqual(ul_cp, 2500)
+        self.assertGreater(ul_lvl, gl_lvl)
+
+        # Ultra League evaluation of a CP 1200 Altaria must NEVER be downgraded to GL 1500 rule!
+        ul_target_lvl = ul_lvl
+        cur_lvl = gl_lvl + 1.0  # ~Lv 20.5 -> base CP ~1200 (< 1500), STILL under UL cap!
+        cur_cp_1200 = compute_cp(self.altaria_stats, ivs, cur_lvl, self.cpms)
+        self.assertLess(cur_cp_1200, 1500)
+        ul_eval = evaluate_owned_for_mega(
+            {'species_id': 'altaria', 'ivs': ivs, 'current_level': cur_lvl, 'current_cp': cur_cp_1200},
+            mega_species_id='altaria_mega',
+            base_stats=self.altaria_stats,
+            mega_stats=self.altaria_mega_stats,
+            target_level=ul_target_lvl,
+            rules={'league': 'ultra', 'cp_cap': 2500, 'max_level': 50, 'cup_id': 'ultra_mega', 'allow_cp_downscaling': True},
+            cpms=self.cpms,
+        )
+        self.assertTrue(ul_eval['eligible'])
+        self.assertFalse(ul_eval['downscaled'])
+        self.assertTrue(ul_eval['needs_power_up'])
+        self.assertEqual(ul_eval['mega_theoretical']['cap_max_level'], ul_lvl)
+
+        # Without explicit rules/cp_cap, never assume 1500 or downscaling.
+        no_rule = resolve_battle_rules(None)
+        self.assertIsNone(no_rule['cp_cap'])
+        self.assertIsNone(no_rule['allow_cp_downscaling'])
+        unverified_rule = evaluate_owned_for_mega(
+            {'species_id': 'altaria', 'ivs': ivs, 'current_cp': 1200},
+            mega_species_id='altaria_mega',
+            base_stats=self.altaria_stats,
+            mega_stats=self.altaria_mega_stats,
+            cpms=self.cpms,
+        )
+        self.assertIsNone(unverified_rule['eligible'])
+        self.assertEqual(unverified_rule['reason'], 'cp_cap_rule_required')
+
+    def test_three_cp_states_downscaling_powerup_unknown_pl_and_super_max(self):
+        ivs = {'attack': 0, 'defense': 14, 'hp': 15}
+        mega_lvl, mega_cp = max_level_and_cp(self.altaria_mega_stats, ivs, cp_cap=1500, max_level=50.0, cpms=self.cpms)
         base_cp_at_cap = compute_cp(self.altaria_stats, ivs, mega_lvl, self.cpms)
         self.assertLess(base_cp_at_cap, 1500)
 
-        # An Altaria kept at base_cp_at_cap fits GL directly without downscaling.
+        # 1. Exact pre-Mega level & base equivalent CP under explicit GL rule.
         fit = evaluate_owned_for_mega(
             {'species_id': 'altaria', 'ivs': ivs, 'current_level': mega_lvl, 'current_cp': base_cp_at_cap},
             mega_species_id='altaria_mega',
             base_stats=self.altaria_stats,
             mega_stats=self.altaria_mega_stats,
             target_level=mega_lvl,
-            cp_cap=1500,
+            rules={'league': 'great', 'cp_cap': 1500, 'cup_id': 'great_mega', 'allow_cp_downscaling': True},
             cpms=self.cpms,
         )
         self.assertTrue(fit['eligible'])
         self.assertFalse(fit['downscaled'])
         self.assertFalse(fit['needs_power_up'])
-        self.assertEqual(fit['reason'], 'ok')
-        self.assertEqual(fit['mega_cp'], mega_cp)
+        self.assertEqual(fit['actual_owned']['cp'], base_cp_at_cap)
+        self.assertEqual(fit['mega_theoretical']['target_cp'], mega_cp)
+        self.assertEqual(fit['battle_effective']['cp'], mega_cp)
+        self.assertTrue(fit['battle_effective']['matches_target'])
 
-        # Live GBL Mega rule: an over-CP / over-level Altaria (e.g. CP 1490) IS eligible via temporary half-level downscaling.
+        # 2. Over-CP (e.g., GL normal Altaria Lv 27.5 CP ~1490) with explicit downscaling rule.
+        high_lvl = 27.5
+        high_cp = compute_cp(self.altaria_stats, ivs, high_lvl, self.cpms)
         over_cp = evaluate_owned_for_mega(
-            {'species_id': 'altaria', 'ivs': ivs, 'current_cp': 1490},
+            {'species_id': 'altaria', 'ivs': ivs, 'current_level': high_lvl, 'current_cp': high_cp},
             mega_species_id='altaria_mega',
             base_stats=self.altaria_stats,
             mega_stats=self.altaria_mega_stats,
             target_level=mega_lvl,
-            cp_cap=1500,
+            rules={'league': 'great', 'cp_cap': 1500, 'cup_id': 'great_mega', 'allow_cp_downscaling': True},
             cpms=self.cpms,
         )
         self.assertTrue(over_cp['eligible'])
         self.assertTrue(over_cp['downscaled'])
         self.assertFalse(over_cp['needs_power_up'])
         self.assertEqual(over_cp['reason'], 'ok_downscaled')
-        self.assertEqual(over_cp['mega_cp'], mega_cp)
+        self.assertEqual(over_cp['actual_owned']['cp'], high_cp)
+        self.assertEqual(over_cp['battle_effective']['level'], mega_lvl)
+        self.assertEqual(over_cp['battle_effective']['cp'], mega_cp)
 
-        # Strict non-scaled mode rejects over-CP individuals when requested.
+        # Strict unscaled cup rejects over-CP individual.
         over_cp_strict = evaluate_owned_for_mega(
-            {'species_id': 'altaria', 'ivs': ivs, 'current_cp': 1490},
+            {'species_id': 'altaria', 'ivs': ivs, 'current_level': high_lvl, 'current_cp': high_cp},
             mega_species_id='altaria_mega',
             base_stats=self.altaria_stats,
             mega_stats=self.altaria_mega_stats,
             target_level=mega_lvl,
-            cp_cap=1500,
+            rules={'league': 'great', 'cp_cap': 1500, 'cup_id': 'strict_unscaled', 'allow_cp_downscaling': False},
             cpms=self.cpms,
-            allow_cp_downscaling=False,
         )
         self.assertFalse(over_cp_strict['eligible'])
-        self.assertEqual(over_cp_strict['reason'], 'cp_exceeds_mega_cap')
+        self.assertEqual(over_cp_strict['reason'], 'level_exceeds_mega_cap')
 
-        # Under-leveled individual is not upscaled in battle and still needs power-up.
+        # Unspecified downscaling cup does NOT silently enable downscaling.
+        over_cp_unspecified = evaluate_owned_for_mega(
+            {'species_id': 'altaria', 'ivs': ivs, 'current_level': high_lvl, 'current_cp': high_cp},
+            mega_species_id='altaria_mega',
+            base_stats=self.altaria_stats,
+            mega_stats=self.altaria_mega_stats,
+            target_level=mega_lvl,
+            rules={'league': 'great', 'cp_cap': 1500, 'cup_id': 'all'},
+            cpms=self.cpms,
+        )
+        self.assertIsNone(over_cp_unspecified['eligible'])
+        self.assertEqual(over_cp_unspecified['reason'], 'downscaling_rule_unverified')
+
+        # 3. Low PL needs power-up (no upscaling).
+        under_cp = compute_cp(self.altaria_stats, ivs, mega_lvl - 2.0, self.cpms)
         under_lvl = evaluate_owned_for_mega(
-            {'species_id': 'altaria', 'ivs': ivs, 'current_level': mega_lvl - 2.0, 'current_cp': 700},
+            {'species_id': 'altaria', 'ivs': ivs, 'current_level': mega_lvl - 2.0, 'current_cp': under_cp},
             mega_species_id='altaria_mega',
             base_stats=self.altaria_stats,
             mega_stats=self.altaria_mega_stats,
             target_level=mega_lvl,
             cp_cap=1500,
+            allow_cp_downscaling=True,
             cpms=self.cpms,
         )
         self.assertTrue(under_lvl['eligible'])
         self.assertFalse(under_lvl['downscaled'])
         self.assertTrue(under_lvl['needs_power_up'])
 
-        # Shadow Altaria can never Mega Evolve.
-        shadow = evaluate_owned_for_mega(
-            {'species_id': 'altaria_shadow', 'ivs': ivs, 'current_cp': 900},
+        # 4. Unknown current_level with CP only -> cannot claim battle_effective matches_target.
+        unknown_pl = evaluate_owned_for_mega(
+            {'species_id': 'altaria', 'ivs': ivs, 'current_cp': base_cp_at_cap},
             mega_species_id='altaria_mega',
             base_stats=self.altaria_stats,
             mega_stats=self.altaria_mega_stats,
+            target_level=mega_lvl,
+            cp_cap=1500,
+            allow_cp_downscaling=True,
             cpms=self.cpms,
         )
-        self.assertFalse(shadow['eligible'])
-        self.assertEqual(shadow['reason'], 'incompatible_species')
+        self.assertTrue(unknown_pl['eligible'])
+        self.assertFalse(unknown_pl['battle_effective']['matches_target'])
 
-    def test_ownership_links_pre_mega_individual_and_selection_saves_mega_form(self):
+        # 5. Super MAX (level 4): preserves move bonus multiplier, defers unconfirmed PL+2 CP shift.
+        super_max_safe = evaluate_owned_for_mega(
+            {'species_id': 'altaria', 'ivs': ivs, 'current_level': mega_lvl, 'current_cp': base_cp_at_cap},
+            mega_species_id='altaria_mega',
+            base_stats=self.altaria_stats,
+            mega_stats=self.altaria_mega_stats,
+            target_level=mega_lvl,
+            cp_cap=1500,
+            allow_cp_downscaling=True,
+            cpms=self.cpms,
+            mega_level=4,
+        )
+        self.assertEqual(super_max_safe['mega_condition']['mega_level'], 4)
+        self.assertEqual(super_max_safe['mega_condition']['move_bonus_multiplier'], MEGA_MOVE_BONUSES[3])
+        self.assertFalse(super_max_safe['mega_condition']['super_max_cp_applied'])
+        self.assertEqual(super_max_safe['mega_condition']['super_max_pl_hypothesis_status'], 'unconfirmed_deferred')
+        self.assertEqual(super_max_safe['battle_effective']['cp'], mega_cp)
+
+        # Speculative Super MAX hypothesis mode stays unconfirmed instead of guessing CP.
+        super_max_spec = evaluate_owned_for_mega(
+            {'species_id': 'altaria', 'ivs': ivs, 'current_level': mega_lvl, 'current_cp': base_cp_at_cap},
+            mega_species_id='altaria_mega',
+            base_stats=self.altaria_stats,
+            mega_stats=self.altaria_mega_stats,
+            cp_cap=1500,
+            cpms=self.cpms,
+            mega_level=4,
+            super_max_cp_mode='pl_plus_2_hyp1',
+        )
+        self.assertIsNone(super_max_spec['eligible'])
+        self.assertEqual(super_max_spec['reason'], 'super_max_cp_unconfirmed')
+
+    def test_ownership_build_match_safety_pre_evolutions_and_no_false_exact(self):
         ivs = {'attack': 0, 'defense': 14, 'hp': 15}
         mega_lvl, mega_cp = max_level_and_cp(self.altaria_mega_stats, ivs, cp_cap=1500, max_level=50.0, cpms=self.cpms)
         base_cp = compute_cp(self.altaria_stats, ivs, mega_lvl, self.cpms)
+        high_lvl = 27.5
+        high_cp = compute_cp(self.altaria_stats, ivs, high_lvl, self.cpms)
+        under_lvl = mega_lvl - 2.0
+        under_cp = compute_cp(self.altaria_stats, ivs, under_lvl, self.cpms)
+        swablu_cp = compute_cp(self.swablu_stats, ivs, mega_lvl, self.cpms)
         moves = {'fast': 'DRAGON_BREATH', 'charged': ['SKY_ATTACK', 'MOONBLAST']}
+        swablu_moves = {'fast': 'PECK', 'charged': ['DISARMING_VOICE']}
 
         inv = Ownership(self.store, species_ids=set(self.catalog))
         inv.register('altaria-fit', {
@@ -154,21 +277,33 @@ class MegaPlatformTests(unittest.TestCase):
         inv.confirm('c1', 'altaria-fit', expected_revision=0, state='confirmed_owned')
 
         inv.register('altaria-over', {
-            'species_id': 'altaria', 'ivs': ivs, 'current_cp': 1495, 'current_moves': moves,
+            'species_id': 'altaria', 'ivs': ivs, 'current_level': high_lvl,
+            'current_cp': high_cp, 'current_moves': moves,
         })
         inv.confirm('c2', 'altaria-over', expected_revision=0, state='confirmed_owned')
 
-        inv.register('altaria-under', {
-            'species_id': 'altaria', 'ivs': ivs, 'current_level': mega_lvl - 2.0,
-            'current_cp': 700, 'current_moves': moves,
+        inv.register('altaria-cp-only', {
+            'species_id': 'altaria', 'ivs': ivs, 'current_cp': base_cp, 'current_moves': moves,
         })
-        inv.confirm('c3', 'altaria-under', expected_revision=0, state='confirmed_owned')
+        inv.confirm('c3', 'altaria-cp-only', expected_revision=0, state='confirmed_owned')
+
+        inv.register('altaria-under', {
+            'species_id': 'altaria', 'ivs': ivs, 'current_level': under_lvl,
+            'current_cp': under_cp, 'current_moves': moves,
+        })
+        inv.confirm('c4', 'altaria-under', expected_revision=0, state='confirmed_owned')
+
+        inv.register('swablu-fit', {
+            'species_id': 'swablu', 'ivs': ivs, 'current_level': mega_lvl,
+            'current_cp': swablu_cp, 'current_moves': swablu_moves,
+        })
+        inv.confirm('c5', 'swablu-fit', expected_revision=0, state='confirmed_owned')
 
         inv.register('altaria-shadow', {
             'species_id': 'altaria_shadow', 'ivs': ivs, 'current_level': mega_lvl,
             'current_cp': base_cp, 'current_moves': moves,
         })
-        inv.confirm('c4', 'altaria-shadow', expected_revision=0, state='confirmed_owned')
+        inv.confirm('c6', 'altaria-shadow', expected_revision=0, state='confirmed_owned')
 
         combatant = {
             'species_id': 'altaria_mega',
@@ -176,25 +311,86 @@ class MegaPlatformTests(unittest.TestCase):
             'level': mega_lvl,
             'moves': moves,
         }
+        gl_mega_rules = {'league': 'great', 'cp_cap': 1500, 'max_level': 50, 'cup_id': 'great_mega', 'allow_cp_downscaling': True}
         with self.store._reader() as db:
-            matches = inv._matches(db, combatant, mega_cp, species_catalog=self.catalog, cpms=self.cpms)
+            matches = inv._matches(
+                db, combatant, mega_cp, species_catalog=self.catalog, cpms=self.cpms, rules=gl_mega_rules,
+            )
+            no_rule_matches = inv._matches(
+                db, combatant, None, species_catalog=self.catalog, cpms=self.cpms, rules=None,
+            )
 
         by_id = {m['instance_id']: m for m in matches}
-        self.assertEqual(set(by_id), {'altaria-fit', 'altaria-over', 'altaria-under'})  # Shadow excluded
+        self.assertEqual(
+            set(by_id),
+            {'altaria-fit', 'altaria-over', 'altaria-cp-only', 'altaria-under', 'swablu-fit'},
+        )
+        # Only verified pre-Mega level + base CP + moves is 'exact'.
         self.assertEqual(by_id['altaria-fit']['build_match'], 'exact')
         self.assertFalse(by_id['altaria-fit'].get('mega_downscaled', False))
-        self.assertEqual(by_id['altaria-fit']['base_species_id'], 'altaria')
-        self.assertEqual(by_id['altaria-over']['build_match'], 'exact')
-        self.assertTrue(by_id['altaria-over'].get('mega_downscaled'))
+        # Downscaled individual is eligible & downscaled, yet build_match stays 'unverified' (never 'exact').
+        self.assertTrue(by_id['altaria-over']['eligible'])
+        self.assertTrue(by_id['altaria-over']['mega_downscaled'])
+        self.assertEqual(by_id['altaria-over']['build_match'], 'unverified')
+        # Unknown PL (CP only) is NEVER 'exact'.
+        self.assertEqual(by_id['altaria-cp-only']['build_match'], 'unverified')
+        # Under-leveled needs power-up.
+        self.assertTrue(by_id['altaria-under']['needs_power_up'])
         self.assertEqual(by_id['altaria-under']['build_match'], 'different')
-        self.assertTrue(by_id['altaria-under'].get('needs_power_up'))
+        # Pre-evolution Swablu is linked with needs_evolution=True and stays 'unverified'.
+        self.assertTrue(by_id['swablu-fit']['needs_evolution'])
+        self.assertEqual(by_id['swablu-fit']['build_match'], 'unverified')
 
-        # Selection history now permits saving Mega forms linked to the pre-Mega confirmed individual.
-        saved = selection_operation(self.store, {
+        # Without rules and with cp=None: must not crash and must not claim 'exact'.
+        by_id_no_rule = {m['instance_id']: m for m in no_rule_matches}
+        self.assertEqual(by_id_no_rule['altaria-fit']['build_match'], 'unverified')
+        self.assertTrue(by_id_no_rule['altaria-fit'].get('mega_rule_unverified'))
+
+    def test_cache_namespace_separation_and_selection_history_compatibility(self):
+        # Legacy cache_namespace signature output stays identical when Mega fields are defaulted.
+        legacy = cache_namespace(gamemaster_hash='g', pokemonjs_hash='p', cp_cap=1500, max_level=50, engine_hash='e')
+        m3_scaled = cache_namespace(
+            gamemaster_hash='g', pokemonjs_hash='p', cp_cap=1500, max_level=50, engine_hash='e',
+            mega_level=3, downscaling_mode='half_level', super_max_mode='none', cup_id='great_mega',
+        )
+        m4_unconfirmed = cache_namespace(
+            gamemaster_hash='g', pokemonjs_hash='p', cp_cap=1500, max_level=50, engine_hash='e',
+            mega_level=4, downscaling_mode='half_level', super_max_mode='unconfirmed', cup_id='great_mega',
+        )
+        ul_scaled = cache_namespace(
+            gamemaster_hash='g', pokemonjs_hash='p', cp_cap=2500, max_level=50, engine_hash='e',
+            mega_level=3, downscaling_mode='half_level', super_max_mode='none', cup_id='ultra_mega',
+        )
+        self.assertEqual(len({legacy, m3_scaled, m4_unconfirmed, ul_scaled}), 4)
+
+        # Existing non-Mega selection snapshot stays intact when saving Mega selection snapshot.
+        ivs = {'attack': 0, 'defense': 14, 'hp': 15}
+        mega_lvl, _ = max_level_and_cp(self.altaria_mega_stats, ivs, cp_cap=1500, max_level=50.0, cpms=self.cpms)
+        inv = Ownership(self.store, species_ids=set(self.catalog))
+        inv.register('altaria-fit', {'species_id': 'altaria', 'ivs': ivs, 'current_level': mega_lvl})
+        inv.confirm('c1', 'altaria-fit', expected_revision=0, state='confirmed_owned')
+
+        selection_operation(self.store, {
+            'action': 'selection_save',
+            'request_id': 'normal-save-1',
+            'species_id': 'altaria',
+            'meta_sha256': 'a' * 64,
+            'calculation_version': 'b' * 64,
+            'policy_version': 'box-first-v3',
+            'candidates': [{
+                'ivs': '0/14/15',
+                'role': 'important',
+                'instance_id': 'altaria-fit',
+                'goal': 'Normal GL',
+                'moves': ['DRAGON_BREATH', 'SKY_ATTACK', 'MOONBLAST'],
+                'evidence': ['Normal GL top rank'],
+            }],
+        }, species_ids=set(self.catalog))
+        selection_operation(self.store, {
             'action': 'selection_save',
             'request_id': 'mega-save-1',
             'species_id': 'altaria_mega',
-            'meta_sha256': 'a' * 64,
+            'meta_sha256': 'c' * 64,
             'calculation_version': 'b' * 64,
             'policy_version': 'box-first-v3',
             'candidates': [{
@@ -206,12 +402,13 @@ class MegaPlatformTests(unittest.TestCase):
                 'evidence': ['Mega GL cap fit'],
             }],
         }, species_ids=set(self.catalog))
-        self.assertGreater(saved['revision'], 0)
-        latest = selection_operation(self.store, {
-            'action': 'selection_latest',
-            'species_id': 'altaria_mega',
-        }, species_ids=set(self.catalog))
-        self.assertEqual(latest['snapshot']['candidates'][0]['instance_id'], 'altaria-fit')
+
+        normal_latest = selection_operation(self.store, {'action': 'selection_latest', 'species_id': 'altaria'}, species_ids=set(self.catalog))
+        mega_latest = selection_operation(self.store, {'action': 'selection_latest', 'species_id': 'altaria_mega'}, species_ids=set(self.catalog))
+        self.assertEqual(normal_latest['snapshot']['species_id'], 'altaria')
+        self.assertEqual(normal_latest['snapshot']['candidates'][0]['goal'], 'Normal GL')
+        self.assertEqual(mega_latest['snapshot']['species_id'], 'altaria_mega')
+        self.assertEqual(mega_latest['snapshot']['candidates'][0]['instance_id'], 'altaria-fit')
 
 
 if __name__ == '__main__':

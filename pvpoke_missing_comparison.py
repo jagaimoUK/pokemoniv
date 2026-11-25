@@ -163,7 +163,7 @@ def _explore(service, payload):
     moves = step['candidate']['moves']
     owned_by_iv, species_confirmed_owned_count = Ownership(
         service.store, species_ids=service.species,
-    ).species_rows_by_iv(species_id)
+    ).species_rows_by_iv(species_id, species_catalog=service.species)
     qualifying_hex = coverage['qualifying_ivs'] or ''
     bits = int.from_bytes(bytes.fromhex(qualifying_hex), 'little') if qualifying_hex else 0
     count = bits.bit_count()
@@ -186,6 +186,9 @@ def _explore(service, payload):
                     raw_rows,
                     {'species_id': species_id, 'ivs': ivs, 'level': row['level'], 'moves': moves},
                     row['cp'],
+                    species_catalog=service.species,
+                    cpms=service.cpms,
+                    rules=specs[0].get('rules'),
                 )
             else:
                 matches = []
