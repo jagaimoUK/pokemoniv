@@ -63,7 +63,10 @@ dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100
 <button id="load">選んだパーティを読み込む</button>
 </details></section>
 <div class="tabs"><button data-tab="compose" aria-pressed="true">構築</button><button data-tab="weakness">弱点・補完</button><button data-tab="selection">相手と選出</button><button data-tab="strategy">詳細戦略</button><button data-tab="settings">保存・設定</button></div>
-<div id="compose"><section><h2>自分の6体</h2><p>各枠をタップして技と個体値を編集。IV省略時はPvPoke標準値を使用します。CP1500/Lv50・同一図鑑番号は1枠。</p><div class="grid" id="members"></div></section>
+<div id="compose"><section><h2>自分の6体</h2><p>各枠をタップして技と個体値を編集。IV省略時はPvPoke標準値を使用します。CP1500/Lv50・同一図鑑番号は1枠（6体登録時は複数メガ可、3体選出は下の大会ルールに従います）。</p>
+<div id="megaRuleSettings"><label for="partyRuleset">大会ルール（メガシンカ上限）<select id="partyRuleset"><option value="cp1500-lv50">通常スーパーリーグ（CP1500 / 3体選出メガ0体）</option><option value="great_mega">スーパーリーグ・メガエディション（CP1500 / 6体複数可・3体選出メガ1体）</option><option value="mega_edition">メガエディション標準（CP1500 / 6体複数可・3体選出メガ1体）</option><option value="custom">カスタム大会（3体選出メガ上限を明示指定）</option></select></label>
+<div id="customMegaRulesWrap" class="fields" hidden><label for="customCupId">カップID（任意）<input id="customCupId" placeholder="例：special_double_mega"></label><label for="maxMegasInThree">3体選出メガ許可数（0〜3体）<select id="maxMegasInThree"><option value="0">0体（メガ禁止）</option><option value="1" selected>1体</option><option value="2">2体</option><option value="3">3体</option></select></label><label for="maxMegasInSix">6体登録メガ上限（1〜6体）<select id="maxMegasInSix"><option value="1">1体</option><option value="2">2体</option><option value="3">3体</option><option value="4">4体</option><option value="5">5体</option><option value="6" selected>6体</option></select></label></div></div>
+<div class="grid" id="members"></div></section>
 <section><h2>自動構築</h2><p>名前から候補を追加します。固定枠を残して最大48候補から探索します。</p>
 <textarea id="pool" placeholder="azumarill,BUBBLE,ICE_BEAM,PLAY_ROUGH,0,15,15"></textarea>
 <label><input id="strategyRefinement" type="checkbox" checked> 詳細戦略を構築と補完に反映</label>
@@ -262,7 +265,7 @@ function applyRecommendedSwap(result,item){
   status('対象枠が変更または固定されています。再分析してください。');return;
  }
  rows[item.slot]={species:next.species,fast:next.moves[0],charged1:next.moves[1],charged2:next.moves[2],
-  atk:next.ivs[0],def:next.ivs[1],hp:next.ivs[2],level_override:next.level};
+  atk:next.ivs[0],def:next.ivs[1],hp:next.ivs[2],level_override:next.level,...(next.mega_level!=null?{mega_level:next.mega_level}:{}),...(next.charged3?{charged3:next.charged3}:{})};
  renderMon(rows);inputRevision++;lastReportRevision=-1;latest=null;strategyTargets();
  $('swapAdvice').replaceChildren(node('p','入れ替えを反映しました。以下の数値は変更前のものです。再分析してください。'));
  $('partyState').textContent='未保存の変更あり（上部の保存・上書きで記録）';
@@ -388,7 +391,7 @@ function applyCompletedParty(result,plan){
  }
  const next=plan.roster.map((id,i)=>{
   const p=result.labels[id];if(!p)throw Error('提案のデータが見つかりません');
-  return id===result.roster[i]?{...current[i]}:{species:p.species,fast:p.moves[0],charged1:p.moves[1],charged2:p.moves[2],atk:p.ivs[0],def:p.ivs[1],hp:p.ivs[2],level_override:p.level};
+  return id===result.roster[i]?{...current[i]}:{species:p.species,fast:p.moves[0],charged1:p.moves[1],charged2:p.moves[2],atk:p.ivs[0],def:p.ivs[1],hp:p.ivs[2],level_override:p.level,...(p.mega_level!=null?{mega_level:p.mega_level}:{}),...(p.charged3?{charged3:p.charged3}:{})};
  });
  renderMon(next.map((m,i)=>({...m,locked:fixed.includes(i)})));
  inputRevision++;lastReportRevision=-1;latest=null;strategyTargets();
@@ -494,7 +497,9 @@ function show(result){latest=result;lastReportRevision=inputRevision;
   }li.append(detail);pairs.append(li);
  });root.append(pairs);
  root.append(node('h3','注目ペアのCore Breaker'));const cb=node('ul');result.pairs.slice(0,5).forEach(x=>{if(x.core_breakers.length)cb.append(node('li',x.members.map(label).join(' + ')+' に共通して有利: '+x.core_breakers.slice(0,3).map(z=>label(z.opponent)).join('、')))});root.append(cb);
- root.append(node('h3','20組の3体別の穴'));const triples=node('ul');result.triples.forEach(x=>triples.append(node('li',x.members.map(label).join(' / ')+' D0 '+pct(x.summary.d0)+' D1 '+pct(x.summary.d1))));root.append(triples);
+ root.append(node('h3',result.triples.length+'組の3体別の穴'));
+ if(result.mega_policy)addLine(root,'大会ルール上限: 6体登録メガ最大'+result.mega_policy.max_megas_in_six+'体 / 3体選出メガ最大'+result.mega_policy.max_megas_in_three+'体');
+ const triples=node('ul');result.triples.forEach(x=>triples.append(node('li',x.members.map(label).join(' / ')+' D0 '+pct(x.summary.d0)+' D1 '+pct(x.summary.d1))));root.append(triples);
  const sel=$('selectionResult');sel.replaceChildren();if(result.selection.status==='計算済み'){sel.append(node('h3','推奨選出（先頭が初手）'));result.selection.recommendations.forEach((x,i)=>{const b=node('div',null,'result');b.append(node('strong',(i+1)+'案: '+x.selection.map(label).join(' → ')));addLine(b,'保守的な静的比較値 '+x.worst+' / 危険な相手選出 '+x.worst_opponent.map(label).join(' / '));sel.append(b)})}else addLine(sel,result.selection.missing_condition||result.selection.status);
  $('result').replaceChildren(node('p','キャッシュ再利用 '+result.cache.hits+' / 新規セル '+result.cache.computed+' / '+result.elapsed_seconds+'秒'),
  node('p','未計算: '+result.not_calculated.join('、')));
@@ -503,8 +508,35 @@ function show(result){latest=result;lastReportRevision=inputRevision;
  const target=proposed?$('swapAdvice'):$(currentTab==='selection'?'selectionResult':'weakResult');
  requestAnimationFrame(()=>target.scrollIntoView({block:'start',behavior:'smooth'}));
 }
+function toggleCustomMegaRules(){const custom=$('partyRuleset')?.value==='custom';if($('customMegaRulesWrap'))$('customMegaRulesWrap').hidden=!custom;}
+function partyRulePayload(){
+ const preset=$('partyRuleset')?.value||'cp1500-lv50';
+ if(preset==='cp1500-lv50')return {ruleset:'cp1500-lv50'};
+ if(preset==='custom'){
+  const cup=($('customCupId')?.value||'').trim()||'custom_cup';
+  return {ruleset:'cp1500-lv50',mega_rules:{cup_id:cup,max_megas_in_three:Number($('maxMegasInThree')?.value??1),max_megas_in_six:Number($('maxMegasInSix')?.value??6)}};
+ }
+ return {ruleset:preset,mega_rules:{cup_id:preset}};
+}
+function restorePartyRules(ruleset,megaRules){
+ const sel=$('partyRuleset');if(!sel)return;
+ const hasExplicit=megaRules&&typeof megaRules==='object'&&megaRules.max_megas_in_three!=null;
+ const cup=megaRules?.cup_id||(ruleset&&ruleset!=='cp1500-lv50'?ruleset:'');
+ if(hasExplicit|| (cup&&!['cp1500-lv50','great_mega','mega_edition'].includes(cup))){
+  sel.value='custom';
+  if($('customCupId'))$('customCupId').value=cup;
+  if($('maxMegasInThree')&&megaRules?.max_megas_in_three!=null)$('maxMegasInThree').value=String(megaRules.max_megas_in_three);
+  if($('maxMegasInSix')&&megaRules?.max_megas_in_six!=null)$('maxMegasInSix').value=String(megaRules.max_megas_in_six);
+ }else if(cup==='great_mega'||cup==='mega_edition'){
+  sel.value=cup;
+ }else{
+  sel.value='cp1500-lv50';
+ }
+ toggleCustomMegaRules();
+}
+$('partyRuleset')?.addEventListener('change',()=>{inputRevision++;toggleCustomMegaRules();});
 function partyCalculationRequest(mode,findSwaps=false,autoComplete=false){
- const request={mode,members:getMon(),locked_slots:locks(),meta_preset_id:$('meta').value,meta_sha256:metaItems.find(x=>x.id===$('meta').value)?.sha256,group_weights:mode==='strategy'?{}:getWeights(),ruleset:'cp1500-lv50',strategy_refinement:$('strategyRefinement').checked};
+ const request={mode,members:getMon(),locked_slots:locks(),meta_preset_id:$('meta').value,meta_sha256:metaItems.find(x=>x.id===$('meta').value)?.sha256,group_weights:mode==='strategy'?{}:getWeights(),...partyRulePayload(),strategy_refinement:$('strategyRefinement').checked};
  if(findSwaps||autoComplete)request.candidate_pool=partyRosterRows('pool');
  if(findSwaps)request.auto_replacements=true;
  if(autoComplete)request.auto_complete=true;
@@ -544,6 +576,7 @@ async function saveParty(asNew=false){try{
  await flushMetaWeights();
  const obj={id:asNew?null:partyId,revision:asNew?0:revision,name:$('partyName').value,members:getMon(),locked_slots:locks(),
   meta_preset_id:$('meta').value,meta_sha256:metaItems.find(x=>x.id===$('meta').value)?.sha256,group_weights:getWeights(),
+  ...partyRulePayload(),
   strategy:{...getStrategy(),enemy_csv:$('strategyEnemy').value},strategy_refinement:$('strategyRefinement').checked,opponents:partyRosterRows('enemy'),candidate_pool:partyRosterRows('pool'),
   opponent_uncertainty:$('opponentUncertainty').checked,opponent_hypotheses:partyRosterRows('hypotheses')};
  const r=await api('party/save',obj);partyId=r.id;revision=r.revision;
@@ -556,6 +589,7 @@ $('saveAs').onclick=()=>saveParty(true);
 $('load').onclick=async()=>{try{
  const id=$('saved').value;if(!id)throw Error('読み込むパーティを選んでください');
  const p=await api('party/get',{id});partyId=p.id;revision=p.revision;$('partyName').value=p.name;
+ restorePartyRules(p.ruleset,p.mega_rules);
  renderMon((p.members||[]).map((m,i)=>({...m,locked:(p.locked_slots||[]).includes(i)})));
  if(metaItems.some(x=>x.id===p.meta_preset_id))$('meta').value=p.meta_preset_id;
  restoreMetaWeightValues(p.group_weights);await loadMetaWeightRows();

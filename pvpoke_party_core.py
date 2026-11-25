@@ -23,8 +23,13 @@ def digest(value):
 
 
 def combatant_id(p):
-    return digest({k: p.get(k) for k in ("species", "fast", "charged1", "charged2",
-                   "atk", "def", "hp", "level", "cp", "state")})[:24]
+    payload = {k: p.get(k) for k in ("species", "fast", "charged1", "charged2",
+                   "atk", "def", "hp", "level", "cp", "state")}
+    if p.get("mega_level") is not None:
+        payload["mega_level"] = p["mega_level"]
+    if p.get("charged3"):
+        payload["charged3"] = p["charged3"]
+    return digest(payload)[:24]
 
 
 def weight_rows(opponents, importance=None):

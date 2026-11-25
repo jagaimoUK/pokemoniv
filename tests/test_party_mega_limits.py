@@ -1,5 +1,10 @@
 import csv
+import json
+import os
+import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -7,6 +12,7 @@ from unittest.mock import patch
 
 import pvpoke_mega as mega
 import pvpoke_party_core as core
+import pvpoke_party_ui
 from pvpoke_party_backend import PartyBuilder
 
 
@@ -278,6 +284,239 @@ class PartyBackendMegaLimitTests(unittest.TestCase):
                         sum(1 for pid in row['members'] if mega.is_mega_form(rb['labels'][pid]['species'])),
                         1,
                     )
+
+    def test_start_accepts_gl_mega_rules_and_rejects_unverified_or_non_1500(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            catalog, species, cpms, engine, _ = self._fixture(work)
+            builder = PartyBuilder(work)
+            own = [self._row(s, catalog) for s in (
+                'altaria_mega', 'sableye_mega', 'venusaur_mega', 'azumarill', 'clodsire', 'skarmory'
+            )]
+            with patch.dict(os.environ, {'PVP_ENGINE': 'direct'}), \
+                 patch.object(PartyBuilder, '_compute', return_value={'ok': True}):
+                for valid_rules in (
+                    {'ruleset': 'cp1500-lv50'},
+                    {'ruleset': 'great_mega'},
+                    {'ruleset': 'mega_edition', 'mega_rules': {'cup_id': 'mega_edition'}},
+                    {'ruleset': 'cp1500-lv50', 'mega_rules': {'cup_id': 'double_mega', 'max_megas_in_three': 2}},
+                ):
+                    state = {'state': 'idle', 'message': ''}
+                    job = builder.start(
+                        {'mode': 'analyze', 'members': own, **valid_rules},
+                        catalog=catalog, species=species, cpms=cpms, engine=engine,
+                        work=work, global_lock=threading.RLock(), global_status=state,
+                    )
+                    self.assertEqual(job['status'], 'queued')
+                    for _ in range(100):
+                        if not builder.running:
+                            break
+                        time.sleep(0.005)
+                    self.assertEqual(builder.run_status(job['job_id'])['status'], 'done')
+
+                for invalid_rules in (
+                    {'ruleset': 'mystery_unverified_cup'},
+                    {'ruleset': 'cp1500-lv50', 'mega_rules': {'cup_id': 'mystery_unverified_cup'}},
+                    {'ruleset': 'ultra_mega'},
+                    {'ruleset': 'master'},
+                    {'ruleset': 'cp1500-lv50', 'mega_rules': {'cup_id': 'great_mega', 'cp_cap': 2500}},
+                ):
+                    with self.subTest(invalid_rules=invalid_rules), self.assertRaises(ValueError):
+                        builder.start(
+                            {'mode': 'analyze', 'members': own, **invalid_rules},
+                            catalog=catalog, species=species, cpms=cpms, engine=engine,
+                            work=work, global_lock=threading.RLock(), global_status={'state': 'idle'},
+                        )
+
+    def test_normalize_and_persistence_preserve_mega_level_charged3_and_rules(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            catalog, species, cpms, engine, _ = self._fixture(work)
+            catalog['altaria_mega']['tags'] = ['mega', 'supermega']
+            catalog['altaria_mega']['extraChargedMoves'] = ['MOONBLAST_PLUS']
+            species['altaria_mega']['tags'] = ['mega', 'supermega']
+            species['altaria_mega']['extraChargedMoves'] = ['MOONBLAST_PLUS']
+
+            base = self._row('altaria_mega', catalog)
+            legacy = PartyBuilder._normalize([base], catalog, species, cpms, engine, 'テスト')[0]
+            self.assertNotIn('mega_level', legacy)
+            self.assertNotIn('charged3', legacy)
+            self.assertEqual(legacy['id'], core.combatant_id({k: legacy[k] for k in (
+                'species', 'fast', 'charged1', 'charged2', 'atk', 'def', 'hp', 'level', 'cp'
+            )}))
+
+            ml1 = PartyBuilder._normalize([{**base, 'mega_level': 1}], catalog, species, cpms, engine, 'テスト')[0]
+            ml4 = PartyBuilder._normalize([{**base, 'mega_level': 4}], catalog, species, cpms, engine, 'テスト')[0]
+            c3 = PartyBuilder._normalize([{**base, 'mega_level': 4, 'charged3': 'MOONBLAST_PLUS'}],
+                                         catalog, species, cpms, engine, 'テスト')[0]
+            self.assertEqual(len({legacy['id'], ml1['id'], ml4['id'], c3['id']}), 4)
+            self.assertEqual(c3['mega_level'], 4)
+            self.assertEqual(c3['charged3'], 'MOONBLAST_PLUS')
+
+            # Reject invalid mega_level or charged3 on non-Mega or unauthorized extra move.
+            non_mega = self._row('azumarill', catalog)
+            for bad in (
+                {**non_mega, 'mega_level': 2},
+                {**non_mega, 'charged3': 'MOONBLAST_PLUS'},
+                {**base, 'mega_level': 5},
+                {**base, 'charged3': 'UNAUTHORIZED_MOVE'},
+                {**base, 'charged3': 'MOONBLAST'},
+            ):
+                with self.subTest(bad=bad), self.assertRaises(ValueError):
+                    PartyBuilder._normalize([bad], catalog, species, cpms, engine, 'テスト')
+
+            # save_party / get_party roundtrips ruleset, mega_rules, mega_level, and charged3.
+            builder = PartyBuilder(work)
+            saved = builder.save_party({
+                'name': 'メガカップ検証',
+                'ruleset': 'cp1500-lv50',
+                'mega_rules': {'cup_id': 'double_mega', 'max_megas_in_three': 2, 'max_megas_in_six': 5},
+                'members': [{**base, 'mega_level': 4, 'charged3': 'MOONBLAST_PLUS'}],
+            })
+            loaded = builder.get_party(saved['id'])
+            self.assertEqual(loaded['mega_rules']['max_megas_in_three'], 2)
+            self.assertEqual(loaded['members'][0]['mega_level'], 4)
+            self.assertEqual(loaded['members'][0]['charged3'], 'MOONBLAST_PLUS')
+
+    def test_party_ui_mega_rules_and_card_mega_controls(self):
+        html = pvpoke_party_ui.HTML
+        for token in (
+            'id="partyRuleset"',
+            'id="customMegaRulesWrap"',
+            'id="customCupId"',
+            'id="maxMegasInThree"',
+            'id="maxMegasInSix"',
+            'data-field',
+        ):
+            self.assertIn(token, html)
+
+        script = """
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+
+function makeNode(tag, text, cls) {
+  const listeners = {};
+  const el = {
+    tagName: tag.toUpperCase(),
+    textContent: text == null ? '' : String(text),
+    className: cls || '',
+    children: [],
+    options: [],
+    dataset: {},
+    style: {},
+    hidden: false,
+    checked: false,
+    disabled: false,
+    value: '',
+    setAttribute(k, v) { el['attr_' + k] = String(v); },
+    setCustomValidity(v) { el._validity = v; },
+    append(...items) {
+      for (const item of items) {
+        if (typeof item === 'object' && item) {
+          item._parent = el;
+          el.children.push(item);
+          if (el.tagName === 'SELECT' && item.tagName === 'OPTION') el.options.push(item);
+        }
+      }
+    },
+    replaceChildren(...items) { el.children = []; el.options = []; el.append(...items); },
+    addEventListener(ev, fn) { (listeners[ev] = listeners[ev] || []).push(fn); },
+    dispatch(ev) { for (const fn of listeners[ev] || []) fn({}); },
+    closest(sel) {
+      let cur = el;
+      const key = sel === '[data-mega-wrap]' ? 'megaWrap' : null;
+      while (cur) {
+        if (key && cur.dataset && cur.dataset[key]) return cur;
+        cur = cur._parent;
+      }
+      return null;
+    },
+    querySelector(sel) { return el.querySelectorAll(sel)[0] || null; },
+    querySelectorAll(sel) {
+      const m = sel.match(/^\\[data-field(?:=([^\\]]+))?\\]$/);
+      const out = [];
+      (function walk(cur) {
+        for (const c of cur.children || []) {
+          if (m && c.dataset && 'field' in c.dataset && (!m[1] || c.dataset.field === m[1])) out.push(c);
+          walk(c);
+        }
+      })(el);
+      return out;
+    },
+  };
+  return el;
+}
+globalThis.Option = function(text, value) { const o = makeNode('option', text); o.value = value == null ? String(text) : String(value); return o; };
+globalThis.document = { createTextNode(t) { return { textContent: t }; } };
+globalThis.node = makeNode;
+globalThis.inputRevision = 0;
+globalThis.partyMoveNames = {};
+globalThis.catalog = {
+  azumarill: { name: 'Azumarill', fastMoves: ['BUBBLE'], chargedMoves: ['ICE_BEAM', 'PLAY_ROUGH'], tags: [] },
+  altaria_mega: { name: 'Altaria (Mega)', fastMoves: ['DRAGON_BREATH'], chargedMoves: ['SKY_ATTACK', 'MOONBLAST'], tags: ['mega', 'supermega'], extraChargedMoves: ['MOONBLAST_PLUS'] },
+  sableye_mega: { name: 'Sableye (Mega)', fastMoves: ['SHADOW_CLAW'], chargedMoves: ['FOUL_PLAY', 'POWER_GEM'], tags: ['mega'], extraChargedMoves: [] },
+};
+const inputCode = fs.readFileSync('pvpoke_party_input.js', 'utf8');
+eval(inputCode);
+
+// 1. Non-Mega card hides mega_level and charged3 and omits them from readPartyCard.
+const cNormal = createMon({ species: 'azumarill', fast: 'BUBBLE', charged1: 'ICE_BEAM', charged2: 'PLAY_ROUGH' });
+assert.equal(cNormal.querySelector('[data-field=mega_level]').closest('[data-mega-wrap]').hidden, true);
+assert.equal(cNormal.querySelector('[data-field=charged3]').closest('[data-mega-wrap]').hidden, true);
+const rNormal = readPartyCard(cNormal);
+assert.equal('mega_level' in rNormal, false);
+assert.equal('charged3' in rNormal, false);
+
+// 2. Mega without extraChargedMoves defaults mega_level=3 and hides charged3.
+const cMega = createMon({ species: 'sableye_mega', fast: 'SHADOW_CLAW', charged1: 'FOUL_PLAY', charged2: 'POWER_GEM' });
+assert.equal(cMega.querySelector('[data-field=mega_level]').closest('[data-mega-wrap]').hidden, false);
+assert.equal(cMega.querySelector('[data-field=mega_level]').value, '3');
+assert.equal(cMega.querySelector('[data-field=charged3]').closest('[data-mega-wrap]').hidden, true);
+const rMega = readPartyCard(cMega);
+assert.equal(rMega.mega_level, 3);
+assert.equal('charged3' in rMega, false);
+
+// 3. SuperMega with extraChargedMoves defaults mega_level=4 and preserves charged3 selection.
+const cSuper = createMon({ species: 'altaria_mega', fast: 'DRAGON_BREATH', charged1: 'SKY_ATTACK', charged2: 'MOONBLAST', mega_level: 2, charged3: 'MOONBLAST_PLUS' });
+assert.equal(cSuper.querySelector('[data-field=mega_level]').value, '2');
+assert.equal(cSuper.querySelector('[data-field=charged3]').closest('[data-mega-wrap]').hidden, false);
+assert.equal(cSuper.querySelector('[data-field=charged3]').value, 'MOONBLAST_PLUS');
+const rSuper = readPartyCard(cSuper);
+assert.equal(rSuper.mega_level, 2);
+assert.equal(rSuper.charged3, 'MOONBLAST_PLUS');
+
+// 4. Verify partyRulePayload & restorePartyRules roundtrip from pvpoke_party_ui HTML.
+const html = """ + json.dumps(html) + """;
+const fnMatch = html.match(/function toggleCustomMegaRules\\(\\)[\\s\\S]*?function restorePartyRules\\([\\s\\S]*?\\n\\}/);
+assert.ok(fnMatch, 'partyRulePayload and restorePartyRules missing in HTML');
+const dom = {
+  partyRuleset: makeNode('select'),
+  customMegaRulesWrap: makeNode('div'),
+  customCupId: makeNode('input'),
+  maxMegasInThree: makeNode('select'),
+  maxMegasInSix: makeNode('select'),
+};
+dom.partyRuleset.value = 'cp1500-lv50';
+dom.maxMegasInThree.value = '1';
+dom.maxMegasInSix.value = '6';
+const $ = id => dom[id];
+eval(fnMatch[0]);
+assert.deepEqual(partyRulePayload(), { ruleset: 'cp1500-lv50' });
+restorePartyRules('great_mega', { cup_id: 'great_mega' });
+assert.equal(dom.partyRuleset.value, 'great_mega');
+assert.equal(dom.customMegaRulesWrap.hidden, true);
+assert.deepEqual(partyRulePayload(), { ruleset: 'great_mega', mega_rules: { cup_id: 'great_mega' } });
+restorePartyRules('cp1500-lv50', { cup_id: 'double_mega', max_megas_in_three: 2, max_megas_in_six: 5 });
+assert.equal(dom.partyRuleset.value, 'custom');
+assert.equal(dom.customMegaRulesWrap.hidden, false);
+assert.deepEqual(partyRulePayload(), {
+  ruleset: 'cp1500-lv50',
+  mega_rules: { cup_id: 'double_mega', max_megas_in_three: 2, max_megas_in_six: 5 },
+});
+console.log('PARTY_UI_MEGA_CONTROLS_OK');
+"""
+        proc = subprocess.run(['node', '-e', script], capture_output=True, text=True, check=True, timeout=10)
+        self.assertIn('PARTY_UI_MEGA_CONTROLS_OK', proc.stdout)
 
 
 if __name__ == '__main__':

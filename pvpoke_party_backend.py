@@ -187,7 +187,34 @@ class PartyBuilder:
             source = dict(zip(engine.HEADER, [sid, *moves, *ivs]))
             if raw.get("level_override") is not None:
                 source["level_override"] = raw["level_override"]
+            raw_ml = raw.get("mega_level")
+            raw_c3 = raw.get("charged3")
+            if (raw_ml is not None and raw_ml != "") or (raw_c3 is not None and str(raw_c3).strip()):
+                from pvpoke_mega import is_mega_form
+                sp_tags = set(p.get("tags") or ()) | set(species[sid].get("tags") or ())
+                mega_capable = is_mega_form(sid) or ("mega" in sp_tags)
+                if raw_ml is not None and raw_ml != "":
+                    if type(raw_ml) is not int or not 1 <= raw_ml <= 4:
+                        raise ValueError(label + ": mega_levelは1〜4の整数で指定してください")
+                    if not mega_capable:
+                        raise ValueError(label + ": メガレベルはメガ・ゲンシ形態のみ指定できます")
+                    source["mega_level"] = raw_ml
+                if raw_c3 is not None and str(raw_c3).strip():
+                    c3 = str(raw_c3).strip().upper()
+                    if not mega_capable:
+                        raise ValueError(label + ": 追加ゲージ技はメガ・ゲンシ形態のみ指定できます")
+                    has_extra_key = ("extraChargedMoves" in p) or ("extraChargedMoves" in species[sid])
+                    extra = set(p.get("extraChargedMoves") or species[sid].get("extraChargedMoves") or ())
+                    if has_extra_key and c3 not in extra:
+                        raise ValueError(label + ": 未対応の追加ゲージ技です " + sid)
+                    if c3 in moves[1:]:
+                        raise ValueError(label + ": 追加ゲージ技が通常ゲージ技と重複しています " + sid)
+                    source["charged3"] = c3
             p0 = engine.optimize([source], species, cpms, label)[0]
+            if "mega_level" in source and "mega_level" not in p0:
+                p0["mega_level"] = source["mega_level"]
+            if "charged3" in source and "charged3" not in p0:
+                p0["charged3"] = source["charged3"]
             p0["id"] = core.combatant_id(p0)
             p0["meta_group_id"] = str(raw.get("meta_group_id") or sid)
             # Species clause intentionally separate from battle identity.
@@ -202,8 +229,7 @@ class PartyBuilder:
     def start(self, args, *, catalog, species, cpms, engine, work, global_lock, global_status, release_owner=None):
         if not isinstance(args, dict) or args.get("mode") not in ("analyze", "select", "build", "strategy"):
             raise ValueError("modeはanalyze/select/build/strategyのいずれかです")
-        if args.get("ruleset", "cp1500-lv50") != "cp1500-lv50":
-            raise ValueError("現在はCP1500/Lv50のみ対応しています")
+        self._mega_policy_from_args(args, engine_cp_cap=getattr(engine, "CP_CAP", 1500))
         if os.environ.get("PVP_ENGINE", "browser").lower() not in ("direct", "node"):
             raise ValueError("パーティ計算はDirectエンジンが必要です")
         with global_lock, self._lock:
@@ -274,8 +300,8 @@ class PartyBuilder:
                             pass
 
     @staticmethod
-    def _mega_policy_from_args(args):
-        from pvpoke_mega import resolve_party_mega_rules
+    def _mega_policy_from_args(args, *, engine_cp_cap=None):
+        from pvpoke_mega import resolve_battle_rules, resolve_party_mega_rules
         ruleset = args.get("ruleset", "cp1500-lv50")
         raw_mega = args.get("mega_rules")
         if raw_mega is not None:
@@ -285,12 +311,23 @@ class PartyBuilder:
         else:
             rule_input = ruleset
         policy = resolve_party_mega_rules(rule_input)
+        if engine_cp_cap is not None:
+            meta_rules = raw_mega if isinstance(raw_mega, dict) else {}
+            battle_rule = resolve_battle_rules({
+                "league": meta_rules.get("league"),
+                "cup_id": policy["effective_cup"],
+                "cp_cap": meta_rules.get("cp_cap"),
+            })
+            if battle_rule["cp_cap"] not in (None, engine_cp_cap) or policy["effective_cup"] in (
+                "ultra", "open_ultra", "ultra_mega", "master", "open_master"
+            ) and engine_cp_cap == 1500:
+                raise ValueError(f"現在はCP{engine_cp_cap}（スーパーリーグ系）のみ対応しています")
         if not policy["rule_verified"] or policy["max_megas_in_three"] is None:
             raise ValueError("大会・カップのメガ許可数が未確認のため、一律1体と仮定して計算できません")
         return policy
 
     def _compute(self, jid, args, catalog, species, cpms, engine, work):
-        mega_policy = self._mega_policy_from_args(args)
+        mega_policy = self._mega_policy_from_args(args, engine_cp_cap=getattr(engine, "CP_CAP", 1500))
         if args["mode"] == "strategy":
             return self._strategy(jid, args, catalog, species, cpms, engine, work)
         own_raw = args.get("members")
@@ -571,7 +608,9 @@ class PartyBuilder:
         labels = {p["id"]: {"species": p["species"],
                   "moves": [p["fast"], p["charged1"], p["charged2"]],
                   "ivs": [p["atk"], p["def"], p["hp"]],
-                  "cp": p["cp"], "level": p["level"]}
+                  "cp": p["cp"], "level": p["level"],
+                  **({"mega_level": p["mega_level"]} if p.get("mega_level") is not None else {}),
+                  **({"charged3": p["charged3"]} if p.get("charged3") else {})}
                   for p in self._unique(pool + meta + enemy)}
         not_calculated = list(refinement["unknown"]) if refinement else [
             "通常技限定の圧力", "受け後の仕事", "観測ベースのシールド温存",
