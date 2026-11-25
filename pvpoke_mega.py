@@ -17,6 +17,10 @@ MEGA_DOWNSCALING_CUPS = frozenset({
     'great_mega', 'ultra_mega', 'mega_edition', 'mega_color', 'mega_catch', 'mega_halloween',
 })
 UNSCALED_CUPS = frozenset({'strict_unscaled', 'no_downscaling'})
+NON_MEGA_RULESETS = frozenset({
+    'cp1500-lv50', 'all', 'great', 'ultra', 'master',
+    'open_great', 'open_ultra', 'open_master',
+})
 
 
 def is_mega_form(species_id: str) -> bool:
@@ -169,6 +173,150 @@ def resolve_battle_rules(rules: Mapping[str, Any] | None) -> dict[str, Any]:
         'max_level': max_level,
         'allow_cp_downscaling': allow_downscale,
         'rule_explicit': cp_cap is not None and explicit_downscale,
+    }
+
+
+def resolve_party_mega_rules(rules: str | Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Resolve show-six and pick-three Mega allowance strictly from explicit tournament/cup rules.
+
+    Allows multiple Mega candidates in 6-Pokémon registration (up to max_megas_in_six, default 6)
+    and never assumes max_megas_in_three == 1 for unverified or unknown cups.
+    """
+    if rules is None:
+        raw: Mapping[str, Any] = {}
+    elif isinstance(rules, str):
+        token = rules.strip()
+        if not token:
+            raise ValueError('rules string must not be empty')
+        raw = {'ruleset': token, 'cup_id': token}
+    elif isinstance(rules, Mapping):
+        raw = rules
+    else:
+        raise ValueError('rules must be None, a string, or a mapping')
+
+    ruleset = raw.get('ruleset')
+    if ruleset is not None and (not isinstance(ruleset, str) or not ruleset.strip()):
+        raise ValueError('ruleset must be a non-empty string when specified')
+    cup_id = raw.get('cup_id')
+    if cup_id is not None and (not isinstance(cup_id, str) or not cup_id.strip()):
+        raise ValueError('cup_id must be a non-empty string when specified')
+    league = raw.get('league')
+    effective_cup = cup_id or (ruleset if ruleset not in (None, 'cp1500-lv50') else None)
+
+    raw_max_six = raw.get('max_megas_in_six', 6)
+    if isinstance(raw_max_six, bool) or not isinstance(raw_max_six, int) or not 0 <= raw_max_six <= 6:
+        raise ValueError(f'max_megas_in_six must be an integer 0..6: {raw_max_six}')
+    max_megas_in_six = raw_max_six
+
+    explicit_allowed = raw.get('mega_allowed')
+    if explicit_allowed is not None and type(explicit_allowed) is not bool:
+        raise ValueError('mega_allowed must be a bool when specified')
+
+    raw_max_three = raw['max_megas_in_three'] if 'max_megas_in_three' in raw else raw.get('max_megas')
+    if raw_max_three is not None:
+        if isinstance(raw_max_three, bool) or not isinstance(raw_max_three, int) or not 0 <= raw_max_three <= 3:
+            raise ValueError(f'max_megas_in_three must be an integer 0..3: {raw_max_three}')
+        if explicit_allowed is False and raw_max_three > 0:
+            raise ValueError('Contradictory rules: mega_allowed=False with max_megas_in_three > 0')
+        if explicit_allowed is True and raw_max_three == 0:
+            raise ValueError('Contradictory rules: mega_allowed=True with max_megas_in_three == 0')
+        max_megas_in_three: int | None = raw_max_three
+        mega_allowed: bool | None = raw_max_three > 0
+        rule_verified = True
+        source = 'explicit'
+    elif explicit_allowed is False:
+        max_megas_in_three = 0
+        mega_allowed = False
+        rule_verified = True
+        source = 'explicit_mega_banned'
+    elif effective_cup in MEGA_DOWNSCALING_CUPS:
+        max_megas_in_three = 1
+        mega_allowed = True
+        rule_verified = True
+        source = 'known_mega_cup'
+    elif (effective_cup in NON_MEGA_RULESETS or (effective_cup is None and ruleset in NON_MEGA_RULESETS)) and explicit_allowed is not True:
+        max_megas_in_three = 0
+        mega_allowed = False
+        rule_verified = True
+        source = 'standard_non_mega_ruleset'
+    else:
+        max_megas_in_three = None
+        mega_allowed = explicit_allowed
+        rule_verified = False
+        source = 'unverified'
+
+    return {
+        'ruleset': ruleset,
+        'cup_id': cup_id,
+        'league': league,
+        'effective_cup': effective_cup,
+        'max_megas_in_six': max_megas_in_six,
+        'allow_multiple_megas_in_six': max_megas_in_six >= 2,
+        'max_megas_in_three': max_megas_in_three,
+        'mega_allowed': mega_allowed,
+        'rule_verified': rule_verified,
+        'source': source,
+    }
+
+
+def _extract_species_id(item: Any, species_lookup: Mapping[str, str] | None = None) -> str:
+    if isinstance(item, Mapping):
+        sid = item.get('species') if item.get('species') is not None else item.get('species_id', '')
+        return str(sid)
+    if isinstance(item, str):
+        if species_lookup is not None and item in species_lookup:
+            return str(species_lookup[item])
+        return item
+    return ''
+
+
+def count_mega_forms(members: Sequence[Any], species_lookup: Mapping[str, str] | None = None) -> int:
+    """Count Mega/Primal combatants in a roster or 3-pick lineup."""
+    return sum(1 for item in members if is_mega_form(_extract_species_id(item, species_lookup)))
+
+
+def validate_party_mega_rules(
+    six_roster: Sequence[Any] | None = None,
+    pick_three: Sequence[Any] | None = None,
+    *,
+    rules: str | Mapping[str, Any] | None = None,
+    species_lookup: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Validate 6-member registration (multi-Mega allowed) and 3-pick battle Mega limits."""
+    policy = resolve_party_mega_rules(rules)
+    six_count = count_mega_forms(six_roster, species_lookup) if six_roster is not None else None
+    three_count = count_mega_forms(pick_three, species_lookup) if pick_three is not None else None
+
+    six_valid: bool | None = (
+        six_count <= policy['max_megas_in_six'] if six_count is not None else None
+    )
+
+    if three_count is None:
+        three_valid: bool | None = None
+        reason = 'six_roster_only' if six_valid is not False else 'six_mega_limit_exceeded'
+    elif not policy['rule_verified'] or policy['max_megas_in_three'] is None:
+        three_valid = None
+        reason = 'mega_rule_unverified'
+    elif three_count > policy['max_megas_in_three']:
+        three_valid = False
+        reason = 'mega_limit_exceeded'
+    elif six_valid is False:
+        three_valid = False
+        reason = 'six_mega_limit_exceeded'
+    else:
+        three_valid = True
+        reason = 'ok'
+
+    return {
+        'six_roster_valid': six_valid,
+        'pick_three_valid': three_valid,
+        'mega_count_in_six': six_count,
+        'mega_count_in_three': three_count,
+        'max_megas_in_six': policy['max_megas_in_six'],
+        'max_megas_in_three': policy['max_megas_in_three'],
+        'rule_verified': policy['rule_verified'],
+        'reason': reason,
+        'policy': policy,
     }
 
 

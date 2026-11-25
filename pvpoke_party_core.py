@@ -124,15 +124,23 @@ def max_matching(own, opponent, matrix, shield=STANDARD):
     return walk(0, frozenset())
 
 
-def legal_triples(roster, *, clause=None):
+def legal_triples(roster, *, clause=None, mega_ids=None, max_megas=None):
+    if max_megas is not None:
+        if isinstance(max_megas, bool) or not isinstance(max_megas, int) or not 0 <= max_megas <= 3:
+            raise ValueError(f"3体選出のメガ許可数が不正です: {max_megas}")
+        megas = set(mega_ids or ())
+    else:
+        megas = None
     for group in combinations(roster, 3):
         if clause and len({clause[x] for x in group}) != 3:
+            continue
+        if megas is not None and sum(1 for x in group if x in megas) > max_megas:
             continue
         yield group
 
 
-def role_orders(roster, *, clause=None):
-    for triple in legal_triples(roster, clause=clause):
+def role_orders(roster, *, clause=None, mega_ids=None, max_megas=None):
+    for triple in legal_triples(roster, clause=clause, mega_ids=mega_ids, max_megas=max_megas):
         for lead in triple:
             yield (lead, *(x for x in triple if x != lead))
 
@@ -175,9 +183,12 @@ def static_bounds(ours, theirs, matrix):
     return (round(low, 6), round(high, 6))
 
 
-def choose_three(ours, enemies, matrix, *, max_enemies=60):
-    own_orders = list(role_orders(ours))
-    enemy_orders = list(role_orders(enemies))
+def choose_three(ours, enemies, matrix, *, max_enemies=60, clause=None, mega_ids=None,
+                 max_megas=None, enemy_clause=None, enemy_mega_ids=None, enemy_max_megas=None):
+    e_mega_ids = mega_ids if enemy_mega_ids is None else enemy_mega_ids
+    e_max_megas = max_megas if enemy_max_megas is None else enemy_max_megas
+    own_orders = list(role_orders(ours, clause=clause, mega_ids=mega_ids, max_megas=max_megas))
+    enemy_orders = list(role_orders(enemies, clause=enemy_clause, mega_ids=e_mega_ids, max_megas=e_max_megas))
     if not own_orders or not enemy_orders:
         raise ValueError("合法な3体選出がありません")
     if len(enemy_orders) > max_enemies:

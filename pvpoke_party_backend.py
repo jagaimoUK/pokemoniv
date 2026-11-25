@@ -108,7 +108,7 @@ class PartyBuilder:
             raise ValueError("保存のrevisionが不正です")
         content = {k: payload.get(k) for k in (
             "members", "locked_slots", "manual_pair_tags", "meta_preset_id", "meta_sha256",
-            "group_weights", "ruleset", "opponents", "candidate_pool", "strategy", "strategy_refinement",
+            "group_weights", "ruleset", "mega_rules", "opponents", "candidate_pool", "strategy", "strategy_refinement",
             "opponent_uncertainty", "opponent_hypotheses")}
         serialized = _json(content)
         if len(serialized.encode("utf-8")) > 100_000:
@@ -273,7 +273,24 @@ class PartyBuilder:
                         except Exception:
                             pass
 
+    @staticmethod
+    def _mega_policy_from_args(args):
+        from pvpoke_mega import resolve_party_mega_rules
+        ruleset = args.get("ruleset", "cp1500-lv50")
+        raw_mega = args.get("mega_rules")
+        if raw_mega is not None:
+            if not isinstance(raw_mega, dict):
+                raise ValueError("メガルール設定はオブジェクトで指定してください")
+            rule_input = {"ruleset": ruleset, **raw_mega}
+        else:
+            rule_input = ruleset
+        policy = resolve_party_mega_rules(rule_input)
+        if not policy["rule_verified"] or policy["max_megas_in_three"] is None:
+            raise ValueError("大会・カップのメガ許可数が未確認のため、一律1体と仮定して計算できません")
+        return policy
+
     def _compute(self, jid, args, catalog, species, cpms, engine, work):
+        mega_policy = self._mega_policy_from_args(args)
         if args["mode"] == "strategy":
             return self._strategy(jid, args, catalog, species, cpms, engine, work)
         own_raw = args.get("members")
@@ -324,6 +341,9 @@ class PartyBuilder:
         clauses = [p["roster_clause_id"] for p in pool]
         if args["mode"] != "build" and len(set(clauses)) != 6:
             raise ValueError("同種のポケモンは6体へ重複登録できません")
+        from pvpoke_mega import is_mega_form
+        if args["mode"] != "build" and sum(1 for p in pool if is_mega_form(p["species"])) > mega_policy["max_megas_in_six"]:
+            raise ValueError(f"6体登録のメガ候補上限（最大{mega_policy['max_megas_in_six']}体）を超えています")
         preset_id = args.get("meta_preset_id") or "legacy"
         meta_file, preset = presets.snapshot(work, preset_id, catalog,
                                               args.get("meta_sha256"))
@@ -369,6 +389,8 @@ class PartyBuilder:
         enemy = self._normalize(enemy_raw, catalog, species, cpms, engine, "相手6体") if enemy_raw else []
         if enemy and len({r["roster_clause_id"] for r in enemy}) != 6:
             raise ValueError("相手の6体に同種重複があります")
+        if enemy and sum(1 for r in enemy if is_mega_form(r["species"])) > mega_policy["max_megas_in_six"]:
+            raise ValueError(f"相手6体登録のメガ候補上限（最大{mega_policy['max_megas_in_six']}体）を超えています")
         self._record(jid, "running", {"progress": 2, "message": "対面を準備しています"})
         version = calculation_version(engine.DATA)
         if version is None:
@@ -382,14 +404,18 @@ class PartyBuilder:
         opponents = [p["id"] for p in meta]
         clause = {p["id"]: p["roster_clause_id"] for p in pool}
         if args["mode"] == "build":
+            from pvpoke_mega import is_mega_form
             locked = [p["id"] for p in self._normalize(
                 locked_raw, catalog, species, cpms, engine, "固定枠")] if locked_raw else []
             # Search cannot put the same species in two slots.
             groups = {}
             for p in pool:
                 groups.setdefault(p["roster_clause_id"], []).append(p["id"])
-            # Check species constraints in the search output as well.
-            result = self._build_legal(ids, opponents, matrix, weights, locked, clause, args)
+            # Check species and Mega legality constraints in the search output as well.
+            build_mega_ids = {p["id"] for p in pool if is_mega_form(p["species"])}
+            result = self._build_legal(
+                ids, opponents, matrix, weights, locked, clause, args,
+                mega_ids=build_mega_ids, mega_policy=mega_policy)
             ids = result["roster"]
         else:
             result = {"roster": ids}
@@ -523,15 +549,24 @@ class PartyBuilder:
                     r['status'] == 'calculated' for r in roles.values()) else '一部未評価')
             pairs.append(main)
         pairs.sort(key=lambda r: -r["balance"])
+        from pvpoke_mega import is_mega_form
+        own_mega_ids = {p["id"] for p in pool if is_mega_form(p["species"])}
+        enemy_mega_ids = {p["id"] for p in enemy if is_mega_form(p["species"])}
+        max_megas_3 = mega_policy["max_megas_in_three"]
         triples = [{"members": list(group),
                     "summary": core.team_summary(group, opponents, matrix, weights)}
-                   for group in core.legal_triples(ids, clause=clause)]
+                   for group in core.legal_triples(
+                       ids, clause=clause, mega_ids=own_mega_ids, max_megas=max_megas_3)]
         triples.sort(key=lambda r: (r["summary"]["unknown_weight"], r["summary"]["d0"],
                                     r["summary"]["severity0"]))
         threats = core.dangerous_pairs(
             [row["members"] for row in triples[:3]], opponents, matrix, weights,
             {p["id"]: p["roster_clause_id"] for p in meta})
-        chosen = (core.choose_three(ids, [p["id"] for p in enemy], matrix)
+        chosen = (core.choose_three(
+            ids, [p["id"] for p in enemy], matrix,
+            clause=clause, mega_ids=own_mega_ids, max_megas=max_megas_3,
+            enemy_clause={p["id"]: p["roster_clause_id"] for p in enemy},
+            enemy_mega_ids=enemy_mega_ids, enemy_max_megas=max_megas_3)
                   if enemy else {"status": "相手6体が未指定"})
         labels = {p["id"]: {"species": p["species"],
                   "moves": [p["fast"], p["charged1"], p["charged2"]],
@@ -552,12 +587,14 @@ class PartyBuilder:
                 "pairs": pairs,
                 "triples": triples, "danger_pairs": threats, "selection": chosen, "search": result if args["mode"] == "build" else None,
                 "recommendations": swaps, "optimization": optimization, "refinement": refinement,
-                "uncertainty": uncertainty,
+                "uncertainty": uncertainty, "mega_policy": mega_policy,
                 "calculation_version": version, "evaluation_version": core.EVALUATION_VERSION,
                 "cache": stats, "not_calculated": not_calculated}
 
     def _strategy(self, jid, args, catalog, species, cpms, engine, work):
+        from pvpoke_mega import is_mega_form
         from pvpoke_party_strategy import StrategyAnalysis, normalize_config
+        mega_policy = self._mega_policy_from_args(args)
         own_raw, enemy_raw = args.get("members"), args.get("opponents")
         if not isinstance(own_raw, list) or len(own_raw) != 6:
             raise ValueError("詳細分析には自分の6体が必要です")
@@ -568,6 +605,8 @@ class PartyBuilder:
         for roster in (own, enemy):
             if len({p["roster_clause_id"] for p in roster}) != len(roster):
                 raise ValueError("大会の同種重複制限により同じ種族枠を複数選べません")
+            if sum(1 for p in roster if is_mega_form(p["species"])) > mega_policy["max_megas_in_six"]:
+                raise ValueError(f"6体登録のメガ候補上限（最大{mega_policy['max_megas_in_six']}体）を超えています")
         if any(p["species"].startswith("minior") for p in own + enemy):
             raise ValueError("メテノの固定方針による詳細分析は未対応です")
         config = normalize_config(args.get("strategy", {}), own, enemy)
@@ -577,9 +616,19 @@ class PartyBuilder:
         return StrategyAnalysis(self, jid, version, engine, work).compute(own, enemy, config)
 
     @staticmethod
-    def _build_legal(ids, opponents, matrix, weights, locked, clause, args):
+    def _build_legal(ids, opponents, matrix, weights, locked, clause, args,
+                     *, mega_ids=None, mega_policy=None):
         if len({clause[x] for x in locked}) != len(locked):
             raise ValueError("固定枠に同種が含まれています")
+        megas = set(mega_ids or ())
+        if mega_policy is not None:
+            max_in_six = mega_policy["max_megas_in_six"]
+            max_in_three = mega_policy["max_megas_in_three"]
+            effective_six_mega_cap = min(max_in_six, 3 + max_in_three) if max_in_three is not None else max_in_six
+        else:
+            effective_six_mega_cap = None
+        if effective_six_mega_cap is not None and sum(1 for x in locked if x in megas) > effective_six_mega_cap:
+            raise ValueError("固定枠のメガ候補数が大会・カップの許可上限を超えています")
         # Only choose one variant of each species for each final six.
         # Wrap rank with explicit legality rather than silently accepting duplicates.
         legal = []
@@ -594,14 +643,19 @@ class PartyBuilder:
             pool = {}
             for partial in beam:
                 existing = {clause[x] for x in partial}
-                choices = [x for x in candidates if x not in partial and clause[x] not in existing]
+                mega_used = sum(1 for x in partial if x in megas)
+                choices = [
+                    x for x in candidates
+                    if x not in partial and clause[x] not in existing
+                    and (effective_six_mega_cap is None or x not in megas or mega_used < effective_six_mega_cap)
+                ]
                 choices.sort(key=lambda x: core.rank_partial((*partial, x), opponents, matrix, weights))
                 for x in choices[:24]:
                     roster = tuple(sorted((*partial, x)))
                     pool[roster] = core.rank_partial(roster, opponents, matrix, weights)
             beam = sorted(pool, key=lambda x: (pool[x], x))[:width]
             if not beam:
-                raise ValueError("種族重複なしで6体を組めません")
+                raise ValueError("種族重複・メガ枠制限を満たして6体を組めません")
         best = beam[0]
         for _ in range(2):
             options = [(core.rank_partial(best, opponents, matrix, weights), best)]
@@ -610,8 +664,11 @@ class PartyBuilder:
                     continue
                 keep = [x for x in best if x != old]
                 used = {clause[x] for x in keep}
+                mega_used = sum(1 for x in keep if x in megas)
                 for replacement in candidates:
                     if clause[replacement] in used:
+                        continue
+                    if effective_six_mega_cap is not None and replacement in megas and mega_used >= effective_six_mega_cap:
                         continue
                     value = tuple(sorted(keep + [replacement]))
                     options.append((core.rank_partial(value, opponents, matrix, weights), value))
