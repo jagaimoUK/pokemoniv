@@ -21,6 +21,7 @@ input,select,button{font:inherit;color:inherit;min-height:44px;border:1px solid 
 .record{padding:.45rem 0}.record summary{font-size:.875rem}.break{overflow-wrap:anywhere}.results{scroll-margin-top:1rem}
 .guide-banner{padding:.75rem .95rem;border:1px solid var(--accent);border-left:5px solid var(--accent);border-radius:.85rem;background:rgba(189,235,208,.09);font-size:.92rem}
 .step-pill{display:inline-block;padding:.1rem .55rem;margin-right:.4rem;border-radius:99px;background:var(--accent);color:#112b23;font-weight:800;font-size:.8rem}
+.guide-hint{display:inline-flex;align-items:center;gap:.3rem;padding:.25rem .6rem;margin:.35rem 0;border-radius:.6rem;background:rgba(189,235,208,.15);border-left:3px solid var(--accent);color:var(--accent);font-size:.84rem;font-weight:700}
 .focus-box{border:1px solid rgba(189,235,208,.45);border-radius:1rem}
 @media(min-width:40rem){.moves{grid-template-columns:repeat(3,minmax(0,1fr))}.moves .wide{grid-column:auto}}
 @media(max-width:24rem){.actions button{max-width:100%}.match{padding-left:.45rem;padding-right:.45rem}}
@@ -31,7 +32,7 @@ input,select,button{font:inherit;color:inherit;min-height:44px;border:1px solid 
 <section id="login" hidden><form id="login-form" class="stack"><h2>アプリに接続</h2><label>接続キー<input id="credential" type="password" autocomplete="off" required></label><div class="actions"><button class="primary" data-action>接続する</button></div></form></section>
 <p id="status" class="status" role="status" aria-live="polite">接続を確認しています。</p>
 <div id="workspace" class="stack" hidden>
-<div class="guide-banner" role="note"><strong>👉 操作の流れ：</strong><span class="step-pill">Step 1</span>「基準個体」の種族・IVを入力（SL上限レベルは自動設定） ➜ <span class="step-pill">Step 2</span>「対面の相手」を入力 ➜ <span class="step-pill">Step 3</span> 下の「👉 保存済みの対面結果を照合」をクリック</div>
+<div class="guide-banner" role="note"><strong>👉 全体の流れ：</strong><span class="step-pill">Step 1</span>基準個体を入力 ➜ <span class="step-pill">Step 2</span>対面相手を追加 ➜ <span class="step-pill">Step 3</span>下の「保存済みの対面結果を照合」をタップ</div>
 <details id="evaluation-history-panel" class="edit"><summary>不足分析の評価履歴・推移</summary><div class="stack">
 <p class="muted">保存済み評価を読み取り専用で表示します。同じ分析計画・役割条件・計算バージョンの記録だけを推移として比較します。古い結果は現在の所持状態を保証しません。</p>
 <div class="actions"><button id="history-load" type="button" class="quiet" data-action>評価履歴を読み込む</button></div>
@@ -49,10 +50,11 @@ input,select,button{font:inherit;color:inherit;min-height:44px;border:1px solid 
 <ul id="meta-import-items" class="inventory"></ul>
 </div></details>
 <form id="analysis-form" class="stack">
-<section class="stack focus-box"><div><h2><span class="step-pill">Step 1 👉</span>探したいポケモンと役割</h2><p class="intro">基準にする個体のフォルム・個体値・技を指定します（対戦時レベルはCP1500以下に自動調整）。</p></div>
+<section class="stack focus-box"><div><h2><span class="step-pill">Step 1</span>探したいポケモンと役割</h2><p class="intro">基準にする個体のフォルム・個体値・技を指定します（対戦時レベルはCP1500以下に自動調整）。</p><p class="guide-hint">👇 ここをタップして探したいポケモン名と個体値を入力（SL上限レベルは自動設定されます）</p></div>
 <div id="reference"></div><div class="grid"><label>役割<select id="role"><option value="lead">初手</option><option value="safe_switch">引き先</option><option value="closer">締め</option><option value="coverage">苦手対面の補完</option></select></label><label>優先度<select id="priority"><option value="1">標準</option><option value="2">高い</option><option value="3">最優先</option></select></label></div></section>
-<section class="stack focus-box"><div><h2><span class="step-pill">Step 2 👉</span>確認する対面</h2><p class="intro">相手の構成と、自分が果たす条件を指定します。最大6件です。</p></div><div id="scenarios" class="stack"></div><div class="actions"><button id="add-scenario" type="button" class="quiet" data-action>対面を追加</button></div></section>
-<section class="stack"><div><h2>比較する個体</h2><p class="intro">同じポケモンの別個体や、別のポケモンを最大7体追加できます。手持ちの確認は結果から行えます。</p></div><div id="alternatives" class="stack"></div><div class="actions"><button id="add-alternative" type="button" class="quiet" data-action>比較する個体を追加</button></div></section>
+<section class="stack focus-box"><div><h2><span class="step-pill">Step 2</span>確認する対面</h2><p class="intro">相手の構成と、自分が果たす条件を指定します。最大6件です。</p></div><div id="scenarios" class="stack"></div><p class="guide-hint">👇 ここをタップして確認したい相手対面を追加</p><div class="actions"><button id="add-scenario" type="button" class="quiet" data-action>対面を追加</button></div></section>
+<section class="stack"><div><h2>比較する個体（任意）</h2><p class="intro">同じポケモンの別個体や、別のポケモンを最大7体追加できます。手持ちの確認は結果から行えます。</p></div><div id="alternatives" class="stack"></div><div class="actions"><button id="add-alternative" type="button" class="quiet" data-action>比較する個体を追加</button></div></section>
+<p class="guide-hint">👇 入力が終わったらここをタップして照合を実行</p>
 <div class="actions"><button id="evaluate" class="primary" data-action>👉 保存済みの対面結果を照合</button></div>
 </form>
 <section id="tactic-evidence-panel" data-sandbox="0" data-tactic-search="0" data-observed-search="0" class="results stack" hidden><h2>Sandbox戦術の根拠・保存済み戦術</h2>

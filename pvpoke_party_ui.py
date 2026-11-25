@@ -51,24 +51,27 @@ dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100
 .heat-win{background:#236e96;color:#fff}.heat-mid{background:#85819e;color:#fff}.heat-loss{background:#953276;color:#fff}.heat-unknown{background:#52615d;color:#fff}
 .guide-banner{padding:11px 14px;margin:10px 0 14px;border:1px solid #96debf;border-left:5px solid #96debf;border-radius:14px;background:rgba(150,222,191,.1);font-size:14px;line-height:1.6}
 .step-pill{display:inline-block;padding:1px 8px;margin-right:5px;border-radius:999px;background:#96debf;color:#112b23;font-weight:800;font-size:12px}
+.guide-hint{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;margin:4px 0;border-radius:8px;background:rgba(150,222,191,.15);border-left:3px solid #96debf;color:#96debf;font-size:13px;font-weight:700}
 @media(max-width:550px){main{padding:12px 10px 110px}section{padding:12px}.mon{padding:8px}.fields{grid-template-columns:1fr}}
 </style></head><body><main><nav><a href="/app">← 個体値厳選</a><a href="/flashcards">フラッシュカード</a></nav>
 <h1>見せ合い6体・選出3体</h1><p>重要メタへの穴、15ペアの補完、20組の3体、相手6体への選出を分析するにぇ。Battle Ratingは実戦勝率ではありません。</p>
 <section id="auth"><h2>アプリに接続</h2><p>ログイン済みのブラウザでは自動接続します。</p><div class="tools"><input id="key" type="password" autocomplete="off" placeholder="接続キー"><button id="login">接続する</button></div></section>
 <div id="workspace" hidden>
-<div class="guide-banner" role="note"><strong>👉 操作の流れ：</strong><span class="step-pill">Step 1</span>「大会・メガルール」と「6体メンバー」を設定 ➜ <span class="step-pill">Step 2</span> 画面下の「6体を分析」または「保存・上書き」をクリック</div>
+<div class="guide-banner" role="note"><strong>👉 全体の流れ：</strong><span class="step-pill">Step 1</span>ルールと6体メンバーを入力 ➜ <span class="step-pill">Step 2</span>画面下の「6体を分析」をタップ</div>
 <section id="partyLibrary"><details open><summary>パーティを保存・切り替え</summary>
 <p>自分6体と相手6体、技・個体値、詳細戦略の相手と条件をパーティごとに保存できます。保存済みは最大32件です。</p>
 <label for="partyName">パーティ名</label><input id="partyName" value="新しいパーティ" maxlength="60">
 <p id="partyState" role="status">新規パーティ（未保存）</p>
+<p class="guide-hint">👇 パーティを保存・更新するときはここをタップ</p>
 <div class="tools"><button id="save">保存・上書き</button><button id="saveAs">別パーティとして保存</button></div>
 <label for="saved">保存済みのパーティ</label><select id="saved"><option value="">読み込むパーティを選ぶ</option></select>
 <button id="load">選んだパーティを読み込む</button>
 </details></section>
 <div class="tabs"><button data-tab="compose" aria-pressed="true">構築</button><button data-tab="weakness">弱点・補完</button><button data-tab="selection">相手と選出</button><button data-tab="strategy">詳細戦略</button><button data-tab="settings">保存・設定</button></div>
-<div id="compose"><section><h2>自分の6体</h2><p>各枠をタップして技と個体値を編集。IV省略時はPvPoke標準値を使用します。CP1500/Lv50・同一図鑑番号は1枠（6体登録時は複数メガ可、3体選出は下の大会ルールに従います）。</p>
+<div id="compose"><section><h2>自分の6体</h2><p class="guide-hint">👇 Step 1: ここで大会ルール（メガ上限）と6体のポケモン・技を選択</p><p>各枠をタップして技と個体値を編集。IV省略時はPvPoke標準値を使用します。CP1500/Lv50・同一図鑑番号は1枠（6体登録時は複数メガ可、3体選出は下の大会ルールに従います）。</p>
 <div id="megaRuleSettings"><label for="partyRuleset">大会ルール（メガシンカ上限）<select id="partyRuleset"><option value="cp1500-lv50">通常スーパーリーグ（CP1500 / 3体選出メガ0体）</option><option value="great_mega">スーパーリーグ・メガエディション（CP1500 / 6体複数可・3体選出メガ1体）</option><option value="mega_edition">メガエディション標準（CP1500 / 6体複数可・3体選出メガ1体）</option><option value="custom">カスタム大会（3体選出メガ上限を明示指定）</option></select></label>
 <div id="customMegaRulesWrap" class="fields" hidden><label for="customCupId">カップID（任意）<input id="customCupId" placeholder="例：special_double_mega"></label><label for="maxMegasInThree">3体選出メガ許可数（0〜3体）<select id="maxMegasInThree"><option value="0">0体（メガ禁止）</option><option value="1" selected>1体</option><option value="2">2体</option><option value="3">3体</option></select></label><label for="maxMegasInSix">6体登録メガ上限（1〜6体）<select id="maxMegasInSix"><option value="1">1体</option><option value="2">2体</option><option value="3">3体</option><option value="4">4体</option><option value="5">5体</option><option value="6" selected>6体</option></select></label></div></div>
+<p class="guide-hint">👇 各カードの「例：サニーゴ」をタップしてポケモン名を入力（技・IVは自動設定されます）</p>
 <div class="grid" id="members"></div></section>
 <section><h2>自動構築</h2><p>名前から候補を追加します。固定枠を残して最大48候補から探索します。</p>
 <textarea id="pool" placeholder="azumarill,BUBBLE,ICE_BEAM,PLAY_ROUGH,0,15,15"></textarea>
@@ -116,7 +119,7 @@ dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100
 <p id="metaWeightSaveStatus" role="status"></p>
 <p>重要度はポケモンごとに自動保存し、別のメタや再読み込み後も引き継ぎます。パーティ保存時には現在の値も記録します。詳細戦略では重要度は使用しません。メタは最大500技構成に対応します。</p></section></div>
 <section><h2>計算状況と結果</h2><div id="status" role="status" aria-live="polite">接続を確認しています。</div><div id="result"></div></section>
-</div></main><footer><div class="tools"><button id="analyze" disabled>6体を分析</button><button id="cancel" disabled>計算を中止</button></div></footer>
+</div></main><footer><div class="tools"><p class="guide-hint" style="display:block;width:100%;margin:0 0 6px">👇 Step 2: メンバーが決まったらここをタップして6体を分析</p><button id="analyze" disabled>6体を分析</button><button id="cancel" disabled>計算を中止</button></div></footer>
 <datalist id="speciesList"></datalist><script>
 'use strict';
 const $=id=>document.getElementById(id);
