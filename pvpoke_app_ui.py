@@ -782,6 +782,7 @@ function render(result,append=false){
  node('p','検索式ではXXLの実際の身長を比較できないため、通常の検索式からXXLを除外します。XXLは手動で比較し、最大の個体を残してください。サイズがフォルムそのものを表す場合は例外です。',panel,'note');
  if(selection.input_notices)selection.input_notices.forEach(n=>node('p',n,panel,'note'));
  if(selection.minior_experimental)node('p','メテノの戦術比較（試験版）：流星で即撃ち／コアまで温存／状況判断を同じ条件で比較。表示Ratingは各対面で最良の戦術を選んだ上限値です。実機のCP・レベル調整が未検証のため、この結果だけで個体を博士に送らないでください。',panel,'note');
+ if(result.mega_condition?.super_max_pl_hypothesis_status==='unconfirmed_deferred')node('p','スーパー MAX PL+2 仮説保留（公式仕様・実機検証が未確定のため、仮説値では計算していません）',panel,'note');
  node('p',(result.moveset_comparison?'技ごとの推薦を統合しています。同じ個体値は1回だけ表示し、その個体の採用技を名前に略します。':'')+'Sは総合本命、Aはその本命にない実戦上の役割を補う個体です。1構成では通常最大4体に絞ります。S/Aは入力候補内の暫定評価で、実際の勝敗を保証するものではありません。',panel,'note');
  if(selection.policy?.version&&selection.policy.version!=='box-first-v3'){
   node('p','保存済みの結果は以前の推薦基準です。最新のS本命・少数厳選を使うには、同じ入力を再計算してください。',panel,'note');
@@ -799,8 +800,19 @@ function render(result,append=false){
  const rejected=Object.entries(selection.dominated_by);if(rejected.length){const d=node('details','',panel);node('summary','全条件で他候補以下の個体（'+rejected.length+'）',d);for(const [iv,rivals] of rejected)node('p',iv+' → '+rivals.join(', '),d);}
  refreshNicknames();
 }
+function megaStatusNotes(row,result){
+ const notes=[];
+ if(row.needs_evolution)notes.push('要進化');
+ if(row.needs_power_up)notes.push(row.level!=null?'PL'+row.level+'まで強化が必要':'目標PLまで強化が必要');
+ if(row.mega_downscaled)notes.push('一時ダウンスケーリング可（未証明）');
+ const sm=row.mega_condition?.super_max_pl_hypothesis_status||result?.mega_condition?.super_max_pl_hypothesis_status;
+ if(sm==='unconfirmed_deferred')notes.push('スーパー MAX PL+2 仮説保留');
+ return notes;
+}
 function renderRecommendation(row,panel,result){
   const card=node('article','',panel,'recommendation');node('h2',row.rank+'位｜'+row.ivs+'｜'+row.grade,card);node('div',row.role,card,'badge');
+  const megaNotes=megaStatusNotes(row,result);
+  if(megaNotes.length)node('p',megaNotes.join(' ／ '),card,'note');
   if(result.gourgeist_group)node('p',result.display_name||catalog[result.candidate.species]?.name_ja||result.candidate.species,card,'note');
   if(row.gourgeist_gains?.length){
    const list=node('ul','',card,'matchup-summary');

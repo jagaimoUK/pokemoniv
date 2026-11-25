@@ -123,6 +123,16 @@ const substitutes={sufficient:['十分に代替（この役割）','good'],condi
 const outcomes={self_win:'勝ち',opponent_win:'負け',simultaneous_ko:'同時ひんし'};
 const ownership={confirmed_owned:'所持確認済み',confirmed_absent:'所持していないことを確認済み',unknown:'未確認'};
 const builds={exact:'個体値・CP・Lv・技が一致',unverified:'一致の判定に必要な情報が不足',different:'CP・Lv・技のいずれかが異なる'};
+function megaStatusBadges(record,targetLevel,megaCondition){
+ const items=[];
+ if(record?.needs_evolution)items.push(['要進化','wait']);
+ if(record?.needs_power_up)items.push([targetLevel!=null?'PL'+targetLevel+'まで強化が必要':'目標PLまで強化が必要','wait']);
+ if(record?.mega_downscaled)items.push(['一時ダウンスケーリング可（未証明）','wait']);
+ if(record?.mega_rule_unverified)items.push(['大会ルール未確認','wait']);
+ const smStatus=record?.super_max_pl_hypothesis_status||megaCondition?.super_max_pl_hypothesis_status;
+ if(smStatus==='unconfirmed_deferred')items.push(['スーパー MAX PL+2 仮説保留','wait']);
+ return items;
+}
 let credential='',catalog=Object.create(null),moves={},speciesNames=new Map(),busy=false,editRevision=0,displayed=null,lastRequest=null;
 let inventoryLedgerRevision=null,inventoryCursor=null,inventoryLoaded=false,inventoryFilterKey='';
 let scopePrevious='',scopeEventId='';
@@ -484,11 +494,19 @@ async function loadOwnershipHistory(instanceId,target){
 function renderInventory(parent,candidate,request){
  const box=node('div',null,parent,'stack');
  node('h3','手持ちの確認',box);node('p',heldLabel(candidate),box);
+ if(!candidate.owned_instances.length&&candidate.mega_condition?.super_max_pl_hypothesis_status==='unconfirmed_deferred'){
+  tag(node('div',null,box,'tags'),'スーパー MAX PL+2 仮説保留','wait');
+ }
  if(candidate.owned_instances.length){
   const list=node('ul',null,box,'inventory');
   for(const record of candidate.owned_instances){
    const row=node('li',null,list);
    node('p',(ownership[record.state]||'未確認')+' ／ '+(builds[record.build_match]||'構成の一致は未確認'),row);
+   const badges=megaStatusBadges(record,candidate.level,candidate.mega_condition);
+   if(badges.length){
+    const badgeRow=node('div',null,row,'tags');
+    for(const [label,tone] of badges)tag(badgeRow,label,tone);
+   }
    const panel=detail(row,'この所持記録を更新・履歴を見る','record');
    node('small','記録ID '+record.instance_id+' · rev '+record.revision,panel,'break');
    const historyBox=node('div',null,panel,'stack');
@@ -646,7 +664,14 @@ function renderExploration(parent,result){
    const ownTone=matches.some(r=>r.state==='confirmed_owned'&&r.build_match==='exact')?'good'
     :matches.some(r=>r.state==='confirmed_owned')?'wait'
     :matches.some(r=>r.state==='confirmed_absent')?'fail':'muted';
-   tag(node('div',null,li,'tags'),ownLabel,ownTone);
+   const tagsWrap=node('div',null,li,'tags');
+   tag(tagsWrap,ownLabel,ownTone);
+   const seenBadges=new Set();
+   for(const record of matches){
+    for(const [label,tone] of megaStatusBadges(record,item.level,data.mega_condition)){
+     if(!seenBadges.has(label)){seenBadges.add(label);tag(tagsWrap,label,tone);}
+    }
+   }
    if(template&&item.level!=null){
     const rowActions=node('div',null,li,'actions');
     button(rowActions,'比較候補へ追加',()=>{

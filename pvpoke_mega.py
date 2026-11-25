@@ -468,3 +468,70 @@ def evaluate_owned_for_mega(
         'battle_effective': battle_effective,
         'mega_condition': mega_condition,
     }
+
+
+def evaluate_gl_mega_score_70_or(
+    *,
+    normal_gl_overall: float | None,
+    mega_gl_overall: float | None = None,
+    threshold: float = 70.0,
+    all_species_mode: bool = False,
+    has_mega_form: bool = True,
+) -> dict[str, Any]:
+    """Evaluate Q2 / TV-04: keep if Normal GL >= 70 OR Mega GL >= 70 (fail closed when unverified).
+
+    All-species mode never excludes by the 70-point threshold.
+    """
+    if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not math.isfinite(threshold) or not 1 <= threshold <= 100:
+        raise ValueError(f'threshold must be 1..100: {threshold}')
+    if type(all_species_mode) is not bool:
+        raise ValueError('all_species_mode must be a bool')
+
+    if all_species_mode:
+        return {
+            'keep': True,
+            'verified': True,
+            'reason': 'all_species_mode',
+            'threshold': float(threshold),
+            'matched_leagues': [],
+            'normal_gl_overall': normal_gl_overall,
+            'mega_gl_overall': mega_gl_overall,
+        }
+
+    matched: list[str] = []
+    if normal_gl_overall is not None and float(normal_gl_overall) >= threshold:
+        matched.append('normal_gl')
+    if has_mega_form and mega_gl_overall is not None and float(mega_gl_overall) >= threshold:
+        matched.append('mega_gl')
+
+    if matched:
+        return {
+            'keep': True,
+            'verified': True,
+            'reason': 'meets_threshold_or',
+            'threshold': float(threshold),
+            'matched_leagues': matched,
+            'normal_gl_overall': float(normal_gl_overall) if normal_gl_overall is not None else None,
+            'mega_gl_overall': float(mega_gl_overall) if mega_gl_overall is not None else None,
+        }
+
+    if normal_gl_overall is None or (has_mega_form and mega_gl_overall is None):
+        return {
+            'keep': True,
+            'verified': False,
+            'reason': 'ranking_unverified',
+            'threshold': float(threshold),
+            'matched_leagues': [],
+            'normal_gl_overall': float(normal_gl_overall) if normal_gl_overall is not None else None,
+            'mega_gl_overall': float(mega_gl_overall) if mega_gl_overall is not None else None,
+        }
+
+    return {
+        'keep': False,
+        'verified': True,
+        'reason': 'below_threshold',
+        'threshold': float(threshold),
+        'matched_leagues': [],
+        'normal_gl_overall': float(normal_gl_overall),
+        'mega_gl_overall': float(mega_gl_overall) if mega_gl_overall is not None else None,
+    }

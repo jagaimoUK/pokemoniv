@@ -410,6 +410,94 @@ class MegaPlatformTests(unittest.TestCase):
         self.assertEqual(mega_latest['snapshot']['species_id'], 'altaria_mega')
         self.assertEqual(mega_latest['snapshot']['candidates'][0]['instance_id'], 'altaria-fit')
 
+    def test_gl_mega_70_or_rule_and_low_score_protection(self):
+        from pvpoke_mega import evaluate_gl_mega_score_70_or
+        from pvpoke_score_search import search_low_scores
+
+        # Normal GL >= 70 keeps even if Mega GL < 70.
+        v1 = evaluate_gl_mega_score_70_or(normal_gl_overall=75.0, mega_gl_overall=62.0)
+        self.assertTrue(v1['keep'])
+        self.assertEqual(v1['matched_leagues'], ['normal_gl'])
+
+        # Mega GL >= 70 keeps even if Normal GL < 70.
+        v2 = evaluate_gl_mega_score_70_or(normal_gl_overall=58.0, mega_gl_overall=81.5)
+        self.assertTrue(v2['keep'])
+        self.assertEqual(v2['matched_leagues'], ['mega_gl'])
+
+        # Both verified < 70 -> exclude.
+        v3 = evaluate_gl_mega_score_70_or(normal_gl_overall=58.0, mega_gl_overall=64.9)
+        self.assertFalse(v3['keep'])
+        self.assertTrue(v3['verified'])
+        self.assertEqual(v3['reason'], 'below_threshold')
+
+        # Unverified Mega GL ranking fails closed (never auto-drops).
+        v4 = evaluate_gl_mega_score_70_or(normal_gl_overall=58.0, mega_gl_overall=None, has_mega_form=True)
+        self.assertTrue(v4['keep'])
+        self.assertFalse(v4['verified'])
+        self.assertEqual(v4['reason'], 'ranking_unverified')
+
+        # All-species mode never excludes by 70-point threshold.
+        v5 = evaluate_gl_mega_score_70_or(normal_gl_overall=20.0, mega_gl_overall=25.0, all_species_mode=True)
+        self.assertTrue(v5['keep'])
+        self.assertEqual(v5['reason'], 'all_species_mode')
+
+        # Integration with search_low_scores: without mega_scores, status is 'unverified'.
+        baseline = search_low_scores({'mode': 'overall'})
+        self.assertEqual(baseline['mega_gl_ranking_status'], 'unverified')
+        sample_low = baseline['selected_preview'][0]['name']
+
+        # With mega_scores >= 70 for sample_low, it is protected from low-score cleanup.
+        protected = search_low_scores({'mode': 'overall'}, mega_scores={sample_low: {'overall': 74.2}})
+        self.assertEqual(protected['mega_gl_ranking_status'], 'verified')
+        self.assertEqual(protected['mega_gl_preserved_count'], 1)
+        self.assertEqual(protected['selected_count'], baseline['selected_count'] - 1)
+        self.assertEqual(protected['mega_gl_preserved'][0]['name'], sample_low)
+
+    def test_web_ui_renders_minimal_mega_pl_evolution_and_super_max_badges(self):
+        import json
+        import re
+        import subprocess
+        from pvpoke_app_ui import HTML as APP_HTML
+        from pvpoke_missing_ui import HTML as MISSING_HTML
+
+        missing_match = re.search(
+            r'function megaStatusBadges\(record,targetLevel,megaCondition\)\{.*?^\}',
+            MISSING_HTML,
+            re.S | re.M,
+        )
+        app_match = re.search(
+            r'function megaStatusNotes\(row,result\)\{.*?^\}',
+            APP_HTML,
+            re.S | re.M,
+        )
+        self.assertIsNotNone(missing_match)
+        self.assertIsNotNone(app_match)
+
+        script = f"""
+{missing_match.group(0)}
+{app_match.group(0)}
+const missingBadges = megaStatusBadges(
+  {{needs_evolution: true, needs_power_up: true, mega_downscaled: true}},
+  27.5,
+  {{super_max_pl_hypothesis_status: 'unconfirmed_deferred'}}
+).map(([label]) => label);
+const appNotes = megaStatusNotes(
+  {{needs_evolution: true, needs_power_up: true, level: 27.5, mega_downscaled: true}},
+  {{mega_condition: {{super_max_pl_hypothesis_status: 'unconfirmed_deferred'}}}}
+);
+console.log(JSON.stringify({{missingBadges, appNotes}}));
+"""
+        proc = subprocess.run(['node', '-e', script], capture_output=True, text=True, check=True, timeout=10)
+        parsed = json.loads(proc.stdout)
+        expected = [
+            '要進化',
+            'PL27.5まで強化が必要',
+            '一時ダウンスケーリング可（未証明）',
+            'スーパー MAX PL+2 仮説保留',
+        ]
+        self.assertEqual(parsed['missingBadges'], expected)
+        self.assertEqual(parsed['appNotes'], expected)
+
 
 if __name__ == '__main__':
     unittest.main()
