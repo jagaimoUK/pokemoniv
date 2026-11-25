@@ -414,7 +414,7 @@ async function checkWidth(browser, width) {
     await page.locator('#inventory-load').click();
     await page.locator('#inventory-items').getByText(/この範囲には該当個体はありません（続きあり）/).waitFor();
     await page.locator('#inventory-more').click();
-    await page.getByText('台帳リビジョン 2 ／ 表示 1件', {exact: true}).waitFor();
+    await page.getByText('更新番号 2 ／ 表示 1件', {exact: true}).waitFor();
     await page.locator('#inventory-items details.record > summary').first().click();
     await page.locator('#inventory-items').getByRole('button', {name: '履歴を表示'}).click();
     await page.getByText('rev 1：未確認 → 所持確認済み', {exact: true}).waitFor();
