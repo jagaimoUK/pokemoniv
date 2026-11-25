@@ -9,7 +9,7 @@ const context={document:{getElementById(id){return els[id]??=element();},createE
 vm.createContext(context);vm.runInContext(script,context);context.jobs=jobs;
 vm.runInContext("catalog={swadloon:{name:'Swadloon',name_ja:'クルマユ',nickname_code:'Swd'},leavanny:{name:'Leavanny',name_ja:'ハハコモリ',nickname_code:'Lea'},other:{name:'Other',name_ja:'相手',nickname_code:'Oth'}};prepareLabels();batchState={jobs,index:0,results:[],run_ref:null,meta_preset_id:'pvpoke:fantasy',meta_sha256:'a'.repeat(64),batch_mode:'simple',focus:[],report_format:'app',policy:{meaningful_win_lead:20}};setImportedJobs(jobs)",context);
 (async()=>{
- await vm.runInContext('executeBatch()',context);
+ await vm.runInContext('executeLegacyBatch()',context);
  assert.deepEqual(calls.map(c=>c.path),['/app-api/run','/app-api/result','/app-api/run','/app-api/result']);
  assert.deepEqual(calls.filter(c=>c.path.endsWith('/run')).map(c=>c.data.candidate.species),['swadloon','leavanny']);
  assert.equal(calls[2].data.expected_meta_sha256,'a'.repeat(64));
@@ -31,7 +31,7 @@ vm.runInContext("catalog={swadloon:{name:'Swadloon',name_ja:'クルマユ',nickn
  calls.length=0;
  context.fetch=async(path,options)=>{const data=JSON.parse(options.body);calls.push({path,data});els.forceRecalculate.checked=false;return {ok:true,json:async()=>({...result(jobs[calls.length-1]),result_cache:{reused:true}})};};
  vm.runInContext("batchState={jobs,index:0,results:[],run_ref:null,batch_mode:'simple',focus:[],report_format:'app',policy:{},force_recalculate:true}",context);
- await vm.runInContext('executeBatch()',context);
+ await vm.runInContext('executeLegacyBatch()',context);
  assert(calls.every(c=>c.data.force_recalculate===true));
  assert(flat(els.results).some(x=>x.textContent.includes('過去の対戦結果を再利用')));
  console.log('Force recalculation stays frozen across queued jobs; reuse notice preserved: OK');
@@ -39,13 +39,13 @@ vm.runInContext("catalog={swadloon:{name:'Swadloon',name_ja:'クルマユ',nickn
  calls.length=0;context.saved=result(jobs[0]);context.saved.display_name='クルマユ';
  vm.runInContext("render(saved);batchState={jobs,index:1,results:[saved],run_ref:'resumed-ref',meta_sha256:'a'.repeat(64),batch_mode:'simple',focus:[],report_format:'app',policy:{}}",context);
  context.fetch=async(path,options)=>{calls.push({path,data:JSON.parse(options.body)});return {ok:true,json:async()=>result(jobs[1])};};
- await vm.runInContext('executeBatch()',context);
+ await vm.runInContext('executeLegacyBatch()',context);
  assert.equal(calls.length,1);assert.equal(calls[0].path,'/app-api/result');assert.equal(calls[0].data.run_ref,'resumed-ref');
  console.log('Resume polls existing job without recalculating completed species: OK');
  // A failure on the second species must preserve the first result.
  let starts=0;context.fetch=async(path,options)=>{if(path.endsWith('/run')&&++starts===2)throw Error('test failure');return {ok:true,json:async()=>path.endsWith('/run')?{state:'running',run_ref:'once'}:result(jobs[0])};};
  vm.runInContext("batchState={jobs,index:0,results:[],run_ref:null,batch_mode:'simple',focus:[],report_format:'app',policy:{}}",context);
- await assert.rejects(vm.runInContext('executeBatch()',context),/test failure/);
+ await assert.rejects(vm.runInContext('executeLegacyBatch()',context),/test failure/);
  assert.equal(vm.runInContext('batchState.results.length',context),1);assert.equal(vm.runInContext('batchState.index',context),1);
  console.log('Partial failure keeps completed result and stops subsequent work: OK');
 
