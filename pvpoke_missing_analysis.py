@@ -123,17 +123,25 @@ class MissingAnalysis:
                     if any(type(key) is not str for key in battle_keys):
                         raise ValueError('Invalid battle key in plan')
                     if has_inventory:
+                        from pvpoke_mega import base_species_id, is_mega_form
+
                         seen_owner_keys = set()
                         for spec in specs.values():
                             combatant = spec['combatants'][0]
-                            owner_key = (combatant['species_id'], _iv_index(combatant['ivs']))
-                            if owner_key not in seen_owner_keys:
-                                seen_owner_keys.add(owner_key)
-                                owner_rows_by_key[owner_key] = db.execute(
-                                    '''SELECT body, digest FROM owned_instances_v1
-                                       WHERE owner_scope=? AND species_id=? AND iv_index=? ORDER BY instance_id''',
-                                    (self.store.owner_scope, *owner_key),
-                                ).fetchall()
+                            iv_idx = _iv_index(combatant['ivs'])
+                            keys_to_fetch = [(combatant['species_id'], iv_idx)]
+                            if is_mega_form(combatant['species_id']):
+                                base_id = base_species_id(combatant['species_id'])
+                                if base_id != combatant['species_id']:
+                                    keys_to_fetch.append((base_id, iv_idx))
+                            for owner_key in keys_to_fetch:
+                                if owner_key not in seen_owner_keys:
+                                    seen_owner_keys.add(owner_key)
+                                    owner_rows_by_key[owner_key] = db.execute(
+                                        '''SELECT body, digest FROM owned_instances_v1
+                                           WHERE owner_scope=? AND species_id=? AND iv_index=? ORDER BY instance_id''',
+                                        (self.store.owner_scope, *owner_key),
+                                    ).fetchall()
                     placeholders = ','.join('?' for _ in battle_keys)
                     saved_rows = {
                         battle_key: (result_json, result_sha256)
@@ -168,9 +176,21 @@ class MissingAnalysis:
                     cp = None
                 if has_inventory and versions == current:
                     if build not in matches_by_build:
-                        owner_key = (combatant['species_id'], _iv_index(combatant['ivs']))
+                        from pvpoke_mega import base_species_id, is_mega_form
+
+                        iv_idx = _iv_index(combatant['ivs'])
+                        rows_for_match = list(owner_rows_by_key.get((combatant['species_id'], iv_idx), ()))
+                        if is_mega_form(combatant['species_id']):
+                            base_id = base_species_id(combatant['species_id'])
+                            if base_id != combatant['species_id']:
+                                rows_for_match.extend(owner_rows_by_key.get((base_id, iv_idx), ()))
                         matches_by_build[build] = Ownership._match_rows(
-                            owner_rows_by_key.get(owner_key, ()), combatant, cp)
+                            rows_for_match,
+                            combatant,
+                            cp,
+                            species_catalog=getattr(normalizer, 'species', None),
+                            cpms=getattr(normalizer, 'cpms', None),
+                        )
                     cell['inventory_matches'] = matches_by_build[build]
                     if any(match['state'] == 'confirmed_owned' and match['build_match'] == 'exact'
                            for match in cell['inventory_matches']):

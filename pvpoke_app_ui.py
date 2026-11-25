@@ -524,7 +524,8 @@ function savedSelectionsEnabled(){
  return Boolean(document.querySelector?.('.quick-nav a[href="/app/missing"]'));
 }
 function isOrdinarySelectionForm(species){
- return !/(?:^|[_-])(mega|primal)(?:$|[_-])/.test(species);
+ // Mega and Primal forms now link to their pre-Mega inventory individuals via the Mega foundation.
+ return Boolean(species);
 }
 function savedBuildText(row){
  return row.ivs+'｜'+(row.role==='important'?'重要個体':'代替候補');

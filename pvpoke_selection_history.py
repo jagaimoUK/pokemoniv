@@ -39,10 +39,7 @@ def _hash(value):
 
 
 def _species(value):
-    species = _id(value, FORM)
-    if {'mega', 'primal'} & set(re.split('[_-]', species)):
-        raise ValueError('Only ordinary Great League forms can be saved')
-    return species
+    return _id(value, FORM)
 
 
 def _candidate(value):
