@@ -81,3 +81,12 @@ HEAD: <SHA>
 - **同期のタイミング**：各PRの作業開始時と、標準ブランチの共通ルールが変更されたときの次回作業開始時に照合する。短間隔のポーリングや全開発ブランチへの機械的な一括更新は不要。
 - **取り込み前**：共通ルールが大きく変更されている場合はPRの差分でレビューし、必要な場合に限り軽量な自動検査を追加する。新ルールのマージに伴うRailwayなどの自動デプロイ経路を先に確認する。
 - **進捗記録**：差分照合と同期の結果（最新版、差分なし／未同期／意図した例外）をPRの`[AI-HANDOFF v1]`に短く残す。実際に同期していないものを「同期済み」と記載しない。
+
+## 個体値厳選・メガ進化・Android連携の設計書（文書PR提案：2026-11-25）
+
+- **設計書の単一正本（全15問の確定要求＋技術検証）**：`docs/mega-iv-selection-cross-app-design.md`（本リポジトリ内）
+- **Web `main` 反映後の正本URL**：https://github.com/jagaimoUK/pokemoniv/blob/main/docs/mega-iv-selection-cross-app-design.md
+- **Web `main` 未反映の場合のDraft参照URL**：https://github.com/jagaimoUK/pokemoniv/blob/docs/mega-iv-cross-app-spec-20261125/docs/mega-iv-selection-cross-app-design.md
+- 厳選アプリの重要個体保存・差分計算、メガCP/PL、パーティ機能、Android同期・オーバーレイへ着手する際は、**本書の第2章・第3章・第5章・第8章を実際に読み**、最新対象PRの[AI-HANDOFF v1]・コードと照合する。
+- Android現行開発正本は `jagaimoUK/PokemonIVReader-public-ci` の `main`。歴史的Private `PokemonIVReader` の作業ブランチを現行開発先と推定しない。
+- 設計書がWeb `main` に存在するか、取得してから参照URLを選ぶ。未反映の場合は上記DraftのURLを使う。**本指示を読めたことと本番反映は別**。本番デプロイ・PRマージは別途明示承認が必要。
