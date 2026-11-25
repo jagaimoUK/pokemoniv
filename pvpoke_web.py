@@ -100,6 +100,9 @@ def load_catalog():
                 'types': p.get('types', []),
                 'fastMoves': p.get('fastMoves', []),
                 'chargedMoves': engine.charged_move_pool(p),
+                'extraChargedMoves': p.get('extraChargedMoves', []),
+                'tags': p.get('tags', []),
+                **({'family': p['family']} if isinstance(p.get('family'), dict) else {}),
             }
             for sid, p in species.items()
         }
@@ -125,7 +128,8 @@ def load_catalog():
                                 'name': m.get('name') or m['moveId'],
                                 'name_ja': move_ja.get(m['moveId'], {}).get('ja')}
                                       for m in gm.get('moves', []) if m.get('moveId')},
-                            'presets': presets, 'timestamp': gm.get('timestamp')})
+                            'presets': presets, 'timestamp': gm.get('timestamp'),
+                            'cpms': [float(x) for x in cpms]})
         meta_variants.start(WORK, LOCK, STATUS)
     except Exception as exc:
         with LOCK:

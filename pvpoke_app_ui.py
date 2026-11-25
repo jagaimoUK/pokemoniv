@@ -22,6 +22,9 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 .species-moveset-row label{margin:0;overflow-wrap:anywhere}.species-moveset-row button{flex:none;padding:8px 10px}
 .species-moveset-add{width:100%;text-align:left;margin-top:8px}.species-moveset-form .row{align-items:end}
 .species-moveset-form .form-buttons{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.guide-banner{padding:12px 14px;margin:0 0 14px;border:1px solid #83bba5;border-left:5px solid #96debf;border-radius:14px;background:rgba(150,222,191,.1);font-size:14px;line-height:1.6}
+.step-pill{display:inline-block;padding:1px 8px;margin-right:5px;border-radius:999px;background:#96debf;color:#0e221b;font-weight:800;font-size:12px}
+.guide-hint{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;margin:4px 0;border-radius:8px;background:rgba(150,222,191,.15);border-left:3px solid #96debf;color:#96debf;font-size:13px;font-weight:700}
 </style></head><body><nav class="quick-nav" aria-label="ページ内の移動"><a href="/app/party" aria-label="パーティ作成">6/3<br>構築</a><a href="#pageTop" aria-label="ページ上部に戻る">↑<br>上へ</a></nav><main id="pageTop">
 <header><div class="eyebrow">PVP IV SELECTION</div><div class="page-heading"><h1>役割から選ぶ、個体値厳選</h1><button id="selectionSettingsOpen" class="secondary settings-button" type="button" aria-controls="selectionSettings" aria-expanded="false" hidden>⚙ 設定</button></div><p>対戦計算からおすすめ・理由・検索式まで。アプリの自動推薦と、これまでのGPT評価を使い分けられます。</p></header>
 <section class="card" id="login"><h2>アプリに接続</h2><p class="note">初回だけ接続キー、または有効なアクセストークンを入力してください。APIキー自体は端末へ保存しません。</p><label for="credential">接続キー</label><input id="credential" type="password" autocomplete="off"><label class="checkline" for="remember"><input id="remember" type="checkbox" checked>このブラウザのログインを30日間維持する</label><p class="note">共有端末ではチェックを外してください。短期アクセストークンは元の期限まで有効です。ログアウトでこのブラウザのセッションを失効できます。</p><div class="actions"><button id="connect">接続する</button></div></section>
@@ -33,6 +36,7 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <p id="selectionModeStatus" class="note" aria-live="polite"></p><div id="selectionModeRows"></div><button id="selectionModeMore" class="secondary" type="button" hidden>さらに50件を表示</button>
 <div class="actions"><button id="selectionSettingsClose" type="button">閉じる</button></div></dialog>
 <div id="workspace" hidden>
+<div class="guide-banner" role="note"><strong>👉 全体の流れ：</strong><span class="step-pill">Step 1</span>下の「ポケモン名・個体値」を入力 ➜ <span class="step-pill">Step 2</span>「計算して推薦を表示」をタップ</div>
 <section class="card" id="lowScorePanel" hidden>
 <h2>非厳選判定の内訳（診断）</h2>
 <p class="note">読み取りアプリの「⋯ → 非厳選を取得・コピー」から直接検索式を生成・コピーします。この画面は除外理由の確認専用で、検索式の手動転送は不要です。候補は博士送りの保証ではありません。</p>
@@ -47,7 +51,7 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <details id="lowManual" hidden><summary>姿・検索名などで安全に検索できない個体</summary><div id="lowManualNames" class="note" style="white-space:pre-wrap"></div></details>
 <details id="lowUnrankedReview" hidden><summary>ランキング未掲載の要確認候補（ゴチム等）</summary><div id="lowUnrankedNames" class="note" style="white-space:pre-wrap"></div></details>
 </section>
-<section class="card"><h2>まとめて貼り付け</h2><p class="note">ポケモン・技・個体値をまとめて取り込めます。読み取りCP付きの「0,11,12 CP717 | ヌオー」にも対応します。日本語の種名、技省略、複数の進化先を含む「個体値リスト」「個体値厳選」、CSVに対応します。</p><label for="importText">コマンドまたはCSV</label><textarea id="importText" spellcheck="false" placeholder="個体値厳選&#10;quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE&#10;0,11,12&#10;3,13,8&#10;2,15,13"></textarea><div class="actions"><button id="importInput" class="secondary">貼り付けた内容を取り込む</button></div><p class="note">取り込みだけでは計算を開始しません。# クルマユ ハハコモリ のような見出しは、次の個体値を両方へ割り当てます。省略した技は種類ごとに補って表示します。</p></section>
+<section class="card"><h2>まとめて貼り付け</h2><p class="guide-hint">👇 複数個体をまとめて取り込む場合はここに貼り付け</p><p class="note">ポケモン・技・個体値をまとめて取り込めます。読み取りCP付きの「0,11,12 CP717 | ヌオー」にも対応します。日本語の種名、技省略、複数の進化先を含む「個体値リスト」「個体値厳選」、CSVに対応します。</p><label for="importText">コマンドまたはCSV</label><textarea id="importText" spellcheck="false" placeholder="個体値厳選&#10;quagsire,MUD_SHOT,AQUA_TAIL,STONE_EDGE&#10;0,11,12&#10;3,13,8&#10;2,15,13"></textarea><div class="actions"><button id="importInput" class="secondary">貼り付けた内容を取り込む</button></div><p class="note">取り込みだけでは計算を開始しません。# クルマユ ハハコモリ のような見出しは、次の個体値を両方へ割り当てます。省略した技は種類ごとに補って表示します。</p></section>
 <section class="card" id="queuePanel" hidden><h2>連続計算するポケモン</h2><pre id="queuePreview"></pre><p class="note">表示した順にすべて計算します。複数種の内容は上の貼り付け欄から編集できます。</p><button id="singleForm" class="secondary">単一種のフォームに戻す</button></section>
 <section class="card" id="comparisonSettings" tabindex="-1"><h2>2. 比較と推薦の設定</h2>
 <div class="meta-presets"><div class="meta-current"><span class="meta-caption">使用中</span><p id="selectedMeta" class="meta-current-name" aria-live="polite">メタプリセットを読み込み中です。</p><span id="metaCurrentCount" class="meta-count"></span><span id="metaCurrentBadges" class="meta-badges"></span></div>
@@ -80,10 +84,12 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <label for="moveThreshold">残す平均Ratingの下限（500付近の目安）</label><input id="moveThreshold" type="number" min="0" max="1000" value="450" step="1">
 <p class="note">全構成が下限未満でも最高平均の構成は表示します。自動比較OFFでは、右上の「設定」で計算対象にした構成をすべて使います。計算対象の登録がない場合は、今回の入力で指定した技を使います。個体ごとのコピー名には採用技の略号を付けます。</p>
 <div class="row" id="inputMoves"><div><label for="fast">通常技</label><select id="fast"></select></div><div><label for="charged1">ゲージ技1</label><select id="charged1"></select></div><div><label for="charged2">ゲージ技2</label><select id="charged2"></select></div></div>
+<div class="row" id="megaMoveSettings" hidden><div><label for="megaLevel">メガレベル（1〜4）</label><select id="megaLevel"><option value="1">Lv1（基本）</option><option value="2">Lv2（高）</option><option value="3" selected>Lv3（MAX・既定）</option><option value="4">Lv4（スーパーMAX・PL+2仮説保留）</option></select></div><div id="charged3Wrap" hidden><label for="charged3">追加ゲージ技（3つ目）</label><select id="charged3"></select></div></div>
 <p id="movePlanSummary" class="note" aria-live="polite"></p>
 </details>
 <details><summary>自動推薦の基準を調整</summary><label for="lead">勝ち方向で採用するRating差（既定20）</label><input id="lead" type="number" min="1" max="1000" step="1" value="20"><p class="note">500の境界を越える役割は差にかかわらず確認します。負けたままのRating差は自動推薦にしません。</p></details>
 <label class="checkline" for="forceRecalculate"><input type="checkbox" id="forceRecalculate"> 保存結果を使わず再計算</label><p class="note">同じ対戦条件では過去の結果を再利用します。ゲームデータ・計算コードの更新時は自動で再計算します。</p>
+<p class="guide-hint">👇 Step 2: ここをタップして推薦を計算</p>
 <div class="actions"><button id="run">計算して推薦を表示</button><button id="cancelRun" class="secondary" type="button" hidden>計算を中止</button><button id="resume" class="secondary" hidden>前の計算を再開</button><button id="disconnect" class="secondary">接続を解除</button></div><p class="note">CP1500以下・最大Lv50。自分0/相手1、自分0/相手2、自分1/相手2も比較します。</p></section>
 <section class="card" id="results" tabindex="-1" hidden></section>
 <details class="card" id="metaManager">
@@ -99,7 +105,7 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <div class="actions"><button id="metaApply" class="secondary" disabled>別のプリセットとして保存</button><button id="metaCancel" class="secondary" type="button">選択を取り消す</button></div>
 <p id="metaNotice" class="note" aria-live="polite"></p>
 </details>
-<section class="card"><h2>1. ポケモンと個体値</h2><label for="preset">登録プリセット（任意）</label><select id="preset"></select><p class="note" id="presetHint"></p><label for="allSpecies">全ポケモンから選ぶ</label><select id="allSpecies"></select><label for="species">ポケモン名・英語ID（直接入力）</label><input id="species" list="speciesList" value="quagsire" autocomplete="off"><datalist id="speciesList"></datalist>
+<section class="card"><h2>1. ポケモンと個体値</h2><p class="guide-hint">👇 Step 1: ここをタップしてポケモン名・個体値を入力</p><label for="preset">登録プリセット（任意）</label><select id="preset"></select><p class="note" id="presetHint"></p><label for="allSpecies">全ポケモンから選ぶ</label><select id="allSpecies"></select><label for="species">ポケモン名・英語ID（直接入力）</label><input id="species" list="speciesList" value="quagsire" autocomplete="off"><datalist id="speciesList"></datalist>
 <div class="actions" role="group" aria-label="登録区分を一括変更"><button id="bulkNormal" class="secondary">すべて通常に変更</button><button id="bulkShadow" class="secondary">すべてシャドウに変更</button><button id="bulkPurified" class="secondary">すべてリトレーンに変更</button><button id="bulkStatusUndo" class="secondary" hidden>区分変更を元に戻す</button></div><p class="note" id="bulkStatusNote">対象：フォーム、または取り込み済みの全種類。区分だけを修正し、個体値・CPは変えません。リトレーン済みの個体値・CPを入力してください。変更後に再計算します。</p>
 <label for="ivs">攻撃,防御,HP（1行1体・最大4,096通り）</label><textarea id="ivs" spellcheck="false" placeholder="0,11,12&#10;3,13,8&#10;2,15,13"></textarea></section>
 </div></main><script>
@@ -230,9 +236,30 @@ function fillMoveFields(sid,row,[fast,charged1,charged2],label){
   if(alternative)charged2.value=alternative;
  }
 }
-function moves(row={},sid=el('species').value){fillMoveFields(sid,row,['fast','charged1','charged2'].map(el));}
+function moves(row={},sid=el('species').value){
+ fillMoveFields(sid,row,['fast','charged1','charged2'].map(el));
+ const p=catalog[sid]||{};
+ const isMega=/_(mega|primal)(?:_[xy])?$/.test(sid)||(p.tags||[]).includes('mega');
+ const megaBox=el('megaMoveSettings'),megaSel=el('megaLevel'),c3Wrap=el('charged3Wrap'),c3Sel=el('charged3');
+ if(megaBox&&megaSel){
+  megaBox.hidden=!isMega;
+  if(isMega)megaSel.value=String(row.mega_level??((p.tags||[]).includes('supermega')?4:3));
+ }
+ if(c3Wrap&&c3Sel){
+  const extra=isMega&&Array.isArray(p.extraChargedMoves)?p.extraChargedMoves:[];
+  c3Wrap.hidden=!extra.length;
+  option(c3Sel,['',...extra],extra.includes(row.charged3)?row.charged3:'',v=>v||'なし');
+  if(!extra.length)c3Sel.value='';
+ }
+}
 function presetKey(p){return p.key||[p.species,p.fast,p.charged1,p.charged2].join('|');}
-function currentCandidate(){return {species:el('species').value.trim(),fast:el('fast').value,charged1:el('charged1').value,charged2:el('charged2').value};}
+function currentCandidate(){
+ const out={species:el('species').value.trim(),fast:el('fast').value,charged1:el('charged1').value,charged2:el('charged2').value};
+ const megaBox=el('megaMoveSettings'),megaSel=el('megaLevel'),c3Wrap=el('charged3Wrap'),c3Sel=el('charged3');
+ if(megaBox&&!megaBox.hidden&&megaSel?.value)out.mega_level=Number(megaSel.value);
+ if(c3Wrap&&!c3Wrap.hidden&&c3Sel?.value)out.charged3=c3Sel.value;
+ return out;
+}
 function setCandidate(p){inputPokemonStatus=null;el('species').value=p.species;el('allSpecies').value=p.species;moves(p);const found=presets.find(x=>['species','fast','charged1','charged2'].every(k=>x[k]===p[k]));el('preset').value=found?presetKey(found):'';}
 function setPreset(){const p=presets.find(x=>presetKey(x)===el('preset').value);if(p)setCandidate(p);}
 function resolveTypedSpecies(){const raw=el('species').value.normalize('NFKC').trim().toLowerCase();if(['gourgeist','pumpkaboo','パンプジン','バケッチャ'].includes(raw)){message('このポケモンはサイズごとに能力が異なります。こだましゅ/XS、ちゅうだましゅ/通常、おおだましゅ/XL、ギガだましゅ/XXLを指定してください。',true);return;}const found=Object.entries(catalog).filter(([sid,p])=>[sid,p.name,p.name_ja,...(p.aliases||[])].some(x=>x&&String(x).normalize('NFKC').trim().toLowerCase()===raw));if(found.length===1)el('species').value=found[0][0];else if(found.length>1)message('複数のフォルムが一致しました。サイズやフォルムを指定してください。',true);}
