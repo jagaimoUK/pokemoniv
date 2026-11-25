@@ -11,6 +11,10 @@ Current implementation: a single-user PvPoke calculation server, an authenticate
 
 Before describing or changing production, confirm the actual active service and deployment revision from its current hosting configuration. Development PRs and CI success do not establish production deployment. Never deploy to a historical Railway target based on this README. Do not merge PRs or deploy to production without explicit approval.
 
+**Safe environment verification (read-only):** identify the current hosting provider and service from its console, record the live URL and deployed revision/commit from that provider, and compare them with the intended GitHub branch and commit. If the live revision cannot be established, report it as *unverified* and stop before any deploy or data operation. A saved Railway GitHub source connection, an old deployment URL, and a successful preview/CI run are not proof of the current production target. The project owner reported disabling Railway Autodeploy on 2026-11-22; this README does not independently verify that setting or imply that manual Railway deployments are disabled.
+
+**Project safety override (2026-11-25):** the historical ChatGPT-connected PvPoke MCP setup and tool-call examples below are retained as archival documentation only. **Do not connect to or use the ChatGPT PvPoke MCP**, including for testing. Use only permitted in-repository calculation and verification paths, and follow the latest default-branch `AGENTS.md` and the active PR handoff.
+
 The links and instructions below include **historical Railway examples**. They are retained for compatibility and provenance, not as evidence of today's production topology. The dated development handoff is a history of earlier implementations, not a live deployment inventory.
 
 ## Historical deployment outline (Railway example; not current production)
