@@ -178,7 +178,8 @@ def load_catalog():
                                 'name': m.get('name') or m['moveId'],
                                 'name_ja': move_ja.get(m['moveId'], {}).get('ja')}
                                       for m in gm.get('moves', []) if m.get('moveId')},
-                            'presets': presets, 'timestamp': gm.get('timestamp')})
+                            'presets': presets, 'timestamp': gm.get('timestamp'),
+                            'cpms': [float(x) for x in cpms]})
         meta_variants.start(
             WORK, LOCK, STATUS,
             battle_busy=_compute_busy_locked,

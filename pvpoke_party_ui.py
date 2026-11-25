@@ -49,11 +49,14 @@ dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100
 .heatmap th:first-child{min-width:95px;position:sticky;left:0;background:#203138;z-index:1;text-align:left}
 .heatmap td{white-space:pre-line;font-variant-numeric:tabular-nums;padding:8px 2px;border-radius:8px}
 .heat-win{background:#236e96;color:#fff}.heat-mid{background:#85819e;color:#fff}.heat-loss{background:#953276;color:#fff}.heat-unknown{background:#52615d;color:#fff}
+.guide-banner{padding:11px 14px;margin:10px 0 14px;border:1px solid #96debf;border-left:5px solid #96debf;border-radius:14px;background:rgba(150,222,191,.1);font-size:14px;line-height:1.6}
+.step-pill{display:inline-block;padding:1px 8px;margin-right:5px;border-radius:999px;background:#96debf;color:#112b23;font-weight:800;font-size:12px}
 @media(max-width:550px){main{padding:12px 10px 110px}section{padding:12px}.mon{padding:8px}.fields{grid-template-columns:1fr}}
 </style></head><body><main><nav><a href="/app">← 個体値厳選</a><a href="/flashcards">フラッシュカード</a></nav>
 <h1>見せ合い6体・選出3体</h1><p>重要メタへの穴、15ペアの補完、20組の3体、相手6体への選出を分析するにぇ。Battle Ratingは実戦勝率ではありません。</p>
 <section id="auth"><h2>アプリに接続</h2><p>ログイン済みのブラウザでは自動接続します。</p><div class="tools"><input id="key" type="password" autocomplete="off" placeholder="接続キー"><button id="login">接続する</button></div></section>
 <div id="workspace" hidden>
+<div class="guide-banner" role="note"><strong>👉 操作の流れ：</strong><span class="step-pill">Step 1</span>「大会・メガルール」と「6体メンバー」を設定 ➜ <span class="step-pill">Step 2</span> 画面下の「6体を分析」または「保存・上書き」をクリック</div>
 <section id="partyLibrary"><details open><summary>パーティを保存・切り替え</summary>
 <p>自分6体と相手6体、技・個体値、詳細戦略の相手と条件をパーティごとに保存できます。保存済みは最大32件です。</p>
 <label for="partyName">パーティ名</label><input id="partyName" value="新しいパーティ" maxlength="60">
