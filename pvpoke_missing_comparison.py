@@ -42,7 +42,12 @@ def _build(value):
 def _spec(candidate, opponent, shields, energy):
     combatants = []
     for build, shield, starting_energy in zip((candidate, opponent), shields, (energy, 0)):
-        clean = {k: v for k, v in build.items() if k != 'owned_species_id'}
+        clean = {k: v for k, v in build.items() if k not in ('owned_species_id', 'charged3')}
+        if build.get('charged3') and isinstance(clean.get('moves'), dict):
+            charged = list(clean['moves'].get('charged') or ())
+            if build['charged3'] not in charged:
+                charged.append(build['charged3'])
+            clean['moves'] = {**clean['moves'], 'charged': charged}
         combatants.append({**clean, 'initial': {'hp': 'full', 'energy': starting_energy,
                                                'shields': shield, 'stages': [0, 0]}})
     return {'schema': 'battle-spec-v1', 'mode': 'standard', 'rules': {'league': 'great', 'cp_cap': 1500},
