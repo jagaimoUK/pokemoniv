@@ -115,8 +115,11 @@ def get_rows(path):
         raise ValueError(f'ファイルがありません: {path}。先に --setup を実行してください')
     with path.open(encoding='utf-8-sig', newline='') as f:
         reader = csv.DictReader(f)
-        if reader.fieldnames not in (HEADER, HEADER + ['level_override']):
-            raise ValueError(f'{path.name}: 列名が不正です。必要な列: {HEADER} (任意でlevel_override)')
+        expected_base = set(HEADER)
+        allowed_extra = {'level_override', 'mega_level', 'charged3'}
+        fields = list(reader.fieldnames or ())
+        if not expected_base.issubset(fields) or len(fields) != len(set(fields)) or set(fields) - expected_base - allowed_extra:
+            raise ValueError(f'{path.name}: 列名が不正です。必要な列: {HEADER} (任意でlevel_override, mega_level, charged3)')
         rows = []
         for i, row in enumerate(reader, 2):
             if not any((v or '').strip() for v in row.values()):
@@ -141,6 +144,18 @@ def get_rows(path):
                 if not math.isfinite(override) or override < 1 or override > MAX_LEVEL or override * 2 != int(override * 2):
                     raise ValueError(f'{path.name} {i}行目: 指定レベルは1〜{MAX_LEVEL}の0.5刻みです')
                 vals['level_override'] = override
+            raw_mega_level = (row.get('mega_level') or '').strip()
+            if raw_mega_level:
+                try:
+                    mega_level = int(raw_mega_level)
+                except ValueError as e:
+                    raise ValueError(f'{path.name} {i}行目: mega_levelは1〜4の整数です') from e
+                if not 1 <= mega_level <= 4:
+                    raise ValueError(f'{path.name} {i}行目: 無効なmega_level: {mega_level}')
+                vals['mega_level'] = mega_level
+            raw_charged3 = (row.get('charged3') or '').strip()
+            if raw_charged3:
+                vals['charged3'] = raw_charged3.upper()
             rows.append(vals)
     if not rows:
         raise ValueError(f'{path.name}: データ行がありません')

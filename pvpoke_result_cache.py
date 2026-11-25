@@ -50,7 +50,8 @@ def _validate(path: Path, request: dict) -> None:
             selected = [row for row in rows if row.get("opponent_iv_mode") == mode]
             if len(selected) != len(expected) or {tuple(int(r[k]) for k in ("atk", "def", "hp")) for r in selected} != expected:
                 raise ValueError("Saved candidate IVs differ")
-            if any(any(r.get(k, "").lower() != v.lower() for k, v in request["candidate"].items()) for r in selected):
+            if any(any(r.get(k, "").lower() != str(request["candidate"][k]).lower()
+                       for k in ("species", "fast", "charged1", "charged2") if k in request["candidate"]) for r in selected):
                 raise ValueError("Saved Pokemon or moves differ")
 
 

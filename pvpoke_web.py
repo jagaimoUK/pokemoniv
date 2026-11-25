@@ -263,6 +263,35 @@ def normalize_pokemon(row, species, label):
     return [sid, *moves]
 
 
+def normalize_pokemon_options(row, species, label):
+    if not isinstance(row, dict):
+        return {}
+    sid = str(row.get('species') or '').strip().lower()
+    p = species.get(sid) or {}
+    tags = p.get('tags') or ()
+    is_mega = 'mega' in tags
+    opts = {}
+    if row.get('mega_level') is not None:
+        if not is_mega:
+            raise ValueError(f'{label}: mega_level はメガシンカ・ゲンシカイキのみ指定できます')
+        mega_level = row.get('mega_level')
+        if type(mega_level) is not int or not 1 <= mega_level <= 4:
+            raise ValueError(f'{label}: mega_level は 1〜4 の整数で指定してください')
+        opts['mega_level'] = mega_level
+    raw_c3 = row.get('charged3')
+    if raw_c3 is not None and str(raw_c3).strip():
+        c3 = str(raw_c3).strip().upper()
+        extra = p.get('extraChargedMoves') or ()
+        if not is_mega or c3 not in extra:
+            raise ValueError(f'{label}: 追加ゲージ技 {c3} は選択できません')
+        c1 = str(row.get('charged1') or '').strip().upper()
+        c2 = str(row.get('charged2') or '').strip().upper()
+        if c3 in (c1, c2):
+            raise ValueError(f'{label}: 追加ゲージ技が通常のゲージ技と重複しています')
+        opts['charged3'] = c3
+    return opts
+
+
 def prepare_payload(payload):
     with LOCK:
         if not CATALOG['ready']:
@@ -271,6 +300,7 @@ def prepare_payload(payload):
     if not isinstance(payload, dict):
         raise ValueError('入力形式が正しくありません')
     species = normalize_pokemon(payload.get('candidate'), catalog, '自分のポケモン')
+    cand_opts = normalize_pokemon_options(payload.get('candidate'), catalog, '自分のポケモン')
     ivs = parse_ivs(payload.get('ivs'))
     opponents = payload.get('opponents')
     if not isinstance(opponents, list) or not 1 <= len(opponents) <= MAX_OPPS:
@@ -375,11 +405,11 @@ def prepare_payload(payload):
         saved_opponents.append(saved)
         modes.append(mode)
 
-    cdict = [dict(zip(engine.HEADER, row)) for row in crows]
+    cdict = [{**dict(zip(engine.HEADER, row)), **cand_opts} for row in crows]
     cand_prepared = engine.optimize(cdict, full_species, cpms, 'candidates.csv')
     opp_prepared = engine.optimize(odict, full_species, cpms, 'opponents.csv')
     cleaned = {
-        'candidate': dict(zip(engine.HEADER[:4], species)),
+        'candidate': {**dict(zip(engine.HEADER[:4], species)), **cand_opts},
         'ivs': '\n'.join(','.join(map(str, iv)) for iv in ivs),
         'opponents': saved_opponents,
         'opponent_iv_mode': global_mode or 'default',
@@ -399,12 +429,19 @@ def prepare_payload(payload):
 
 def save_input(cleaned, crows, orows):
     WORK.mkdir(parents=True, exist_ok=True)
+    cand_meta = cleaned.get('candidate') or {}
+    cand_extra = [k for k in ('mega_level', 'charged3') if k in cand_meta]
     for path, rows in ((CAND, crows), (OPPS, orows)):
         tmp = path.with_suffix('.csv.tmp')
         with tmp.open('w', encoding='utf-8', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(engine.HEADER + (['level_override'] if path == OPPS else []))
-            writer.writerows(rows)
+            if path == CAND:
+                writer.writerow(engine.HEADER + cand_extra)
+                extra_vals = [cand_meta[k] for k in cand_extra]
+                writer.writerows([list(row) + extra_vals for row in rows])
+            else:
+                writer.writerow(engine.HEADER + ['level_override'])
+                writer.writerows(rows)
         tmp.replace(path)
     tmp = LAST_CONFIG.with_suffix('.json.tmp')
     tmp.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -987,6 +1024,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.respond(200, {'ok': True, **result})
                 if path in ('/api/prepare24','/api/run24'):
                     cand_parts = normalize_pokemon(payload.get('candidate'), CATALOG['species'], '自分')
+                    cand_opts = normalize_pokemon_options(payload.get('candidate'), CATALOG['species'], '自分')
+                    cand_dict = {**dict(zip(engine.HEADER[:4], cand_parts)), **cand_opts}
                     iv_list = parse_ivs(payload.get('ivs'))
                     meta_file = meta_live.active_path(WORK)
                     selected_meta = None
@@ -1006,6 +1045,8 @@ class Handler(BaseHTTPRequestHandler):
                     preview = {'meta_preset': selected_meta, 'batch24': True, 'batch_mode': batch_mode, 'candidate_count': len(iv_list),
                                'opponent_count': meta_count, 'mode_count': mode_count, 'shield_cases': 6,
                                'battles_upper_bound': len(iv_list)*meta_count*mode_count*6}
+                    if cand_opts:
+                        preview['candidate_mega'] = dict(cand_opts)
                     if path == '/api/run24':
                         force = payload.get('force_recalculate', False)
                         if not isinstance(force, bool):
@@ -1019,7 +1060,7 @@ class Handler(BaseHTTPRequestHandler):
                                 saved = result_cache.ResultCache.configured(WORK)
                                 if saved is not None:
                                     cache_context = result_cache.context(
-                                        dict(zip(engine.HEADER[:4], cand_parts)), iv_list, batch_mode,
+                                        cand_dict, iv_list, batch_mode,
                                         content_hash(meta_file), version, engine.CP_CAP, engine.MAX_LEVEL)
                                     cached = None if force else saved.restore(
                                         cache_context, archives.archive_dir(WORK) / 'latest.zip')
@@ -1040,7 +1081,7 @@ class Handler(BaseHTTPRequestHandler):
                             BATCH_CONFIG.parent.mkdir(parents=True, exist_ok=True)
                             temp = BATCH_CONFIG.with_suffix('.tmp')
                             temp.write_text(json.dumps({
-                                'candidate': dict(zip(engine.HEADER[:4], cand_parts)),
+                                'candidate': cand_dict,
                                 'ivs': '\n'.join(','.join(map(str, iv)) for iv in iv_list),
                                 'batch_mode': batch_mode,
                             }, ensure_ascii=False), encoding='utf-8')

@@ -72,9 +72,14 @@ def _pool(service, template, floors):
         if not pos:
             continue
         level, cpm = levels[pos - 1]
-        rows[index] = dict(species=candidate['species_id'], fast=fast, charged1=charged[0],
-                           charged2=charged[1], atk=a, hp=h, level=level,
-                           cp=_cp(base, cpm, *ivs), **{'def': d})
+        entry = dict(species=candidate['species_id'], fast=fast, charged1=charged[0],
+                     charged2=charged[1], atk=a, hp=h, level=level,
+                     cp=_cp(base, cpm, *ivs), **{'def': d})
+        if len(charged) > 2:
+            entry['charged3'] = charged[2]
+        if candidate.get('mega_level') is not None:
+            entry['mega_level'] = candidate['mega_level']
+        rows[index] = entry
         hp = 10 if pokemon.get('dex') == 292 else max(10, math.floor((base['hp'] + h) * cpm))
         stats[index] = ((base['atk'] + a) * cpm, (base['def'] + d) * cpm, hp)
     return rows, stats
@@ -165,7 +170,7 @@ class IVSearch:
             full, _ = self.service._combatant({**candidate, 'initial': {**candidate['initial'], 'hp': 'full'}})
             if full['initial'] != candidate['initial']:
                 raise ValueError('IV search requires full candidate HP')
-            identity = (candidate['species_id'], candidate['moves'])
+            identity = (candidate['species_id'], candidate['moves'], candidate.get('mega_level'))
             if fixed is not None and fixed != identity:
                 raise ValueError('IV search requires one species, form and moveset')
             fixed = identity
