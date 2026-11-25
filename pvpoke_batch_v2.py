@@ -172,6 +172,16 @@ def optimize(rows, species, cpms, fname):
                 raise ValueError(f'{fname} {idx}行目: 未対応の技: {key}={row[key]} ({row["species"]})')
         if row['charged1'] == row['charged2']:
             raise ValueError(f'{fname} {idx}行目: 同じゲージ技が2つ指定されています')
+        if row.get('charged3') is not None:
+            tags = p.get('tags') or ()
+            extra_charged = set(p.get('extraChargedMoves') or ())
+            if 'mega' not in tags or row['charged3'] not in extra_charged:
+                raise ValueError(f'{fname} {idx}行目: 未対応の追加ゲージ技: charged3={row["charged3"]} ({row["species"]})')
+            if row['charged3'] in (row['charged1'], row['charged2']):
+                raise ValueError(f'{fname} {idx}行目: 同じゲージ技が重複しています')
+        if row.get('mega_level') is not None:
+            if type(row['mega_level']) is not int or not 1 <= row['mega_level'] <= 4:
+                raise ValueError(f'{fname} {idx}行目: 無効なmega_level: {row["mega_level"]}')
         stats = p['baseStats']
         maxlevel = min(MAX_LEVEL, float(p.get('levelCap', MAX_LEVEL)))
         floorlevel = max(1.0, float(p.get('levelFloor', 1.0)))

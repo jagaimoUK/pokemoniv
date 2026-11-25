@@ -168,6 +168,28 @@ function createPokemon(row, index, battle) {
       poke.chargedMoves[1]?.moveId !== row.charged2) {
     throw Error("Move import mismatch: " + row.species);
   }
+  if (row.mega_level !== undefined && row.mega_level !== null) {
+    const megaLevel = Number(row.mega_level);
+    if (!Number.isInteger(megaLevel) || megaLevel < 1 || megaLevel > 4) {
+      throw Error("Invalid mega_level: " + row.mega_level);
+    }
+    if (!poke.hasTag("mega")) {
+      throw Error("mega_level requires mega tag: " + row.species);
+    }
+    poke.setMegaLevel(megaLevel);
+  }
+  if (row.charged3 !== undefined && row.charged3 !== null && row.charged3 !== "") {
+    if (!poke.hasThirdChargedMove()) {
+      throw Error("Third charged move requires mega tag: " + row.species);
+    }
+    if (row.charged3 === row.charged1 || row.charged3 === row.charged2) {
+      throw Error("Duplicate charged3 move: " + row.species);
+    }
+    poke.selectMove("extra-charged", row.charged3, 2);
+    if (poke.chargedMoves[2]?.moveId !== row.charged3) {
+      throw Error("Extra move import mismatch: " + row.species);
+    }
+  }
   minior.preparePokemon(poke, gm.data);
   return poke;
 }

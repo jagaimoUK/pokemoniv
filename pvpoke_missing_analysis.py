@@ -176,7 +176,7 @@ class MissingAnalysis:
                 else:
                     cp = None
                 if has_inventory and versions == current:
-                    match_cache_key = (build, _json_hash(spec.get('rules')))
+                    match_cache_key = (build, _json_hash(spec.get('rules')), combatant.get('mega_level'))
                     if match_cache_key not in matches_by_build:
                         from pvpoke_mega import eligible_pre_evolutions, is_mega_form
 

@@ -48,7 +48,7 @@ function createRunner(ctx) {
     function observation(defenderIndex) {
       const own=ps[defenderIndex],enemy=ps[1-defenderIndex],h=histories[1-defenderIndex];
       const publicData=gm.getPokemonById(enemy.activeFormId)||gm.getPokemonById(enemy.speciesId);
-      const ids=req.public_moves !== false ? [rows[1-defenderIndex].charged1,rows[1-defenderIndex].charged2] :
+      const ids=req.public_moves !== false ? [rows[1-defenderIndex].charged1,rows[1-defenderIndex].charged2,rows[1-defenderIndex].charged3].filter(Boolean) :
         [...new Set([...(gm.getPokemonById(enemy.speciesId).chargedMoves||[]),...h.charged.map(m=>m.move_id)])];
       // Public conservative upper bound under CP1500/Lv50; independent of the
       // actual opposing IV, level, energy and secretly selected charged move.

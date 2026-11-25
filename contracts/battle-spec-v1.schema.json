@@ -83,11 +83,12 @@
           }
         },
         "level": {"type": "number", "minimum": 1, "maximum": 100, "multipleOf": 0.5},
+        "mega_level": {"type": "integer", "minimum": 1, "maximum": 4},
         "moves": {
           "type": "object", "additionalProperties": false, "required": ["fast", "charged"],
           "properties": {
             "fast": {"$ref": "#/$defs/moveId"},
-            "charged": {"type": "array", "maxItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/moveId"}}
+            "charged": {"type": "array", "maxItems": 3, "uniqueItems": true, "items": {"$ref": "#/$defs/moveId"}}
           }
         },
         "initial": {

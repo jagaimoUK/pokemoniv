@@ -79,7 +79,10 @@ def _now():
 
 def build_id(combatant):
     """Identify a simulation build independently of its opponent or initial conditions."""
-    return _json_hash({key: combatant[key] for key in ('species_id', 'ivs', 'level', 'moves')})
+    payload = {key: combatant[key] for key in ('species_id', 'ivs', 'level', 'moves')}
+    if 'mega_level' in combatant and combatant['mega_level'] is not None:
+        payload['mega_level'] = combatant['mega_level']
+    return _json_hash(payload)
 
 
 class Ownership:
@@ -476,7 +479,7 @@ class Ownership:
                         target_level=combatant['level'],
                         cpms=cpms,
                         rules=rules,
-                        mega_level=mega_level,
+                        mega_level=combatant.get('mega_level', mega_level),
                     )
                 move_pairs = (
                     (moves.get('fast'), combatant['moves']['fast']),

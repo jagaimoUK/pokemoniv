@@ -498,6 +498,193 @@ console.log(JSON.stringify({{missingBadges, appNotes}}));
         self.assertEqual(parsed['missingBadges'], expected)
         self.assertEqual(parsed['appNotes'], expected)
 
+    def test_battle_service_and_matrix_mega_level_and_extra_charged_move(self):
+        import json
+        import shutil
+        from pvpoke_battle_service import BattleService
+        from pvpoke_direct_backend import DirectMatrixClient
+        from pvpoke_ownership import build_id
+
+        fixtures = Path(__file__).resolve().parent / 'fixtures'
+        gm_data = json.loads((fixtures / 'strategy_gamemaster.json').read_text(encoding='utf-8'))
+        rows = json.loads((fixtures / 'strategy_rows.json').read_text(encoding='utf-8'))
+        opponent_row = rows[0]
+
+        # Synthetic Mega Pokémon with 35-energy Mega extra move (higher priority than high-cost charged moves).
+        gm_data['moves'].append({
+            'moveId': 'MEGA_BLAST_PLUS',
+            'name': 'Mega Blast+',
+            'type': 'dragon',
+            'power': 80,
+            'energy': 35,
+            'energyGain': 0,
+            'cooldown': 500,
+            'turns': 1,
+            'isMegaMove': True,
+        })
+        gm_data['moves'].append({
+            'moveId': 'MEGA_HEAVY',
+            'name': 'Mega Heavy',
+            'type': 'normal',
+            'power': 110,
+            'energy': 90,
+            'energyGain': 0,
+            'cooldown': 500,
+            'turns': 1,
+        })
+        gm_data['moves'].append({
+            'moveId': 'MEGA_HEAVY_ALT',
+            'name': 'Mega Heavy Alt',
+            'type': 'normal',
+            'power': 120,
+            'energy': 95,
+            'energyGain': 0,
+            'cooldown': 500,
+            'turns': 1,
+        })
+        mega_ivs = {'attack': 0, 'defense': 14, 'hp': 15}
+        mega_lvl, _ = max_level_and_cp(self.altaria_mega_stats, mega_ivs, cp_cap=1500, max_level=50.0, cpms=self.cpms)
+        gm_data['pokemon'].append({
+            'speciesId': 'altaria_mega',
+            'speciesName': 'Altaria (Mega)',
+            'dex': 334,
+            'types': ['dragon', 'fairy'],
+            'baseStats': self.altaria_mega_stats,
+            'fastMoves': ['DRAGON_BREATH'],
+            'chargedMoves': ['MEGA_HEAVY', 'MEGA_HEAVY_ALT'],
+            'extraChargedMoves': ['MEGA_BLAST_PLUS'],
+            'tags': ['mega'],
+        })
+        master = self.root / 'gamemaster.json'
+        master.write_text(json.dumps(gm_data), encoding='utf-8')
+        client = DirectMatrixClient(gamemaster=master, log_dir=self.root)
+        self.addCleanup(client.close)
+        service = BattleService(client, store=self.store)
+
+        def make_spec(mega_level=None, charged=None):
+            c0 = {
+                'species_id': 'altaria_mega',
+                'ivs': mega_ivs,
+                'level': mega_lvl,
+                'moves': {'fast': 'DRAGON_BREATH', 'charged': charged or ['MEGA_HEAVY', 'MEGA_HEAVY_ALT', 'MEGA_BLAST_PLUS']},
+                'initial': {'hp': 'full', 'energy': 40, 'shields': 0, 'stages': [0, 0]},
+            }
+            if mega_level is not None:
+                c0['mega_level'] = mega_level
+            return {
+                'schema': 'battle-spec-v1',
+                'mode': 'standard',
+                'rules': {'league': 'great', 'cp_cap': 1500},
+                'combatants': [
+                    c0,
+                    {
+                        'species_id': opponent_row['species'],
+                        'ivs': {'attack': opponent_row['atk'], 'defense': opponent_row['def'], 'hp': opponent_row['hp']},
+                        'level': opponent_row['level'],
+                        'moves': {'fast': opponent_row['fast'], 'charged': [opponent_row['charged1'], opponent_row['charged2']]},
+                        'initial': {'hp': 'full', 'energy': 0, 'shields': 0, 'stages': [0, 0]},
+                    },
+                ],
+            }
+
+        results_by_level = {}
+        for ml in (1, 2, 3, 4):
+            res = service.simulate(make_spec(mega_level=ml))
+            self.assertEqual(res['status'], 'complete', res.get('error'))
+            self.assertEqual(res['spec']['combatants'][0]['mega_level'], ml)
+            extra_hits = [
+                ev['damage'] for ev in res['executed_moves']
+                if ev['actor'] == 0 and ev['kind'] == 'charged' and ev['move_id'] == 'MEGA_BLAST_PLUS'
+            ]
+            self.assertTrue(extra_hits, f'Expected MEGA_BLAST_PLUS execution at mega_level={ml}')
+            results_by_level[ml] = (res['battle_key'], extra_hits[0])
+
+        # All 4 mega levels produce distinct BattleStore keys and DamageCalculator scales isMegaMove damage.
+        self.assertEqual(len({k for k, _ in results_by_level.values()}), 4)
+        self.assertGreater(results_by_level[4][1], results_by_level[1][1])
+
+        # Default mega_level normalizes to 3 (matching explicit mega_level=3 battle_key).
+        default_res = service.simulate(make_spec(mega_level=None))
+        self.assertEqual(default_res['status'], 'complete')
+        self.assertEqual(default_res['spec']['combatants'][0]['mega_level'], 3)
+        self.assertEqual(default_res['battle_key'], results_by_level[3][0])
+
+        # Build IDs stay distinct across mega_level 1..4 while keeping non-Mega build_ids unchanged.
+        b1 = build_id(make_spec(mega_level=1)['combatants'][0])
+        b4 = build_id(make_spec(mega_level=4)['combatants'][0])
+        self.assertNotEqual(b1, b4)
+
+        # Reject invalid mega_level / 3rd charged move on non-Mega or unauthorized extra move.
+        non_mega_invalid_ml = make_spec()
+        non_mega_invalid_ml['combatants'][0] = {
+            **non_mega_invalid_ml['combatants'][1],
+            'mega_level': 2,
+        }
+        self.assertEqual(service.simulate(non_mega_invalid_ml)['status'], 'invalid')
+
+        non_mega_invalid_c3 = make_spec()
+        non_mega_invalid_c3['combatants'][0] = {
+            **non_mega_invalid_c3['combatants'][1],
+            'moves': {
+                'fast': opponent_row['fast'],
+                'charged': [opponent_row['charged1'], opponent_row['charged2'], 'MEGA_BLAST_PLUS'],
+            },
+        }
+        self.assertEqual(service.simulate(non_mega_invalid_c3)['status'], 'invalid')
+
+        bad_c3 = make_spec(charged=['MEGA_HEAVY', 'MEGA_HEAVY_ALT', 'MEGA_HEAVY'])
+        self.assertEqual(service.simulate(bad_c3)['status'], 'invalid')
+
+    def test_matchup_cache_separates_mega_level_and_charged3(self):
+        from pvpoke_matchup_cache import MatchupCache, _prepared
+
+        base_row = {
+            'species': 'altaria_mega',
+            'fast': 'DRAGON_BREATH',
+            'charged1': 'MEGA_HEAVY',
+            'charged2': 'MEGA_HEAVY_ALT',
+            'atk': 0,
+            'def': 14,
+            'hp': 15,
+            'level': 19.5,
+            'cp': 1498,
+        }
+        opp_row = {
+            'species': 'azumarill',
+            'fast': 'BUBBLE',
+            'charged1': 'ICE_BEAM',
+            'charged2': 'PLAY_ROUGH',
+            'atk': 0,
+            'def': 15,
+            'hp': 15,
+            'level': 45.5,
+            'cp': 1499,
+        }
+        # Legacy 10-element _prepared list preserved when charged3 & mega_level are absent.
+        self.assertEqual(len(_prepared(base_row)), 10)
+
+        ns = cache_namespace(gamemaster_hash='g', pokemonjs_hash='p', cp_cap=1500, max_level=50)
+        with MatchupCache(self.root / 'matchups.sqlite3', ns) as cache:
+            m1 = {**base_row, 'charged3': 'MEGA_BLAST_PLUS', 'mega_level': 1}
+            m4 = {**base_row, 'charged3': 'MEGA_BLAST_PLUS', 'mega_level': 4}
+            m4_alt = {**base_row, 'charged3': 'OTHER_PLUS', 'mega_level': 4}
+            k1 = cache._key(m1, opp_row, [1, 1])
+            k4 = cache._key(m4, opp_row, [1, 1])
+            k4_alt = cache._key(m4_alt, opp_row, [1, 1])
+            self.assertEqual(len({k1, k4, k4_alt}), 3)
+
+            cache.store_matrix([m1], [opp_row], [1, 1], [
+                ['Pokemon', 'Azumarill', 'Wins', 'Losses', 'Draws', 'Avg'],
+                ['Altaria (Mega) 0/14/15', '510', '1', '0', '0', '510'],
+            ])
+            cache.store_matrix([m4], [opp_row], [1, 1], [
+                ['Pokemon', 'Azumarill', 'Wins', 'Losses', 'Draws', 'Avg'],
+                ['Altaria (Mega) 0/14/15', '620', '1', '0', '0', '620'],
+            ])
+            self.assertEqual(cache.lookup([m1], [opp_row], [1, 1])[(0, 0)][2], '510')
+            self.assertEqual(cache.lookup([m4], [opp_row], [1, 1])[(0, 0)][2], '620')
+            self.assertEqual(cache.lookup([m4_alt], [opp_row], [1, 1]), {})
+
 
 if __name__ == '__main__':
     unittest.main()

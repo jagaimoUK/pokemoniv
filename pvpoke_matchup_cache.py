@@ -43,7 +43,11 @@ def cache_namespace(
 
 
 def _prepared(row):
-    return [row.get(k) for k in FIELDS]
+    base = [row.get(k) for k in FIELDS]
+    extras = [row.get("charged3"), row.get("mega_level")]
+    if any(v is not None for v in extras):
+        base.extend(extras)
+    return base
 
 
 def _winner_counts(ratings):
