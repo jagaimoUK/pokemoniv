@@ -10,7 +10,7 @@ import time
 
 from pvpoke_battle_service import _canonical_json, _json_hash
 from pvpoke_battle_store import BattleStore, BattleStoreError, COMPLETENESS
-from pvpoke_ownership import Ownership, _iv_index, build_id
+from pvpoke_ownership import Ownership, _iv_index, _unpack, build_id
 
 MAX_MATCHUPS = 128
 MAX_PLAN_BYTES = 512 * 1024
@@ -38,6 +38,67 @@ def battle_facts(result):
         for side in (0, 1)
     ]
     return facts
+
+
+def candidate_gl_mega_ranking(species_id, *, species_catalog=None, mega_scores=None, all_species_mode=False):
+    """Resolve Normal GL / Mega GL 70-point OR verdict from pinned PvPoke ranking snapshot."""
+    from pvpoke_mega import resolve_gl_mega_ranking_70_or
+
+    return resolve_gl_mega_ranking_70_or(
+        species_id,
+        species_catalog=species_catalog,
+        mega_scores=mega_scores,
+        all_species_mode=all_species_mode,
+    )
+
+
+def candidate_training_goal(combatant, matches, *, owned_records=None):
+    """Compute target PL, Candy, Candy XL, Stardust, and Super MAX note for a candidate and its matches."""
+    from pvpoke_mega import build_training_goal, is_shadow_form
+
+    target_level = combatant.get('level')
+    mega_level = combatant.get('mega_level')
+    species_id = combatant.get('species_id', '')
+    if target_level is None:
+        return None, list(matches or ())
+
+    records_by_id = owned_records or {}
+    enriched_matches = []
+    best_match = None
+    best_rank = 99
+    for match in matches or ():
+        rec = records_by_id.get(match.get('instance_id'))
+        goal = build_training_goal(
+            rec,
+            target_level=float(target_level),
+            needs_evolution=bool(match.get('needs_evolution')),
+            downscaled=bool(match.get('mega_downscaled')),
+            mega_level=mega_level,
+            shadow=is_shadow_form((rec or {}).get('species_id') or species_id),
+        )
+        updated = {**match, 'training_goal': goal}
+        enriched_matches.append(updated)
+        rank = 0 if (updated.get('state') == 'confirmed_owned' and updated.get('build_match') == 'exact') else (
+            1 if updated.get('state') == 'confirmed_owned' else 2
+        )
+        if rank < best_rank:
+            best_rank = rank
+            best_match = updated
+
+    summary = (
+        dict(best_match['training_goal'])
+        if best_match is not None
+        else build_training_goal(
+            None,
+            target_level=float(target_level),
+            needs_evolution=False,
+            downscaled=False,
+            mega_level=mega_level,
+            shadow=is_shadow_form(species_id),
+        )
+    )
+    return summary, enriched_matches
+
 
 
 class MissingAnalysis:
@@ -158,14 +219,22 @@ class MissingAnalysis:
             cells = []
             completed = 0
             matches_by_build = {}
+            goals_by_build = {}
+            rankings_by_species = {}
             max_hp_by_build = {}
+            catalog = getattr(normalizer, 'species', None)
             for key, spec in specs.items():
                 combatant = spec['combatants'][0]
                 build = build_id(combatant)
+                sid = combatant['species_id']
+                if sid not in rankings_by_species:
+                    rankings_by_species[sid] = candidate_gl_mega_ranking(sid, species_catalog=catalog)
                 cell = {'battle_key': key, 'build_id': build, 'spec': spec,
                         'state': 'unknown', 'facts': None, 'ownership': 'unknown',
                         'inventory_matches': [], 'recommendation': 'unreviewed',
-                        'gap_state': 'evidence_pending'}
+                        'gap_state': 'evidence_pending',
+                        'gl_mega_ranking': rankings_by_species[sid],
+                        'training_goal': None}
                 if normalizer is not None and versions == current:
                     if build not in max_hp_by_build:
                         full = {**combatant, 'initial': {**combatant['initial'], 'hp': 'full'}}
@@ -175,19 +244,18 @@ class MissingAnalysis:
                     cell['starts_at_full_hp'] = combatant['initial']['hp'] == max_hp
                 else:
                     cp = None
+                goal_cache_key = (build, _json_hash(spec.get('rules')), combatant.get('mega_level'))
                 if has_inventory and versions == current:
-                    match_cache_key = (build, _json_hash(spec.get('rules')), combatant.get('mega_level'))
-                    if match_cache_key not in matches_by_build:
+                    if goal_cache_key not in matches_by_build:
                         from pvpoke_mega import eligible_pre_evolutions, is_mega_form
 
-                        catalog = getattr(normalizer, 'species', None)
                         iv_idx = _iv_index(combatant['ivs'])
-                        rows_for_match = list(owner_rows_by_key.get((combatant['species_id'], iv_idx), ()))
-                        if is_mega_form(combatant['species_id']):
-                            for ancestor in eligible_pre_evolutions(combatant['species_id'], catalog):
-                                if ancestor != combatant['species_id']:
+                        rows_for_match = list(owner_rows_by_key.get((sid, iv_idx), ()))
+                        if is_mega_form(sid):
+                            for ancestor in eligible_pre_evolutions(sid, catalog):
+                                if ancestor != sid:
                                     rows_for_match.extend(owner_rows_by_key.get((ancestor, iv_idx), ()))
-                        matches_by_build[match_cache_key] = Ownership._match_rows(
+                        raw_matches = Ownership._match_rows(
                             rows_for_match,
                             combatant,
                             cp,
@@ -195,10 +263,24 @@ class MissingAnalysis:
                             cpms=getattr(normalizer, 'cpms', None),
                             rules=spec.get('rules'),
                         )
-                    cell['inventory_matches'] = matches_by_build[match_cache_key]
+                        owned_records = {
+                            rec['instance_id']: rec
+                            for rec in (_unpack(r) for r in rows_for_match)
+                        }
+                        summary_goal, enriched_matches = candidate_training_goal(
+                            combatant, raw_matches, owned_records=owned_records,
+                        )
+                        matches_by_build[goal_cache_key] = enriched_matches
+                        goals_by_build[goal_cache_key] = summary_goal
+                    cell['inventory_matches'] = matches_by_build[goal_cache_key]
+                    cell['training_goal'] = goals_by_build[goal_cache_key]
                     if any(match['state'] == 'confirmed_owned' and match['build_match'] == 'exact'
                            for match in cell['inventory_matches']):
                         cell['ownership'] = 'confirmed_owned'
+                else:
+                    if goal_cache_key not in goals_by_build:
+                        goals_by_build[goal_cache_key], _ = candidate_training_goal(combatant, ())
+                    cell['training_goal'] = goals_by_build[goal_cache_key]
                 if versions != current:
                     cell['state'] = 'stale'
                 else:

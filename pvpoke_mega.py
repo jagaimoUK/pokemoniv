@@ -598,6 +598,15 @@ def evaluate_owned_for_mega(
             eligible = True
             reason = 'ok'
 
+    training_goal = build_training_goal(
+        owned_record,
+        target_level=effective_level,
+        needs_evolution=needs_evolution,
+        downscaled=downscaled,
+        mega_level=mega_level,
+        shadow=is_shadow_form(owned_species),
+    )
+
     return {
         'eligible': eligible,
         'reason': reason,
@@ -615,6 +624,185 @@ def evaluate_owned_for_mega(
         'mega_theoretical': mega_theoretical,
         'battle_effective': battle_effective,
         'mega_condition': mega_condition,
+        'training_goal': training_goal,
+    }
+
+
+_DEFAULT_GL_RANKINGS_PATH = Path(__file__).resolve().parent / 'data' / 'cp1500_role_scores_20261015.json'
+_REGIONAL_WORD_TO_JA = {
+    'alolan': 'アローラ',
+    'galarian': 'ガラル',
+    'hisuian': 'ヒスイ',
+    'paldean': 'パルデア',
+}
+_POWER_UP_HALF_COSTS: tuple[tuple[int, int, int], ...] = (
+    # Each entry covers one half-level step starting at (idx + 2) / 2.0 (1.0 -> 49.5): (stardust, candy, candy_xl)
+    *((200, 1, 0),) * 4,
+    *((400, 1, 0),) * 4,
+    *((600, 1, 0),) * 4,
+    *((800, 1, 0),) * 4,
+    *((1000, 1, 0),) * 4,
+    *((1300, 2, 0),) * 4,
+    *((1600, 2, 0),) * 4,
+    *((1900, 2, 0),) * 4,
+    *((2200, 2, 0),) * 4,
+    *((2500, 2, 0),) * 4,
+    *((3000, 3, 0),) * 4,
+    *((3500, 3, 0),) * 4,
+    *((4000, 3, 0),) * 2,
+    *((4000, 4, 0),) * 2,
+    *((4500, 4, 0),) * 4,
+    *((5000, 4, 0),) * 4,
+    *((6000, 6, 0),) * 4,
+    *((7000, 8, 0),) * 4,
+    *((8000, 10, 0),) * 4,
+    *((9000, 12, 0),) * 4,
+    *((10000, 15, 0),) * 2,
+    *((10000, 0, 10),) * 2,
+    *((11000, 0, 10),) * 2,
+    *((11000, 0, 12),) * 2,
+    *((12000, 0, 12),) * 2,
+    *((12000, 0, 15),) * 2,
+    *((13000, 0, 15),) * 2,
+    *((13000, 0, 17),) * 2,
+    *((14000, 0, 17),) * 2,
+    *((14000, 0, 20),) * 2,
+    *((15000, 0, 20),) * 2,
+)
+
+
+def _validate_half_level(value: float, name: str, *, max_level: float = 55.0) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f'{name} must be a finite number: {value}')
+    doubled = int(round(float(value) * 2))
+    if abs(float(value) * 2 - doubled) > 1e-6 or doubled < 2 or doubled > int(round(max_level * 2)):
+        raise ValueError(f'{name} must be in half-level increments 1.0..{max_level:g}: {value}')
+    return doubled
+
+
+def compute_power_up_cost(
+    current_level: float | None,
+    target_level: float,
+    *,
+    lucky: bool = False,
+    purified: bool = False,
+    shadow: bool = False,
+    mega_level: int | None = None,
+) -> dict[str, Any]:
+    """Compute Pokémon GO Stardust, Candy, and Candy XL needed to reach target_level (paid steps <= PL50).
+
+    Super MAX PL+2 remains unconfirmed/deferred and never fabricates Lv 50.5+ power-up costs.
+    """
+    if type(lucky) is not bool or type(purified) is not bool or type(shadow) is not bool:
+        raise ValueError('lucky, purified, and shadow must be bools')
+    if shadow and purified:
+        raise ValueError('Pokémon cannot be both Shadow and Purified')
+    if mega_level is not None and (type(mega_level) is not int or not 1 <= mega_level <= 4):
+        raise ValueError(f'mega_level must be 1..4: {mega_level}')
+
+    target_doubled = _validate_half_level(target_level, 'target_level', max_level=55.0)
+    paid_target_doubled = min(target_doubled, 100)  # Paid power-ups stop at PL 50.0.
+    super_max_status = 'unconfirmed_deferred' if mega_level == 4 else 'not_applicable'
+    super_max_note = 'スーパー MAX PL+2 仮説保留（仮補正なし）' if mega_level == 4 else None
+
+    if current_level is None:
+        return {
+            'current_level': None,
+            'target_level': target_doubled / 2.0,
+            'paid_target_level': paid_target_doubled / 2.0,
+            'power_ups': None,
+            'stardust': None,
+            'candy': None,
+            'candy_xl': None,
+            'uses_xl_candy': paid_target_doubled > 80,
+            'cost_verified': False,
+            'target_level_capped_at_50': target_doubled > 100,
+            'super_max_pl_hypothesis_status': super_max_status,
+            'super_max_pl_note': super_max_note,
+        }
+
+    cur_doubled = _validate_half_level(current_level, 'current_level', max_level=55.0)
+    if cur_doubled >= paid_target_doubled:
+        return {
+            'current_level': cur_doubled / 2.0,
+            'target_level': target_doubled / 2.0,
+            'paid_target_level': paid_target_doubled / 2.0,
+            'power_ups': 0,
+            'stardust': 0,
+            'candy': 0,
+            'candy_xl': 0,
+            'uses_xl_candy': False,
+            'cost_verified': True,
+            'target_level_capped_at_50': target_doubled > 100,
+            'super_max_pl_hypothesis_status': super_max_status,
+            'super_max_pl_note': super_max_note,
+        }
+
+    total_dust = 0
+    total_candy = 0
+    total_xl = 0
+    for doubled in range(cur_doubled, paid_target_doubled):
+        dust, candy, xl = _POWER_UP_HALF_COSTS[doubled - 2]
+        if shadow:
+            dust = math.ceil(dust * 1.2)
+            candy = math.ceil(candy * 1.2)
+            xl = math.ceil(xl * 1.2)
+        elif purified:
+            dust = math.ceil(dust * 0.9)
+            candy = math.ceil(candy * 0.9)
+            xl = math.ceil(xl * 0.9)
+        if lucky:
+            dust = math.ceil(dust * 0.5)
+        total_dust += dust
+        total_candy += candy
+        total_xl += xl
+
+    return {
+        'current_level': cur_doubled / 2.0,
+        'target_level': target_doubled / 2.0,
+        'paid_target_level': paid_target_doubled / 2.0,
+        'power_ups': paid_target_doubled - cur_doubled,
+        'stardust': total_dust,
+        'candy': total_candy,
+        'candy_xl': total_xl,
+        'uses_xl_candy': total_xl > 0,
+        'cost_verified': True,
+        'target_level_capped_at_50': target_doubled > 100,
+        'super_max_pl_hypothesis_status': super_max_status,
+        'super_max_pl_note': super_max_note,
+    }
+
+
+def build_training_goal(
+    owned_record: Mapping[str, Any] | None,
+    *,
+    target_level: float,
+    needs_evolution: bool = False,
+    downscaled: bool = False,
+    mega_level: int | None = None,
+    shadow: bool = False,
+) -> dict[str, Any]:
+    """Summarize target PL, evolution/downscale state, power-up resources, and Super MAX note."""
+    rec = owned_record if isinstance(owned_record, Mapping) else {}
+    cur_level = rec.get('current_level')
+    cur_cp = rec.get('current_cp')
+    cost = compute_power_up_cost(
+        float(cur_level) if cur_level is not None else None,
+        float(target_level),
+        lucky=bool(rec.get('lucky', False)),
+        purified=bool(rec.get('purified', False)),
+        shadow=shadow,
+        mega_level=mega_level,
+    )
+    needs_power_up: bool | None = (
+        None if cost['power_ups'] is None else cost['power_ups'] > 0
+    )
+    return {
+        **cost,
+        'current_cp': int(cur_cp) if cur_cp is not None else None,
+        'needs_power_up': needs_power_up,
+        'needs_evolution': bool(needs_evolution),
+        'downscaled': bool(downscaled),
     }
 
 
@@ -683,3 +871,153 @@ def evaluate_gl_mega_score_70_or(
         'normal_gl_overall': float(normal_gl_overall),
         'mega_gl_overall': float(mega_gl_overall) if mega_gl_overall is not None else None,
     }
+
+
+@lru_cache(maxsize=4)
+def load_gl_ranking_snapshot(path: str | None = None) -> tuple[str, tuple[dict[str, Any], ...]]:
+    """Load the pinned PvPoke GL role-score snapshot (`pvpoke-role-scores-v1`)."""
+    import json
+
+    target = Path(path) if path else _DEFAULT_GL_RANKINGS_PATH
+    raw = json.loads(target.read_text(encoding='utf-8'))
+    roles = ('overall', 'leads', 'closers', 'switches', 'chargers', 'attackers', 'consistency')
+    if raw.get('schema') != 'pvpoke-role-scores-v1' or raw.get('columns') != ['name', 'dex', *roles]:
+        raise ValueError(f'Invalid ranking snapshot schema in {target}')
+    rows: list[dict[str, Any]] = []
+    for fields in raw['rows']:
+        name, dex, *scores = fields
+        rows.append({'name': name, 'dex': dex, **dict(zip(roles, scores))})
+    return str(raw['source_date']), tuple(rows)
+
+
+def _lookup_snapshot_overall(
+    species_id: str,
+    rows: Sequence[Mapping[str, Any]],
+    species_catalog: Mapping[str, Mapping[str, Any]] | None,
+) -> tuple[float | None, str | None]:
+    row_meta = (species_catalog or {}).get(species_id)
+    tokens = set(re.split(r'[_-]', species_id.casefold()))
+    is_shadow = 'shadow' in tokens
+    region_ja = next((ja for en, ja in _REGIONAL_WORD_TO_JA.items() if en in tokens), None)
+
+    candidate_names: list[str] = []
+    dex: int | None = None
+    if isinstance(row_meta, Mapping):
+        raw_dex = row_meta.get('dex')
+        if isinstance(raw_dex, int) and not isinstance(raw_dex, bool):
+            dex = raw_dex
+        if isinstance(row_meta.get('name_ja'), str):
+            candidate_names.append(row_meta['name_ja'])
+    if dex is not None and not candidate_names:
+        try:
+            from pvpoke_app_defaults import NAMES_JA
+            ja_base = NAMES_JA.get(dex)
+        except Exception:
+            ja_base = None
+        if isinstance(ja_base, str) and ja_base:
+            built = ja_base + (f' ({region_ja})' if region_ja else '')
+            if is_shadow:
+                built += ' (シャドウ)'
+            candidate_names.append(built)
+
+    norm_candidates = {re.sub(r'\s+', '', n) for n in candidate_names if n}
+    if norm_candidates:
+        exact = [
+            r for r in rows
+            if re.sub(r'\s+', '', str(r.get('name', ''))) in norm_candidates
+            and (dex is None or r.get('dex') == dex)
+        ]
+        if len(exact) == 1:
+            return float(exact[0]['overall']), str(exact[0]['name'])
+
+    if dex is not None:
+        dex_matches = []
+        for r in rows:
+            if r.get('dex') != dex:
+                continue
+            r_name = str(r.get('name', ''))
+            labels = re.findall(r'\(([^()]*)\)', r_name)
+            r_shadow = 'シャドウ' in labels
+            r_regions = [x for x in labels if x in _REGIONAL_WORD_TO_JA.values()]
+            if r_shadow != is_shadow:
+                continue
+            if region_ja:
+                if r_regions != [region_ja]:
+                    continue
+            elif r_regions:
+                continue
+            # Exclude other explicit form labels when plain species_id has no extra tokens beyond base+region+shadow.
+            extra_labels = [x for x in labels if x != 'シャドウ' and x not in _REGIONAL_WORD_TO_JA.values()]
+            if extra_labels and not (tokens - {'shadow', *_REGIONAL_WORD_TO_JA.keys()}):
+                continue
+            dex_matches.append(r)
+        if len(dex_matches) == 1:
+            return float(dex_matches[0]['overall']), str(dex_matches[0]['name'])
+
+    return None, None
+
+
+def resolve_gl_mega_ranking_70_or(
+    species_id: str,
+    *,
+    species_catalog: Mapping[str, Mapping[str, Any]] | None = None,
+    normal_snapshot: tuple[str, Sequence[Mapping[str, Any]]] | None = None,
+    mega_scores: Mapping[Any, Any] | None = None,
+    threshold: float = 70.0,
+    all_species_mode: bool = False,
+) -> dict[str, Any]:
+    """Evaluate TV-04 70-point OR rule using real PvPoke GL ranking data and optional Mega GL scores."""
+    source_date, rows = normal_snapshot if normal_snapshot is not None else load_gl_ranking_snapshot()
+    is_mega = is_mega_form(species_id)
+    normal_sid = base_species_id(species_id) if is_mega else species_id
+    mega_forms = [species_id] if is_mega else (
+        mega_forms_for_base(normal_sid, list(species_catalog or {}), species_catalog)
+        if species_catalog and not is_shadow_form(normal_sid)
+        else []
+    )
+    has_mega = bool(mega_forms)
+
+    normal_overall, matched_name = _lookup_snapshot_overall(normal_sid, rows, species_catalog)
+    mega_overall: float | None = None
+    mega_source_date: str | None = None
+    if isinstance(mega_scores, Mapping):
+        mega_source_date = str(mega_scores.get('source_date')) if mega_scores.get('source_date') else None
+        lookup_keys: list[Any] = [species_id, *mega_forms]
+        if matched_name:
+            lookup_keys.append(matched_name)
+        norm_meta = (species_catalog or {}).get(normal_sid)
+        if isinstance(norm_meta, Mapping) and isinstance(norm_meta.get('dex'), int):
+            lookup_keys.append(norm_meta['dex'])
+        for k in lookup_keys:
+            if k is None or k not in mega_scores:
+                continue
+            entry = mega_scores[k]
+            if isinstance(entry, Mapping) and isinstance(entry.get('overall'), (int, float)) and not isinstance(entry.get('overall'), bool):
+                mega_overall = float(entry['overall'])
+                break
+            if isinstance(entry, (int, float)) and not isinstance(entry, bool):
+                mega_overall = float(entry)
+                break
+
+    verdict = evaluate_gl_mega_score_70_or(
+        normal_gl_overall=normal_overall,
+        mega_gl_overall=mega_overall,
+        threshold=threshold,
+        all_species_mode=all_species_mode,
+        has_mega_form=has_mega,
+    )
+    return {
+        **verdict,
+        'species_id': species_id,
+        'normal_species_id': normal_sid,
+        'mega_species_ids': mega_forms,
+        'has_mega_form': has_mega,
+        'normal_gl_source_date': source_date,
+        'normal_gl_matched_name': matched_name,
+        'mega_gl_source_date': mega_source_date,
+        'mega_gl_status': (
+            'not_applicable' if not has_mega
+            else ('verified' if mega_overall is not None else 'unverified')
+        ),
+    }
+

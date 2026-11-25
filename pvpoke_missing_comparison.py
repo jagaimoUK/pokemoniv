@@ -3,8 +3,13 @@ import os
 
 from pvpoke_battle_service import _integer, _json_hash, _object
 from pvpoke_iv_search import BOUNDARY_NAMES, IVSearch, _pool
-from pvpoke_missing_analysis import AnalysisUnavailable, MissingAnalysis
-from pvpoke_ownership import Ownership, OwnershipConflict, build_id
+from pvpoke_missing_analysis import (
+    AnalysisUnavailable,
+    MissingAnalysis,
+    candidate_gl_mega_ranking,
+    candidate_training_goal,
+)
+from pvpoke_ownership import Ownership, OwnershipConflict, _unpack, build_id
 from pvpoke_role_evaluation import RoleEvaluation, _definition, _hash, condition_id
 from pvpoke_sandbox import SandboxService
 from pvpoke_sandbox_workspace import TacticStore, enabled as sandbox_enabled, search_enabled, observed_enabled
@@ -103,6 +108,8 @@ def _comparison(service, payload):
         inventory = first['inventory_matches']
         builds.append({**current, 'build_id': bid, 'status': status, 'party_substitution': 'pending',
                        'owned_instances': inventory[:32], 'inventory_match_count': len(inventory),
+                       'gl_mega_ranking': first.get('gl_mega_ranking'),
+                       'training_goal': first.get('training_goal'),
                        'conditions': conditions})
     reference = {'build_id': order[0], 'species_id': builds[0]['species_id']}
     for build in builds:
@@ -172,6 +179,7 @@ def _explore(service, payload):
     absent_recorded_count = 0
     unconfirmed_count = 0
     ranked_examples = []
+    ref_combatant = specs[0]['combatants'][0]
     if bits:
         rows, _ = _pool(service, specs[0], step['iv_floors'])
         while bits:
@@ -181,17 +189,31 @@ def _explore(service, payload):
             row = rows[index]
             ivs = {'attack': row['atk'], 'defense': row['def'], 'hp': row['hp']}
             raw_rows = owned_by_iv.get(index)
+            target_combatant = {
+                'species_id': species_id,
+                'ivs': ivs,
+                'level': row['level'],
+                'moves': moves,
+                **({'mega_level': ref_combatant['mega_level']} if ref_combatant.get('mega_level') is not None else {}),
+            }
             if raw_rows:
-                matches = Ownership._match_rows(
+                raw_matches = Ownership._match_rows(
                     raw_rows,
-                    {'species_id': species_id, 'ivs': ivs, 'level': row['level'], 'moves': moves},
+                    target_combatant,
                     row['cp'],
                     species_catalog=service.species,
                     cpms=service.cpms,
                     rules=specs[0].get('rules'),
                 )
+                owned_records = {
+                    rec['instance_id']: rec
+                    for rec in (_unpack(r) for r in raw_rows)
+                }
+                training_goal, matches = candidate_training_goal(
+                    target_combatant, raw_matches, owned_records=owned_records,
+                )
             else:
-                matches = []
+                training_goal, matches = candidate_training_goal(target_combatant, ())
             has_exact = any(m['state'] == 'confirmed_owned' and m['build_match'] == 'exact' for m in matches)
             has_owned = any(m['state'] == 'confirmed_owned' for m in matches)
             has_unknown = any(m['state'] == 'unknown' for m in matches)
@@ -211,16 +233,23 @@ def _explore(service, payload):
                 'cp': row['cp'],
                 'owned_instances': matches[:16],
                 'inventory_match_count': len(matches),
+                'training_goal': training_goal,
             }))
     ranked_examples.sort(key=lambda item: (item[0], item[1]))
     examples = [entry for _, _, entry in ranked_examples[:32]]
     completed = coverage['all_completed_iv_count']
+    mega_level = ref_combatant.get('mega_level')
     return {'state': step['state'], 'new_battles': step['new_battles'],
             'retry_needed': any(status != 'complete' and attempts > 0
                                 for status, attempts in step['attempt_outcomes'].items()),
             'raw_iv_count': coverage['raw_iv_count'],
             'iv_floors': step['iv_floors'],
             'candidate': {'species_id': species_id, 'moves': moves},
+            'gl_mega_ranking': candidate_gl_mega_ranking(species_id, species_catalog=service.species),
+            'mega_condition': {
+                'mega_level': mega_level,
+                'super_max_pl_hypothesis_status': 'unconfirmed_deferred' if mega_level == 4 else 'not_applicable',
+            },
             'eligible_iv_count': coverage['eligible_iv_count'], 'qualifying_count': count,
             'completed_iv_count': completed,
             'fully_tested_nonqualifying_iv_count': completed - count,

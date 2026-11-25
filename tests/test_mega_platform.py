@@ -849,6 +849,240 @@ console.log('APP_UI_MEGA_CONTROLS_OK');
         proc = subprocess.run(['node', '-e', test_script], capture_output=True, text=True, check=True, timeout=10)
         self.assertIn('APP_UI_MEGA_CONTROLS_OK', proc.stdout)
 
+    def test_real_pvpoke_ranking_70_or_and_form_mapping(self):
+        from pvpoke_mega import load_gl_ranking_snapshot, resolve_gl_mega_ranking_70_or
+
+        source_date, rows = load_gl_ranking_snapshot()
+        self.assertEqual(source_date, '2026-10-15')
+        self.assertGreater(len(rows), 1000)
+
+        low_entry = next(r for r in rows if r['overall'] < 65 and '(' not in r['name'])
+        synth_catalog = {
+            'altaria': {'dex': 334, 'tags': []},
+            'altaria_mega': {'dex': 334, 'tags': ['mega']},
+            'azumarill': {'dex': 184, 'tags': []},
+            'sableye': {'dex': 302, 'tags': []},
+            'sableye_shadow': {'dex': 302, 'tags': ['shadow']},
+            'sableye_mega': {'dex': 302, 'tags': ['mega']},
+            'low_mon': {'dex': low_entry['dex'], 'name_ja': low_entry['name'], 'tags': []},
+            'low_mon_mega': {'dex': low_entry['dex'], 'name_ja': low_entry['name'] + ' (メガ)', 'tags': ['mega']},
+        }
+
+        # 1. Real Normal GL >= 70 keeps Mega target even when Mega GL snapshot is not loaded.
+        alt = resolve_gl_mega_ranking_70_or('altaria_mega', species_catalog=synth_catalog)
+        self.assertTrue(alt['keep'])
+        self.assertTrue(alt['verified'])
+        self.assertEqual(alt['matched_leagues'], ['normal_gl'])
+        self.assertEqual(alt['normal_gl_matched_name'], 'チルタリス')
+        self.assertGreaterEqual(alt['normal_gl_overall'], 70.0)
+        self.assertEqual(alt['normal_gl_source_date'], '2026-10-15')
+        self.assertEqual(alt['mega_gl_status'], 'unverified')
+
+        # 2. Shadow species cannot Mega Evolve -> has_mega_form=False and matches Shadow row.
+        sab_sh = resolve_gl_mega_ranking_70_or('sableye_shadow', species_catalog=synth_catalog)
+        self.assertFalse(sab_sh['has_mega_form'])
+        self.assertEqual(sab_sh['mega_gl_status'], 'not_applicable')
+        self.assertEqual(sab_sh['normal_gl_matched_name'], 'ヤミラミ (シャドウ)')
+        self.assertTrue(sab_sh['keep'])
+
+        # 3. Normal GL < 70 with Mega form and unverified Mega GL fails closed (never auto-drops).
+        low_unverified = resolve_gl_mega_ranking_70_or('low_mon_mega', species_catalog=synth_catalog)
+        self.assertLess(low_unverified['normal_gl_overall'], 70.0)
+        self.assertTrue(low_unverified['keep'])
+        self.assertFalse(low_unverified['verified'])
+        self.assertEqual(low_unverified['reason'], 'ranking_unverified')
+
+        # 4. Normal GL < 70 but Mega GL >= 70 keeps via OR rule.
+        low_mega_pass = resolve_gl_mega_ranking_70_or(
+            'low_mon_mega', species_catalog=synth_catalog, mega_scores={'low_mon_mega': {'overall': 74.5}}
+        )
+        self.assertTrue(low_mega_pass['keep'])
+        self.assertTrue(low_mega_pass['verified'])
+        self.assertEqual(low_mega_pass['matched_leagues'], ['mega_gl'])
+
+        # 5. Both Normal GL < 70 and verified Mega GL < 70 -> below_threshold.
+        low_both_fail = resolve_gl_mega_ranking_70_or(
+            'low_mon_mega', species_catalog=synth_catalog, mega_scores={'low_mon_mega': {'overall': 61.2}}
+        )
+        self.assertFalse(low_both_fail['keep'])
+        self.assertTrue(low_both_fail['verified'])
+        self.assertEqual(low_both_fail['reason'], 'below_threshold')
+
+    def test_power_up_candy_xl_boundaries_and_missing_analysis_integration(self):
+        import json
+        from pvpoke_battle_service import BattleService
+        from pvpoke_direct_backend import DirectMatrixClient
+        from pvpoke_mega import compute_power_up_cost
+        from pvpoke_missing_analysis import MissingAnalysis
+        from pvpoke_ownership import Ownership
+
+        # Exact Pokémon GO Lv 39.5->40.0 vs Lv 40.0->40.5 XL Candy boundary.
+        pre_xl = compute_power_up_cost(39.5, 40.0)
+        self.assertEqual((pre_xl['stardust'], pre_xl['candy'], pre_xl['candy_xl'], pre_xl['uses_xl_candy']),
+                         (10000, 15, 0, False))
+        first_xl = compute_power_up_cost(40.0, 40.5)
+        self.assertEqual((first_xl['stardust'], first_xl['candy'], first_xl['candy_xl'], first_xl['uses_xl_candy']),
+                         (10000, 0, 10, True))
+
+        # Exact cumulative Lv 1->40, Lv 40->50, Lv 1->50, Shadow/Purified/Lucky modifiers.
+        to_40 = compute_power_up_cost(1.0, 40.0)
+        self.assertEqual((to_40['stardust'], to_40['candy'], to_40['candy_xl']), (270000, 304, 0))
+        xl_full = compute_power_up_cost(40.0, 50.0)
+        self.assertEqual((xl_full['stardust'], xl_full['candy'], xl_full['candy_xl']), (250000, 0, 296))
+        full = compute_power_up_cost(1.0, 50.0)
+        self.assertEqual((full['stardust'], full['candy'], full['candy_xl']), (520000, 304, 296))
+        self.assertEqual(compute_power_up_cost(40.0, 50.0, shadow=True)['candy_xl'], 360)
+        self.assertEqual(compute_power_up_cost(40.0, 50.0, purified=True)['candy_xl'], 272)
+        self.assertEqual(compute_power_up_cost(40.0, 50.0, lucky=True)['stardust'], 125000)
+
+        # Unknown current level stays unverified without guessing cost; Super MAX PL+2 remains deferred.
+        unknown_lvl = compute_power_up_cost(None, 45.0, mega_level=4)
+        self.assertFalse(unknown_lvl['cost_verified'])
+        self.assertIsNone(unknown_lvl['stardust'])
+        self.assertTrue(unknown_lvl['uses_xl_candy'])
+        self.assertEqual(unknown_lvl['super_max_pl_hypothesis_status'], 'unconfirmed_deferred')
+        self.assertIn('仮説保留', unknown_lvl['super_max_pl_note'])
+
+        capped = compute_power_up_cost(49.5, 51.0, mega_level=4)
+        self.assertTrue(capped['target_level_capped_at_50'])
+        self.assertEqual((capped['stardust'], capped['candy_xl']), (15000, 20))
+
+        # Integration with MissingAnalysis.evidence: Mega candidate + owned pre-evo Swablu at Lv 20.
+        fixtures = Path(__file__).resolve().parent / 'fixtures'
+        gm_data = json.loads((fixtures / 'strategy_gamemaster.json').read_text(encoding='utf-8'))
+        rows = json.loads((fixtures / 'strategy_rows.json').read_text(encoding='utf-8'))
+        opp = rows[0]
+        shared_fast = opp['fast']
+        shared_charged = [opp['charged1'], opp['charged2']]
+        ivs = {'attack': 0, 'defense': 14, 'hp': 15}
+        mega_lvl, _ = max_level_and_cp(self.altaria_mega_stats, ivs, cp_cap=1500, max_level=50.0, cpms=self.cpms)
+        swablu_cp = compute_cp(self.catalog['swablu']['baseStats'], ivs, 10.0, self.cpms)
+        gm_data['pokemon'].extend([
+            {
+                'speciesId': 'swablu', 'speciesName': 'Swablu', 'dex': 333,
+                'types': ['normal', 'flying'],
+                'baseStats': self.catalog['swablu']['baseStats'],
+                'fastMoves': [shared_fast], 'chargedMoves': shared_charged,
+                'family': {'evolutions': ['altaria']},
+            },
+            {
+                'speciesId': 'altaria', 'speciesName': 'Altaria', 'dex': 334,
+                'types': ['dragon', 'flying'],
+                'baseStats': self.altaria_stats,
+                'fastMoves': [shared_fast], 'chargedMoves': shared_charged,
+                'family': {'parent': 'swablu', 'evolutions': ['altaria_mega']},
+            },
+            {
+                'speciesId': 'altaria_mega', 'speciesName': 'Altaria (Mega)', 'dex': 334,
+                'types': ['dragon', 'fairy'],
+                'baseStats': self.altaria_mega_stats,
+                'fastMoves': [shared_fast], 'chargedMoves': shared_charged,
+                'tags': ['mega', 'supermega'], 'family': {'parent': 'altaria'},
+            },
+        ])
+        gm_path = self.root / 'gm_missing_mega.json'
+        gm_path.write_text(json.dumps(gm_data), encoding='utf-8')
+        client = DirectMatrixClient(gamemaster=gm_path, log_dir=self.root)
+        self.addCleanup(client.close)
+        service = BattleService(client, store=self.store)
+
+        inv = Ownership(self.store, species_ids=set(service.species))
+        inv.register('swablu-10', {
+            'species_id': 'swablu', 'ivs': ivs, 'current_level': 10.0,
+            'current_cp': swablu_cp, 'current_moves': {'fast': shared_fast, 'charged': shared_charged},
+        })
+        inv.confirm('c-sw', 'swablu-10', expected_revision=0, state='confirmed_owned')
+
+        spec = {
+            'schema': 'battle-spec-v1',
+            'mode': 'standard',
+            'rules': {'league': 'great', 'cp_cap': 1500, 'cup_id': 'great_mega', 'allow_cp_downscaling': True},
+            'combatants': [
+                {
+                    'species_id': 'altaria_mega', 'ivs': ivs, 'level': mega_lvl,
+                    'moves': {'fast': shared_fast, 'charged': shared_charged},
+                    'mega_level': 4,
+                    'initial': {'hp': 'full', 'energy': 0, 'shields': 1, 'stages': [0, 0]},
+                },
+                {
+                    'species_id': opp['species'],
+                    'ivs': {'attack': opp['atk'], 'defense': opp['def'], 'hp': opp['hp']},
+                    'level': opp['level'],
+                    'moves': {'fast': opp['fast'], 'charged': [opp['charged1'], opp['charged2']]},
+                    'initial': {'hp': 'full', 'energy': 0, 'shields': 1, 'stages': [0, 0]},
+                },
+            ],
+        }
+        analysis = MissingAnalysis(self.store)
+        aid = analysis.save_plan(service, [spec])
+        ev = analysis.evidence(aid, active_versions=service.versions, normalizer=service)
+        cell = ev['cells'][0]
+        self.assertEqual(cell['gl_mega_ranking']['normal_gl_matched_name'], 'チルタリス')
+        self.assertTrue(cell['gl_mega_ranking']['keep'])
+        self.assertEqual(cell['training_goal']['current_level'], 10.0)
+        self.assertEqual(cell['training_goal']['target_level'], mega_lvl)
+        self.assertTrue(cell['training_goal']['needs_evolution'])
+        self.assertTrue(cell['training_goal']['needs_power_up'])
+        expected_cost = compute_power_up_cost(10.0, mega_lvl, mega_level=4)
+        self.assertGreater(expected_cost['stardust'], 0)
+        self.assertGreater(expected_cost['candy'], 0)
+        self.assertEqual(cell['training_goal']['stardust'], expected_cost['stardust'])
+        self.assertEqual(cell['training_goal']['candy'], expected_cost['candy'])
+        self.assertEqual(cell['training_goal']['candy_xl'], expected_cost['candy_xl'])
+        self.assertEqual(cell['training_goal']['super_max_pl_hypothesis_status'], 'unconfirmed_deferred')
+        self.assertEqual(cell['inventory_matches'][0]['training_goal']['stardust'], expected_cost['stardust'])
+
+    def test_missing_ui_renders_70_or_and_training_goal_lines(self):
+        import re
+        import subprocess
+        from pvpoke_missing_ui import HTML as MISSING_HTML
+
+        fn_match = re.search(
+            r'function ranking70OrInfo\(ranking\)\{.*?function trainingGoalLines\(goal\)\{.*?^\}',
+            MISSING_HTML,
+            re.S | re.M,
+        )
+        self.assertIsNotNone(fn_match)
+        script = f"""
+const assert = require('node:assert/strict');
+{fn_match.group(0)}
+const rPass = ranking70OrInfo({{
+  reason: 'meets_threshold_or', matched_leagues: ['normal_gl'],
+  normal_gl_overall: 93.0, has_mega_form: true, mega_gl_overall: null,
+  normal_gl_source_date: '2026-10-15',
+}});
+assert.equal(rPass.label, '70点OR適合（通常GL）');
+assert.equal(rPass.tone, 'good');
+assert.ok(rPass.detail.includes('通常GL 93.0点'));
+assert.ok(rPass.detail.includes('メガGL 未取得（保留）'));
+
+const rWait = ranking70OrInfo({{
+  reason: 'ranking_unverified', matched_leagues: [],
+  normal_gl_overall: 58.0, has_mega_form: true, mega_gl_overall: null,
+}});
+assert.equal(rWait.label, 'ランキング未確定（自動除外保留）');
+assert.equal(rWait.tone, 'wait');
+
+const gCost = trainingGoalLines({{
+  target_level: 45.0, current_level: 40.0, current_cp: 1200,
+  needs_evolution: true, downscaled: false, cost_verified: true,
+  power_ups: 10, stardust: 112000, candy: 0, candy_xl: 118,
+  super_max_pl_hypothesis_status: 'unconfirmed_deferred',
+  super_max_pl_note: 'スーパー MAX PL+2 仮説保留（仮補正なし）',
+}});
+assert.ok(gCost[0].includes('目標 PL45') && gCost[0].includes('要進化'));
+assert.ok(gCost[1].includes('10回強化') && gCost[1].includes('アメXL 118'));
+assert.equal(gCost[2], 'スーパー MAX PL+2 仮説保留（仮補正なし）');
+
+const gUnk = trainingGoalLines({{
+  target_level: 45.0, current_level: null, cost_verified: false, uses_xl_candy: true,
+}});
+assert.ok(gUnk[1].includes('現在PL未確認のため未確定') && gUnk[1].includes('アメXL'));
+console.log('MISSING_UI_RANKING_GOAL_OK');
+"""
+        proc = subprocess.run(['node', '-e', script], capture_output=True, text=True, check=True, timeout=10)
+        self.assertIn('MISSING_UI_RANKING_GOAL_OK', proc.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -133,6 +133,44 @@ function megaStatusBadges(record,targetLevel,megaCondition){
  if(smStatus==='unconfirmed_deferred')items.push(['スーパー MAX PL+2 仮説保留','wait']);
  return items;
 }
+function ranking70OrInfo(ranking){
+ if(!ranking)return null;
+ const normal=ranking.normal_gl_overall!=null?'通常GL '+Number(ranking.normal_gl_overall).toFixed(1)+'点':'通常GL 未掲載';
+ const mega=ranking.has_mega_form
+  ?(ranking.mega_gl_overall!=null?'メガGL '+Number(ranking.mega_gl_overall).toFixed(1)+'点':'メガGL 未取得（保留）')
+  :'メガ形態なし';
+ let label='ランキング未確定（自動除外保留）',tone='wait';
+ if(ranking.reason==='all_species_mode'){label='全種モード（70点除外なし）';tone='good';}
+ else if(ranking.reason==='meets_threshold_or'){
+  const matched=(ranking.matched_leagues||[]).map(x=>x==='mega_gl'?'メガGL':'通常GL').join('・')||'GL';
+  label='70点OR適合（'+matched+'）';tone='good';
+ }else if(ranking.reason==='below_threshold'){
+  label='通常GL/メガGL 70点未満（参考比較）';tone='fail';
+ }
+ const src=ranking.normal_gl_source_date?'（PvPoke '+ranking.normal_gl_source_date+'）':'';
+ return {label,tone,detail:normal+' ／ '+mega+src};
+}
+function trainingGoalLines(goal){
+ if(!goal)return [];
+ const lines=[];
+ const target=goal.target_level!=null?'目標 PL'+goal.target_level:'目標 PL未確認';
+ const cur=goal.current_level!=null?'現在 PL'+goal.current_level+(goal.current_cp!=null?' / CP '+goal.current_cp:''):'現在 PL未確認';
+ const flags=[goal.needs_evolution?'要進化':'',goal.downscaled?'一時ダウンスケーリング対象':''].filter(Boolean).join('・');
+ lines.push('育成目標：'+target+'（'+cur+(flags?' ／ '+flags:'')+'）');
+ if(goal.cost_verified===true){
+  if(goal.power_ups===0){
+   lines.push('強化不要（追加すな 0 / アメ 0 / アメXL 0）');
+  }else{
+   lines.push('必要リソース（'+goal.power_ups+'回強化）：すな '+Number(goal.stardust).toLocaleString('ja-JP')+' / アメ '+goal.candy+' / アメXL '+goal.candy_xl);
+  }
+ }else{
+  lines.push('必要リソース：現在PL未確認のため未確定'+(goal.uses_xl_candy?'（目標PL40超のためアメXLが必要になる可能性あり）':''));
+ }
+ if(goal.super_max_pl_hypothesis_status==='unconfirmed_deferred'){
+  lines.push(goal.super_max_pl_note||'スーパー MAX PL+2 仮説保留（仮補正なし）');
+ }
+ return lines;
+}
 let credential='',catalog=Object.create(null),moves={},speciesNames=new Map(),busy=false,editRevision=0,displayed=null,lastRequest=null;
 let inventoryLedgerRevision=null,inventoryCursor=null,inventoryLoaded=false,inventoryFilterKey='';
 let scopePrevious='',scopeEventId='';
@@ -494,6 +532,9 @@ async function loadOwnershipHistory(instanceId,target){
 function renderInventory(parent,candidate,request){
  const box=node('div',null,parent,'stack');
  node('h3','手持ちの確認',box);node('p',heldLabel(candidate),box);
+ for(const line of trainingGoalLines(candidate.training_goal)){
+  node('p',line,box,'muted break');
+ }
  if(!candidate.owned_instances.length&&candidate.mega_condition?.super_max_pl_hypothesis_status==='unconfirmed_deferred'){
   tag(node('div',null,box,'tags'),'スーパー MAX PL+2 仮説保留','wait');
  }
@@ -506,6 +547,9 @@ function renderInventory(parent,candidate,request){
    if(badges.length){
     const badgeRow=node('div',null,row,'tags');
     for(const [label,tone] of badges)tag(badgeRow,label,tone);
+   }
+   for(const line of trainingGoalLines(record.training_goal)){
+    node('p',line,row,'muted break');
    }
    const panel=detail(row,'この所持記録を更新・履歴を見る','record');
    node('small','記録ID '+record.instance_id+' · rev '+record.revision,panel,'break');
@@ -631,6 +675,7 @@ function renderExploration(parent,result){
  for(const field of selfFloors.fields)field.addEventListener('input',syncPreset);
  const info=node('p','保存済みの対戦を照合し、役割の全条件を満たす個体値を確認します。',body,'muted');
  const floorInfo=node('p',null,body,'muted');
+ const rankingInfo=node('p',null,body,'muted');
  const ownershipInfo=node('p',null,body,'muted');
  const examples=node('p',null,body,'break');
  const qualifyingList=node('ul',null,body,'inventory');
@@ -644,6 +689,8 @@ function renderExploration(parent,result){
   const data=await api('missing-analysis',{action:'explore',evaluation_id:result.evaluation_id,build_id:result.reference.build_id,budget,iv_floors});
   info.textContent='全条件を計算済み '+data.completed_iv_count+' / '+data.eligible_iv_count+'通り ／ 達成確認済み '+data.qualifying_count+'通り ／ 全条件を検証して未達成 '+data.fully_tested_nonqualifying_iv_count+'通り ／ 全条件の検証が未完了 '+data.not_fully_tested_iv_count+'通り';
   floorInfo.textContent=Array.isArray(data.iv_floors)?'適用IV下限 '+data.iv_floors.join('/')+'（全'+(data.raw_iv_count??4096)+'通り中 '+data.eligible_iv_count+'通りが探索対象）':'';
+  const rInfo=ranking70OrInfo(data.gl_mega_ranking);
+  rankingInfo.textContent=rInfo?'ランキング70点OR基準：'+rInfo.label+'（'+rInfo.detail+'）':'';
   const ownSum=data.ownership_summary;
   if(ownSum){
    ownershipInfo.textContent=data.qualifying_count
@@ -671,6 +718,9 @@ function renderExploration(parent,result){
     for(const [label,tone] of megaStatusBadges(record,item.level,data.mega_condition)){
      if(!seenBadges.has(label)){seenBadges.add(label);tag(tagsWrap,label,tone);}
     }
+   }
+   for(const line of trainingGoalLines(item.training_goal)){
+    node('p',line,li,'muted break');
    }
    if(template&&item.level!=null){
     const rowActions=node('div',null,li,'actions');
@@ -731,7 +781,10 @@ function renderResult(result,request,revision){
   const badges=baseline?assessment:substitutes;
   tag(tags,...(badges[candidate.status]||badges.pending));
   if(candidate.party_substitution==='pending')tag(tags,'パーティでの入替は未評価','wait');
+  const rankInfo=ranking70OrInfo(candidate.gl_mega_ranking);
+  if(rankInfo)tag(tags,rankInfo.label,rankInfo.tone);
   node('p','技構成　'+moveText(candidate),body,'muted');
+  if(rankInfo)node('p','ランキング70点OR基準：'+rankInfo.detail,body,'muted');
   if(result.can_sandbox){
    fixedEvidenceTargets.set(candidate.build_id,
     node('p','固定戦術：保存済みの根拠は上のパネルから照合できます。',body,'muted'));
