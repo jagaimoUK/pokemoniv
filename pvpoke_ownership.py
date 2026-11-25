@@ -462,23 +462,30 @@ class Ownership:
             if is_mega_link:
                 mega_eval = None
                 if species_catalog and base_id in species_catalog and target_species in species_catalog:
+                    cap = 1500 if int(cp) <= 1500 else (2500 if int(cp) <= 2500 else 10000)
                     mega_eval = evaluate_owned_for_mega(
                         record,
                         mega_species_id=target_species,
                         base_stats=species_catalog[base_id]['baseStats'],
                         mega_stats=species_catalog[target_species]['baseStats'],
                         target_level=combatant['level'],
-                        cp_cap=1500,
+                        cp_cap=cap,
                         cpms=cpms,
+                        allow_cp_downscaling=True,
                     )
                 if mega_eval is not None and not mega_eval['eligible']:
                     match = 'different'
+                elif mega_eval is not None and mega_eval.get('needs_power_up'):
+                    match = 'different'
                 else:
-                    pairs = (
-                        (record['current_level'], combatant['level']),
+                    move_pairs = (
                         (moves.get('fast'), combatant['moves']['fast']),
                         (moves.get('charged'), combatant['moves']['charged']),
                     )
+                    if mega_eval is not None and mega_eval.get('downscaled'):
+                        pairs = move_pairs
+                    else:
+                        pairs = ((record['current_level'], combatant['level']),) + move_pairs
                     if any(actual is not None and expected is not None and actual != expected for actual, expected in pairs):
                         match = 'different'
                     elif any(actual is None or expected is None for actual, expected in pairs):
@@ -499,6 +506,10 @@ class Ownership:
                      'revision': record['revision'], 'build_match': match}
             if is_mega_link:
                 entry['base_species_id'] = rec_species
+                if mega_eval and mega_eval.get('downscaled'):
+                    entry['mega_downscaled'] = True
+                if mega_eval and mega_eval.get('needs_power_up'):
+                    entry['needs_power_up'] = True
             matches.append(entry)
         return matches
 

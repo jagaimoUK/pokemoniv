@@ -109,6 +109,7 @@ def evaluate_owned_for_mega(
     cp_cap: int = 1500,
     max_level: float = 50.0,
     cpms: Sequence[float] | None = None,
+    allow_cp_downscaling: bool = True,
 ) -> dict:
     """Evaluate whether a base-species owned individual can be used as mega_species_id within cp_cap."""
     owned_species = owned_record.get('species_id', '')
@@ -135,26 +136,32 @@ def evaluate_owned_for_mega(
     base_cap_cp = compute_cp(base_stats, ivs, effective_level, table)
     current_level = owned_record.get('current_level')
     current_cp = owned_record.get('current_cp')
-    if current_level is not None and float(current_level) > effective_level:
-        return {
-            'eligible': False,
-            'reason': 'level_exceeds_mega_cap',
-            'mega_max_level': mega_max_level,
-            'mega_max_cp': mega_max_cp,
-            'base_cap_cp': base_cap_cp,
-        }
-    if current_cp is not None and int(current_cp) > base_cap_cp:
-        return {
-            'eligible': False,
-            'reason': 'cp_exceeds_mega_cap',
-            'mega_max_level': mega_max_level,
-            'mega_max_cp': mega_max_cp,
-            'base_cap_cp': base_cap_cp,
-        }
+    exceeds_level = current_level is not None and float(current_level) > effective_level
+    exceeds_cp = current_cp is not None and int(current_cp) > base_cap_cp
+    downscaled = False
+    if exceeds_level or exceeds_cp:
+        if not allow_cp_downscaling:
+            return {
+                'eligible': False,
+                'reason': 'level_exceeds_mega_cap' if exceeds_level else 'cp_exceeds_mega_cap',
+                'mega_max_level': mega_max_level,
+                'mega_max_cp': mega_max_cp,
+                'base_cap_cp': base_cap_cp,
+            }
+        downscaled = True
+
+    needs_power_up = False
+    if not downscaled:
+        if current_level is not None:
+            needs_power_up = float(current_level) < effective_level
+        elif current_cp is not None:
+            needs_power_up = int(current_cp) < base_cap_cp
 
     return {
         'eligible': True,
-        'reason': 'ok',
+        'reason': 'ok_downscaled' if downscaled else 'ok',
+        'downscaled': downscaled,
+        'needs_power_up': needs_power_up,
         'base_species_id': owned_species,
         'mega_species_id': mega_species_id,
         'effective_level': effective_level,
