@@ -55,6 +55,28 @@ function preparePokemon(row, index, battle, gameMaster) {
       moves.some(move => move.formChange || !Number.isFinite(move.stab))) {
     throw Error(`Unsupported initialized moveset: ${row.species}`);
   }
+  if (row.mega_level !== undefined && row.mega_level !== null) {
+    const megaLevel = Number(row.mega_level);
+    if (!Number.isInteger(megaLevel) || megaLevel < 1 || megaLevel > 4) {
+      throw Error(`Invalid mega_level: ${row.mega_level}`);
+    }
+    if (!pokemon.hasTag("mega")) {
+      throw Error(`mega_level requires mega tag: ${row.species}`);
+    }
+    pokemon.setMegaLevel(megaLevel);
+  }
+  if (row.charged3 !== undefined && row.charged3 !== null && row.charged3 !== "") {
+    if (!pokemon.hasThirdChargedMove()) {
+      throw Error(`Third charged move requires mega tag: ${row.species}`);
+    }
+    if (row.charged3 === row.charged1 || row.charged3 === row.charged2) {
+      throw Error(`Duplicate charged3 move: ${row.species}`);
+    }
+    pokemon.selectMove("extra-charged", row.charged3, 2);
+    if (pokemon.chargedMoves[2]?.moveId !== row.charged3) {
+      throw Error(`Extra move import mismatch: ${row.species}`);
+    }
+  }
   if (![pokemon.stats.atk, pokemon.stats.def].every(stat => Number.isFinite(stat) && stat > 0) ||
       !Number.isSafeInteger(pokemon.stats.hp) || pokemon.stats.hp < 10) {
     throw Error(`Invalid initialized stats: ${row.species}`);
