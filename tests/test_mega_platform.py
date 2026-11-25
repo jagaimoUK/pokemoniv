@@ -1083,6 +1083,438 @@ console.log('MISSING_UI_RANKING_GOAL_OK');
         proc = subprocess.run(['node', '-e', script], capture_output=True, text=True, check=True, timeout=10)
         self.assertIn('MISSING_UI_RANKING_GOAL_OK', proc.stdout)
 
+    def test_q1_preevo_mega_e2e_and_form_distinction(self):
+        import json
+        import shutil
+        from pvpoke_battle_service import BattleService
+        from pvpoke_direct_backend import DirectMatrixClient
+        from pvpoke_mega import (
+            can_evolve_to,
+            discover_reachable_forms,
+            pre_evolutions_for_target,
+        )
+        from pvpoke_missing_analysis import MissingAnalysis
+        from pvpoke_missing_comparison import app_operation as missing_operation
+        from test_battle_service import FIXTURES
+
+        # 1. Reachability graph must discover normal evolutions & Mega without fabricating paths.
+        reach_swablu = discover_reachable_forms('swablu', self.catalog, evaluated_species_id='altaria_mega')
+        self.assertEqual(reach_swablu['owned_species_id'], 'swablu')
+        self.assertEqual(reach_swablu['evaluated_species_id'], 'altaria_mega')
+        self.assertTrue(reach_swablu['form_distinct'])
+        self.assertEqual(reach_swablu['evolutions'], ['altaria'])
+        self.assertEqual(reach_swablu['mega_forms'], ['altaria_mega'])
+        self.assertEqual(reach_swablu['pre_evolutions'], ['altaria', 'swablu'])
+
+        self.assertTrue(can_evolve_to('swablu', 'altaria', self.catalog))
+        self.assertTrue(can_evolve_to('swablu', 'altaria_mega', self.catalog))
+        self.assertFalse(can_evolve_to('slowpoke_galarian', 'slowbro_mega', self.catalog))
+        self.assertEqual(pre_evolutions_for_target('altaria', self.catalog), ('swablu',))
+        # Shadow isolation: Shadow forms never evolve into Mega.
+        shadow_cat = {
+            **self.catalog,
+            'swablu_shadow': {'baseStats': self.swablu_stats, 'family': {'id': 'FAMILY_SWABLU', 'evolutions': ['altaria_shadow']}},
+            'altaria_shadow': {'baseStats': self.altaria_stats, 'family': {'id': 'FAMILY_SWABLU', 'parent': 'swablu_shadow'}},
+        }
+        self.assertEqual(discover_reachable_forms('swablu_shadow', shadow_cat)['mega_forms'], [])
+        self.assertFalse(can_evolve_to('swablu_shadow', 'altaria_mega', shadow_cat))
+
+        # 2. E2E across fixture gamemaster -> Ownership -> MissingAnalysis -> MissingComparison -> SelectionHistory.
+        master = self.root / 'gm_q1.json'
+        gm = json.loads((FIXTURES / 'strategy_gamemaster.json').read_text(encoding='utf-8'))
+        opp_row = json.loads((FIXTURES / 'strategy_rows.json').read_text(encoding='utf-8'))[0]
+        shared_fast = opp_row['fast']
+        shared_charged = [opp_row['charged1'], opp_row['charged2']]
+        gm['pokemon'].extend([
+            {
+                'speciesId': 'swablu',
+                'speciesName': 'Swablu',
+                'dex': 333,
+                'types': ['normal', 'flying'],
+                'baseStats': dict(self.swablu_stats),
+                'fastMoves': [shared_fast],
+                'chargedMoves': shared_charged,
+                'family': {'id': 'FAMILY_SWABLU', 'evolutions': ['altaria']},
+            },
+            {
+                'speciesId': 'altaria',
+                'speciesName': 'Altaria',
+                'dex': 334,
+                'types': ['dragon', 'flying'],
+                'baseStats': dict(self.altaria_stats),
+                'fastMoves': [shared_fast],
+                'chargedMoves': shared_charged,
+                'family': {'id': 'FAMILY_SWABLU', 'parent': 'swablu'},
+            },
+            {
+                'speciesId': 'altaria_mega',
+                'speciesName': 'Altaria (Mega)',
+                'dex': 334,
+                'types': ['dragon', 'fairy'],
+                'baseStats': dict(self.altaria_mega_stats),
+                'fastMoves': [shared_fast],
+                'chargedMoves': shared_charged,
+                'extraChargedMoves': shared_charged[:1],
+                'tags': ['mega'],
+            },
+        ])
+        master.write_text(json.dumps(gm), encoding='utf-8')
+
+        client = DirectMatrixClient(gamemaster=master, log_dir=self.root)
+        self.addCleanup(client.close)
+        service = BattleService(client, store=self.store)
+        ivs = {'attack': 0, 'defense': 14, 'hp': 15}
+
+        inv = Ownership(self.store, species_ids=service.species)
+        inv.register('swablu-owned', {
+            'species_id': 'swablu', 'ivs': ivs, 'current_level': 12.0,
+            'current_cp': 260, 'current_moves': {'fast': shared_fast, 'charged': shared_charged},
+        })
+        inv.confirm('q1-own', 'swablu-owned', expected_revision=0, state='confirmed_owned')
+
+        # Normal evolution target (altaria) also discovers owned swablu while distinguishing forms.
+        norm_spec = {
+            'schema': 'battle-spec-v1',
+            'mode': 'standard',
+            'rules': {'league': 'great', 'cp_cap': 1500},
+            'combatants': [
+                {'species_id': 'altaria', 'ivs': ivs, 'level': 27.0,
+                 'moves': {'fast': shared_fast, 'charged': shared_charged},
+                 'initial': {'hp': 'full', 'energy': 0, 'shields': 1, 'stages': [0, 0]}},
+                {'species_id': opp_row['species'], 'ivs': {'attack': opp_row['atk'], 'defense': opp_row['def'], 'hp': opp_row['hp']},
+                 'level': opp_row['level'], 'moves': {'fast': opp_row['fast'], 'charged': [opp_row['charged1'], opp_row['charged2']]},
+                 'initial': {'hp': 'full', 'energy': 0, 'shields': 1, 'stages': [0, 0]}},
+            ],
+        }
+        analysis = MissingAnalysis(self.store)
+        norm_plan = analysis.save_plan(service, [norm_spec])
+        norm_ev = analysis.evidence(norm_plan, active_versions=service.versions, normalizer=service)
+        norm_match = norm_ev['cells'][0]['inventory_matches'][0]
+        self.assertEqual(norm_match['owned_species_id'], 'swablu')
+        self.assertEqual(norm_match['evaluated_species_id'], 'altaria')
+        self.assertTrue(norm_match['form_distinct'])
+        self.assertTrue(norm_match['needs_evolution'])
+        self.assertEqual(norm_ev['cells'][0]['reachable_forms']['mega_forms'], ['altaria_mega'])
+
+        # Missing comparison carrying owned_species_id='swablu' for evaluated target='altaria_mega'.
+        mega_lvl, _ = max_level_and_cp(self.altaria_mega_stats, ivs, cp_cap=1500, max_level=50.0, cpms=self.cpms)
+        comp = missing_operation(service, {
+            'action': 'evaluate',
+            'candidates': [{
+                'species_id': 'altaria_mega',
+                'owned_species_id': 'swablu',
+                'ivs': ivs,
+                'level': mega_lvl,
+                'moves': {'fast': shared_fast, 'charged': shared_charged},
+                'mega_level': 3,
+            }],
+            'scenarios': [{
+                'opponent': {
+                    'species_id': opp_row['species'],
+                    'ivs': {'attack': opp_row['atk'], 'defense': opp_row['def'], 'hp': opp_row['hp']},
+                    'level': opp_row['level'],
+                    'moves': {'fast': opp_row['fast'], 'charged': [opp_row['charged1'], opp_row['charged2']]},
+                },
+                'shields': [1, 1],
+                'requirement': {'outcomes': ['self_win']},
+            }],
+            'role': {'role_id': 'role-q1', 'revision': 1, 'priority': 1},
+        })
+        cand = comp['candidates'][0]
+        self.assertEqual(cand['species_id'], 'altaria_mega')
+        self.assertEqual(cand['owned_species_id'], 'swablu')
+        self.assertTrue(cand['form_distinct'])
+        self.assertEqual(cand['reachable_forms']['pre_evolutions'], ['altaria', 'swablu'])
+        self.assertEqual(comp['evidence_state'], 'unknown')
+
+        # Selection history saving Mega candidate with owned_species_id='swablu'.
+        calc_ver = 'a' * 64
+        meta_ver = 'b' * 64
+        selection_operation(
+            self.store,
+            {
+                'action': 'selection_save',
+                'species_id': 'altaria_mega',
+                'owned_species_id': 'swablu',
+                'request_id': 'q1-save-1',
+                'meta_sha256': meta_ver,
+                'calculation_version': calc_ver,
+                'policy_version': 'box-first-v3',
+                'ranking_source_date': '2026-10-15',
+                'candidates': [{
+                    'ivs': '0/14/15',
+                    'role': 'important',
+                    'moves': [shared_fast, *shared_charged],
+                    'evidence': ['Reachable from swablu'],
+                    'instance_id': 'swablu-owned',
+                    'owned_species_id': 'swablu',
+                    'goal': 'Evolve to Altaria Mega',
+                }],
+            },
+            set(service.species),
+        )
+        latest = selection_operation(
+            self.store,
+            {'action': 'selection_latest', 'species_id': 'altaria_mega'},
+            set(service.species),
+            species_catalog=service.species,
+        )['snapshot']
+        self.assertEqual(latest['owned_species_id'], 'swablu')
+        self.assertTrue(latest['reachable_forms']['form_distinct'])
+        self.assertEqual(latest['reachable_forms']['pre_evolutions'], ['altaria', 'swablu'])
+
+    def test_q11_tv09_freshness_invalidation_and_conservative_pending(self):
+        import shutil
+        from pvpoke_battle_service import BattleService
+        from pvpoke_direct_backend import DirectMatrixClient
+        from pvpoke_mega import evaluate_selection_freshness
+        from pvpoke_missing_analysis import MissingAnalysis
+        from test_battle_service import FIXTURES, battle_spec
+
+        # 1. All TV-09 axes match -> current & fresh.
+        base_ctx = {
+            'calculation_version': 'a' * 64,
+            'ranking_source_date': '2026-10-15',
+            'meta_sha256': 'b' * 64,
+            'policy_version': 'box-first-v3',
+            'rules_digest': 'c' * 64,
+        }
+        ok = evaluate_selection_freshness(dict(base_ctx), dict(base_ctx))
+        self.assertTrue(ok['fresh'])
+        self.assertFalse(ok['needs_reevaluation'])
+        self.assertEqual(ok['status'], 'current')
+
+        # 2. Changes across each axis mark needs_reevaluation=True conservatively.
+        for key, new_val, expected_reason in (
+            ('calculation_version', 'f' * 64, 'calculation_version_changed'),
+            ('ranking_source_date', '2026-11-01', 'ranking_changed'),
+            ('meta_sha256', 'e' * 64, 'meta_changed'),
+            ('policy_version', 'box-first-v4', 'policy_version_changed'),
+            ('rules_digest', 'd' * 64, 'rules_changed'),
+        ):
+            with self.subTest(axis=key):
+                res = evaluate_selection_freshness(dict(base_ctx), {**base_ctx, key: new_val})
+                self.assertFalse(res['fresh'])
+                self.assertTrue(res['needs_reevaluation'])
+                self.assertEqual(res['status'], 'reevaluation_pending')
+                self.assertIn(expected_reason, res['reasons'])
+                self.assertTrue(res['old_result_preserved'])
+
+        # 3. Missing / unprovable impact conservatively marks reevaluation_pending.
+        unprovable = evaluate_selection_freshness(
+            {'calculation_version': 'a' * 64},
+            {**base_ctx, 'impact_provable': False},
+        )
+        self.assertTrue(unprovable['needs_reevaluation'])
+        self.assertIn('ranking_unverified', unprovable['reasons'])
+        self.assertIn('impact_not_provable', unprovable['reasons'])
+
+        # 4. Selection history preserves old snapshots read-only while flagging staleness.
+        species = {'quagsire'}
+        selection_operation(
+            self.store,
+            {
+                'action': 'selection_save',
+                'species_id': 'quagsire',
+                'request_id': 'tv09-save-1',
+                'meta_sha256': base_ctx['meta_sha256'],
+                'calculation_version': base_ctx['calculation_version'],
+                'policy_version': base_ctx['policy_version'],
+                'ranking_source_date': base_ctx['ranking_source_date'],
+                'rules_digest': base_ctx['rules_digest'],
+                'candidates': [{
+                    'ivs': '0/11/12', 'role': 'important',
+                    'moves': ['MUD_SHOT', 'STONE_EDGE', 'MUD_BOMB'],
+                    'evidence': ['Old snapshot evidence'],
+                }],
+            },
+            species,
+        )
+        stale_latest = selection_operation(
+            self.store,
+            {'action': 'selection_latest', 'species_id': 'quagsire'},
+            species,
+            current_context={**base_ctx, 'ranking_source_date': '2026-11-15'},
+        )['snapshot']
+        self.assertTrue(stale_latest['needs_reevaluation'])
+        self.assertEqual(stale_latest['freshness']['status'], 'reevaluation_pending')
+        self.assertIn('ranking_changed', stale_latest['freshness']['reasons'])
+        self.assertEqual(stale_latest['candidates'][0]['evidence'], ['Old snapshot evidence'])
+
+        stale_pool = selection_operation(
+            self.store,
+            {'action': 'selection_pool', 'species_ids': ['quagsire']},
+            species,
+            current_context={**base_ctx, 'rules_digest': '9' * 64},
+        )['snapshots']['quagsire']
+        self.assertTrue(stale_pool['needs_reevaluation'])
+        self.assertIn('rules_changed', stale_pool['freshness']['reasons'])
+
+        # 5. MissingAnalysis.evidence suppresses stale facts and flags needs_reevaluation.
+        master = self.root / 'gm_tv09.json'
+        shutil.copyfile(FIXTURES / 'strategy_gamemaster.json', master)
+        client = DirectMatrixClient(gamemaster=master, log_dir=self.root)
+        self.addCleanup(client.close)
+        service = BattleService(client, store=self.store)
+        analysis = MissingAnalysis(self.store)
+        spec = battle_spec()
+        service.simulate(spec)
+        plan = analysis.save_plan(service, [spec])
+
+        ev_stale_gm = analysis.evidence(plan, active_versions={**service.versions, 'game_data': '0' * 64})
+        self.assertEqual(ev_stale_gm['state'], 'stale')
+        self.assertTrue(ev_stale_gm['freshness']['needs_reevaluation'])
+        self.assertIn('engine_or_gamemaster_changed', ev_stale_gm['freshness']['reasons'])
+        self.assertEqual(ev_stale_gm['coverage']['completed'], 0)
+        self.assertIsNone(ev_stale_gm['cells'][0]['facts'])
+
+        ev_stale_rules = analysis.evidence(
+            plan,
+            active_versions=service.versions,
+            active_context={'rules': {'league': 'great', 'cp_cap': 1500, 'cup_id': 'great_mega', 'allow_cp_downscaling': True}},
+        )
+        self.assertEqual(ev_stale_rules['state'], 'stale')
+        self.assertTrue(ev_stale_rules['freshness']['needs_reevaluation'])
+        self.assertIn('rules_changed', ev_stale_rules['freshness']['reasons'])
+
+    def test_app_ui_and_missing_ui_q1_q11_e2e(self):
+        import json
+        import re
+        import subprocess
+        from pvpoke_app_ui import HTML as APP_HTML
+        from pvpoke_missing_ui import HTML as MISSING_HTML
+
+        # Syntax check both inline scripts cleanly.
+        for label, html_doc in (('app_ui', APP_HTML), ('missing_ui', MISSING_HTML)):
+            m = re.search(r'<script>(.*?)</script>', html_doc, re.S)
+            self.assertIsNotNone(m, f'{label} inline script missing')
+            tmp_js = self.root / f'{label}.js'
+            tmp_js.write_text(m.group(1), encoding='utf-8')
+            subprocess.run(['node', '--check', str(tmp_js)], check=True, capture_output=True, text=True, timeout=10)
+
+        # Functional Node test for discoverReachableForms, freshnessNoticeText, readReferenceTransfer, renderResult stale & reachable UI.
+        app_fns = []
+        for pat in (
+            r'function isMegaSpeciesId\(sid\)\{.*?^\}',
+            r'function isShadowSpeciesId\(sid\)\{.*?^\}',
+            r'function discoverReachableForms\(sid\)\{.*?^\}',
+            r'function freshnessNoticeText\(saved\)\{.*?^\}',
+        ):
+            m = re.search(pat, APP_HTML, re.S | re.M)
+            self.assertIsNotNone(m, f'Pattern missing in app_ui: {pat}')
+            app_fns.append(m.group(0))
+
+        miss_gaps = re.search(r'const gaps=\{.*?\};', MISSING_HTML)
+        self.assertIsNotNone(miss_gaps)
+        miss_transfer = re.search(r'function readReferenceTransfer\(\)\{.*?^\}', MISSING_HTML, re.S | re.M)
+        self.assertIsNotNone(miss_transfer)
+        miss_render = re.search(r'function defaultBuildForForm\(targetSid,sourceCandidate\)\{.*?function renderResult\(result,request,revision\)\{.*?^\}', MISSING_HTML, re.S | re.M)
+        self.assertIsNotNone(miss_render)
+
+        synth_cat = json.dumps({
+            'swablu': {'name_ja': 'チルット', 'fastMoves': ['PECK'], 'chargedMoves': ['DISARMING_VOICE', 'AERIAL_ACE'], 'family': {'evolutions': ['altaria']}},
+            'altaria': {'name_ja': 'チルタリス', 'fastMoves': ['DRAGON_BREATH'], 'chargedMoves': ['SKY_ATTACK', 'MOONBLAST'], 'family': {'parent': 'swablu'}},
+            'altaria_mega': {'name_ja': 'メガチルタリス', 'fastMoves': ['DRAGON_BREATH'], 'chargedMoves': ['SKY_ATTACK', 'MOONBLAST'], 'tags': ['mega'], 'extraChargedMoves': ['MOONBLAST_PLUS']},
+            'swablu_shadow': {'name_ja': 'シャドウチルット', 'family': {'evolutions': ['altaria_shadow']}},
+            'altaria_shadow': {'name_ja': 'シャドウチルタリス', 'family': {'parent': 'swablu_shadow'}},
+            'slowpoke_galarian': {'name_ja': 'ヤドン (ガラル)', 'family': {'evolutions': ['slowbro_galarian']}},
+            'slowbro_galarian': {'name_ja': 'ヤドラン (ガラル)', 'family': {'parent': 'slowpoke_galarian'}},
+            'slowbro_mega': {'name_ja': 'メガヤドラン', 'tags': ['mega']},
+        })
+        script = f"""
+const assert = require('node:assert/strict');
+const catalog = {synth_cat};
+{''.join(app_fns)}
+const rSwablu = discoverReachableForms('swablu');
+assert.deepEqual(rSwablu.evolutions, ['altaria']);
+assert.deepEqual(rSwablu.mega_forms, ['altaria_mega']);
+assert.deepEqual(discoverReachableForms('swablu_shadow').mega_forms, []);
+assert.deepEqual(discoverReachableForms('slowpoke_galarian').mega_forms, []);
+const staleMsg = freshnessNoticeText({{ needs_reevaluation: true, freshness: {{ reasons: ['ranking_changed'] }} }});
+assert.ok(staleMsg.includes('再評価が必要') && staleMsg.includes('ranking_changed'));
+
+// Missing UI transfer & renderResult checks with minimal DOM stub:
+const missingTransferKey = 'pokemoniv:missing-reference-transfer-v1';
+const sessionStorage = {{
+ _m: new Map(),
+ getItem(k){{ return this._m.get(k) ?? null; }},
+ setItem(k,v){{ this._m.set(k, String(v)); }},
+ removeItem(k){{ this._m.delete(k); }},
+}};
+sessionStorage.setItem(missingTransferKey, JSON.stringify({{
+ schema: 'missing-reference-transfer-v1',
+ species_id: 'altaria_mega',
+ owned_species_id: 'swablu',
+ mega_level: 4,
+ charged3: 'MOONBLAST_PLUS',
+ moves: {{ fast: 'DRAGON_BREATH', charged: ['SKY_ATTACK', 'MOONBLAST'] }},
+ ivs: {{ attack: 0, defense: 14, hp: 15 }},
+}}));
+{miss_transfer.group(0)}
+const parsed = readReferenceTransfer();
+assert.equal(parsed.species_id, 'altaria_mega');
+assert.equal(parsed.owned_species_id, 'swablu');
+assert.equal(parsed.mega_level, 4);
+assert.equal(parsed.charged3, 'MOONBLAST_PLUS');
+
+const texts = [];
+const mkEl = (tag) => ({{
+ tag, textContent: '', hidden: false, className: '', children: [],
+ append(...xs){{ this.children.push(...xs); }},
+ replaceChildren(...xs){{ this.children = xs; }},
+ setAttribute(){{}},
+}});
+const resultTree = mkEl('div');
+const tacticResults = mkEl('div');
+const tacticPanel = Object.assign(mkEl('div'), {{ dataset: {{}} }});
+const edited = mkEl('div');
+const resultsSec = mkEl('div');
+const $ = (id) => ({{ 'result-tree': resultTree, 'tactic-evidence-results': tacticResults, 'tactic-evidence-panel': tacticPanel, edited, results: resultsSec }}[id] || mkEl(id));
+const document = {{ createElement: mkEl }};
+const node = (tag, text, parent, cls) => {{ const n = mkEl(tag); if (text != null) {{ n.textContent = text; texts.push(text); }} if (parent) parent.append(n); return n; }};
+const detail = (parent, summary) => {{ const d = node('details', null, parent); node('summary', summary, d); return d; }};
+const tag = (parent, text) => node('span', text, parent);
+const button = (parent, text, onclick) => {{ const b = node('button', text, parent); b.onclick = onclick; return b; }};
+const fixedEvidenceTargets = new Map();
+const roles = {{ r1: '役割1' }}, priorities = {{ 1: '標準' }}, metrics = {{}};
+const assessment = {{ pending: ['未評価', 'wait'] }}, substitutes = {{ pending: ['保留', 'wait'] }};
+const name = (id) => catalog[id]?.name_ja || id;
+const ivText = (ivs) => [ivs.attack, ivs.defense, ivs.hp].join('/');
+const moveText = (c) => [c.moves.fast, ...c.moves.charged].join('/');
+const buildText = (c) => name(c.species_id) + ' ' + ivText(c.ivs);
+const comparisonLabel = () => '比較';
+const ranking70OrInfo = () => null;
+const renderExploration = () => {{}};
+const renderMatch = () => {{}};
+const renderInventory = () => {{}};
+const addAlternative = () => {{}};
+let editRevision = 0, displayed = null;
+{miss_gaps.group(0)}
+{miss_render.group(0)}
+renderResult({{
+ state: 'evidence_pending',
+ evidence_state: 'stale',
+ freshness: {{ needs_reevaluation: true, reasons: ['ranking_changed'] }},
+ evaluation_id: 'e1',
+ role: {{ role_id: 'r1', priority: 1 }},
+ reference: {{ species_id: 'altaria_mega', build_id: 'b1' }},
+ candidates: [{{
+  build_id: 'b1', species_id: 'altaria_mega', owned_species_id: 'swablu', form_distinct: true,
+  ivs: {{ attack: 0, defense: 14, hp: 15 }}, level: 20,
+  moves: {{ fast: 'DRAGON_BREATH', charged: ['SKY_ATTACK', 'MOONBLAST'] }},
+  reachable_forms: {{ evolutions: ['altaria'], mega_forms: ['altaria_mega'] }},
+  status: 'pending', conditions: [], owned_instances: [],
+ }}],
+}}, {{}}, 0);
+assert.ok(texts.some(t => t.includes('再評価保留')));
+assert.ok(texts.some(t => t.includes('ranking_changed')));
+assert.ok(texts.some(t => t.includes('所持形態：チルット') && t.includes('評価対象：メガチルタリス')));
+assert.ok(texts.some(t => t.includes('比較候補へ追加（チルタリス）')));
+console.log('UI_Q1_Q11_E2E_OK');
+"""
+        proc = subprocess.run(['node', '-e', script], capture_output=True, text=True, check=True, timeout=10)
+        self.assertIn('UI_Q1_Q11_E2E_OK', proc.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()

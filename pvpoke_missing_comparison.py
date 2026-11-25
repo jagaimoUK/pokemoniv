@@ -31,14 +31,20 @@ def _can_calculate():
 
 
 def _build(value):
-    return _object(value, 'candidate build', ('species_id', 'ivs', 'level', 'moves'))
+    return _object(
+        value,
+        'candidate build',
+        ('species_id', 'ivs', 'level', 'moves'),
+        ('mega_level', 'charged3', 'owned_species_id'),
+    )
 
 
 def _spec(candidate, opponent, shields, energy):
     combatants = []
     for build, shield, starting_energy in zip((candidate, opponent), shields, (energy, 0)):
-        combatants.append({**build, 'initial': {'hp': 'full', 'energy': starting_energy,
-                                              'shields': shield, 'stages': [0, 0]}})
+        clean = {k: v for k, v in build.items() if k != 'owned_species_id'}
+        combatants.append({**clean, 'initial': {'hp': 'full', 'energy': starting_energy,
+                                               'shields': shield, 'stages': [0, 0]}})
     return {'schema': 'battle-spec-v1', 'mode': 'standard', 'rules': {'league': 'great', 'cp_cap': 1500},
             'combatants': combatants}
 
@@ -73,11 +79,18 @@ def _plan(service, payload):
     order = [build_id(combatant) for combatant in first]
     if len(set(order)) != len(order):
         raise ValueError('Duplicate candidate build')
-    return specs, definition, order
+    owned_by_build = {
+        bid: raw.get('owned_species_id')
+        for bid, raw in zip(order, builds)
+        if raw.get('owned_species_id') is not None
+    }
+    return specs, definition, order, owned_by_build
 
 
 def _comparison(service, payload):
-    specs, role, order = _plan(service, payload)
+    from pvpoke_mega import discover_reachable_forms
+
+    specs, role, order, owned_by_build = _plan(service, payload)
     analysis = MissingAnalysis(service.store)
     analysis_id = analysis.save_plan(service, specs)
     evidence = analysis.evidence(analysis_id, active_versions=service.versions, normalizer=service)
@@ -106,7 +119,20 @@ def _comparison(service, payload):
         else:
             status = 'unavailable' if result['meets'] is False else 'pending'
         inventory = first['inventory_matches']
+        owned_sid = owned_by_build.get(bid)
+        if owned_sid is None and inventory:
+            owned_sid = inventory[0].get('owned_species_id')
+        if owned_sid is None:
+            owned_sid = current['species_id']
+        reachable = discover_reachable_forms(
+            owned_sid,
+            service.species,
+            evaluated_species_id=current['species_id'],
+        )
         builds.append({**current, 'build_id': bid, 'status': status, 'party_substitution': 'pending',
+                       'owned_species_id': owned_sid,
+                       'form_distinct': owned_sid != current['species_id'],
+                       'reachable_forms': reachable,
                        'owned_instances': inventory[:32], 'inventory_match_count': len(inventory),
                        'gl_mega_ranking': first.get('gl_mega_ranking'),
                        'training_goal': first.get('training_goal'),
@@ -116,7 +142,9 @@ def _comparison(service, payload):
         build['comparison'] = 'same_species' if build['species_id'] == reference['species_id'] else 'cross_species'
     priority = {'sufficient': 0, 'conditional': 1, 'pending': 2, 'unavailable': 3}
     builds[1:] = sorted(builds[1:], key=lambda build: priority[build['status']])
-    return {'state': snapshot['state'], 'evaluation_id': snapshot['evaluation_id'], 'analysis_id': analysis_id,
+    return {'state': snapshot['state'], 'evidence_state': snapshot['evidence_state'],
+            'freshness': evidence.get('freshness'),
+            'evaluation_id': snapshot['evaluation_id'], 'analysis_id': analysis_id,
             'role': {key: role[key] for key in ('role_id', 'priority', 'revision')}, 'reference': reference,
             'candidates': builds, 'can_calculate': _can_calculate(), 'can_sandbox': sandbox_enabled()}
 
@@ -239,12 +267,16 @@ def _explore(service, payload):
     examples = [entry for _, _, entry in ranked_examples[:32]]
     completed = coverage['all_completed_iv_count']
     mega_level = ref_combatant.get('mega_level')
+    from pvpoke_mega import discover_reachable_forms
+
     return {'state': step['state'], 'new_battles': step['new_battles'],
             'retry_needed': any(status != 'complete' and attempts > 0
                                 for status, attempts in step['attempt_outcomes'].items()),
             'raw_iv_count': coverage['raw_iv_count'],
             'iv_floors': step['iv_floors'],
             'candidate': {'species_id': species_id, 'moves': moves},
+            'reachable_forms': discover_reachable_forms(species_id, service.species),
+            'freshness': evidence.get('freshness'),
             'gl_mega_ranking': candidate_gl_mega_ranking(species_id, species_catalog=service.species),
             'mega_condition': {
                 'mega_level': mega_level,

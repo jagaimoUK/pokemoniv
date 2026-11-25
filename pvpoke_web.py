@@ -152,6 +152,7 @@ def load_catalog():
                 'chargedMoves': engine.charged_move_pool(p),
                 'extraChargedMoves': p.get('extraChargedMoves', []),
                 'tags': p.get('tags', []),
+                **({'family': p['family']} if isinstance(p.get('family'), dict) else {}),
             }
             for sid, p in species.items()
         }
@@ -189,6 +190,40 @@ def load_catalog():
         with LOCK:
             CATALOG.update({'ready': False,
                             'error': 'ゲームデータの読み込みに失敗しました。再試行してください'})
+
+
+def _active_selection_context():
+    from pvpoke_battle_service import _json_hash
+    from pvpoke_mega import load_gl_ranking_snapshot, resolve_battle_rules
+
+    gm_version = None
+    try:
+        gm_version = calculation_version(engine.DATA)
+    except Exception:
+        gm_version = None
+    meta_sha = None
+    try:
+        meta_sha = meta_live.get_status(WORK).get('sha256')
+    except Exception:
+        meta_sha = None
+    ranking_date = None
+    try:
+        ranking_date, _ = load_gl_ranking_snapshot()
+    except Exception:
+        ranking_date = None
+    rules_digest = _json_hash(resolve_battle_rules({
+        'league': 'great',
+        'cp_cap': 1500,
+        'max_level': 50.0,
+        'allow_cp_downscaling': False,
+    }))
+    return {
+        'calculation_version': gm_version,
+        'meta_sha256': meta_sha,
+        'ranking_source_date': ranking_date,
+        'policy_version': 'box-first-v3',
+        'rules_digest': rules_digest,
+    }
 
 
 def parse_ivs(raw):
@@ -675,10 +710,12 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
             available = []
+            extra = {}
             if cat.get('ready'):
                 available = app_presets(cat['species'], cat['presets'],
                                        meta_live.active_path(WORK).read_text(encoding='utf-8-sig'))
-            self.respond(200, {**cat, 'app_presets': available, 'saved': saved})
+                extra['selection_context'] = _active_selection_context()
+            self.respond(200, {**cat, 'app_presets': available, 'saved': saved, **extra})
         elif path == '/api/flashcards':
             if self.headers.get('X-PvPoke-Token') != TOKEN:
                 return self.respond(403, {'error': '認証が必要です'})
@@ -794,8 +831,18 @@ class Handler(BaseHTTPRequestHandler):
                 if path == MISSING_API_PATH and payload.get('action') in SELECTION_ACTIONS:
                     try:
                         with LOCK:
-                            species_ids = frozenset(CATALOG.get('species', {}))
-                        return self.respond(200, selection_operation(BattleStore.from_volume(), payload, species_ids))
+                            species_catalog = dict(CATALOG.get('species', {}))
+                            species_ids = frozenset(species_catalog)
+                        return self.respond(
+                            200,
+                            selection_operation(
+                                BattleStore.from_volume(),
+                                payload,
+                                species_ids,
+                                current_context=_active_selection_context(),
+                                species_catalog=species_catalog,
+                            ),
+                        )
                     except OwnershipConflict:
                         return self.respond(409, {'error': 'Selection save conflicts with an earlier request'})
                     except (OwnershipUnavailable, BattleStoreError, OSError, sqlite3.Error):

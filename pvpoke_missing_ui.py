@@ -118,7 +118,7 @@ const roles={lead:'初手',safe_switch:'引き先',closer:'締め',coverage:'苦
 const priorities={1:'標準',2:'高い',3:'最優先'};
 const metrics={hp:['自分の残りHP',10000],energy:['自分の残りゲージ',100],fast_damage:['通常技の総ダメージ',10000],charged_damage:['ゲージ技の総ダメージ',10000],charged_moves_resolved:['ゲージ技を撃った回数',2000],shields_forced:['相手に使わせたシールド',2],shields_remaining:['自分の残りシールド',2]};
 const assessment={sufficient:['条件を満たす','good'],conditional:['開始ゲージ条件付きで達成','wait'],unavailable:['条件を満たさない','fail'],pending:['未評価の対面あり','wait']};
-const gaps={covered:['所持確認済みの個体で充足','good'],gap:['比較した範囲で不足','fail'],ownership_confirmation_needed:['所持確認待ち','wait'],evidence_pending:['対戦証拠待ち','wait']};
+const gaps={covered:['所持確認済みの個体で充足','good'],gap:['比較した範囲で不足','fail'],ownership_confirmation_needed:['所持確認待ち','wait'],evidence_pending:['対戦証拠待ち','wait'],stale:['計算データ更新・再評価保留（旧結果を新結果として扱いません）','wait']};
 const substitutes={sufficient:['十分に代替（この役割）','good'],conditional:['条件付き代替','wait'],unavailable:['代替不可（指定条件）','fail'],pending:['判定保留','wait']};
 const outcomes={self_win:'勝ち',opponent_win:'負け',simultaneous_ko:'同時ひんし'};
 const ownership={confirmed_owned:'所持確認済み',confirmed_absent:'所持していないことを確認済み',unknown:'未確認'};
@@ -280,6 +280,11 @@ function buildEditor(parent,title,{open=false,removable,initial}={}){
  const charged=[select(moveFields,'ゲージ技1',[['','ポケモンを指定']]),select(moveFields,'ゲージ技2',[['','ポケモンを指定']])];
  for(const field of [fast,...charged])field.required=true;
  let speciesId='';
+ const ownedSpeciesId=initial?.owned_species_id||null;
+ const ownedFormNote=node('p',null,body,'muted');
+ ownedFormNote.hidden=true;
+ const megaLevel=initial?.mega_level??null;
+ const charged3=initial?.charged3??null;
  function updateSpecies(preferred){
   const id=resolveSpecies(species.value);
   if(id!==speciesId||preferred){
@@ -294,6 +299,13 @@ function buildEditor(parent,title,{open=false,removable,initial}={}){
   }
   species.setCustomValidity(species.value&&!id?'一覧からフォルムまで選択してください。':'');
   el.firstElementChild.textContent=title+(id?' · '+name(id):'');
+  if(ownedSpeciesId&&id&&ownedSpeciesId!==id){
+   ownedFormNote.hidden=false;
+   ownedFormNote.textContent='所持形態：'+name(ownedSpeciesId)+' → 評価対象：'+name(id)+'（形態を区別）';
+  }else{
+   ownedFormNote.hidden=true;
+   ownedFormNote.textContent='';
+  }
  }
  function validateMoves(){charged[1].setCustomValidity(charged[0].value&&charged[0].value===charged[1].value?'異なるゲージ技を選んでください。':'');}
  species.addEventListener('input',()=>{updateSpecies();validateMoves();});
@@ -306,7 +318,7 @@ function buildEditor(parent,title,{open=false,removable,initial}={}){
   updateSpecies(initial.moves);
  }
  if(removable)button(body,'この項目を削除',()=>removable(el),'quiet');
- return {el,body,species,fields:[species,...Object.values(ivs),level,fast,...charged],read:()=>({species_id:speciesId,ivs:Object.fromEntries(Object.entries(ivs).map(([id,field])=>[id,field.valueAsNumber])),level:level.valueAsNumber,moves:{fast:fast.value,charged:charged.map(field=>field.value)}})};
+ return {el,body,species,fields:[species,...Object.values(ivs),level,fast,...charged],read:()=>({species_id:speciesId,ivs:Object.fromEntries(Object.entries(ivs).map(([id,field])=>[id,field.valueAsNumber])),level:level.valueAsNumber,moves:{fast:fast.value,charged:charged.map(field=>field.value)},...(megaLevel!=null?{mega_level:megaLevel}:{}),...(charged3?{charged3}:{}),...(ownedSpeciesId&&ownedSpeciesId!==speciesId?{owned_species_id:ownedSpeciesId}:{})})};
 }
 function removeEditor(list,el){list.splice(list.findIndex(item=>item.el===el),1);el.remove();markEdited();setBusy(false);}
 function addAlternative(initialCandidate=null){
@@ -690,7 +702,8 @@ function renderExploration(parent,result){
   info.textContent='全条件を計算済み '+data.completed_iv_count+' / '+data.eligible_iv_count+'通り ／ 達成確認済み '+data.qualifying_count+'通り ／ 全条件を検証して未達成 '+data.fully_tested_nonqualifying_iv_count+'通り ／ 全条件の検証が未完了 '+data.not_fully_tested_iv_count+'通り';
   floorInfo.textContent=Array.isArray(data.iv_floors)?'適用IV下限 '+data.iv_floors.join('/')+'（全'+(data.raw_iv_count??4096)+'通り中 '+data.eligible_iv_count+'通りが探索対象）':'';
   const rInfo=ranking70OrInfo(data.gl_mega_ranking);
-  rankingInfo.textContent=rInfo?'ランキング70点OR基準：'+rInfo.label+'（'+rInfo.detail+'）':'';
+  const exploreStale=data.freshness?.needs_reevaluation?'⚠ 再評価保留（'+(data.freshness.reasons||[]).join(', ')+'） ／ ':'';
+  rankingInfo.textContent=exploreStale+(rInfo?'ランキング70点OR基準：'+rInfo.label+'（'+rInfo.detail+'）':'');
   const ownSum=data.ownership_summary;
   if(ownSum){
    ownershipInfo.textContent=data.qualifying_count
@@ -762,13 +775,31 @@ function renderExploration(parent,result){
  }
  renderOpponentBoundaries(body,result);
 }
+function defaultBuildForForm(targetSid,sourceCandidate){
+ const pokemon=catalog[targetSid];
+ if(!pokemon)return null;
+ const fastPool=pokemon.fastMoves||[],chargePool=pokemon.chargedMoves||[],def=pokemon.default_moves||{};
+ const fast=fastPool.includes(def.fast)?def.fast:fastPool[0];
+ const c1=chargePool.includes(def.charged1)?def.charged1:chargePool[0];
+ const c2=(def.charged2&&def.charged2!==c1&&chargePool.includes(def.charged2))?def.charged2:chargePool.find(m=>m!==c1);
+ if(!fast||!c1||!c2||c1===c2)return null;
+ const out={species_id:targetSid,ivs:sourceCandidate.ivs,level:sourceCandidate.level??20,moves:{fast,charged:[c1,c2]}};
+ if(sourceCandidate.owned_species_id&&sourceCandidate.owned_species_id!==targetSid)out.owned_species_id=sourceCandidate.owned_species_id;
+ else if(sourceCandidate.species_id&&sourceCandidate.species_id!==targetSid)out.owned_species_id=sourceCandidate.species_id;
+ return out;
+}
 function renderResult(result,request,revision){
  const tree=$('result-tree');tree.replaceChildren();
  fixedEvidenceTargets.clear();$('tactic-evidence-results').replaceChildren();
  const species=detail(tree,name(result.reference.species_id),'edit',true);
  const role=detail(species,roles[result.role.role_id]||result.role.role_id,'role',true);
  const cards=node('div',null,role,'stack');
- tag(node('div',null,cards,'tags'),...(gaps[result.state]||gaps.evidence_pending));
+ const isStale=result.evidence_state==='stale'||Boolean(result.freshness?.needs_reevaluation);
+ tag(node('div',null,cards,'tags'),...(isStale?gaps.stale:(gaps[result.state]||gaps.evidence_pending)));
+ if(isStale){
+  const reasons=(result.freshness?.reasons||[]).filter(Boolean);
+  node('p','⚠ 再評価が必要（再評価保留）：計算データ・ランキング・ルール等の更新が検出されたため、旧結果を新結果として表示しません。'+(reasons.length?'（理由: '+reasons.join(', ')+'）':''),cards,'muted break');
+ }
  renderExploration(cards,result);
  const conditions=result.candidates.flatMap(item=>item.conditions);
  node('p','優先度 '+(priorities[result.role.priority]||result.role.priority)+' ／ 確認済みの対面 '+conditions.filter(item=>item.state==='complete').length+' / '+conditions.length,cards,'muted');
@@ -784,6 +815,19 @@ function renderResult(result,request,revision){
   const rankInfo=ranking70OrInfo(candidate.gl_mega_ranking);
   if(rankInfo)tag(tags,rankInfo.label,rankInfo.tone);
   node('p','技構成　'+moveText(candidate),body,'muted');
+  if(candidate.owned_species_id&&candidate.owned_species_id!==candidate.species_id){
+   node('p','所持形態：'+name(candidate.owned_species_id)+' → 評価対象：'+name(candidate.species_id)+'（形態を区別して評価）',body,'muted');
+  }
+  const reach=candidate.reachable_forms;
+  const reachTargets=reach?[...(reach.evolutions||[]),...(reach.mega_forms||[])].filter(id=>id!==candidate.species_id&&catalog[id]):[];
+  if(reachTargets.length){
+   const reachBar=node('div',null,body,'actions');
+   node('span','到達可能な通常進化・メガ候補：',reachBar,'muted');
+   for(const targetSid of reachTargets){
+    const alt=defaultBuildForForm(targetSid,candidate);
+    if(alt)button(reachBar,'比較候補へ追加（'+name(targetSid)+'）',()=>addAlternative(alt),'quiet');
+   }
+  }
   if(rankInfo)node('p','ランキング70点OR基準：'+rankInfo.detail,body,'muted');
   if(result.can_sandbox){
    fixedEvidenceTargets.set(candidate.build_id,
@@ -1212,7 +1256,11 @@ function readReferenceTransfer(){
      moveset.charged[0]===moveset.charged[1]||
      !moveset.charged.every(m=>pokemon.chargedMoves?.includes(m)))return null;
   if(value.ivs&&(!['attack','defense','hp'].every(k=>Number.isInteger(value.ivs[k])&&value.ivs[k]>=0&&value.ivs[k]<=15)))return null;
-  return {species_id:value.species_id,moves:moveset,...(value.ivs?{ivs:value.ivs}:{})};
+  const out={species_id:value.species_id,moves:moveset,...(value.ivs?{ivs:value.ivs}:{})};
+  if(typeof value.owned_species_id==='string'&&catalog[value.owned_species_id])out.owned_species_id=value.owned_species_id;
+  if(Number.isInteger(value.mega_level)&&value.mega_level>=1&&value.mega_level<=4)out.mega_level=value.mega_level;
+  if(typeof value.charged3==='string'&&Array.isArray(pokemon.extraChargedMoves)&&pokemon.extraChargedMoves.includes(value.charged3))out.charged3=value.charged3;
+  return out;
  }catch{return null;}
 }
 async function connect(manual){

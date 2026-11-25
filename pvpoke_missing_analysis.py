@@ -145,8 +145,14 @@ class MissingAnalysis:
             raise AnalysisUnavailable('Could not store analysis plan') from exc
         return analysis_id
 
-    def evidence(self, analysis_id, *, active_versions, normalizer=None):
+    def evidence(self, analysis_id, *, active_versions, normalizer=None, active_context=None):
         """Return coverage and per-matchup facts from a single SQLite snapshot."""
+        from pvpoke_mega import (
+            discover_reachable_forms,
+            evaluate_selection_freshness,
+            pre_evolutions_for_target,
+        )
+
         if type(analysis_id) is not str or not re.fullmatch(r'[0-9a-f]{64}', analysis_id):
             raise ValueError('Invalid analysis ID')
         current = _versions(active_versions)
@@ -184,18 +190,15 @@ class MissingAnalysis:
                     if any(type(key) is not str for key in battle_keys):
                         raise ValueError('Invalid battle key in plan')
                     if has_inventory:
-                        from pvpoke_mega import eligible_pre_evolutions, is_mega_form
-
                         catalog = getattr(normalizer, 'species', None)
                         seen_owner_keys = set()
                         for spec in specs.values():
                             combatant = spec['combatants'][0]
                             iv_idx = _iv_index(combatant['ivs'])
                             keys_to_fetch = [(combatant['species_id'], iv_idx)]
-                            if is_mega_form(combatant['species_id']):
-                                for ancestor in eligible_pre_evolutions(combatant['species_id'], catalog):
-                                    if ancestor != combatant['species_id']:
-                                        keys_to_fetch.append((ancestor, iv_idx))
+                            for ancestor in pre_evolutions_for_target(combatant['species_id'], catalog):
+                                if ancestor != combatant['species_id']:
+                                    keys_to_fetch.append((ancestor, iv_idx))
                             for owner_key in keys_to_fetch:
                                 if owner_key not in seen_owner_keys:
                                     seen_owner_keys.add(owner_key)
@@ -221,19 +224,29 @@ class MissingAnalysis:
             matches_by_build = {}
             goals_by_build = {}
             rankings_by_species = {}
+            reachable_by_species = {}
             max_hp_by_build = {}
             catalog = getattr(normalizer, 'species', None)
+            advisories = []
+            seen_advisories = set()
             for key, spec in specs.items():
                 combatant = spec['combatants'][0]
                 build = build_id(combatant)
                 sid = combatant['species_id']
                 if sid not in rankings_by_species:
                     rankings_by_species[sid] = candidate_gl_mega_ranking(sid, species_catalog=catalog)
+                if sid not in reachable_by_species:
+                    reachable_by_species[sid] = discover_reachable_forms(sid, catalog)
+                rank_info = rankings_by_species[sid]
+                if rank_info.get('mega_gl_status') == 'unverified' and 'mega_ranking_unverified' not in seen_advisories:
+                    seen_advisories.add('mega_ranking_unverified')
+                    advisories.append('mega_ranking_unverified')
                 cell = {'battle_key': key, 'build_id': build, 'spec': spec,
                         'state': 'unknown', 'facts': None, 'ownership': 'unknown',
                         'inventory_matches': [], 'recommendation': 'unreviewed',
                         'gap_state': 'evidence_pending',
-                        'gl_mega_ranking': rankings_by_species[sid],
+                        'gl_mega_ranking': rank_info,
+                        'reachable_forms': reachable_by_species[sid],
                         'training_goal': None}
                 if normalizer is not None and versions == current:
                     if build not in max_hp_by_build:
@@ -247,14 +260,11 @@ class MissingAnalysis:
                 goal_cache_key = (build, _json_hash(spec.get('rules')), combatant.get('mega_level'))
                 if has_inventory and versions == current:
                     if goal_cache_key not in matches_by_build:
-                        from pvpoke_mega import eligible_pre_evolutions, is_mega_form
-
                         iv_idx = _iv_index(combatant['ivs'])
                         rows_for_match = list(owner_rows_by_key.get((sid, iv_idx), ()))
-                        if is_mega_form(sid):
-                            for ancestor in eligible_pre_evolutions(sid, catalog):
-                                if ancestor != sid:
-                                    rows_for_match.extend(owner_rows_by_key.get((ancestor, iv_idx), ()))
+                        for ancestor in pre_evolutions_for_target(sid, catalog):
+                            if ancestor != sid:
+                                rows_for_match.extend(owner_rows_by_key.get((ancestor, iv_idx), ()))
                         raw_matches = Ownership._match_rows(
                             rows_for_match,
                             combatant,
@@ -300,8 +310,36 @@ class MissingAnalysis:
                 cells.append(cell)
         except (sqlite3.Error, OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
             raise AnalysisUnavailable('Could not read analysis evidence') from exc
-        state = ('stale' if versions != current else 'complete' if completed == len(cells)
+
+        rec_calc = plan.get('calculation_version') or _json_hash([versions['engine'], versions['game_data']])
+        cur_calc = _json_hash([current['engine'], current['game_data']])
+        recorded_ctx = {'versions': versions, 'calculation_version': rec_calc}
+        current_ctx = {'versions': current, 'calculation_version': cur_calc}
+        if isinstance(active_context, dict):
+            for k in ('ranking_source_date', 'ranking_sha256', 'rules_digest', 'policy_version', 'meta_sha256'):
+                if k in plan:
+                    recorded_ctx[k] = plan[k]
+                if k in active_context:
+                    current_ctx[k] = active_context[k]
+            if 'rules' in active_context:
+                first_spec = next(iter(specs.values()))
+                recorded_ctx['rules'] = first_spec.get('rules')
+                current_ctx['rules'] = active_context['rules']
+            if active_context.get('impact_provable') is False:
+                current_ctx['impact_provable'] = False
+        freshness = evaluate_selection_freshness(recorded_ctx, current_ctx)
+        freshness['advisories'] = advisories
+        stale = (versions != current) or freshness['needs_reevaluation']
+        if stale:
+            for cell in cells:
+                cell['state'] = 'stale'
+                cell['facts'] = None
+                cell['gap_state'] = 'evidence_pending'
+            completed = 0
+        state = ('stale' if stale else 'complete' if completed == len(cells)
                  else 'partial' if completed else 'unknown')
         return {'analysis_id': analysis_id, 'versions': versions, 'state': state,
+                'freshness': freshness,
                 'coverage': {'requested': len(cells), 'completed': completed},
                 'ledger_revision': ledger_revision, 'cells': cells}
+

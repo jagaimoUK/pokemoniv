@@ -1021,3 +1021,241 @@ def resolve_gl_mega_ranking_70_or(
         ),
     }
 
+
+def _forward_evolutions(
+    start_species_id: str,
+    species_catalog: Mapping[str, Mapping[str, Any]] | None,
+) -> list[str]:
+    """Return catalog-verified forward non-Mega evolutions matching Shadow status."""
+    if not species_catalog or start_species_id not in species_catalog or is_mega_form(start_species_id):
+        return []
+    start_shadow = is_shadow_form(start_species_id)
+    reverse_parents: dict[str, list[str]] = {}
+    for sid, row in species_catalog.items():
+        if not isinstance(row, Mapping):
+            continue
+        fam = row.get('family')
+        if isinstance(fam, Mapping):
+            parent = fam.get('parent')
+            if isinstance(parent, str):
+                reverse_parents.setdefault(parent, []).append(sid)
+
+    visited = {start_species_id}
+    queue = [start_species_id]
+    evolutions: list[str] = []
+    while queue:
+        cur = queue.pop(0)
+        row = species_catalog.get(cur)
+        children: list[str] = []
+        if isinstance(row, Mapping):
+            fam = row.get('family')
+            if isinstance(fam, Mapping):
+                for child in fam.get('evolutions') or ():
+                    if isinstance(child, str):
+                        children.append(child)
+        children.extend(reverse_parents.get(cur, ()))
+        for child in children:
+            if (child in visited or child not in species_catalog
+                    or is_mega_form(child) or is_shadow_form(child) != start_shadow):
+                continue
+            visited.add(child)
+            evolutions.append(child)
+            queue.append(child)
+    return evolutions
+
+
+def pre_evolutions_for_target(
+    target_species_id: str,
+    species_catalog: Mapping[str, Mapping[str, Any]] | None = None,
+) -> tuple[str, ...]:
+    """Return catalog-verified pre-evolutions for Mega or normal evolved target species."""
+    if is_mega_form(target_species_id):
+        return eligible_pre_evolutions(target_species_id, species_catalog)
+    if not species_catalog or target_species_id not in species_catalog:
+        return ()
+    target_shadow = is_shadow_form(target_species_id)
+    reverse_parents: dict[str, list[str]] = {}
+    for sid, row in species_catalog.items():
+        if not isinstance(row, Mapping):
+            continue
+        fam = row.get('family')
+        if isinstance(fam, Mapping):
+            for child in fam.get('evolutions') or ():
+                if isinstance(child, str):
+                    reverse_parents.setdefault(child, []).append(sid)
+
+    chain: list[str] = []
+    visited = {target_species_id}
+    queue = [target_species_id]
+    while queue:
+        cur = queue.pop(0)
+        parents: list[str] = []
+        row = species_catalog.get(cur)
+        if isinstance(row, Mapping):
+            fam = row.get('family')
+            if isinstance(fam, Mapping):
+                parent = fam.get('parent')
+                if isinstance(parent, str):
+                    parents.append(parent)
+        parents.extend(reverse_parents.get(cur, ()))
+        for parent in parents:
+            if (parent in visited or parent not in species_catalog
+                    or is_mega_form(parent) or is_shadow_form(parent) != target_shadow):
+                continue
+            visited.add(parent)
+            chain.append(parent)
+            queue.append(parent)
+    return tuple(chain)
+
+
+def can_evolve_to(
+    owned_species_id: str,
+    target_species_id: str,
+    species_catalog: Mapping[str, Mapping[str, Any]] | None = None,
+) -> bool:
+    """Return True iff owned_species_id can evolve to target_species_id without fabricating paths."""
+    if not owned_species_id or not target_species_id or owned_species_id == target_species_id:
+        return False
+    if is_mega_form(target_species_id):
+        return can_mega_evolve(owned_species_id, target_species_id, species_catalog)
+    return owned_species_id in pre_evolutions_for_target(target_species_id, species_catalog)
+
+
+def discover_reachable_forms(
+    owned_species_id: str,
+    species_catalog: Mapping[str, Mapping[str, Any]] | None = None,
+    species_ids: Sequence[str] | set[str] | None = None,
+    *,
+    evaluated_species_id: str | None = None,
+) -> dict[str, Any]:
+    """Discover reachable normal evolutions and Mega forms while distinguishing owned vs evaluated."""
+    target = evaluated_species_id or owned_species_id
+    pool = (
+        list(species_ids) if species_ids is not None
+        else list(species_catalog or ())
+    )
+    evolutions = _forward_evolutions(owned_species_id, species_catalog)
+    mega_forms = (
+        mega_forms_for_base(owned_species_id, pool, species_catalog)
+        if not is_mega_form(owned_species_id)
+        else [owned_species_id]
+    )
+    pre_evolutions = list(pre_evolutions_for_target(target, species_catalog))
+    return {
+        'owned_species_id': owned_species_id,
+        'evaluated_species_id': target,
+        'form_distinct': target != owned_species_id,
+        'evolutions': evolutions,
+        'mega_forms': mega_forms,
+        'pre_evolutions': pre_evolutions,
+    }
+
+
+def evaluate_selection_freshness(
+    recorded: Mapping[str, Any] | None,
+    current: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Compare recorded evaluation fingerprints vs active context (TV-09 conservative fail-closed).
+
+    Checks GM/engine versions & calculation_version, ranking snapshot date/hash,
+    meta preset SHA-256, and policy/rule digests. Missing or unprovable axes mark
+    needs_reevaluation=True while preserving old results read-only.
+    """
+    rec = recorded if isinstance(recorded, Mapping) else {}
+    cur = current if isinstance(current, Mapping) else {}
+    reasons: list[str] = []
+    checked_axes: list[str] = []
+
+    # 1. GM / Engine versions & calculation_version
+    checked_axes.append('gm_and_engine')
+    rec_vers = rec.get('versions') if isinstance(rec.get('versions'), Mapping) else None
+    cur_vers = cur.get('versions') if isinstance(cur.get('versions'), Mapping) else None
+    rec_calc = rec.get('calculation_version')
+    cur_calc = cur.get('calculation_version')
+    if cur_vers is not None or rec_vers is not None:
+        if rec_vers is None or cur_vers is None:
+            reasons.append('calculation_version_unverified')
+        elif rec_vers != cur_vers:
+            reasons.append('engine_or_gamemaster_changed')
+    if cur_calc is not None or rec_calc is not None:
+        if not rec_calc or not cur_calc:
+            if 'calculation_version_unverified' not in reasons:
+                reasons.append('calculation_version_unverified')
+        elif rec_calc != cur_calc and 'engine_or_gamemaster_changed' not in reasons:
+            reasons.append('calculation_version_changed')
+    elif cur_vers is None and rec_vers is None:
+        reasons.append('calculation_version_unverified')
+
+    # 2. Ranking snapshot & Mega GL ranking verification
+    if ('ranking_source_date' in cur or 'ranking_source_date' in rec
+            or 'ranking_sha256' in cur or 'ranking_sha256' in rec
+            or rec.get('mega_gl_status') == 'unverified'
+            or cur.get('mega_gl_status') == 'unverified'):
+        checked_axes.append('ranking')
+        cur_date = cur.get('ranking_source_date')
+        rec_date = rec.get('ranking_source_date')
+        cur_rhash = cur.get('ranking_sha256')
+        rec_rhash = rec.get('ranking_sha256')
+        if cur_date is not None or rec_date is not None:
+            if not rec_date or not cur_date:
+                reasons.append('ranking_unverified')
+            elif rec_date != cur_date:
+                reasons.append('ranking_changed')
+        if cur_rhash is not None or rec_rhash is not None:
+            if not rec_rhash or not cur_rhash:
+                if 'ranking_unverified' not in reasons:
+                    reasons.append('ranking_unverified')
+            elif rec_rhash != cur_rhash and 'ranking_changed' not in reasons:
+                reasons.append('ranking_changed')
+        if rec.get('mega_gl_status') == 'unverified' or cur.get('mega_gl_status') == 'unverified':
+            reasons.append('mega_ranking_unverified')
+
+    # 3. Meta preset hash (when applicable)
+    if rec.get('meta_sha256') is not None or cur.get('meta_sha256') is not None:
+        checked_axes.append('meta')
+        if not rec.get('meta_sha256') or not cur.get('meta_sha256'):
+            reasons.append('meta_unverified')
+        elif rec.get('meta_sha256') != cur.get('meta_sha256'):
+            reasons.append('meta_changed')
+
+    # 4. Rules, downscaling policy, and selection policy
+    if ('policy_version' in cur or 'policy_version' in rec
+            or 'rules_digest' in cur or 'rules_digest' in rec
+            or 'rules' in cur or 'rules' in rec
+            or rec.get('mega_rule_unverified') or cur.get('mega_rule_unverified')):
+        checked_axes.append('rules_and_policy')
+        if 'policy_version' in cur or 'policy_version' in rec:
+            if not rec.get('policy_version') or not cur.get('policy_version'):
+                reasons.append('policy_version_unverified')
+            elif rec.get('policy_version') != cur.get('policy_version'):
+                reasons.append('policy_version_changed')
+        if 'rules_digest' in cur or 'rules_digest' in rec:
+            if not rec.get('rules_digest') or not cur.get('rules_digest'):
+                reasons.append('rules_unverified')
+            elif rec.get('rules_digest') != cur.get('rules_digest'):
+                reasons.append('rules_changed')
+        if 'rules' in cur or 'rules' in rec:
+            rec_rules = resolve_battle_rules(rec.get('rules')) if rec.get('rules') is not None else None
+            cur_rules = resolve_battle_rules(cur.get('rules')) if cur.get('rules') is not None else None
+            if (rec_rules is None) != (cur_rules is None):
+                reasons.append('rules_unverified')
+            elif rec_rules is not None and rec_rules != cur_rules:
+                reasons.append('rules_changed')
+        if rec.get('mega_rule_unverified') or cur.get('mega_rule_unverified'):
+            reasons.append('mega_rule_unverified')
+
+    if rec.get('impact_provable') is False or cur.get('impact_provable') is False:
+        reasons.append('impact_not_provable')
+
+    needs_reeval = bool(reasons)
+    return {
+        'fresh': not needs_reeval,
+        'needs_reevaluation': needs_reeval,
+        'status': 'reevaluation_pending' if needs_reeval else 'current',
+        'display_label': '再評価が必要（再評価保留）' if needs_reeval else '最新の計算基準と一致',
+        'reasons': reasons,
+        'checked_axes': checked_axes,
+        'old_result_preserved': True,
+    }
+
+

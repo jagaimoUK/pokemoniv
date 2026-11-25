@@ -450,6 +450,7 @@ class Ownership:
     def _match_rows(rows, combatant, cp, *, species_catalog=None, cpms=None, rules=None, mega_level=3):
         from pvpoke_mega import (
             base_species_id,
+            can_evolve_to,
             can_mega_evolve,
             evaluate_owned_for_mega,
             is_mega_form,
@@ -464,7 +465,9 @@ class Ownership:
             rec_species = record['species_id']
             is_direct = rec_species == target_species
             is_mega_link = mega_mode and can_mega_evolve(rec_species, target_species, species_catalog)
-            if (not is_direct and not is_mega_link) or record['ivs'] != combatant['ivs']:
+            is_evolution_link = (not is_direct and not is_mega_link
+                                 and can_evolve_to(rec_species, target_species, species_catalog))
+            if (not is_direct and not is_mega_link and not is_evolution_link) or record['ivs'] != combatant['ivs']:
                 raise OwnershipUnavailable('Inventory match index is inconsistent')
             moves = record['current_moves'] or {}
             mega_eval = None
@@ -519,6 +522,22 @@ class Ownership:
                         match = 'unverified'
                     else:
                         match = 'exact'
+            elif is_evolution_link:
+                move_pairs = (
+                    (moves.get('fast'), combatant['moves']['fast']),
+                    (moves.get('charged'), combatant['moves']['charged']),
+                )
+                moves_mismatch = any(
+                    actual is not None and expected is not None and actual != expected
+                    for actual, expected in move_pairs
+                )
+                cur_level = record['current_level']
+                if cur_level is not None and float(cur_level) > float(combatant['level']):
+                    match = 'different'
+                elif moves_mismatch:
+                    match = 'different'
+                else:
+                    match = 'unverified'
             else:
                 pairs = ((record['current_level'], combatant['level']), (record['current_cp'], cp),
                          (moves.get('fast'), combatant['moves']['fast']),
@@ -529,8 +548,20 @@ class Ownership:
                     match = 'unverified'
                 else:
                     match = 'exact'
-            entry = {'instance_id': record['instance_id'], 'state': record['state'],
-                     'revision': record['revision'], 'build_match': match}
+            entry = {
+                'instance_id': record['instance_id'],
+                'state': record['state'],
+                'revision': record['revision'],
+                'build_match': match,
+                'owned_species_id': rec_species,
+                'evaluated_species_id': target_species,
+                'form_distinct': rec_species != target_species,
+            }
+            if is_evolution_link:
+                entry['needs_evolution'] = True
+                cur_level = record.get('current_level')
+                if cur_level is not None and float(cur_level) < float(combatant['level']):
+                    entry['needs_power_up'] = True
             if is_mega_link:
                 entry['base_species_id'] = rec_species
                 if mega_eval is not None:
@@ -550,15 +581,14 @@ class Ownership:
 
     def _matches(self, db, combatant, cp, *, species_catalog=None, cpms=None, rules=None, mega_level=3):
         """Show exact and uncertain candidates without converting absence into a build-wide fact."""
-        from pvpoke_mega import eligible_pre_evolutions, is_mega_form
+        from pvpoke_mega import pre_evolutions_for_target
 
         species_id = combatant['species_id']
         iv_idx = _iv_index(combatant['ivs'])
         query_species = [species_id]
-        if is_mega_form(species_id):
-            for ancestor in eligible_pre_evolutions(species_id, species_catalog):
-                if ancestor not in query_species:
-                    query_species.append(ancestor)
+        for ancestor in pre_evolutions_for_target(species_id, species_catalog):
+            if ancestor not in query_species:
+                query_species.append(ancestor)
         placeholders = ','.join('?' for _ in query_species)
         rows = list(db.execute(
             f'''SELECT body, digest FROM owned_instances_v1
@@ -571,14 +601,13 @@ class Ownership:
 
     def species_rows_by_iv(self, species_id, *, species_catalog=None):
         """Return validated inventory row pairs keyed by iv_index and confirmed-owned count."""
-        from pvpoke_mega import eligible_pre_evolutions, is_mega_form
+        from pvpoke_mega import pre_evolutions_for_target
 
         species = self._species(species_id)
         query_species = [species]
-        if is_mega_form(species):
-            for ancestor in eligible_pre_evolutions(species, species_catalog):
-                if ancestor in self.species_ids and ancestor not in query_species:
-                    query_species.append(ancestor)
+        for ancestor in pre_evolutions_for_target(species, species_catalog):
+            if ancestor in self.species_ids and ancestor not in query_species:
+                query_species.append(ancestor)
         if not self.store.path.exists():
             return {}, 0
         by_iv = {}
@@ -599,3 +628,4 @@ class Ownership:
                     confirmed_owned += 1
                 by_iv.setdefault(iv_index, []).append((body, digest))
         return by_iv, confirmed_owned
+
