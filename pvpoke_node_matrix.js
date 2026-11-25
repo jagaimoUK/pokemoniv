@@ -205,8 +205,9 @@ function matrix(req) {
     throw Error("shields must be [self,opponent] with 0,1,2");
   }
   loadMaster(req.gamemaster_path);
+  const cpCap = Number.isInteger(req.cp_cap) && req.cp_cap >= 10 && req.cp_cap <= 10000 ? req.cp_cap : 1500;
   const init = new Battle();
-  init.setCP(1500);
+  init.setCP(cpCap);
   const candidates = req.candidates.map((r,i) => createPokemon(r,i,init));
   const opponents = req.opponents.map((r,i) => createPokemon(r,i,init));
   const ranker = RankerMaster.getInstance();
@@ -226,7 +227,7 @@ function matrix(req) {
     for (const policy of modes) {
       // Restore upstream behavior for every non-Minior candidate.
       if (isMiniorBatch) Battle = minior.installBattleHook(originalBattle, policy, DamageCalculator);
-      const result = ranker.rank(opponents, 1500, {name:"all",include:[],exclude:[]}, [], "matrix");
+      const result = ranker.rank(opponents, cpCap, {name:"all",include:[],exclude:[]}, [], "matrix");
       if (!result || !Array.isArray(result.rankings) ||
           result.rankings.length !== candidates.length) {
         throw Error("PvPoke TeamRanker did not return a complete Matrix");

@@ -159,14 +159,14 @@ def charged_move_pool(pokemon, cp_cap=CP_CAP):
     return moves
 
 
-def optimize(rows, species, cpms, fname):
+def optimize(rows, species, cpms, fname, cp_cap=CP_CAP):
     prepared = []
     for idx, row in enumerate(rows, 2):
         p = species.get(row['species'])
         if p is None:
             raise ValueError(f'{fname} {idx}行目: species未登録: {row["species"]}')
         allowed_fast = set(p['fastMoves'])
-        allowed_charged = set(charged_move_pool(p))
+        allowed_charged = set(charged_move_pool(p, cp_cap=cp_cap))
         for key, allowed in [('fast', allowed_fast), ('charged1', allowed_charged), ('charged2', allowed_charged)]:
             if row[key] not in allowed:
                 raise ValueError(f'{fname} {idx}行目: 未対応の技: {key}={row[key]} ({row["species"]})')
@@ -198,10 +198,10 @@ def optimize(rows, species, cpms, fname):
                 math.sqrt(stats['def'] + row['def']) *
                 math.sqrt(stats['hp'] + row['hp']) * cpm ** 2 / 10
             ))
-            if cp <= CP_CAP:
+            if cp <= cp_cap:
                 possibilities.append((level, cp))
         if not possibilities:
-            raise ValueError(f'{fname} {idx}行目: CP{CP_CAP}以下の適正レベルが見つかりません')
+            raise ValueError(f'{fname} {idx}行目: CP{cp_cap}以下の適正レベルが見つかりません')
         if row.get('level_override') is not None:
             requested = float(row['level_override'])
             selected = [pair for pair in possibilities if abs(pair[0] - requested) < .001]

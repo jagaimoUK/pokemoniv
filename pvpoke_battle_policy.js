@@ -22,7 +22,8 @@ function state(p) {
 function createRunner(ctx) {
   const {Battle, createPokemon, DamageCalculator:DC, ActionLogic, TimelineAction, gm} = ctx;
   function run(req) {
-    const b = new Battle(); b.setCP(1500);
+    const cpCap = Number.isInteger(req.cp_cap) && req.cp_cap >= 10 && req.cp_cap <= 10000 ? req.cp_cap : 1500;
+    const b = new Battle(); b.setCP(cpCap);
     const rows = [req.self,req.opponent];
     if (rows.some(r => r.species.startsWith('minior'))) throw Error('Minior policy not supported');
     const ps = rows.map((r,i)=>createPokemon(r,i,b));
@@ -50,11 +51,11 @@ function createRunner(ctx) {
       const publicData=gm.getPokemonById(enemy.activeFormId)||gm.getPokemonById(enemy.speciesId);
       const ids=req.public_moves !== false ? [rows[1-defenderIndex].charged1,rows[1-defenderIndex].charged2,rows[1-defenderIndex].charged3].filter(Boolean) :
         [...new Set([...(gm.getPokemonById(enemy.speciesId).chargedMoves||[]),...h.charged.map(m=>m.move_id)])];
-      // Public conservative upper bound under CP1500/Lv50; independent of the
+      // Public conservative upper bound under cpCap/Lv50; independent of the
       // actual opposing IV, level, energy and secretly selected charged move.
       const base=publicData.baseStats;
       const attackUpper=Math.min((base.atk+15)*.840300023555755,
-        Math.sqrt(15010*(base.atk+15)/Math.sqrt(base.def*base.hp)));
+        Math.sqrt((cpCap*10+10)*(base.atk+15)/Math.sqrt(base.def*base.hp)));
       const mult=enemy.getStatBuffMultiplier(0,false); // visible stat stages only
       const publicAttacker={activeFormId:'',getEffectiveStat:()=>attackUpper*mult*(enemy.shadowType==='shadow'?1.2:1),hasTag:()=>false};
       const possible=ids.map(id=>gm.getMoveById(id)).filter(m=>m && m.energy<=h.energy_range[1]).map(m=>{

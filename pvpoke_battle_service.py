@@ -17,7 +17,7 @@ from pathlib import Path
 from pvpoke_batch_v2 import CP_CAP, MAX_LEVEL, optimize
 from pvpoke_calculation_version import content_hash
 from pvpoke_direct_backend import DirectMatrixClient, DirectMatrixError
-from pvpoke_mega import is_mega_form
+from pvpoke_mega import MEGA_DOWNSCALING_CUPS, UNSCALED_CUPS, is_mega_form
 
 if TYPE_CHECKING:
     from pvpoke_battle_store import BattleStore
@@ -231,7 +231,7 @@ class BattleService:
         self.versions = {'engine': self.engine_version, 'game_data': self.data_version}
         self.calculation_version = _json_hash([self.engine_version, self.data_version])
 
-    def _combatant(self, value):
+    def _combatant(self, value, *, cp_cap=CP_CAP):
         _object(value, 'combatant', ('species_id', 'ivs', 'level', 'moves', 'initial'), ('mega_level',))
         species = _identifier(value['species_id'], 'species ID')
         ivs = _object(value['ivs'], 'IVs', ('attack', 'defense', 'hp'))
@@ -277,7 +277,7 @@ class BattleService:
         if mega_level is not None:
             row['mega_level'] = mega_level
         try:
-            prepared, = optimize([row], self.species, self.cpms, 'battle')
+            prepared, = optimize([row], self.species, self.cpms, 'battle', cp_cap=cp_cap)
         except ValueError:
             raise ValueError('Moves or level do not match the species, form or CP cap') from None
         # Pokemon.initialize applies a fixed HP rule to Shedinja after CPM scaling.
@@ -304,13 +304,28 @@ class BattleService:
                 ('calculation_version', 'policies', 'actions', 'shield_decisions'))
         if request['schema'] != SPEC_SCHEMA:
             raise UnsupportedBattle('Unknown battle spec version')
-        rules = _object(request['rules'], 'rules', ('league', 'cp_cap'), ('max_level', 'cup_id'))
+        rules = _object(request['rules'], 'rules', ('league', 'cp_cap'), ('max_level', 'cup_id', 'allow_cp_downscaling'))
         league = _identifier(rules['league'], 'league')
         cap = _integer(rules['cp_cap'], 'CP cap', 10, 10000)
         level_cap = _integer(rules.get('max_level', MAX_LEVEL), 'max level', 1, 100)
         cup = _identifier(rules.get('cup_id', 'all'), 'cup ID')
-        if (league, cap, level_cap, cup) != ('great', CP_CAP, MAX_LEVEL, 'all'):
-            raise UnsupportedBattle('Only open Great League, CP 1500 and level cap 50 are supported')
+        has_downscale_flag = 'allow_cp_downscaling' in rules
+        allow_downscaling = _boolean(rules['allow_cp_downscaling'], 'allow_cp_downscaling') if has_downscale_flag else None
+
+        supported_cups_great = {'all', *MEGA_DOWNSCALING_CUPS, *UNSCALED_CUPS} - {'ultra_mega'}
+        supported_cups_ultra = {'ultra_mega', 'mega_edition', *UNSCALED_CUPS}
+        if level_cap != MAX_LEVEL or not (
+            (league == 'great' and cap == CP_CAP and cup in supported_cups_great)
+            or (league == 'ultra' and cap == 2500 and cup in supported_cups_ultra)
+        ):
+            raise UnsupportedBattle('Unsupported league, CP cap, level cap, or cup ID')
+        if cup == 'all' and allow_downscaling is True:
+            raise UnsupportedBattle('Open Great League does not support Mega CP downscaling')
+        if cup in UNSCALED_CUPS and allow_downscaling is True:
+            raise UnsupportedBattle('Unscaled cup does not support Mega CP downscaling')
+        if cup in MEGA_DOWNSCALING_CUPS and allow_downscaling is None:
+            allow_downscaling = True
+
         mode = request['mode']
         if mode not in ('standard', 'sandbox'):
             raise ValueError('Invalid battle mode')
@@ -331,11 +346,14 @@ class BattleService:
         bait = [_boolean(value, 'bait') for value in _items(policies.get('bait', [True] * 2), 'bait', 2, 2)]
         if mode == 'sandbox' or actions or decisions or shield != ['standard'] * 2:
             raise UnsupportedBattle('Sandbox actions and manual shield decisions are not executable in this version')
-        combatants, rows = zip(*(self._combatant(value)
+        combatants, rows = zip(*(self._combatant(value, cp_cap=cap)
                                  for value in _items(request['combatants'], 'combatants', 2, 2)))
+        normalized_rules = {'league': league, 'cp_cap': cap, 'max_level': level_cap, 'cup_id': cup}
+        if allow_downscaling is not None:
+            normalized_rules['allow_cp_downscaling'] = allow_downscaling
         spec = {
             'schema': SPEC_SCHEMA, 'mode': mode, 'calculation_version': self.calculation_version,
-            'rules': {'league': league, 'cp_cap': cap, 'max_level': level_cap, 'cup_id': cup},
+            'rules': normalized_rules,
             'combatants': list(combatants), 'actions': [], 'shield_decisions': [],
             'policies': {'attack': list(attack), 'shield': list(shield), 'bait': bait},
         }
@@ -346,6 +364,8 @@ class BattleService:
                         for state in initial],
             'attack_policies': list(attack), 'bait': bait,
         }
+        if cap != CP_CAP:
+            payload['cp_cap'] = cap
         return spec, payload
 
     def simulate(self, request: dict | str | bytes) -> dict:

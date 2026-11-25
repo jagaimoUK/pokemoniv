@@ -685,6 +685,93 @@ console.log(JSON.stringify({{missingBadges, appNotes}}));
             self.assertEqual(cache.lookup([m4], [opp_row], [1, 1])[(0, 0)][2], '620')
             self.assertEqual(cache.lookup([m4_alt], [opp_row], [1, 1]), {})
 
+    def test_battle_service_supports_gl_ul_mega_rules_and_rejects_mismatched_leagues(self):
+        import json
+        from pvpoke_battle_service import BattleService
+        from pvpoke_direct_backend import DirectMatrixClient
+
+        fixtures = Path(__file__).resolve().parent / 'fixtures'
+        gm_data = json.loads((fixtures / 'strategy_gamemaster.json').read_text(encoding='utf-8'))
+        rows = json.loads((fixtures / 'strategy_rows.json').read_text(encoding='utf-8'))
+        opponent_row = rows[0]
+
+        gm_data['moves'].append({
+            'moveId': 'MEGA_BLAST_PLUS',
+            'name': 'Mega Blast+',
+            'type': 'dragon',
+            'power': 80,
+            'energy': 35,
+            'energyGain': 0,
+            'cooldown': 500,
+            'turns': 1,
+            'isMegaMove': True,
+        })
+        mega_ivs = {'attack': 0, 'defense': 14, 'hp': 15}
+        gl_lvl, _ = max_level_and_cp(self.altaria_mega_stats, mega_ivs, cp_cap=1500, max_level=50.0, cpms=self.cpms)
+        ul_lvl, ul_cp = max_level_and_cp(self.altaria_mega_stats, mega_ivs, cp_cap=2500, max_level=50.0, cpms=self.cpms)
+        self.assertGreater(ul_cp, 1500)
+        self.assertLessEqual(ul_cp, 2500)
+
+        gm_data['pokemon'].append({
+            'speciesId': 'altaria_mega',
+            'speciesName': 'Altaria (Mega)',
+            'dex': 334,
+            'types': ['dragon', 'fairy'],
+            'baseStats': self.altaria_mega_stats,
+            'fastMoves': ['DRAGON_BREATH'],
+            'chargedMoves': ['DRAGON_PULSE', 'MOONBLAST'],
+            'extraChargedMoves': ['MEGA_BLAST_PLUS'],
+            'tags': ['mega'],
+        })
+        master = self.root / 'gamemaster.json'
+        master.write_text(json.dumps(gm_data), encoding='utf-8')
+        client = DirectMatrixClient(gamemaster=master, log_dir=self.root)
+        self.addCleanup(client.close)
+        service = BattleService(client, store=self.store)
+
+        def make_spec(rules, level):
+            return {
+                'schema': 'battle-spec-v1',
+                'mode': 'standard',
+                'rules': rules,
+                'combatants': [
+                    {
+                        'species_id': 'altaria_mega',
+                        'ivs': mega_ivs,
+                        'level': level,
+                        'mega_level': 4,
+                        'moves': {'fast': 'DRAGON_BREATH', 'charged': ['DRAGON_PULSE', 'MOONBLAST', 'MEGA_BLAST_PLUS']},
+                        'initial': {'hp': 'full', 'energy': 0, 'shields': 1, 'stages': [0, 0]},
+                    },
+                    {
+                        'species_id': opponent_row['species'],
+                        'ivs': {'attack': opponent_row['atk'], 'defense': opponent_row['def'], 'hp': opponent_row['hp']},
+                        'level': opponent_row['level'],
+                        'moves': {'fast': opponent_row['fast'], 'charged': [opponent_row['charged1'], opponent_row['charged2']]},
+                        'initial': {'hp': 'full', 'energy': 0, 'shields': 1, 'stages': [0, 0]},
+                    },
+                ],
+            }
+
+        gl_mega = service.simulate(make_spec({'league': 'great', 'cp_cap': 1500, 'cup_id': 'great_mega'}, gl_lvl))
+        self.assertEqual(gl_mega['status'], 'complete', gl_mega.get('error'))
+        self.assertTrue(gl_mega['spec']['rules']['allow_cp_downscaling'])
+
+        gl_strict = service.simulate(make_spec({'league': 'great', 'cp_cap': 1500, 'cup_id': 'strict_unscaled', 'allow_cp_downscaling': False}, gl_lvl))
+        self.assertEqual(gl_strict['status'], 'complete', gl_strict.get('error'))
+        self.assertFalse(gl_strict['spec']['rules']['allow_cp_downscaling'])
+        self.assertNotEqual(gl_mega['battle_key'], gl_strict['battle_key'])
+
+        ul_mega = service.simulate(make_spec({'league': 'ultra', 'cp_cap': 2500, 'cup_id': 'ultra_mega'}, ul_lvl))
+        self.assertEqual(ul_mega['status'], 'complete', ul_mega.get('error'))
+        self.assertEqual(ul_mega['spec']['rules']['cp_cap'], 2500)
+        self.assertTrue(ul_mega['spec']['rules']['allow_cp_downscaling'])
+
+        # Mismatched league/cap or unknown cup must remain unsupported.
+        self.assertEqual(service.simulate(make_spec({'league': 'ultra', 'cp_cap': 1500, 'cup_id': 'ultra_mega'}, gl_lvl))['status'], 'unsupported')
+        self.assertEqual(service.simulate(make_spec({'league': 'great', 'cp_cap': 2500, 'cup_id': 'great_mega'}, gl_lvl))['status'], 'unsupported')
+        self.assertEqual(service.simulate(make_spec({'league': 'great', 'cp_cap': 1500, 'cup_id': 'some_cup'}, gl_lvl))['status'], 'unsupported')
+
 
 if __name__ == '__main__':
     unittest.main()
