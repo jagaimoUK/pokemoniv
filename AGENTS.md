@@ -85,6 +85,6 @@ HEAD: <SHA>
 ## 個体値厳選・メガ進化・Android連携の設計書（文書PR提案：2026-11-25）
 
 - **設計書の単一正本（全15問の確定要求＋技術検証）**：https://github.com/jagaimoUK/pokemoniv/blob/docs/mega-iv-cross-app-spec-20261125/docs/mega-iv-selection-cross-app-design.md
-- 厳選アプリの重要個体保存・差分計算、メガCP/PL、パーティ機能、Android同期・オーバーレイへ着手する際は、**本書の`2、`3、`5、`8を実際に読み**、最新対象PRの[AI-HANDOFF v1]・コードと照合する。
+- 厳選アプリの重要個体保存・差分計算、メガCP/PL、パーティ機能、Android同期・オーバーレイへ着手する際は、**本書の第2章・第3章・第5章・第8章を実際に読み**、最新対象PRの[AI-HANDOFF v1]・コードと照合する。
 - Android現行開発正本は `jagaimoUK/PokemonIVReader-public-ci` の `main`。歴史的Private `PokemonIVReader` の作業ブランチを現行開発先と推定しない。
 - このリンクは現在**文書専用ブランチへの参照**。本AGENTS変更のDraft PRがマージされるまでは標準ブランチへ反映済みと扱わない。本番デプロイ・マージは別途明示承認が必要。
