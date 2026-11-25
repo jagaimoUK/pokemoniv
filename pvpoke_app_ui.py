@@ -37,7 +37,7 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <p id="selectionModeStatus" class="note" aria-live="polite"></p><div id="selectionModeRows"></div><button id="selectionModeMore" class="secondary" type="button" hidden>さらに50件を表示</button>
 <div class="actions"><button id="selectionSettingsClose" type="button">閉じる</button></div></dialog>
 <div id="workspace" hidden>
-<div class="guide-banner" role="note"><strong>👉 全体の流れ：</strong><span class="step-pill">Step 1</span>「1. ポケモンと個体値」を入力 ➜ <span class="step-pill">Step 2</span>「計算して推薦を表示」をタップ</div>
+<div class="guide-banner" role="note"><strong>👉 全体の流れ：</strong><span class="step-pill">Step 1</span>下の「ポケモン名・個体値」を入力 ➜ <span class="step-pill">Step 2</span>「計算して推薦を表示」をタップ</div>
 <section class="card" id="lowScorePanel" hidden>
 <h2>非厳選判定の内訳（診断）</h2>
 <p class="note">読み取りアプリの「⋯ → 非厳選を取得・コピー」から直接検索式を生成・コピーします。この画面は除外理由の確認専用で、検索式の手動転送は不要です。候補は博士送りの保証ではありません。</p>
