@@ -772,6 +772,83 @@ console.log(JSON.stringify({{missingBadges, appNotes}}));
         self.assertEqual(service.simulate(make_spec({'league': 'great', 'cp_cap': 2500, 'cup_id': 'great_mega'}, gl_lvl))['status'], 'unsupported')
         self.assertEqual(service.simulate(make_spec({'league': 'great', 'cp_cap': 1500, 'cup_id': 'some_cup'}, gl_lvl))['status'], 'unsupported')
 
+    def test_app_ui_mega_level_and_extra_charged_move_controls(self):
+        import json
+        import re
+        import subprocess
+        from pvpoke_app_ui import HTML as APP_HTML
+
+        # Verify HTML controls exist.
+        for control_id in ('id="megaMoveSettings"', 'id="megaLevel"', 'id="charged3Wrap"', 'id="charged3"'):
+            self.assertIn(control_id, APP_HTML)
+
+        script_body = re.search(r"<script>\s*(.*)\s*</script>", APP_HTML, re.S).group(1)
+        # Extract only the pure option / fillMoveFields / moves / currentCandidate helpers to test in Node.
+        js_harness = """
+const assert = require('node:assert/strict');
+const elements = {};
+function makeEl(id, hidden = false) {
+  return {
+    id, hidden, value: '', options: [],
+    replaceChildren() { this.options = []; this.value = ''; },
+    append(o) { this.options.push(o); if (!this.value) this.value = o.value; },
+  };
+}
+['species', 'fast', 'charged1', 'charged2', 'megaMoveSettings', 'megaLevel', 'charged3Wrap', 'charged3'].forEach(id => {
+  elements[id] = makeEl(id, id === 'megaMoveSettings' || id === 'charged3Wrap');
+});
+elements.megaLevel.options = [{value:'1'},{value:'2'},{value:'3'},{value:'4'}];
+elements.megaLevel.value = '3';
+const el = id => elements[id];
+const document = { createElement: () => ({ value: '', textContent: '' }) };
+let catalog = {
+  quagsire: { fastMoves: ['MUD_SHOT'], chargedMoves: ['AQUA_TAIL', 'STONE_EDGE'] },
+  altaria_mega: { fastMoves: ['DRAGON_BREATH'], chargedMoves: ['DRAGON_PULSE', 'MOONBLAST'], tags: ['mega'], extraChargedMoves: [] },
+  clefable_mega: { fastMoves: ['FAIRY_WIND'], chargedMoves: ['MOONBLAST', 'METEOR_MASH'], tags: ['mega', 'supermega'], extraChargedMoves: ['MOONBLAST_PLUS'] },
+};
+"""
+        m_opts = re.search(r"function option\(select,values,selected,label=v=>v\)\{.*?\n\}", script_body, re.S)
+        m_fill = re.search(r"function fillMoveFields\(sid,row,\[fast,charged1,charged2\],label\)\{.*?\n\}", script_body, re.S)
+        m_moves = re.search(r"function moves\(row=\{\},sid=el\('species'\)\.value\)\{.*?\n\}", script_body, re.S)
+        m_curr = re.search(r"function currentCandidate\(\)\{.*?\n\}", script_body, re.S)
+        self.assertTrue(all((m_opts, m_fill, m_moves, m_curr)))
+
+        test_script = js_harness + "\n".join(m.group(0) for m in (m_opts, m_fill, m_moves, m_curr)) + """
+// 1. Non-Mega species hides Mega controls and omits mega_level / charged3.
+elements.species.value = 'quagsire';
+moves();
+assert.equal(elements.megaMoveSettings.hidden, true);
+assert.equal(elements.charged3Wrap.hidden, true);
+const cNormal = currentCandidate();
+assert.equal('mega_level' in cNormal, false);
+assert.equal('charged3' in cNormal, false);
+
+// 2. Mega species without extraChargedMoves shows megaLevel (default 3) and hides charged3.
+elements.species.value = 'altaria_mega';
+moves();
+assert.equal(elements.megaMoveSettings.hidden, false);
+assert.equal(elements.megaLevel.value, '3');
+assert.equal(elements.charged3Wrap.hidden, true);
+elements.megaLevel.value = '2';
+assert.deepEqual(currentCandidate(), {
+  species: 'altaria_mega', fast: 'DRAGON_BREATH', charged1: 'DRAGON_PULSE', charged2: 'MOONBLAST', mega_level: 2
+});
+
+// 3. SuperMega species with extraChargedMoves defaults megaLevel=4 and allows selecting charged3.
+elements.species.value = 'clefable_mega';
+moves({ charged3: 'MOONBLAST_PLUS' });
+assert.equal(elements.megaMoveSettings.hidden, false);
+assert.equal(elements.megaLevel.value, '4');
+assert.equal(elements.charged3Wrap.hidden, false);
+assert.deepEqual(currentCandidate(), {
+  species: 'clefable_mega', fast: 'FAIRY_WIND', charged1: 'MOONBLAST', charged2: 'METEOR_MASH',
+  mega_level: 4, charged3: 'MOONBLAST_PLUS'
+});
+console.log('APP_UI_MEGA_CONTROLS_OK');
+"""
+        proc = subprocess.run(['node', '-e', test_script], capture_output=True, text=True, check=True, timeout=10)
+        self.assertIn('APP_UI_MEGA_CONTROLS_OK', proc.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()

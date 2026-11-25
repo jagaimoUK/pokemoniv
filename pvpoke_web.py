@@ -150,6 +150,8 @@ def load_catalog():
                 'types': p.get('types', []),
                 'fastMoves': p.get('fastMoves', []),
                 'chargedMoves': engine.charged_move_pool(p),
+                'extraChargedMoves': p.get('extraChargedMoves', []),
+                'tags': p.get('tags', []),
             }
             for sid, p in species.items()
         }

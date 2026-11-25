@@ -80,6 +80,7 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <label for="moveThreshold">残す平均Ratingの下限（500付近の目安）</label><input id="moveThreshold" type="number" min="0" max="1000" value="450" step="1">
 <p class="note">全構成が下限未満でも最高平均の構成は表示します。自動比較OFFでは、右上の「設定」で計算対象にした構成をすべて使います。計算対象の登録がない場合は、今回の入力で指定した技を使います。個体ごとのコピー名には採用技の略号を付けます。</p>
 <div class="row" id="inputMoves"><div><label for="fast">通常技</label><select id="fast"></select></div><div><label for="charged1">ゲージ技1</label><select id="charged1"></select></div><div><label for="charged2">ゲージ技2</label><select id="charged2"></select></div></div>
+<div class="row" id="megaMoveSettings" hidden><div><label for="megaLevel">メガレベル（1〜4）</label><select id="megaLevel"><option value="1">Lv1（基本）</option><option value="2">Lv2（高）</option><option value="3" selected>Lv3（MAX・既定）</option><option value="4">Lv4（スーパーMAX・PL+2仮説保留）</option></select></div><div id="charged3Wrap" hidden><label for="charged3">追加ゲージ技（3つ目）</label><select id="charged3"></select></div></div>
 <p id="movePlanSummary" class="note" aria-live="polite"></p>
 </details>
 <details><summary>自動推薦の基準を調整</summary><label for="lead">勝ち方向で採用するRating差（既定20）</label><input id="lead" type="number" min="1" max="1000" step="1" value="20"><p class="note">500の境界を越える役割は差にかかわらず確認します。負けたままのRating差は自動推薦にしません。</p></details>
@@ -233,9 +234,30 @@ function fillMoveFields(sid,row,[fast,charged1,charged2],label){
   if(alternative)charged2.value=alternative;
  }
 }
-function moves(row={},sid=el('species').value){fillMoveFields(sid,row,['fast','charged1','charged2'].map(el));}
+function moves(row={},sid=el('species').value){
+ fillMoveFields(sid,row,['fast','charged1','charged2'].map(el));
+ const p=catalog[sid]||{};
+ const isMega=/_(mega|primal)(?:_[xy])?$/.test(sid)||(p.tags||[]).includes('mega');
+ const megaBox=el('megaMoveSettings'),megaSel=el('megaLevel'),c3Wrap=el('charged3Wrap'),c3Sel=el('charged3');
+ if(megaBox&&megaSel){
+  megaBox.hidden=!isMega;
+  if(isMega)megaSel.value=String(row.mega_level??((p.tags||[]).includes('supermega')?4:3));
+ }
+ if(c3Wrap&&c3Sel){
+  const extra=isMega&&Array.isArray(p.extraChargedMoves)?p.extraChargedMoves:[];
+  c3Wrap.hidden=!extra.length;
+  option(c3Sel,['',...extra],extra.includes(row.charged3)?row.charged3:'',v=>v||'なし');
+  if(!extra.length)c3Sel.value='';
+ }
+}
 function presetKey(p){return p.key||[p.species,p.fast,p.charged1,p.charged2].join('|');}
-function currentCandidate(){return {species:el('species').value.trim(),fast:el('fast').value,charged1:el('charged1').value,charged2:el('charged2').value};}
+function currentCandidate(){
+ const out={species:el('species').value.trim(),fast:el('fast').value,charged1:el('charged1').value,charged2:el('charged2').value};
+ const megaBox=el('megaMoveSettings'),megaSel=el('megaLevel'),c3Wrap=el('charged3Wrap'),c3Sel=el('charged3');
+ if(megaBox&&!megaBox.hidden&&megaSel?.value)out.mega_level=Number(megaSel.value);
+ if(c3Wrap&&!c3Wrap.hidden&&c3Sel?.value)out.charged3=c3Sel.value;
+ return out;
+}
 const transferMissing=el('transferMissing');
 transferMissing.hidden=!document.querySelector?.('.quick-nav a[href="/app/missing"]');
 transferMissing.onclick=()=>{
