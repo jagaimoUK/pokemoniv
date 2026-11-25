@@ -833,8 +833,8 @@ function renderSaveSelection(result,parent){
  if(!savedSelectionsEnabled()||result.complete!==true||!isOrdinarySelectionForm(species))return;
  const details=node('details','',parent);
  node('summary','この厳選結果を保存',details);
- node('p','個体別履歴に追加する場合は、不足分析の保有台帳で確認した登録個体IDを指定してください。IDが未入力の候補は、種族・フォルム別の結果にだけ保存します。',details,'note');
- const inventory=node('a','不足分析の保有台帳',details);inventory.href='/app/missing';
+ node('p','個体別履歴に追加する場合は、不足分析の手持ちポケモン一覧で確認した登録個体IDを指定してください。IDが未入力の候補は、種族・フォルム別の結果にだけ保存します。',details,'note');
+ const inventory=node('a','不足分析の手持ちポケモン一覧',details);inventory.href='/app/missing';
  const builds=new Map();
  for(const row of result.selection.recommendations){
   const chosen=row.chosen_moves||result.candidate;

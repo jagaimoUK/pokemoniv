@@ -86,15 +86,15 @@ input,select,button{font:inherit;color:inherit;min-height:44px;border:1px solid 
 <ul id="sandbox-tactic-items" class="inventory"></ul>
 </div></section>
 <section id="results" class="results stack" aria-labelledby="results-heading" hidden><h2 id="results-heading" tabindex="-1">不足分析の結果</h2><p id="edited" class="muted" hidden>入力が変更されました。表示中の結果は前回の条件です。</p><div id="result-tree"></div></section>
-<details id="inventory-panel" class="edit"><summary>手持ち台帳・ボックス確認範囲</summary>
+<details id="inventory-panel" class="edit"><summary>手持ちポケモン一覧・ボックス確認範囲</summary>
 <div class="stack">
 <p class="muted">登録済みの個体一覧・変更履歴・ボックス確認範囲を閲覧および更新します。未登録・未確認の個体は「未所持」とはみなされません。</p>
 <div class="grid">
 <label>種族で絞り込み（任意）<input id="inventory-species" type="text" list="pokemon-list" autocomplete="off" placeholder="例：マリルリ（空欄で全種族）"></label>
 <label>所持状態<select id="inventory-state"><option value="">すべて</option><option value="confirmed_owned">所持確認済み</option><option value="confirmed_absent">所持していないことを確認済み</option><option value="unknown">未確認</option></select></label>
 </div>
-<div class="actions"><button id="inventory-load" type="button" class="quiet" data-action>手持ち台帳を読み込む</button></div>
-<p id="inventory-summary" class="muted">「手持ち台帳を読み込む」を押すと、保存済みの手持ち記録と確認範囲を取得します。</p>
+<div class="actions"><button id="inventory-load" type="button" class="quiet" data-action>手持ち一覧を読み込む</button></div>
+<p id="inventory-summary" class="muted">「手持ち一覧を読み込む」を押すと、登録済みの手持ちポケモンと確認範囲を取得します。</p>
 <ul id="inventory-items" class="inventory"></ul>
 <div class="actions"><button id="inventory-more" type="button" class="quiet" data-action hidden>次のページを読み込む</button></div>
 <details id="scope-panel" class="match"><summary>ボックス確認範囲の記録</summary>
@@ -1238,7 +1238,7 @@ function renderHistory(){
   const flags=node('div',null,row,'tags');
   tag(flags,...(gaps[item.state]||gaps.evidence_pending));
   if(!item.versions_current)tag(flags,'現在の計算データとは異なる','wait');
-  node('small','台帳rev '+item.ledger_revision+' · 評価ID '+item.evaluation_id.slice(0,12),row,'muted break');
+  node('small','更新#'+item.ledger_revision+' · 評価ID '+item.evaluation_id.slice(0,12),row,'muted break');
   const previous=historyItems.slice(i+1).find(older=>older.comparison_key===item.comparison_key);
   if(previous){
    const before=(gaps[previous.state]||gaps.evidence_pending)[0];
@@ -1449,7 +1449,7 @@ function renderScopeRecords(scopes,truncated){
   else tag(tags,'確認途中','wait');
   const range=Array.isArray(item.scope?.box_range)?item.scope.box_range.join('〜'):'';
   node('p',name(item.scope?.species_id)+' · ボックス '+range+(item.scope?.search?' · 検索「'+item.scope.search+'」':''),li,'break');
-  node('small','台帳rev '+item.ledger_revision+(item.confirmed_at?' · '+item.confirmed_at:''),li,'muted break');
+  node('small','更新#'+item.ledger_revision+(item.confirmed_at?' · '+item.confirmed_at:''),li,'muted break');
  }
  if(truncated)node('li','表示は最新32件までです。',list,'muted');
 }
@@ -1530,7 +1530,7 @@ async function loadInventory(append){
  const data=await api('missing-analysis',payload);
  if(append&&inventoryLedgerRevision!=null&&data.ledger_revision!==inventoryLedgerRevision){
   await loadInventory(false);
-  announce('台帳が更新されたため、先頭から最新の状態を読み込み直しました。');
+  announce('手持ち記録が更新されたため、先頭から最新の状態を読み込み直しました。');
   return;
  }
  inventoryFilterKey=filterKey;
@@ -1554,12 +1554,12 @@ async function loadInventory(append){
   }
  }
  $('inventory-more').hidden=!data.has_more||!inventoryCursor;
- $('inventory-summary').textContent='台帳リビジョン '+data.ledger_revision+' ／ 表示 '+list.querySelectorAll(':scope > li[data-inventory-item="1"]').length+'件'+(data.has_more?'（続きあり）':'');
+ $('inventory-summary').textContent='更新番号 '+data.ledger_revision+' ／ 表示 '+list.querySelectorAll(':scope > li[data-inventory-item="1"]').length+'件'+(data.has_more?'（続きあり）':'');
  if(!append&&Array.isArray(data.scopes))renderScopeRecords(data.scopes,Boolean(data.scopes_truncated));
- announce(!items.length&&data.has_more?'この範囲には該当個体がありませんでした。続きを読み込めます。':'手持ち台帳を読み込みました。');
+ announce(!items.length&&data.has_more?'この範囲には該当個体がありませんでした。続きを読み込めます。':'手持ち一覧を読み込みました。');
 }
 async function submitScope(){
- if(inventoryLedgerRevision==null)throw Error('先に「手持ち台帳を読み込む」を押して最新の台帳リビジョンを確認してください。');
+ if(inventoryLedgerRevision==null)throw Error('先に「手持ち一覧を読み込む」を押して最新の手持ち記録を確認してください。');
  const species=resolveSpecies($('scope-species').value);
  if(!species)throw Error('確認したポケモンは一覧からフォルムまで選択してください。');
  const first=$('scope-start').valueAsNumber,last=$('scope-end').valueAsNumber;
