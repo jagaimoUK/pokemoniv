@@ -102,6 +102,20 @@ class ProxyGatewayTests(unittest.TestCase):
         self.assertIn(429, codes)
         self.assertEqual(self.request(), 200)
 
+    def test_spoofed_credentials_do_not_bypass_api_rate_limit(self):
+        # The proxy cannot authenticate JWTs or cookies. It must not trust
+        # their mere presence to exempt requests from request-rate limits.
+        for headers in (
+            {'Authorization': 'Bearer forged-value'},
+            {'Cookie': 'pvpoke_app_login=forged-value'},
+        ):
+            with self.subTest(headers=headers):
+                statuses = [self.request('/app-api/meta-status', headers=headers)
+                            for _ in range(60)]
+                self.assertIn(429, statuses)
+                # The health route remains available even when API is limited.
+                self.assertEqual(self.request('/health'), 200)
+
     def test_oversized_body_rejected_before_backend(self):
         with socket.create_connection(('127.0.0.1', self.port), timeout=3) as c:
             c.sendall(b'POST /health HTTP/1.1\r\nHost: local\r\nContent-Length: 30000000\r\n\r\n')

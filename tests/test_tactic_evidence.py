@@ -1,0 +1,257 @@
+"""Stage H: owner-scoped, read-only evidence integration without standard rewrites."""
+from contextlib import closing
+from pathlib import Path
+import sqlite3
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from pvpoke_battle_service import BattleService, _json_hash
+from pvpoke_battle_store import BattleStore
+from pvpoke_direct_backend import DirectMatrixClient
+from pvpoke_missing_analysis import MissingAnalysis
+from pvpoke_role_evaluation import RoleEvaluation, condition_id
+from pvpoke_tactic_evidence import TacticEvidenceUnavailable, compare_tactics
+from pvpoke_tactic_search import TacticSearch
+from test_sandbox import FIXTURES, scripted_spec
+
+
+class TacticEvidenceTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.store = BattleStore(self.root / 'archive' / 'battle_analysis.sqlite3')
+        self.client = DirectMatrixClient(gamemaster=FIXTURES / 'strategy_gamemaster.json',
+                                         log_dir=self.root)
+        self.addCleanup(self.client.close)
+        self.service = BattleService(self.client, store=self.store)
+        self.script = scripted_spec(energy=100, shield=0)
+        self.script['actions'] = []
+        self.script['shield_decisions'] = []
+        self.script['combatants'][1]['initial']['energy'] = 100
+        baseline = {key: self.script[key] for key in ('schema', 'rules', 'combatants')}
+        baseline = {**baseline, 'mode': 'standard'}
+        self.standard_spec = baseline
+        plan_id = MissingAnalysis(self.store).save_plan(self.service, [baseline])
+        normalized, _ = self.service._prepare(baseline)
+        slot = condition_id(normalized)
+        role = {'role_id': 'critical', 'revision': 1, 'priority': 4,
+                'meta_snapshot': 'f' * 64,
+                'requirements': {slot: {'minimum': {'fast_damage': 0}}}}
+        self.evaluation = RoleEvaluation(self.store).evaluate(
+            plan_id, role, active_versions=self.service.versions, normalizer=self.service)
+        self.search = TacticSearch(self.service)
+        self.search_id = self.search.start(self.script)
+
+    def test_tactic_evidence_is_read_only_and_never_promotes_standard_gap(self):
+        self.assertEqual(self.evaluation['state'], 'evidence_pending')
+        self.search.step(self.search_id, budget=2)
+        with closing(sqlite3.connect(self.store.path)) as db:
+            before = db.execute('SELECT COUNT(*) FROM battle_results').fetchone()[0]
+        self.assertEqual(before, 0)
+        with patch('pvpoke_sandbox.subprocess.run', side_effect=AssertionError('unexpected battle')):
+            data = compare_tactics(self.service, self.evaluation['evaluation_id'], [self.search_id])
+        self.assertEqual(data['schema'], 'missing-tactic-evidence-v1')
+        self.assertEqual(data['standard_state'], 'evidence_pending')
+        self.assertEqual(data['status'], 'counterfactual_only')
+        self.assertEqual(data['information_fairness'], 'not_established')
+        self.assertEqual(data['live_reproducibility'], 'not_verified')
+        self.assertEqual(data['new_battles'], 0)
+        self.assertFalse(data['builds'][0]['practical_role_covered'])
+        advisory = data['builds'][0]['advisory']
+        self.assertEqual(advisory['scope'], 'selected_builds_and_saved_scripts_only')
+        self.assertEqual(advisory['practical_substitution'], 'not_established')
+        self.assertEqual(advisory['role_priority'], 4)
+        self.assertEqual(advisory['evidence_order'], 1)
+        self.assertLessEqual(advisory['theoretical_supported_conditions'],
+                             advisory['tested_conditions'])
+        self.assertTrue(all('all_requested_shields_honored' in path
+                            for condition in data['builds'][0]['conditions']
+                            for path in condition['paths']))
+        self.assertEqual(data['builds'][0]['conditions'][0]['standard']['status'], 'unknown')
+        self.assertEqual(data['builds'][0]['conditions'][0]['tested_scripts'], 2)
+        self.assertTrue(data['builds'][0]['conditions'][0]['paths'])
+        with closing(sqlite3.connect(self.store.path)) as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM battle_results').fetchone()[0], 0)
+        self.assertEqual(self.service.cache_stats['engine_calls'], 0)
+
+    def test_counterfactual_paths_disclose_unobservable_assumptions(self):
+        """A native win must never hide the opponent response assumed in advance."""
+        self.search.step(self.search_id, budget=2)
+        with patch('pvpoke_sandbox.subprocess.run',
+                   side_effect=AssertionError('Audit must reuse native facts')):
+            result = compare_tactics(self.service, self.evaluation['evaluation_id'],
+                                     [self.search_id])
+        self.assertEqual(result['information_fairness'], 'not_established')
+        self.assertEqual(result['live_reproducibility'], 'not_verified')
+        self.assertFalse(result['builds'][0]['practical_role_covered'])
+        paths = result['builds'][0]['conditions'][0]['paths']
+        self.assertGreaterEqual(len(paths), 2)
+        original = next(row for row in paths if row['opponent_response'] == 'original')
+        alternate = next(row for row in paths if row['opponent_response'] == 'alternate_charged')
+        for row in (original, alternate):
+            self.assertIs(row['observation_conditioned'], False)
+            self.assertIn('fixed_timed_self_actions', row['information_assumptions'])
+            self.assertEqual(row['reproducibility'], 'not_verified')
+        self.assertIn('prespecified_opponent_actions', alternate['information_assumptions'])
+        self.assertIn('unrevealed_opponent_charged_move_assumed',
+                      alternate['information_assumptions'])
+
+    def test_shield_choices_in_fixed_scripts_get_conservative_info_warnings(self):
+        from pvpoke_tactic_evidence import _information_assumptions
+        script = {
+            'response': 'alternate_charged_self_shield',
+            'spec': {'actions': [{
+                'id': 'charge', 'actor': 1, 'turn': 3, 'kind': 'charged',
+                'move_id': 'ICE_BEAM'}],
+                'shield_decisions': [
+                    {'action_id': 'charge', 'defender': 0, 'use_shield': True},
+                    {'action_id': 'self_charge', 'defender': 1, 'use_shield': False}]},
+        }
+        assumptions = _information_assumptions(script)
+        self.assertIn('prespecified_opponent_actions', assumptions)
+        self.assertIn('unrevealed_opponent_charged_move_assumed', assumptions)
+        self.assertIn('own_shield_before_opponent_move_reveal', assumptions)
+        self.assertIn('assumed_opponent_shield_choice', assumptions)
+        # Seeded opponent charged moves have the same information issue even
+        # when the response is "original", not just newly generated variants.
+        script['response'] = 'original'
+        self.assertIn('unrevealed_opponent_charged_move_assumed',
+                      _information_assumptions(script))
+
+    def test_wrong_owner_and_unrelated_matchup_are_rejected(self):
+        other = BattleService(self.client, store=BattleStore(self.store.path, owner_scope='other'))
+        with self.assertRaises(ValueError):
+            compare_tactics(other, self.evaluation['evaluation_id'], [self.search_id])
+        changed = {**self.script, 'combatants': [dict(c) for c in self.script['combatants']]}
+        changed['combatants'][1] = {**changed['combatants'][1], 'initial': {
+            **changed['combatants'][1]['initial'], 'shields': 1}}
+        unrelated = self.search.start(changed)
+        with self.assertRaises(ValueError):
+            compare_tactics(self.service, self.evaluation['evaluation_id'], [unrelated])
+
+    def test_version_drift_and_changed_standard_evidence_rejected(self):
+        with patch.object(TacticSearch, '_version', return_value='0' * 64):
+            with self.assertRaises(TacticEvidenceUnavailable):
+                compare_tactics(self.service, self.evaluation['evaluation_id'], [self.search_id])
+        result = self.service.simulate(self.standard_spec)
+        self.assertEqual(result['status'], 'complete')
+        with self.assertRaises(TacticEvidenceUnavailable):
+            compare_tactics(self.service, self.evaluation['evaluation_id'], [self.search_id])
+
+    def test_verified_sandbox_cache_required_and_corruption_never_recomputed(self):
+        self.search.step(self.search_id, budget=1)
+        with closing(sqlite3.connect(self.store.path)) as db, db:
+            db.execute("UPDATE sandbox_results_v1 SET digest='corrupt'")
+        with patch('pvpoke_sandbox.subprocess.run', side_effect=AssertionError('not allowed')):
+            with self.assertRaises((ValueError, sqlite3.Error)):
+                compare_tactics(self.service, self.evaluation['evaluation_id'], [self.search_id])
+
+    def test_unexecuted_opponent_seed_action_cannot_support_role(self):
+        seed = self.script.copy()
+        seed['combatants'] = [dict(side) for side in self.script['combatants']]
+        seed['combatants'][1] = {**seed['combatants'][1], 'initial': {
+            **seed['combatants'][1]['initial'], 'energy': 0}}
+        seed['actions'] = [{'id': 'unfunded_opponent', 'actor': 1, 'turn': 1,
+                            'kind': 'charged', 'move_id': seed['combatants'][1]['moves']['charged'][1]}]
+        baseline = {key: seed[key] for key in ('schema', 'rules', 'combatants')}
+        baseline['mode'] = 'standard'
+        analysis_id = MissingAnalysis(self.store).save_plan(self.service, [baseline])
+        normalized, _ = self.service._prepare(baseline)
+        role = {'role_id': 'unfunded_opponent', 'revision': 1, 'priority': 4,
+                'meta_snapshot': 'a' * 64, 'requirements': {
+                    condition_id(normalized): {'minimum': {'fast_damage': 0}}}}
+        evaluation = RoleEvaluation(self.store).evaluate(
+            analysis_id, role, active_versions=self.service.versions, normalizer=self.service)
+        search = TacticSearch(self.service)
+        identity = search.start(seed)
+        search.step(identity, budget=1)
+        with patch('pvpoke_sandbox.subprocess.run', side_effect=AssertionError('no new battle')):
+            result = compare_tactics(self.service, evaluation['evaluation_id'], [identity])
+        item = result['builds'][0]['conditions'][0]
+        self.assertEqual(item['tested_scripts'], 1)
+        self.assertEqual(item['matching_scripts'], 0)
+        self.assertFalse(item['paths'][0]['all_requested_actions_executed'])
+        self.assertIsNone(item['paths'][0]['meets'])
+        self.assertEqual(result['status'], 'counterfactual_only')
+
+    def test_one_saved_matchup_does_not_fill_a_second_required_matchup(self):
+        second = {**self.standard_spec, 'combatants': [dict(c) for c in self.standard_spec['combatants']]}
+        second['combatants'][1] = {**second['combatants'][1], 'initial': {
+            **second['combatants'][1]['initial'], 'shields': 1}}
+        plan_id = MissingAnalysis(self.store).save_plan(self.service, [self.standard_spec, second])
+        normalized1, _ = self.service._prepare(self.standard_spec)
+        normalized2, _ = self.service._prepare(second)
+        role = {'role_id': 'two_matchups', 'revision': 1, 'priority': 99,
+                'meta_snapshot': 'd' * 64, 'requirements': {
+                    condition_id(normalized1): {'minimum': {'fast_damage': 0}},
+                    condition_id(normalized2): {'minimum': {'fast_damage': 0}}}}
+        snapshot = RoleEvaluation(self.store).evaluate(
+            plan_id, role, active_versions=self.service.versions, normalizer=self.service)
+        self.search.step(self.search_id, budget=2)
+        with patch('pvpoke_sandbox.subprocess.run', side_effect=AssertionError('no new battles')):
+            result = compare_tactics(self.service, snapshot['evaluation_id'], [self.search_id])
+        build = result['builds'][0]
+        self.assertFalse(build['theoretical_all_conditions'])
+        self.assertFalse(build['practical_role_covered'])
+        self.assertEqual(build['advisory']['classification'], 'pending')
+        self.assertEqual(build['advisory']['required_conditions'], 2)
+        self.assertEqual(build['advisory']['tested_conditions'], 1)
+        self.assertEqual(build['advisory']['role_priority'], 99)
+        self.assertEqual(result['new_battles'], 0)
+        self.assertEqual(snapshot['state'], 'evidence_pending')
+
+    def test_sampled_opponent_responses_never_promote_live_role(self):
+        """Compare native evidence only for the *same* declared self script."""
+        self.search.step(self.search_id, budget=2)
+        with patch('pvpoke_sandbox.subprocess.run',
+                   side_effect=AssertionError('Saved comparison must not simulate')):
+            result = compare_tactics(self.service, self.evaluation['evaluation_id'],
+                                     [self.search_id])
+        condition = result['builds'][0]['conditions'][0]
+        self.assertEqual(condition['tested_scripts'], 2)
+        self.assertTrue(condition['response_sensitivity'])
+        group = condition['response_sensitivity'][0]
+        self.assertEqual(group['tested_scenarios'], 2)
+        self.assertEqual(group['matching_scenarios'] + group['nonmatching_scenarios'] +
+                         group['unverified_scenarios'], 2)
+        self.assertFalse(group['opponent_scenarios_exhaustive'])
+        self.assertFalse(group['observation_conditioned'])
+        self.assertEqual(group['live_reproducibility'], 'not_verified')
+        self.assertFalse(result['builds'][0]['practical_role_covered'])
+
+    def test_response_disagreement_requires_two_verified_opposite_outcomes(self):
+        from pvpoke_tactic_evidence import _response_sensitivity, _self_script_fingerprint
+        common = {'spec': {'actions': [
+            {'id': 'mine', 'actor': 0, 'turn': 3, 'kind': 'charged', 'move_id': 'AQUA_TAIL'},
+            {'id': 'enemy', 'actor': 1, 'turn': 3, 'kind': 'charged', 'move_id': 'ICE_BEAM'}],
+            'shield_decisions': []}}
+        with_shield = {'spec': {**common['spec'], 'shield_decisions': [
+            {'action_id': 'enemy', 'defender': 0, 'use_shield': True}]}}
+        without_shield = _self_script_fingerprint(common)
+        with_shield_id = _self_script_fingerprint(with_shield)
+        self.assertNotEqual(without_shield, with_shield_id)
+        rows = [{'self_script_fingerprint': without_shield, 'strategy': 'fixed',
+                 'meets': value} for value in (True, False, None)]
+        rows += [{'self_script_fingerprint': with_shield_id, 'strategy': 'fixed',
+                  'meets': True}]
+        groups = _response_sensitivity(rows)
+        self.assertEqual(len(groups), 2)
+        diverged = next(row for row in groups if row['self_script_fingerprint'] == without_shield)
+        self.assertEqual((diverged['matching_scenarios'], diverged['nonmatching_scenarios'],
+                          diverged['unverified_scenarios']), (1, 1, 1))
+        self.assertTrue(diverged['observed_disagreement'])
+        self.assertFalse(diverged['all_sampled_scenarios_meet'])
+        isolated = next(row for row in groups if row['self_script_fingerprint'] == with_shield_id)
+        self.assertEqual(isolated['tested_scenarios'], 1)
+        self.assertTrue(isolated['all_sampled_scenarios_meet'])
+        self.assertFalse(isolated['opponent_scenarios_exhaustive'])
+        self.assertEqual(isolated['live_reproducibility'], 'not_verified')
+
+    def test_invalid_search_list_is_not_accepted(self):
+        for search_ids in ([], [self.search_id] * 2, ['xyz'], [self.search_id] * 7, 'bad'):
+            with self.assertRaises(ValueError):
+                compare_tactics(self.service, self.evaluation['evaluation_id'], search_ids)
+
+
+if __name__ == '__main__':
+    unittest.main()

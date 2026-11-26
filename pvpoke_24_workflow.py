@@ -93,7 +93,14 @@ def input_config(path: Path) -> tuple[dict, str]:
         parsed.append(item)
     if not 1 <= len(parsed) <= MAX_CANDIDATES:
         raise ValueError(f'自分の個体値は1〜{MAX_CANDIDATES}体にしてください')
-    return {k: str(cand[k]).strip() for k in POKE_FIELDS}, '\n'.join(','.join(map(str, iv)) for iv in parsed)
+    cleaned = {k: str(cand[k]).strip() for k in POKE_FIELDS}
+    if cand.get('mega_level') is not None:
+        if type(cand['mega_level']) is not int or not 1 <= cand['mega_level'] <= 4:
+            raise ValueError('config.candidate.mega_levelは1〜4の整数です')
+        cleaned['mega_level'] = cand['mega_level']
+    if cand.get('charged3') is not None and str(cand.get('charged3')).strip():
+        cleaned['charged3'] = str(cand['charged3']).strip().upper()
+    return cleaned, '\n'.join(','.join(map(str, iv)) for iv in parsed)
 
 
 def generate_rows(meta: list[dict], species: dict, cpms: list, *, full_modes=MODES):
@@ -222,6 +229,10 @@ def main():
     if species_id not in species:
         raise ValueError(f'自分のポケモンIDがGameMasterにありません: {species_id}')
     own = dict(zip(POKE_FIELDS, [species_id, *(cand[k].upper() for k in POKE_FIELDS[1:])]))
+    if cand.get('mega_level') is not None:
+        own['mega_level'] = cand['mega_level']
+    if cand.get('charged3') is not None:
+        own['charged3'] = cand['charged3']
     own_rows = [{**own, **dict(zip(IV_FIELDS, map(int, iv.split(','))))} for iv in iv_text.splitlines()]
     own_prepared = engine.optimize(own_rows, species, cpms, 'candidates.csv')
     meta, source_errors = load_meta(args.meta, species)
@@ -264,8 +275,10 @@ def main():
         engine.CAND = job / 'candidates.csv'
         engine.OPPS = job / 'opponents.csv'
         engine.DATA = prev[4]
-        write_csv(engine.CAND, engine.HEADER,
-                  [[row[k] for k in engine.HEADER] for row in own_rows])
+        cand_extra = [k for k in ('mega_level', 'charged3') if k in own]
+        cand_headers = list(engine.HEADER) + cand_extra
+        write_csv(engine.CAND, cand_headers,
+                  [[row[k] for k in cand_headers] for row in own_rows])
         write_csv(engine.OPPS, engine.HEADER + ['level_override'],
                   [[row[k] for k in engine.HEADER] + [row['level_override']] for row in rows])
         print('PvPoke Matrixで全6シールドを実行します。', flush=True)

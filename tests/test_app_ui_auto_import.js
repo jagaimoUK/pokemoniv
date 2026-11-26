@@ -10,10 +10,15 @@ const context={URLSearchParams,Uint8Array,TextDecoder,atob,location:{hash:'#ivda
  if(!authorized)return {status:401};
  if(path.endsWith('/catalog'))return {ok:true,json:async()=>({ready:true,species:{quagsire:{name:'Quagsire',name_ja:'ヌオー',nickname_code:'Quag',fastMoves:['MUD_SHOT'],chargedMoves:['AQUA_TAIL','STONE_EDGE']}},app_presets:[job.candidate]})};
  if(path.endsWith('/meta-presets'))return {ok:true,json:async()=>({items:[{id:'legacy',name:'標準',rows:10,default:true,sha256:'a'.repeat(64)}],default_id:'legacy'})};
- if(path.endsWith('/import')){imports++;assert.equal(data.text,el('importText').value);if(importFail)return {status:400,ok:false,json:async()=>({error:'取り込み失敗'})};return {ok:true,json:async()=>({jobs:[job]})};}
+ if(path.endsWith('/import')){imports++;assert.equal(data.text,el('importText').value);
+  assert.equal(data.registered_movesets.quagsire.length,1,'Only enabled browser configurations are sent');
+  assert.equal(data.registered_movesets.quagsire[0].charged2,'STONE_EDGE');
+  if(importFail)return {status:400,ok:false,json:async()=>({error:'取り込み失敗'})};return {ok:true,json:async()=>({jobs:[job]})};}
  throw Error('Unexpected automatic action '+path);
 }};
 vm.createContext(context);vm.runInContext(script,context);
+context.job=job;
+vm.runInContext("savedMovesets={quagsire:[{...job.candidate,enabled:true},{...job.candidate,enabled:false}]}",context);
 (async()=>{
  await new Promise(r=>setImmediate(r));
  assert.equal(imports,0,'Do not import before authentication');assert.equal(el('importText').value,raw);
