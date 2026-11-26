@@ -131,6 +131,8 @@ const ownership={confirmed_owned:'所持確認済み',confirmed_absent:'所持�
 const builds={exact:'個体値・CP・Lv・技が一致',unverified:'一致の判定に必要な情報が不足',different:'CP・Lv・技のいずれかが異なる'};
 function megaStatusBadges(record,targetLevel,megaCondition){
  const items=[];
+ if(record?.mega_level!=null)items.push(['手持ち メガLv'+record.mega_level,record?.needs_mega_level?'wait':'good']);
+ if(record?.needs_mega_level)items.push(['目標メガLv不足','wait']);
  if(record?.needs_evolution)items.push(['要進化','wait']);
  if(record?.needs_power_up)items.push([targetLevel!=null?'PL'+targetLevel+'まで強化が必要':'目標PLまで強化が必要','wait']);
  if(record?.mega_downscaled)items.push(['一時ダウンスケーリング可（未証明）','wait']);
@@ -270,7 +272,7 @@ function speciesList(entries){
 }
 const ivText=ivs=>[ivs.attack,ivs.defense,ivs.hp].join('/');
 const moveText=build=>[build.moves.fast,...build.moves.charged].map(move).join('・');
-const buildText=build=>name(build.species_id)+' '+ivText(build.ivs)+(build.level==null?'':' / Lv'+build.level);
+const buildText=build=>name(build.species_id)+' '+ivText(build.ivs)+(build.level==null?'':' / Lv'+build.level)+(build.mega_level==null?'':' · メガLv'+build.mega_level);
 const isMegaSpeciesId=sid=>Boolean(sid&&(/^(?:.*_(?:mega|primal)(?:_[xy])?)$/.test(sid)||(catalog[sid]?.tags||[]).includes('mega')));
 function cpmForLevel(lvl){
  if(!Array.isArray(cpms)||!cpms.length)return null;
@@ -315,13 +317,15 @@ function buildEditor(parent,title,{open=false,removable,initial}={}){
  const fast=select(moveFields,'通常技',[['','ポケモンを指定']],'wide');
  const charged=[select(moveFields,'ゲージ技1',[['','ポケモンを指定']]),select(moveFields,'ゲージ技2',[['','ポケモンを指定']])];
  for(const field of [fast,...charged])field.required=true;
+ const megaRow=node('div',null,body,'grid');
+ const megaLevelSelect=select(megaRow,'メガレベル（メガ個体時）',[['','既定（自動）'],['1','メガレベル 1'],['2','メガレベル 2'],['3','メガレベル 3'],['4','スーパーMAX (Lv4)']]);
+ const charged3Select=select(megaRow,'3枠目ゲージ技（メガ時）',[['','なし（通常2技）']]);
+ megaRow.hidden=true;
  let speciesId='';
  let levelAuto=(initial?.level==null);
  const ownedSpeciesId=initial?.owned_species_id||null;
  const ownedFormNote=node('p',null,body,'muted');
  ownedFormNote.hidden=true;
- const megaLevel=initial?.mega_level??null;
- const charged3=initial?.charged3??null;
  function currentIvs(){
   const vals=Object.fromEntries(Object.entries(ivs).map(([k,f])=>[k,f.value===''?NaN:f.valueAsNumber]));
   if(Object.values(vals).some(v=>!Number.isInteger(v)||v<0||v>15))return null;
@@ -371,6 +375,13 @@ function buildEditor(parent,title,{open=false,removable,initial}={}){
    setOptions(fast,[['','通常技を選ぶ'],...fastPool],preferred?.fast||defaults.fast);
    setOptions(charged[0],[['','ゲージ技を選ぶ'],...chargePool],preferred?.charged[0]||defaults.charged1);
    setOptions(charged[1],[['','ゲージ技を選ぶ'],...chargePool],preferred?.charged[1]||defaults.charged2);
+   const isMega=isMegaSpeciesId(id);
+   megaRow.hidden=!isMega;
+   const extraPool=isMega&&Array.isArray(pokemon.extraChargedMoves)?pokemon.extraChargedMoves.map(mid=>[mid,move(mid)]):[];
+   charged3Select.parentElement.hidden=!extraPool.length;
+   setOptions(charged3Select,[['','なし（通常2技）'],...extraPool],preferred?.charged3||'');
+   if(preferred?.mega_level!=null)megaLevelSelect.value=String(preferred.mega_level);
+   else if(!isMega)megaLevelSelect.value='';
   }
   species.setCustomValidity(species.value&&!id?'一覧からフォルムまで選択してください。':'');
   el.firstElementChild.textContent=title+(id?' · '+name(id):'');
@@ -397,12 +408,15 @@ function buildEditor(parent,title,{open=false,removable,initial}={}){
   species.value=nameWithId(initial.species_id);
   if(initial.ivs)for(const [id,field] of Object.entries(ivs))field.value=initial.ivs[id];
   if(initial.level!=null){level.value=initial.level;levelAuto=false;}
-  updateSpecies(initial.moves);
+  const initCharged3=initial.charged3||(Array.isArray(initial.moves?.charged)&&initial.moves.charged[2])||null;
+  updateSpecies({...initial.moves,mega_level:initial.mega_level,charged3:initCharged3});
  }
  if(removable)button(body,'この項目を削除',()=>removable(el),'quiet');
- return {el,body,species,fields:[species,...Object.values(ivs),level,fast,...charged],read:()=>{
+ return {el,body,species,fields:[species,...Object.values(ivs),level,fast,...charged,megaLevelSelect,charged3Select],read:()=>{
   const isMega=isMegaSpeciesId(speciesId);
-  return {species_id:speciesId,ivs:Object.fromEntries(Object.entries(ivs).map(([id,field])=>[id,field.valueAsNumber])),level:level.valueAsNumber,moves:{fast:fast.value,charged:charged.map(field=>field.value)},...(isMega&&megaLevel!=null?{mega_level:megaLevel}:{}),...(isMega&&charged3?{charged3}:{}),...(ownedSpeciesId&&ownedSpeciesId!==speciesId?{owned_species_id:ownedSpeciesId}:{})};
+  const megaVal=isMega&&megaLevelSelect.value?Number(megaLevelSelect.value):null;
+  const c3Val=isMega&&charged3Select.value?charged3Select.value:null;
+  return {species_id:speciesId,ivs:Object.fromEntries(Object.entries(ivs).map(([id,field])=>[id,field.valueAsNumber])),level:level.valueAsNumber,moves:{fast:fast.value,charged:charged.map(field=>field.value)},...(megaVal!=null?{mega_level:megaVal}:{}),...(c3Val?{charged3:c3Val}:{}),...(ownedSpeciesId&&ownedSpeciesId!==speciesId?{owned_species_id:ownedSpeciesId}:{})};
  }};
 }
 function removeEditor(list,el){list.splice(list.findIndex(item=>item.el===el),1);el.remove();markEdited();setBusy(false);}
@@ -565,12 +579,15 @@ function checkbox(parent,text){
  const label=node('label',null,parent,'check');
  const check=node('input',null,label);check.type='checkbox';check.required=true;label.append(document.createTextNode(text));return check;
 }
+const canMegaSpecies=sid=>Boolean(sid&&(isMegaSpeciesId(sid)||(catalog[sid]?.mega_forms||[]).length||catalog[sid+'_mega']||catalog[sid+'_mega_x']||catalog[sid+'_mega_y']));
 function registerInventory(parent,candidate,request){
  const box=detail(parent,'実物を確認して所持を記録');
  const form=node('form',null,box,'stack');
  const fields=node('div',null,form,'grid');
  const cp=input(fields,'現在のCP',{type:'number',min:10,max:10000,step:1,required:true});
  const level=input(fields,'現在のLv（任意）',{type:'number',min:1,max:51,step:.5});
+ const canMega=canMegaSpecies(candidate.owned_species_id||candidate.species_id);
+ const megaLevel=canMega?select(fields,'現在のメガレベル（任意）',[['','未記録'],['1','メガレベル 1'],['2','メガレベル 2'],['3','メガレベル 3'],['4','スーパーMAX (Lv4)']]):null;
  const currentMoves=checkbox(form,'現在の技がこの候補の技構成と一致している');currentMoves.required=false;
  checkbox(form,'ゲーム内で、このフォルムと個体値の所持を確認した');
  const submit=node('button','所持を記録する',node('div',null,form,'actions'),'quiet');submit.dataset.action='';submit.disabled=busy;
@@ -580,6 +597,7 @@ function registerInventory(parent,candidate,request){
   event.preventDefault();
   const observation={species_id:candidate.species_id,ivs:candidate.ivs,current_cp:cp.valueAsNumber};
   if(level.value)observation.current_level=level.valueAsNumber;
+  if(megaLevel&&megaLevel.value)observation.mega_level=Number(megaLevel.value);
   if(currentMoves.checked)observation.current_moves=candidate.moves;
   const encoded=JSON.stringify(observation);
   if(previous!==encoded){previous=encoded;eventId=crypto.randomUUID();}
@@ -604,6 +622,7 @@ async function loadOwnershipHistory(instanceId,target){
    'CP '+(item.current_cp??'未記録')+' ／ Lv '+(item.current_level??'未記録'),
    '技 '+observedMovesText(item.current_moves),
   ];
+  if(item.mega_level!=null)summary.push('メガLv '+item.mega_level);
   node('p',summary.join(' · '),target,'muted break');
  }
  const events=Array.isArray(data.events)?data.events:[];
@@ -620,6 +639,7 @@ async function loadOwnershipHistory(instanceId,target){
    if(ev.confirmed_at)meta.push(ev.confirmed_at);
    if(ev.instance?.current_cp!=null)meta.push('CP '+ev.instance.current_cp);
    if(ev.instance?.current_level!=null)meta.push('Lv '+ev.instance.current_level);
+   if(ev.instance?.mega_level!=null)meta.push('メガLv '+ev.instance.mega_level);
    if(meta.length)node('small',meta.join(' · '),li,'muted break');
   }
   if(data.has_more)node('p','表示は最新32件までです。',target,'muted');
@@ -656,6 +676,9 @@ function renderInventory(parent,candidate,request){
    const fields=node('div',null,updateForm,'grid');
    const cp=input(fields,'現在のCP',{type:'number',min:10,max:10000,step:1,required:true});
    const level=input(fields,'現在のLv（任意・空欄で維持）',{type:'number',min:1,max:51,step:.5});
+   const canMega=canMegaSpecies(record.owned_species_id||candidate.species_id);
+   const megaLevel=canMega?select(fields,'現在のメガレベル（任意）',[['','変更しない'],['1','メガレベル 1'],['2','メガレベル 2'],['3','メガレベル 3'],['4','スーパーMAX (Lv4)']]):null;
+   if(megaLevel&&record.mega_level!=null)megaLevel.value=String(record.mega_level);
    const currentMoves=checkbox(updateForm,'現在の技がこの候補の技構成と一致している（未選択なら維持）');currentMoves.required=false;
    const pokemon=catalog[candidate.species_id]||{};
    const moveOverride=detail(updateForm,'別の技に変更する（任意・変更しない場合は未選択）','quiet');
@@ -678,6 +701,7 @@ function renderInventory(parent,candidate,request){
     event.preventDefault();
     const observation={species_id:candidate.species_id,ivs:candidate.ivs,current_cp:cp.valueAsNumber};
     if(level.value)observation.current_level=level.valueAsNumber;
+    if(megaLevel&&megaLevel.value)observation.mega_level=Number(megaLevel.value);
     if(currentMoves.checked){
      observation.current_moves=candidate.moves;
     }else if(fast.value||c1.value||c2.value){
@@ -1458,7 +1482,7 @@ function renderLedgerItem(parent,item){
  const tags=node('div',null,row,'tags');
  tag(tags,ownership[item.state]||'未確認',item.state==='confirmed_owned'?'good':item.state==='confirmed_absent'?'fail':'wait');
  node('p',name(item.species_id)+' '+ivText(item.ivs)+' · CP '+(item.current_cp??'未記録')+' / Lv '+(item.current_level??'未記録'),row,'break');
- node('small','技 '+observedMovesText(item.current_moves)+' · rev '+item.revision+(item.confirmed_at?' · '+item.confirmed_at:''),row,'muted break');
+ node('small','技 '+observedMovesText(item.current_moves)+(item.mega_level!=null?' · メガLv'+item.mega_level:'')+' · rev '+item.revision+(item.confirmed_at?' · '+item.confirmed_at:''),row,'muted break');
  const panel=detail(row,'履歴・所持状態の更新','record');
  node('small','記録ID '+item.instance_id,panel,'break');
  const historyBox=node('div',null,panel,'stack');
@@ -1469,6 +1493,9 @@ function renderLedgerItem(parent,item){
  if(item.current_cp!=null)cp.value=String(item.current_cp);
  const level=input(fields,'現在のLv（任意）',{type:'number',min:1,max:51,step:.5});
  if(item.current_level!=null)level.value=String(item.current_level);
+ const canMega=canMegaSpecies(item.species_id);
+ const megaLevel=canMega?select(fields,'現在のメガレベル（任意）',[['','変更しない／未記録'],['1','メガレベル 1'],['2','メガレベル 2'],['3','メガレベル 3'],['4','スーパーMAX (Lv4)']]):null;
+ if(megaLevel&&item.mega_level!=null)megaLevel.value=String(item.mega_level);
  const pokemon=catalog[item.species_id]||{};
  const fast=select(fields,'通常技（任意）',[['','変更しない'],...(pokemon.fastMoves||[]).map(id=>[id,move(id)])],'wide');
  const c1=select(fields,'ゲージ技1（任意）',[['','変更しない'],...(pokemon.chargedMoves||[]).map(id=>[id,move(id)])]);
@@ -1487,6 +1514,7 @@ function renderLedgerItem(parent,item){
   event.preventDefault();
   const observation={species_id:item.species_id,ivs:item.ivs,current_cp:cp.valueAsNumber};
   if(level.value)observation.current_level=level.valueAsNumber;
+  if(megaLevel&&megaLevel.value)observation.mega_level=Number(megaLevel.value);
   const charged=[c1.value,c2.value].filter(Boolean);
   if(fast.value||charged.length){
    observation.current_moves={fast:fast.value||item.current_moves?.fast||null,charged:charged.length?charged:item.current_moves?.charged||null};

@@ -106,7 +106,7 @@ class Ownership:
 
     def _observation(self, value, *, partial=False):
         if type(value) is not dict or not {'species_id', 'ivs'} <= value.keys() or (
-            value.keys() - {'species_id', 'ivs', 'current_cp', 'current_level', 'current_moves'}
+            value.keys() - {'species_id', 'ivs', 'current_cp', 'current_level', 'current_moves', 'mega_level'}
         ):
             raise ValueError('Invalid inventory observation')
         ivs = value['ivs']
@@ -140,6 +140,9 @@ class Ownership:
                 moves = {'fast': None if fast is None else _id(fast, r'[A-Z0-9_]{1,100}'),
                          'charged': charged}
             result['current_moves'] = moves
+        if 'mega_level' in value:
+            mega_level = value.get('mega_level')
+            result['mega_level'] = None if mega_level is None else _int(mega_level, 1, 4)
         return result
 
     @staticmethod
@@ -484,9 +487,16 @@ class Ownership:
                         rules=rules,
                         mega_level=combatant.get('mega_level', mega_level),
                     )
+                expected_charged = combatant['moves']['charged']
+                actual_charged = moves.get('charged')
+                charged_target = (
+                    expected_charged[:2]
+                    if actual_charged is not None and len(expected_charged) == 3 and len(actual_charged) <= 2
+                    else expected_charged
+                )
                 move_pairs = (
                     (moves.get('fast'), combatant['moves']['fast']),
-                    (moves.get('charged'), combatant['moves']['charged']),
+                    (actual_charged, charged_target),
                 )
                 moves_mismatch = any(
                     actual is not None and expected is not None and actual != expected
@@ -557,6 +567,14 @@ class Ownership:
                 'evaluated_species_id': target_species,
                 'form_distinct': rec_species != target_species,
             }
+            owned_mega_level = record.get('mega_level')
+            target_mega_level = combatant.get('mega_level')
+            if owned_mega_level is not None:
+                entry['mega_level'] = owned_mega_level
+                if (is_mega_link or (mega_mode and is_direct)) and target_mega_level is not None and owned_mega_level < target_mega_level:
+                    entry['needs_mega_level'] = True
+                    if entry['build_match'] == 'exact':
+                        entry['build_match'] = 'unverified'
             if is_evolution_link:
                 entry['needs_evolution'] = True
                 cur_level = record.get('current_level')
