@@ -2,7 +2,32 @@
 function normalizePartyName(value){return String(value||'').normalize('NFKC').trim().toLowerCase().replace(/[ぁ-ゖ]/g,c=>String.fromCharCode(c.charCodeAt(0)+0x60));}
 function partyDisplay(id,cat=catalog){const p=cat[id];if(!p)return id;let ja=p.name_ja||p.name||id;if(id.split('_').includes('shadow')&&!ja.includes('シャドウ'))ja='シャドウ'+ja;return ja;}
 function partySearch(query,cat=catalog){const q=normalizePartyName(query);if(!q)return [];return Object.entries(cat).map(([id,p])=>({id,p,terms:[id,p.name,p.name_ja,...(p.aliases||[])].filter(Boolean).map(normalizePartyName)})).filter(r=>r.terms.some(t=>t.includes(q))).sort((a,b)=>Number(b.terms.includes(q))-Number(a.terms.includes(q))||a.id.localeCompare(b.id)).slice(0,20);}
-function resolvePartyName(value,cat=catalog){const q=normalizePartyName(value);if(!q)return '';if(cat[q])return q;const exact=Object.entries(cat).filter(([id,p])=>[id,p.name,p.name_ja,...(p.aliases||[])].some(t=>t&&normalizePartyName(t)===q));if(exact.length===1)return exact[0][0];throw Error(exact.length?'姿が複数あります。候補から姿を選んでください':'ポケモン名を確認し、候補から選んでください');}
+function resolvePartyName(value,cat=catalog){
+ const q=normalizePartyName(value);
+ if(!q)return '';
+ if(cat[q])return q;
+ const exact=Object.entries(cat).filter(([id,p])=>[id,p.name,p.name_ja,...(p.aliases||[])].some(t=>t&&normalizePartyName(t)===q));
+ if(exact.length===1)return exact[0][0];
+ if(exact.length===0){
+  let sub='',isX=false,isY=false;
+  if(q.startsWith('メガ')||q.startsWith('mega')){
+   sub=q.replace(/^(?:メガ|mega)\s*/,'');
+   if(sub.endsWith('x')||sub.endsWith('(x)')){isX=true;sub=sub.replace(/\(?x\)?$/,'').trim();}
+   else if(sub.endsWith('y')||sub.endsWith('(y)')){isY=true;sub=sub.replace(/\(?y\)?$/,'').trim();}
+  }else if(q.startsWith('ゲンシ')||q.startsWith('primal')){
+   sub=q.replace(/^(?:ゲンシ|primal)\s*/,'');
+  }
+  if(sub){
+   const baseMatches=Object.entries(cat).filter(([id,p])=>[id,p.name,p.name_ja,...(p.aliases||[])].some(t=>t&&normalizePartyName(t)===sub));
+   if(baseMatches.length===1){
+    const baseId=baseMatches[0][0];
+    const target=isX?(baseId+'_mega_x'):isY?(baseId+'_mega_y'):(q.startsWith('ゲンシ')||q.startsWith('primal')?(baseId+'_primal'):(baseId+'_mega'));
+    if(cat[target])return target;
+   }
+  }
+ }
+ throw Error(exact.length?'姿が複数あります。候補から姿を選んでください':'ポケモン名を確認し、候補から選んでください');
+}
 function partyDefaultMoves(p){const d=p.default_moves;const valid=d&&p.fastMoves.includes(d.fast)&&p.chargedMoves.includes(d.charged1)&&p.chargedMoves.includes(d.charged2)&&d.charged1!==d.charged2;return {moves:valid?{...d}:{fast:p.fastMoves[0]||'',charged1:p.chargedMoves[0]||'',charged2:p.chargedMoves[1]||''},recommended:!!valid};}
 function partyMoveLabel(id, moveNames=partyMoveNames){const p=moveNames[id];return p?.name_ja||p?.name||id;}
 function resolvePartyMove(value, allowed, moveNames=partyMoveNames){
@@ -70,12 +95,43 @@ function validatePartyAnalysisMembers(rows,cat=catalog){
  if(!Array.isArray(rows)||rows.length!==6)throw Error('自分の6体を指定してください');
  for(const [i,p] of rows.entries()){
   const id=String(p?.species||'').trim();
-  if(!id)throw Error('自分の候補: '+(i+1)+'枠目のポケモンが未選択です');
+  if(!id){
+   if(p?.raw_name)throw Error('自分の候補: '+(i+1)+'枠目のポケモン名「'+p.raw_name+'」が未確定または無効です');
+   throw Error('自分の候補: '+(i+1)+'枠目のポケモンが未選択です');
+  }
   if(!cat[id])throw Error('自分の候補: '+(i+1)+'枠目のポケモンが未登録です ('+id+')');
  }
  return rows;
 }
-function readPartyCard(box){const r={};box.querySelectorAll('[data-field]').forEach(x=>{const k=x.dataset.field;if(k==='locked')return;const wrap=x.closest?.('[data-mega-wrap]');if(wrap&&wrap.hidden)return;if(k==='species'){if(!x.value.trim())return;r.species=x.dataset.species||resolvePartyName(x.value);return;}if(x.value.trim())r[k]=(x.type==='number'||k==='mega_level')?Number(x.value):x.value;});return r;}
+function readPartyCard(box,slotIndex){
+ const r={};
+ box.querySelectorAll('[data-field]').forEach(x=>{
+  const k=x.dataset.field;
+  if(k==='locked')return;
+  const wrap=x.closest?.('[data-mega-wrap]');
+  if(wrap&&wrap.hidden)return;
+  if(k==='species'){
+   const val=x.value.trim();
+   if(!val)return;
+   r.raw_name=val;
+   let sid=x.dataset.species;
+   if(!sid){
+    try{
+     sid=resolvePartyName(val);
+    }catch(err){
+     const slotPrefix=(typeof slotIndex==='number')?(slotIndex+1)+'枠目: ':'';
+     const isMega=/^(?:メガ|mega|primal|ゲンシ)/i.test(val)||/(?:mega|primal|メガ|ゲンシ)/i.test(val);
+     const msg=isMega?('メガ形態IDの変換に失敗しました ('+val+')'):err.message;
+     throw Error('自分の候補: '+slotPrefix+msg);
+    }
+   }
+   r.species=sid;
+   return;
+  }
+  if(x.value.trim())r[k]=(x.type==='number'||k==='mega_level')?Number(x.value):x.value;
+ });
+ return r;
+}
 if(typeof module!=='undefined')module.exports={normalizePartyName,partyDisplay,partySearch,resolvePartyName,partyDefaultMoves,partyMoveLabel,resolvePartyMove,isPartyMegaSpecies,partyExtraChargedMoves,createMon,readPartyCard,validatePartyAnalysisMembers};
 
 function partyRosterRows(id){return rosterEditors[id]?rosterEditors[id].rows():parseCsv($(id).value);}

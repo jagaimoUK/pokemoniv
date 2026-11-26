@@ -58,13 +58,21 @@ const assert=require('node:assert/strict');
   await page.waitForFunction(()=>document.getElementById('status').textContent.includes('4枠目のポケモンが未選択'));
   assert.equal(requests.length,0,'Fourth blank must not call party/start');
 
+  // Case 1c: typing an unresolvable mega name into slot 2 must identify slot 2.
+  await page.locator('#members details.mon').nth(1).evaluate(e=>e.open=true);
+  await speciesInputs.nth(1).fill('メガ存在しないポケモン');
+  await page.click('#analyze');
+  await page.waitForFunction(()=>document.getElementById('status').textContent.includes('2枠目'));
+  assert.equal(requests.length,0,'Invalid name in slot 2 must suppress POST');
+
   // Restore the original six via the existing saved-party UI.
   await page.click('#load');
-  await page.waitForFunction(ids=>getMon().every((p,i)=>p.species===ids[i]),original.map(p=>p.species));
+  await page.waitForFunction(()=>document.getElementById('status').textContent.includes('読み込みました'));
+  await page.waitForFunction(ids=>{try{return getMon().every((p,i)=>p.species===ids[i])}catch(_){return false}},original.map(p=>p.species));
   const restored=await page.evaluate(()=>getMon());
   assert.deepEqual(restored.map(p=>p.species),original.map(p=>p.species));
 
-  // Case 2/3: regular six, visible input IDs and server request match.
+  // Case A: regular six, visible input IDs and server request match, evaluation completes.
   async function startAndInspect(){
    const before=requests.length;
    const visible=await page.locator('#members [data-field=species]').evaluateAll(
@@ -90,24 +98,26 @@ const assert=require('node:assert/strict');
   assert((await page.textContent('#status')).includes('計算完了'),'Regular six must finish');
   assert(!/未登録ポケモン/.test(await page.textContent('#status')));
 
-  // Analysis navigates to weakness results; switch back to the editable panel.
+  // Case B: real Mega species (Mega Sableye / sableye_mega) under great_mega ruleset.
   await page.click('[data-tab=compose]');
-  // Use the real selection UI, not a fabricated POST body.
   await page.locator('#members details.mon').nth(0).evaluate(e=>e.open=true);
-  await speciesInputs.nth(0).fill('Synthetic Mega Quagsire');
-  await page.locator('#members details.mon').nth(0)
-   .locator('.suggestions button').filter({hasText:'Synthetic Mega Quagsire'}).first().click();
-  assert.equal(await speciesInputs.nth(0).getAttribute('data-species'),'quagsire_mega');
+  await speciesInputs.nth(0).fill('メガヤミラミ');
+  const sableyeBtn=page.locator('#members details.mon').nth(0)
+   .locator('.suggestions button').filter({hasText:/ヤミラミ\(メガ\)|Sableye \(Mega\)|メガヤミラミ/}).first();
+  await sableyeBtn.waitFor({state:'visible'});
+  await sableyeBtn.click();
+  assert.equal(await speciesInputs.nth(0).getAttribute('data-species'),'sableye_mega');
   await page.selectOption('#partyRuleset','great_mega');
-  const mega=await startAndInspect();
-  assert.equal(mega.sent[0].species,'quagsire_mega');
-  assert.equal(mega.sent[0].mega_level,3,'Mega level must remain in its own field');
-  assert.equal(mega.sent.length,6);
+  const realMega=await startAndInspect();
+  assert.equal(realMega.sent[0].species,'sableye_mega');
+  assert.equal(realMega.sent[0].mega_level,3,'Mega level must remain in its own field');
+  assert.equal(realMega.sent.length,6);
   await page.waitForFunction(()=>activeJob===null,null,{timeout:90000});
-  assert((await page.textContent('#status')).includes('計算完了'),'Synthetic Mega six must finish');
+  assert((await page.textContent('#status')).includes('計算完了'),'Real Mega six must finish evaluation');
   assert(!/未登録ポケモン/.test(await page.textContent('#status')));
+
   assert.deepEqual(errors,[],'No page errors');
-  console.log('Party browser validation PASS: blank slots suppress POST; normal and synthetic Mega six start; visible names match sent IDs');
+  console.log('Party browser validation PASS: Case A normal six, Case B real Mega Sableye, Case C invalid/unselected slot identification passed');
  }finally{
   if(browser)await browser.close();
   server.kill();

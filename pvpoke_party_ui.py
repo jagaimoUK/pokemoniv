@@ -139,7 +139,7 @@ async function api(path,body={}){
 }
 /*PARTY_INPUT*/
 function renderMon(rows=[]){$('members').replaceChildren();for(let i=0;i<6;i++)$('members').append(createMon(rows[i]||{}))}
-function getMon(){return [...$('members').children].map(readPartyCard)}
+function getMon(){return [...$('members').children].map((box,i)=>readPartyCard(box,i))}
 function locks(){return [...$('members').children].flatMap((box,i)=>box.querySelector('[data-field=locked]').checked?[i]:[])}
 function normalizeMetaId(value){
  const s=String(value||'').trim().toLowerCase();

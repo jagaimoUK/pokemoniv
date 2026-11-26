@@ -8,8 +8,16 @@ assert.equal(x.validatePartyAnalysisMembers(six,cat),six);
 assert.throws(()=>x.validatePartyAnalysisMembers(six.slice(0,5),cat),/6体/);
 assert.throws(()=>x.validatePartyAnalysisMembers(six.map((p,i)=>i===3?{}:p),cat),/4枠目.*未選択/);
 assert.throws(()=>x.validatePartyAnalysisMembers(six.map((p,i)=>i===4?{species:'unregistered_mega'}:p),cat),/5枠目.*未登録/);
+assert.throws(()=>x.validatePartyAnalysisMembers(six.map((p,i)=>i===1?{raw_name:'未確定な名前'}:p),cat),/2枠目.*未確定または無効/);
 
 assert.equal(x.resolvePartyName('サニーゴ',cat),'corsola');assert.equal(x.resolvePartyName('さにーご',cat),'corsola');assert.equal(x.resolvePartyName('Ｃｏｒｓｏｌａ',cat),'corsola');assert.equal(x.resolvePartyName('ガラルサニーゴ',cat),'corsola_galarian');assert.equal(x.partySearch('サニーゴ',cat).length,2);
+
+cat.corsola_mega={name:'Corsola (Mega)',name_ja:'サニーゴ (メガ)',aliases:['メガサニーゴ','Mega Corsola'],fastMoves:['A'],chargedMoves:['B','C','D'],tags:['mega']};
+assert.equal(x.resolvePartyName('メガサニーゴ',cat),'corsola_mega');
+assert.equal(x.resolvePartyName('Mega Corsola',cat),'corsola_mega');
+assert.equal(x.resolvePartyName('サニーゴ (メガ)',cat),'corsola_mega');
+assert.equal(x.isPartyMegaSpecies('corsola_mega',cat.corsola_mega),true);
+assert.equal(x.partySearch('サニーゴ',cat).length,3);
 assert.equal(x.partyDefaultMoves(cat.corsola).moves.charged1,'C');assert.equal(x.partyDefaultMoves(cat.corsola_galarian).recommended,false);
 assert.equal(context.parseCsv('サニーゴ')[0].charged1,'C');
 assert.equal(x.partyMoveLabel('C',moveNames),'れいとうビーム');
