@@ -8,6 +8,18 @@ import pvpoke_party_core as core
 from pvpoke_party_backend import PartyBuilder
 
 
+class PartyEmptySpeciesTests(unittest.TestCase):
+    def test_missing_species_identifies_first_slot_before_engine_call(self):
+        with self.assertRaisesRegex(ValueError, "自分の候補: 1枠目のポケモンが未選択です"):
+            PartyBuilder._normalize([{"fast": "BUBBLE"}], {}, {}, [], None, "自分の候補")
+
+    def test_blank_species_is_distinct_from_unknown_nonempty_id(self):
+        with self.assertRaisesRegex(ValueError, "自分の候補: 1枠目のポケモンが未選択です"):
+            PartyBuilder._normalize([{"species": "  "}], {}, {}, [], None, "自分の候補")
+        with self.assertRaisesRegex(ValueError, "未登録ポケモン unknown_mega"):
+            PartyBuilder._normalize([{"species": "unknown_mega"}], {}, {}, [], None, "自分の候補")
+
+
 class PartyCoreTests(unittest.TestCase):
     def test_ids_include_species_and_moves(self):
         base = dict(species="azumarill", fast="BUBBLE", charged1="ICE_BEAM",
