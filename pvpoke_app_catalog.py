@@ -44,6 +44,24 @@ def enrich_catalog(payload: dict, species: dict) -> None:
                 # Accept the source display form with or without the space
                 # preceding parentheses, regardless of Japanese/English suffix.
                 aliases.extend([ja + suffix, ja + ' ' + suffix, ja + localized, ja + ' ' + localized])
+            if sid.endswith('_mega_x'):
+                aliases.extend(['メガ' + ja + 'X', 'メガ' + ja + ' X', 'メガ' + ja + '(X)', ja + '(X)', ja + ' (X)'])
+            elif sid.endswith('_mega_y'):
+                aliases.extend(['メガ' + ja + 'Y', 'メガ' + ja + ' Y', 'メガ' + ja + '(Y)', ja + '(Y)', ja + ' (Y)'])
+            elif 'primal' in sid:
+                aliases.extend(['ゲンシ' + ja, 'ゲンシ ' + ja])
+            elif 'mega' in sid:
+                aliases.extend(['メガ' + ja, 'メガ ' + ja])
+            eng_base = english[:english.find('(')].strip() if '(' in english else english
+            if eng_base:
+                if sid.endswith('_mega_x'):
+                    aliases.extend(['Mega ' + eng_base + ' X', 'Mega ' + eng_base + 'X'])
+                elif sid.endswith('_mega_y'):
+                    aliases.extend(['Mega ' + eng_base + ' Y', 'Mega ' + eng_base + 'Y'])
+                elif 'primal' in sid:
+                    aliases.extend(['Primal ' + eng_base, 'Primal' + eng_base])
+                elif 'mega' in sid:
+                    aliases.extend(['Mega ' + eng_base, 'Mega' + eng_base])
             entry['name_ja'] = ja + localized if suffix else ja + ((' (' + region + ')') if region else '')
             if sid == 'oinkologne' and 'oinkologne_male' not in species:
                 # PvPoke's unsuffixed ID is the male form. Android always writes its sex.
@@ -65,6 +83,12 @@ def enrich_catalog(payload: dict, species: dict) -> None:
         entry['aliases'] = list(dict.fromkeys(aliases))
         moves = GL_MOVES.get(sid)
         move_source = 'PvPoke GL overall / ' + SOURCES['retrieved']
+        if not moves and ('mega' in sid or 'primal' in sid):
+            from pvpoke_mega import base_species_id
+            base_moves = GL_MOVES.get(base_species_id(sid))
+            if base_moves:
+                moves = base_moves
+                move_source = '通常形態の推奨技を継承'
         if not moves and sid in ('minior_meteor', 'minior_core'):
             # An explicit, GameMaster-validated provisional moveset until a
             # curated PvPoke GL recommendation becomes available.

@@ -139,7 +139,7 @@ async function api(path,body={}){
 }
 /*PARTY_INPUT*/
 function renderMon(rows=[]){$('members').replaceChildren();for(let i=0;i<6;i++)$('members').append(createMon(rows[i]||{}))}
-function getMon(){return [...$('members').children].map(readPartyCard)}
+function getMon(){return [...$('members').children].map((box,i)=>readPartyCard(box,i))}
 function locks(){return [...$('members').children].flatMap((box,i)=>box.querySelector('[data-field=locked]').checked?[i]:[])}
 function normalizeMetaId(value){
  const s=String(value||'').trim().toLowerCase();
@@ -542,7 +542,9 @@ function restorePartyRules(ruleset,megaRules){
 }
 $('partyRuleset')?.addEventListener('change',()=>{inputRevision++;toggleCustomMegaRules();});
 function partyCalculationRequest(mode,findSwaps=false,autoComplete=false){
- const request={mode,members:getMon(),locked_slots:locks(),meta_preset_id:$('meta').value,meta_sha256:metaItems.find(x=>x.id===$('meta').value)?.sha256,group_weights:mode==='strategy'?{}:getWeights(),...partyRulePayload(),strategy_refinement:$('strategyRefinement').checked};
+ const members=getMon();
+ if(mode!=='build')validatePartyAnalysisMembers(members);
+ const request={mode,members,locked_slots:locks(),meta_preset_id:$('meta').value,meta_sha256:metaItems.find(x=>x.id===$('meta').value)?.sha256,group_weights:mode==='strategy'?{}:getWeights(),...partyRulePayload(),strategy_refinement:$('strategyRefinement').checked};
  if(findSwaps||autoComplete)request.candidate_pool=partyRosterRows('pool');
  if(findSwaps)request.auto_replacements=true;
  if(autoComplete)request.auto_complete=true;

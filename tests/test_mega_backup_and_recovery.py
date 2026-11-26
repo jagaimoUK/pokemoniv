@@ -483,7 +483,10 @@ vm.runInContext(script, ctx);
   assert.equal(vm.runInContext('revision', ctx), 2);
   assert.ok($('status').textContent.includes('保存競合'), 'status was: ' + $('status').textContent);
 
-  // 3. Offline failure during party/status recovers button state cleanly.
+  // 3. Offline flow uses six selected species; this minimal DOM mock does not
+  // implement querySelectorAll, so supply a valid roster only for API-state tests.
+  // Real selection/serialization remains covered by Playwright browser E2E.
+  vm.runInContext("getMon = () => Array.from({{length:6}}, () => ({{species:'altaria_mega'}}))", ctx);
   fetchHandler = async (url) => {{
     if (url.endsWith('/app-api/party/start')) return {{ ok: true, json: async () => ({{ job_id: 'j1' }}) }};
     if (url.endsWith('/app-api/party/status')) throw TypeError('Failed to fetch');

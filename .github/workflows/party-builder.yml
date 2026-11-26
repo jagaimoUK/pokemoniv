@@ -53,4 +53,7 @@ jobs:
         run: |
           npm install --no-save --no-package-lock playwright@1.57.0
           docker run --rm -v "$PWD:/work" -w /work -e STRATEGY_CHROMIUM_PATH=/usr/bin/chromium --entrypoint node pokemoniv-party-ci tests/party_strategy_browser.cjs
+      - name: Isolated six-member and Mega browser contract
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work -e STRATEGY_CHROMIUM_PATH=/usr/bin/chromium --entrypoint node pokemoniv-party-ci tests/party_analysis_validation_browser.cjs
 

@@ -22,6 +22,15 @@ import pvpoke_meta_presets as meta_presets
 workspace = tempfile.TemporaryDirectory()
 work = Path(workspace.name)
 gm = json.loads((ROOT/'tests/fixtures/strategy_gamemaster.json').read_text())
+# Opt-in synthetic form used only by the isolated 6-member browser contract test.
+# Never modify the on-disk bundled GameMaster or production catalog.
+if os.environ.get('PARTY_TEST_SYNTHETIC_MEGA') == '1':
+    from copy import deepcopy
+    prototype = next(p for p in gm['pokemon'] if p['speciesId'] == 'quagsire')
+    mega = deepcopy(prototype)
+    mega.update(speciesId='quagsire_mega', speciesName='Synthetic Mega Quagsire',
+                tags=['mega'])
+    gm['pokemon'].append(mega)
 (work/'gamemaster.json').write_text(json.dumps(gm))
 js = (ROOT/'vendor/pvpoke/src/js/pokemon/Pokemon.js').read_text()
 (work/'Pokemon.js').write_text(js)
