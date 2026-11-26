@@ -19,6 +19,13 @@ class RateBudget:
         self._buckets = {}
         self._lock = threading.Lock()
 
+    def available(self, name, count, seconds):
+        now = time.monotonic()
+        with self._lock:
+            tokens, before = self._buckets.get(name, (count, now))
+            tokens = min(count, tokens + (now - before) * count / seconds)
+            return tokens >= 1
+
     def allow(self, name, count, seconds):
         now = time.monotonic()
         with self._lock:

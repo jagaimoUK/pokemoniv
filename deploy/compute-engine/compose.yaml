@@ -1,0 +1,40 @@
+# Staging-only: expose no application port publicly until HTTPS and data validation.
+name: pokemoniv
+services:
+  web:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: production
+    restart: unless-stopped
+    init: true
+    env_file:
+      - /etc/pokemoniv/pokemoniv.env
+    environment:
+      PORT: "8787"
+      PVP_ARCHIVE_DIR: /data
+      RAILWAY_VOLUME_MOUNT_PATH: /data
+      PVP_ENGINE: direct
+      PVP_ALLOW_BROWSER: "0"
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - type: bind
+        source: /srv/pokemoniv/data
+        target: /data
+      - type: bind
+        source: /srv/pokemoniv/work
+        target: /home/appuser/pvpoke_automation_web
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/health', timeout=8).read()"
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
