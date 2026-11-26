@@ -84,8 +84,9 @@ const assert=require('node:assert/strict');
   }
   const regular=await startAndInspect();
   assert.equal(regular.sent.length,6);
-  // Wait for the worker to release its active-job lock before submitting Mega.
+  // Await the exact job to finish; a 200/queued response alone is not success.
   await page.waitForFunction(()=>activeJob===null,null,{timeout:90000});
+  assert((await page.textContent('#status')).includes('計算完了'),'Regular six must finish');
   assert(!/未登録ポケモン/.test(await page.textContent('#status')));
 
   // Use the real selection UI, not a fabricated POST body.
@@ -100,6 +101,7 @@ const assert=require('node:assert/strict');
   assert.equal(mega.sent[0].mega_level,3,'Mega level must remain in its own field');
   assert.equal(mega.sent.length,6);
   await page.waitForFunction(()=>activeJob===null,null,{timeout:90000});
+  assert((await page.textContent('#status')).includes('計算完了'),'Synthetic Mega six must finish');
   assert(!/未登録ポケモン/.test(await page.textContent('#status')));
   assert.deepEqual(errors,[],'No page errors');
   console.log('Party browser validation PASS: blank slots suppress POST; normal and synthetic Mega six start; visible names match sent IDs');
