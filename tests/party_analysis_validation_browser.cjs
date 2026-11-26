@@ -76,6 +76,7 @@ const assert=require('node:assert/strict');
    assert.equal(response.status(),200,await response.text());
    const result=await response.json();
    assert.equal(result.status,'queued');
+   await page.waitForFunction(id=>activeJob===id,result.job_id,{timeout:10000});
    assert.equal(requests.length,before+1);
    const sent=requests[before].members;
    assert.deepEqual(sent.map(x=>x.species),visible.map(x=>x.id));
