@@ -92,3 +92,12 @@ HEAD: <SHA>
 
 - 開発方針や次工程の選択をユーザーに求める際（`ask_question` 等で選択肢を提示する場合）は、**各選択肢ごとにその作業に適した推奨モデル・思考量（および実行環境）を第4節の3軸評価（精度・速度・使用量節約）に基づいて明記する**。
 - 契約プランに実在しないモデル名は記載しない（Codex: `GPT-6.2 Sol (High/Medium)`, `Luna (Medium/Low)` / Antigravity: `Gemini 4 Hydrogen (High/Medium)`, `Gemini 4 Neon (High/Medium)`, `Orchestrator (Neon)`, `Gemini 3.8 Flash (Medium/Low)`）。
+
+## 個体値厳選・メガ進化・Android連携の設計書（文書PR提案：2026-11-25）
+
+- **設計書の単一正本（全15問の確定要求＋技術検証）**：`docs/mega-iv-selection-cross-app-design.md`（本リポジトリ内）
+- **Web `main` 反映後の正本URL**：https://github.com/jagaimoUK/pokemoniv/blob/main/docs/mega-iv-selection-cross-app-design.md
+- **Web `main` 未反映の場合のDraft参照URL**：https://github.com/jagaimoUK/pokemoniv/blob/docs/mega-iv-cross-app-spec-20261125/docs/mega-iv-selection-cross-app-design.md
+- 厳選アプリの重要個体保存・差分計算、メガCP/PL、パーティ機能、Android同期・オーバーレイへ着手する際は、**本書の第2章・第3章・第5章・第8章を実際に読み**、最新対象PRの[AI-HANDOFF v1]・コードと照合する。
+- Android現行開発正本は `jagaimoUK/PokemonIVReader-public-ci` の `main`。歴史的Private `PokemonIVReader` の作業ブランチを現行開発先と推定しない。
+- 設計書がWeb `main` に存在するか、取得してから参照URLを選ぶ。未反映の場合は上記DraftのURLを使う。**本指示を読めたことと本番反映は別**。本番デプロイ・PRマージは別途明示承認が必要。

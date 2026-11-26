@@ -326,6 +326,33 @@ class PartyBuilder:
             raise ValueError("大会・カップのメガ許可数が未確認のため、一律1体と仮定して計算できません")
         return policy
 
+    @staticmethod
+    def _mega_policy_from_args(args, *, engine_cp_cap=None):
+        from pvpoke_mega import resolve_battle_rules, resolve_party_mega_rules
+        ruleset = args.get("ruleset", "cp1500-lv50")
+        raw_mega = args.get("mega_rules")
+        if raw_mega is not None:
+            if not isinstance(raw_mega, dict):
+                raise ValueError("メガルール設定はオブジェクトで指定してください")
+            rule_input = {"ruleset": ruleset, **raw_mega}
+        else:
+            rule_input = ruleset
+        policy = resolve_party_mega_rules(rule_input)
+        if engine_cp_cap is not None:
+            meta_rules = raw_mega if isinstance(raw_mega, dict) else {}
+            battle_rule = resolve_battle_rules({
+                "league": meta_rules.get("league"),
+                "cup_id": policy["effective_cup"],
+                "cp_cap": meta_rules.get("cp_cap"),
+            })
+            if battle_rule["cp_cap"] not in (None, engine_cp_cap) or policy["effective_cup"] in (
+                "ultra", "open_ultra", "ultra_mega", "master", "open_master"
+            ) and engine_cp_cap == 1500:
+                raise ValueError(f"現在はCP{engine_cp_cap}（スーパーリーグ系）のみ対応しています")
+        if not policy["rule_verified"] or policy["max_megas_in_three"] is None:
+            raise ValueError("大会・カップのメガ許可数が未確認のため、一律1体と仮定して計算できません")
+        return policy
+
     def _compute(self, jid, args, catalog, species, cpms, engine, work):
         mega_policy = self._mega_policy_from_args(args, engine_cp_cap=getattr(engine, "CP_CAP", 1500))
         if args["mode"] == "strategy":
