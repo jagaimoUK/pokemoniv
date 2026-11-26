@@ -89,6 +89,8 @@ const assert=require('node:assert/strict');
   assert((await page.textContent('#status')).includes('計算完了'),'Regular six must finish');
   assert(!/未登録ポケモン/.test(await page.textContent('#status')));
 
+  // Analysis navigates to weakness results; switch back to the editable panel.
+  await page.click('[data-tab=compose]');
   // Use the real selection UI, not a fabricated POST body.
   await page.locator('#members details.mon').nth(0).evaluate(e=>e.open=true);
   await speciesInputs.nth(0).fill('Synthetic Mega Quagsire');
