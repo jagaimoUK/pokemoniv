@@ -459,7 +459,7 @@ vm.runInContext(script, ctx);
     if (url.endsWith('/app-api/party/meta-weights')) return {{ ok: true, json: async () => ({{ weights: {{}} }}) }};
     if (url.endsWith('/app-api/party/get')) return {{ ok: true, json: async () => ({{
       id: 'p1', revision: 2, name: 'Mega Team',
-      members: Array.from({{length: 6}}, () => ({{ species: 'altaria_mega', fast: 'DRAGON_BREATH', charged1: 'SKY_ATTACK', charged2: 'MOONBLAST', mega_level: 4, charged3: 'MOONBLAST_PLUS' }})),
+      members: [{{ species: 'altaria_mega', fast: 'DRAGON_BREATH', charged1: 'SKY_ATTACK', charged2: 'MOONBLAST', mega_level: 4, charged3: 'MOONBLAST_PLUS' }}],
       locked_slots: [0], ruleset: 'cp1500-lv50', mega_rules: {{ cup_id: 'great_mega', max_megas_in_three: 1, max_megas_in_six: 6 }},
       opponents: [], candidate_pool: [], strategy: {{}}, opponent_hypotheses: [],
     }}) }};
@@ -483,7 +483,10 @@ vm.runInContext(script, ctx);
   assert.equal(vm.runInContext('revision', ctx), 2);
   assert.ok($('status').textContent.includes('保存競合'), 'status was: ' + $('status').textContent);
 
-  // 3. Offline failure during party/status recovers button state cleanly.
+  // 3. Offline flow uses six selected species; this minimal DOM mock does not
+  // implement querySelectorAll, so supply a valid roster only for API-state tests.
+  // Real selection/serialization remains covered by Playwright browser E2E.
+  vm.runInContext("getMon = () => Array.from({length:6}, () => ({{species:'altaria_mega'}}))", ctx);
   fetchHandler = async (url) => {{
     if (url.endsWith('/app-api/party/start')) return {{ ok: true, json: async () => ({{ job_id: 'j1' }}) }};
     if (url.endsWith('/app-api/party/status')) throw TypeError('Failed to fetch');
