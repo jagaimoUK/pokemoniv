@@ -173,4 +173,98 @@ vm.runInContext("catalog={swadloon:{name:'Swadloon',name_ja:'クルマユ',nickn
  assert.equal(redundant.selected.length,1,'Do not fill a fixed quota for equivalent roles');
  console.log('Gourgeist: one family shortlist, no interim copies, useful extra roles, no filler, exact eight-copy ceiling: OK');
 
+ // Saving is explicit and includes equivalent builds plus a confirmed linkage.
+ context.document.querySelector=()=>({});
+ context.crypto=require('crypto').webcrypto;
+ context.saved.selection.recommendations[0].equivalent_candidates=[{ivs:'0/12/11'}];
+ context.fetch=async(path,options)=>{
+  calls.push({path,data:JSON.parse(options.body)});
+  return {ok:true,json:async()=>({revision:1})};
+ };
+ calls.length=0;
+ const target=element();
+ context.savePanel=target;
+ vm.runInContext('renderSaveSelection(saved,savePanel)',context);
+ const fields=target.children[0].children.filter(n=>n.children.length===2);
+ fields[0].children[0].children[0].value='confirmed-individual';
+ fields[0].children[1].children[0].value='PL 29.5';
+ const save=flat(target).find(n=>n.textContent==='最新結果として保存');
+ await save.onclick();
+ await save.onclick();
+ assert.equal(calls[0].path,'/app-api/missing-analysis');
+ assert.equal(calls[0].data.action,'selection_save');
+ assert.deepEqual(calls[0].data.candidates.map(r=>[r.role,r.instance_id,r.goal]),
+  [['important','confirmed-individual','PL 29.5'],['alternative',null,'']]);
+ assert.equal(calls[0].data.request_id,calls[1].data.request_id);
+ console.log('Explicit important/alternative save, individual goal and retry ID: OK');
+
+ // The standard run freezes the merged pool before planning, and force only disables the cache.
+ calls.length=0;
+ context.fetch=async(path,options)=>{
+  const data=JSON.parse(options.body);
+  calls.push({path,data});
+  if(data.action==='selection_pool')return {ok:true,json:async()=>({snapshots:{
+   swadloon:{revision:3,ivs:['1/2/3','0/12/11'],
+    links:[{ivs:'0/12/11',instance_id:'saved-alternative',goal:'PL 31'}]},
+   leavanny:{revision:9,ivs:['15/15/15'],links:[]},
+  }})};
+  return {ok:true,json:async()=>({...context.saved,run_ref:'diff-run'})};
+ };
+ vm.runInContext(`
+  catalog.swadloon.fastMoves=['FAST'];catalog.swadloon.chargedMoves=['CHARGE1','CHARGE2'];
+  selectedMetaId='fixture-meta';metaState={items:[{id:'fixture-meta',sha256:'a'.repeat(64)}]};
+  readerAutomation=null;importedJobs=null;batchState=null;runRef=null;
+  el('species').value='swadloon';el('fast').value='FAST';
+  el('charged1').value='CHARGE1';el('charged2').value='CHARGE2';
+  el('ivs').value='01、2、3';el('autoMoves').checked=false;
+  el('includeSaved').checked=true;el('forceRecalculate').checked=true;
+ `,context);
+ await vm.runInContext('startSelection()',context);
+ assert.deepEqual(calls.map(call=>call.path),['/app-api/missing-analysis','/app-api/run']);
+ assert.deepEqual(calls[0].data.species_ids,['swadloon']);
+ assert.equal(calls[1].data.ivs,'1,2,3\n0,12,11');
+ assert.equal(calls[1].data.force_recalculate,true);
+ assert.equal(vm.runInContext('lastResult.saved_selection.revision',context),3);
+ assert.deepEqual(JSON.parse(vm.runInContext('overlayExport([lastResult])',context)).items.map(item=>item.ivs),['1/2/3']);
+ const preserved=flat(els.results).filter(n=>n.value==='saved-alternative'||n.value==='PL 31');
+ assert.equal(preserved.length,2,'Previously confirmed ID and goal stay attached to the saved candidate');
+ console.log('Saved-and-new IV union, full recalculation toggle, preserved goal and safe export: OK');
+
+ // Web retains a contested draft while allowing another field to be saved.
+ const syncPanel=element(), instanceInput=element();
+ instanceInput.value='confirmed-individual';
+ context.syncPanel=syncPanel;context.syncInput=instanceInput;
+ const server={individual:{instance_id:'confirmed-individual',species_id:'quagsire',
+  current_cp:1498,ivs:{attack:0,defense:11,hp:12}},
+  fields:{nickname:{revision:0,value:''},memo:{revision:0,value:''}}};
+ calls.length=0;
+ let writes=0;
+ context.fetch=async(path,options)=>{
+  const data=JSON.parse(options.body);
+  calls.push({path,data});
+  if(data.action==='individual_get')return {ok:true,json:async()=>server};
+  if(++writes===1)throw Error('synthetic lost reply');
+  const first=writes===2;
+  return {ok:true,json:async()=>({...server,fields:{
+   nickname:{revision:1,value:'Phone'},memo:{revision:first?1:2,value:data.changes.memo.value}},
+   outcomes:first?{nickname:'conflict',memo:'applied'}:{memo:'applied'}})};
+ };
+ vm.runInContext('renderIndividualSync(syncPanel,syncInput)',context);
+ const control=text=>flat(syncPanel).find(n=>n.textContent===text);
+ await control('登録個体を読み込む').onclick();
+ control('希望ニックネーム').children[0].value='Browser';
+ control('個体の育成メモ').children[0].value='Target 1';
+ await control('個体の項目を保存').onclick();
+ await control('個体の項目を保存').onclick();
+ assert.equal(calls[1].data.request_id,calls[2].data.request_id);
+ assert.equal(calls[2].data.changes.nickname.revision,0);
+ assert(control('希望ニックネーム｜未適用の入力 Browser'));
+ assert(control('希望ニックネーム').children[0].disabled);
+ control('個体の育成メモ').children[0].value='Target 2';
+ await control('個体の項目を保存').onclick();
+ assert.deepEqual(Object.keys(calls[3].data.changes),['memo']);
+ assert.equal(calls[3].data.changes.memo.revision,1);
+ assert(control('希望ニックネーム｜未適用の入力 Browser'));
+ console.log('Web retry preserves request ID and only holds the contested field: OK');
+
 })();

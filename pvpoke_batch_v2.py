@@ -115,8 +115,11 @@ def get_rows(path):
         raise ValueError(f'ファイルがありません: {path}。先に --setup を実行してください')
     with path.open(encoding='utf-8-sig', newline='') as f:
         reader = csv.DictReader(f)
-        if reader.fieldnames not in (HEADER, HEADER + ['level_override']):
-            raise ValueError(f'{path.name}: 列名が不正です。必要な列: {HEADER} (任意でlevel_override)')
+        expected_base = set(HEADER)
+        allowed_extra = {'level_override', 'mega_level', 'charged3'}
+        fields = list(reader.fieldnames or ())
+        if not expected_base.issubset(fields) or len(fields) != len(set(fields)) or set(fields) - expected_base - allowed_extra:
+            raise ValueError(f'{path.name}: 列名が不正です。必要な列: {HEADER} (任意でlevel_override, mega_level, charged3)')
         rows = []
         for i, row in enumerate(reader, 2):
             if not any((v or '').strip() for v in row.values()):
@@ -141,6 +144,18 @@ def get_rows(path):
                 if not math.isfinite(override) or override < 1 or override > MAX_LEVEL or override * 2 != int(override * 2):
                     raise ValueError(f'{path.name} {i}行目: 指定レベルは1〜{MAX_LEVEL}の0.5刻みです')
                 vals['level_override'] = override
+            raw_mega_level = (row.get('mega_level') or '').strip()
+            if raw_mega_level:
+                try:
+                    mega_level = int(raw_mega_level)
+                except ValueError as e:
+                    raise ValueError(f'{path.name} {i}行目: mega_levelは1〜4の整数です') from e
+                if not 1 <= mega_level <= 4:
+                    raise ValueError(f'{path.name} {i}行目: 無効なmega_level: {mega_level}')
+                vals['mega_level'] = mega_level
+            raw_charged3 = (row.get('charged3') or '').strip()
+            if raw_charged3:
+                vals['charged3'] = raw_charged3.upper()
             rows.append(vals)
     if not rows:
         raise ValueError(f'{path.name}: データ行がありません')
@@ -159,19 +174,29 @@ def charged_move_pool(pokemon, cp_cap=CP_CAP):
     return moves
 
 
-def optimize(rows, species, cpms, fname):
+def optimize(rows, species, cpms, fname, cp_cap=CP_CAP):
     prepared = []
     for idx, row in enumerate(rows, 2):
         p = species.get(row['species'])
         if p is None:
             raise ValueError(f'{fname} {idx}行目: species未登録: {row["species"]}')
         allowed_fast = set(p['fastMoves'])
-        allowed_charged = set(charged_move_pool(p))
+        allowed_charged = set(charged_move_pool(p, cp_cap=cp_cap))
         for key, allowed in [('fast', allowed_fast), ('charged1', allowed_charged), ('charged2', allowed_charged)]:
             if row[key] not in allowed:
                 raise ValueError(f'{fname} {idx}行目: 未対応の技: {key}={row[key]} ({row["species"]})')
         if row['charged1'] == row['charged2']:
             raise ValueError(f'{fname} {idx}行目: 同じゲージ技が2つ指定されています')
+        if row.get('charged3') is not None:
+            tags = p.get('tags') or ()
+            extra_charged = set(p.get('extraChargedMoves') or ())
+            if 'mega' not in tags or row['charged3'] not in extra_charged:
+                raise ValueError(f'{fname} {idx}行目: 未対応の追加ゲージ技: charged3={row["charged3"]} ({row["species"]})')
+            if row['charged3'] in (row['charged1'], row['charged2']):
+                raise ValueError(f'{fname} {idx}行目: 同じゲージ技が重複しています')
+        if row.get('mega_level') is not None:
+            if type(row['mega_level']) is not int or not 1 <= row['mega_level'] <= 4:
+                raise ValueError(f'{fname} {idx}行目: 無効なmega_level: {row["mega_level"]}')
         stats = p['baseStats']
         maxlevel = min(MAX_LEVEL, float(p.get('levelCap', MAX_LEVEL)))
         floorlevel = max(1.0, float(p.get('levelFloor', 1.0)))
@@ -188,10 +213,10 @@ def optimize(rows, species, cpms, fname):
                 math.sqrt(stats['def'] + row['def']) *
                 math.sqrt(stats['hp'] + row['hp']) * cpm ** 2 / 10
             ))
-            if cp <= CP_CAP:
+            if cp <= cp_cap:
                 possibilities.append((level, cp))
         if not possibilities:
-            raise ValueError(f'{fname} {idx}行目: CP{CP_CAP}以下の適正レベルが見つかりません')
+            raise ValueError(f'{fname} {idx}行目: CP{cp_cap}以下の適正レベルが見つかりません')
         if row.get('level_override') is not None:
             requested = float(row['level_override'])
             selected = [pair for pair in possibilities if abs(pair[0] - requested) < .001]

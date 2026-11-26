@@ -185,6 +185,7 @@ const reasons={
  no_shields:'残りシールドなし',unshieldable:'シールドを使えない技',action_not_resolved:'技が解決しなかった'
 };
 const importKey='pokemoniv:sandbox-input-v1';
+const tacticLoadKey='pokemoniv:sandbox-tactic-load-v1';
 const tacticLinkKey='pokemoniv:tactic-evidence-link-v1';
 const observedLinkKey='pokemoniv:observed-evidence-link-v1';
 const defaultRules={league:'great',cp_cap:1500,max_level:50,cup_id:'all'};
@@ -901,7 +902,14 @@ function renderObserved(data){
    $('observed-to-missing').hidden=false;
   }else{
    const stored=JSON.parse(sessionStorage.getItem(observedLinkKey)||'null');
-   $('observed-to-missing').hidden=stored?.search_id!==data.search_id;
+   if(stored?.search_id===data.search_id){
+    $('observed-to-missing').hidden=false;
+   }else if(/^[a-f0-9]{64}$/.test(data.search_id)&&document.querySelector('nav a[href="/app/missing"]')){
+    sessionStorage.setItem(observedLinkKey,JSON.stringify({search_id:data.search_id}));
+    $('observed-to-missing').hidden=false;
+   }else{
+    $('observed-to-missing').hidden=true;
+   }
   }
  }catch{}
 }
@@ -949,6 +957,8 @@ async function beginTacticSearch(spec){
   if(/^[a-f0-9]{64}$/.test(old?.evaluation_id)&&Array.isArray(old.search_ids)){
    const search_ids=[...new Set([...old.search_ids,data.search_id])].slice(-6);
    sessionStorage.setItem(tacticLinkKey,JSON.stringify({...old,search_ids}));
+   $('search-to-missing').hidden=false;
+  }else if(document.querySelector('nav a[href="/app/missing"]')){
    $('search-to-missing').hidden=false;
   }
  }catch{}
@@ -1021,6 +1031,19 @@ function importSpec(){
  commitDraft(fromSpec(spec));
  return true;
 }
+function importSavedTactic(){
+ let raw;
+ try{raw=sessionStorage.getItem(tacticLoadKey);sessionStorage.removeItem(tacticLoadKey);}
+ catch{return null;}
+ if(!raw||raw.length>256)return null;
+ const ref=JSON.parse(raw);
+ if(typeof ref?.tactic_id!=='string'||!/^[a-f0-9]{32}$/.test(ref.tactic_id))
+  throw Error('保存済み戦術の参照IDが不正です。');
+ const revision=ref.revision==null?undefined:ref.revision;
+ if(revision!==undefined&&(!Number.isInteger(revision)||revision<1||revision>1000000))
+  throw Error('保存済み戦術の版番号が不正です。');
+ return {tactic_id:ref.tactic_id,revision};
+}
 async function connect(manual){
  if(manual)credential=$('credential').value.trim();
  announce('ポケモンと技の一覧を読み込んでいます。');
@@ -1042,13 +1065,22 @@ async function connect(manual){
  $('observed-panel').hidden=$('observed-panel').dataset.observedSearch!=='1';
  if(!$('observed-panel').hidden&&new URLSearchParams(location.search).get('observed')==='1')
   $('observed-details').open=true;
- let imported=false,importError=false;
+ let imported=false,importError=false,loadedRef=null,loadRefError=false;
  try{imported=importSpec();}
  catch{importError=true;}
- renderSetup(!imported);
+ if(!imported){
+  try{loadedRef=importSavedTactic();}
+  catch{importError=true;}
+ }
+ renderSetup(!imported&&!loadedRef);
  render();
+ if(loadedRef){
+  try{await loadTactic(loadedRef.tactic_id,loadedRef.revision);}
+  catch{loadRefError=true;}
+ }
  if(importError)announce('不足分析から対戦条件を読み込めませんでした。入力欄から条件を指定できます。','warning');
- else announce(imported?'不足分析から両者の個体・技・開始状態を読み込みました。':'両者の個体・技・開始状態を入力してください。');
+ else if(loadRefError)announce('不足分析で選択した保存済み戦術を読み込めませんでした。入力欄から条件を指定できます。','warning');
+ else if(!loadedRef)announce(imported?'不足分析から両者の個体・技・開始状態を読み込みました。':'両者の個体・技・開始状態を入力してください。');
 }
 $('login-form').addEventListener('submit',event=>{event.preventDefault();perform(()=>connect(true));});
 $('setup').addEventListener('submit',event=>event.preventDefault());

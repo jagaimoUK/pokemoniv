@@ -57,7 +57,7 @@ def _canonical(candidate: dict, ivs: str, batch_mode: str) -> tuple[dict, str, t
     return own, "\n".join(",".join(str(x) for x in row) for row in rows), tuple(rows)
 
 
-def _verify_zip(archive: ZipFile, ticket: dict) -> None:
+def _verify_zip(archive: ZipFile, ticket: dict) -> dict:
     """Do not mistake the previous persisted ZIP for the just-started job."""
     import json
     manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
@@ -88,6 +88,7 @@ def _verify_zip(archive: ZipFile, ticket: dict) -> None:
             if triple not in expected_ivs or triple in seen:
                 raise ValueError("The saved ZIP candidate IVs differ from the job")
             seen.add(triple)
+    return manifest
 
 
 class IVWorkflow:
@@ -254,8 +255,8 @@ class IVWorkflow:
                 return deepcopy(ticket["completed_result"])
             analysis_started = time.monotonic()
             with self.backend._zip() as archive:
-                _verify_zip(archive, ticket)
-                calculation_revision = json.loads(archive.read("manifest.json")).get("calculation_version")
+                manifest = _verify_zip(archive, ticket)
+                calculation_revision = manifest.get("calculation_version")
                 modes = ("default",) if ticket["batch_mode"] == "simple" else MODES
                 app_selection = None
                 if ticket["report_format"] == "app":
@@ -307,6 +308,9 @@ class IVWorkflow:
                     "scope": "server only; excludes GPT evaluation and final response",
                 },
             }
+            # A restored ZIP records the old run's counters, not this request's.
+            if not ticket["result_cache"].get("reused"):
+                output["matchup_cache"] = manifest.get("matchup_cache", {"enabled": False})
             if app_selection is not None:
                 if ticket.get('inventory_form_notice'):
                     app_selection.setdefault('input_notices', []).append(ticket['inventory_form_notice'])

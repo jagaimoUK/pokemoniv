@@ -15,16 +15,40 @@ function resolvePartyMove(value, allowed, moveNames=partyMoveNames){
  if(matches.length===1)return matches[0];
  throw Error(matches.length?'同じ名前の技が複数あります。英語名または技IDを指定してください':'技「'+value+'」は選択したポケモンの習得技にありません');
 }
+function isPartyMegaSpecies(id,p=catalog[id]){const s=String(id||'').toLowerCase();return Boolean(p&&((Array.isArray(p.tags)&&p.tags.includes('mega'))||/(?:_|-)(?:mega(?:_[xy])?|primal)$/.test(s)));}
+function partyExtraChargedMoves(p){return Array.isArray(p?.extraChargedMoves)?p.extraChargedMoves:[];}
 function createMon(data={}){
  const box=node('details',null,'mon'),summary=node('summary',data.species?partyDisplay(data.species):'ポケモンを選ぶ');box.append(summary);
  const body=node('div',null,'fields');box.append(body);
  const label=node('label','ポケモン名（日本語・英語）'),input=node('input');input.dataset.field='species';input.autocomplete='off';input.placeholder='例：サニーゴ / Corsola';input.value=data.species?partyDisplay(data.species):'';input.dataset.species=data.species||'';input.setAttribute('role','combobox');input.setAttribute('aria-expanded','false');
  const suggestions=node('div',null,'suggestions');suggestions.hidden=true;const hint=node('p');hint.style.gridColumn='1/-1';hint.style.fontSize='12px';label.append(input,suggestions);body.append(label);
  for(const [k,title] of [['fast','通常技'],['charged1','ゲージ技1'],['charged2','ゲージ技2']]){const l=node('label',title),select=node('select');select.dataset.field=k;select.setAttribute('aria-label',title);select.onchange=()=>{syncMoves();inputRevision++;};l.append(select);body.append(l);}
- function syncMoves(){const one=body.querySelector('[data-field=charged1]'),two=body.querySelector('[data-field=charged2]');for(const s of [one,two])for(const o of s.options)o.disabled=o.value===(s===one?two.value:one.value);}
- function choose(id,preserve=false){const p=catalog[id];if(!p)return;input.value=partyDisplay(id);input.dataset.species=id;input.setCustomValidity('');summary.textContent=partyDisplay(id);const rec=partyDefaultMoves(p);for(const k of ['fast','charged1','charged2']){const select=body.querySelector('[data-field='+k+']');select.replaceChildren();for(const m of k==='fast'?p.fastMoves:p.chargedMoves)select.append(new Option(partyMoveLabel(m),m));select.value=preserve&&data[k]&&(k==='fast'?p.fastMoves:p.chargedMoves).includes(data[k])?data[k]:rec.moves[k];}syncMoves();hint.textContent=rec.recommended?'初期技：スーパーリーグ推奨。大会・パーティによって最適な技は変わります。':'推奨構成が未登録のため、覚えられる技を仮入力しています。技を確認してください。';suggestions.hidden=true;input.setAttribute('aria-expanded','false');}
- function suggest(){input.dataset.species='';const matches=partySearch(input.value);suggestions.replaceChildren();for(const r of matches){const b=node('button',partyDisplay(r.id)+' / '+(r.p.name||r.id));b.type='button';b.onmousedown=e=>e.preventDefault();b.onclick=()=>{choose(r.id);inputRevision++;};suggestions.append(b);}suggestions.hidden=!matches.length;input.setAttribute('aria-expanded',String(matches.length>0));}
- let composing=false;input.oncompositionstart=()=>composing=true;input.oncompositionend=()=>{composing=false;suggest();};input.oninput=()=>{if(!composing)suggest();};input.onfocus=()=>{if(!input.dataset.species)suggest();};input.onkeydown=e=>{if(e.isComposing||composing)return;if(e.key==='Escape'){suggestions.hidden=true;input.setAttribute('aria-expanded','false');}if(e.key==='ArrowDown'&&!suggestions.hidden){e.preventDefault();suggestions.querySelector('button')?.focus();}if(e.key==='Enter'){e.preventDefault();try{choose(resolvePartyName(input.value));}catch(err){hint.textContent=err.message;}}};input.onchange=()=>{try{choose(resolvePartyName(input.value));}catch(err){input.setCustomValidity(err.message);hint.textContent=err.message;}};
+ const megaWrap=node('label','メガレベル'),megaSelect=node('select');megaWrap.dataset.megaWrap='mega_level';megaWrap.hidden=true;megaSelect.dataset.field='mega_level';megaSelect.setAttribute('aria-label','メガレベル');for(const [v,t] of [['1','1（基礎）'],['2','2（高レベル）'],['3','3（MAX）'],['4','4（スーパーMAX）']])megaSelect.append(new Option(t,v));megaSelect.value='3';megaSelect.onchange=()=>{inputRevision++;};megaWrap.append(megaSelect);body.append(megaWrap);
+ const c3Wrap=node('label','追加ゲージ技（3つ目）'),c3Select=node('select');c3Wrap.dataset.megaWrap='charged3';c3Wrap.hidden=true;c3Select.dataset.field='charged3';c3Select.setAttribute('aria-label','追加ゲージ技（3つ目）');c3Select.append(new Option('なし',''));c3Select.onchange=()=>{syncMoves();inputRevision++;};c3Wrap.append(c3Select);body.append(c3Wrap);
+ function syncMoves(){const one=body.querySelector('[data-field=charged1]'),two=body.querySelector('[data-field=charged2]');for(const s of [one,two])for(const o of s.options)o.disabled=o.value===(s===one?two.value:one.value);if(!c3Wrap.hidden){for(const o of c3Select.options)o.disabled=!!o.value&&(o.value===one.value||o.value===two.value);if(c3Select.value&&(c3Select.value===one.value||c3Select.value===two.value))c3Select.value='';}}
+ function choose(id,preserve=false){const p=catalog[id];if(!p)return;input.value=partyDisplay(id);input.dataset.species=id;input.setCustomValidity('');summary.textContent=partyDisplay(id);const rec=partyDefaultMoves(p);for(const k of ['fast','charged1','charged2']){const select=body.querySelector('[data-field='+k+']');select.replaceChildren();for(const m of k==='fast'?p.fastMoves:p.chargedMoves)select.append(new Option(partyMoveLabel(m),m));select.value=preserve&&data[k]&&(k==='fast'?p.fastMoves:p.chargedMoves).includes(data[k])?data[k]:rec.moves[k];}if(isPartyMegaSpecies(id,p)){megaWrap.hidden=false;const defMl=Array.isArray(p.tags)&&p.tags.includes('supermega')?'4':'3';megaSelect.value=preserve&&data.mega_level!=null&&['1','2','3','4'].includes(String(data.mega_level))?String(data.mega_level):defMl;const extras=partyExtraChargedMoves(p);c3Select.replaceChildren(new Option('なし',''));if(extras.length){for(const m of extras)c3Select.append(new Option(partyMoveLabel(m),m));c3Wrap.hidden=false;c3Select.value=preserve&&data.charged3&&extras.includes(data.charged3)?data.charged3:'';}else{c3Wrap.hidden=true;c3Select.value='';}}else{megaWrap.hidden=true;c3Wrap.hidden=true;c3Select.replaceChildren(new Option('なし',''));c3Select.value='';}syncMoves();hint.textContent=rec.recommended?'初期技：スーパーリーグ推奨。大会・パーティによって最適な技は変わります。':'推奨構成が未登録のため、覚えられる技を仮入力しています。技を確認してください。';suggestions.hidden=true;input.setAttribute('aria-expanded','false');}
+ let composing=false,picking=false,lockedPick=null,pickTimer=null;
+ function clampPicked(){if(!lockedPick)return false;input.value=lockedPick.text;input.dataset.species=lockedPick.id;input.setCustomValidity('');suggestions.hidden=true;input.setAttribute('aria-expanded','false');return true;}
+ function pickSuggestion(id){
+  const text=partyDisplay(id);if(!catalog[id])return;
+  picking=true;composing=false;lockedPick={id,text};
+  if(pickTimer&&typeof clearTimeout==='function')clearTimeout(pickTimer);
+  input.blur?.();
+  choose(id);
+  clampPicked();
+  if(typeof inputRevision!=='undefined')inputRevision++;
+  if(typeof setTimeout==='function'){
+   setTimeout(()=>{clampPicked();},0);
+   pickTimer=setTimeout(()=>{clampPicked();picking=false;lockedPick=null;pickTimer=null;},180);
+  }else{picking=false;lockedPick=null;}
+ }
+ function suggest(){if(clampPicked())return;input.dataset.species='';const matches=partySearch(input.value);suggestions.replaceChildren();for(const r of matches){const b=node('button',partyDisplay(r.id)+' / '+(r.p.name||r.id));b.type='button';b.onmousedown=e=>{picking=true;e.preventDefault();};b.ontouchstart=()=>{picking=true;};b.onclick=()=>{pickSuggestion(r.id);};suggestions.append(b);}suggestions.hidden=!matches.length;input.setAttribute('aria-expanded',String(matches.length>0));}
+ input.oncompositionstart=()=>{if(!clampPicked())composing=true;};
+ input.oncompositionend=()=>{composing=false;if(clampPicked())return;suggest();};
+ input.oninput=()=>{if(clampPicked())return;suggest();};
+ input.onfocus=()=>{if(picking||lockedPick)return;if(!input.dataset.species)suggest();};
+ input.onkeydown=e=>{if(e.isComposing||composing)return;if(e.key==='Escape'){suggestions.hidden=true;input.setAttribute('aria-expanded','false');}if(e.key==='ArrowDown'&&!suggestions.hidden){e.preventDefault();suggestions.querySelector('button')?.focus();}if(e.key==='Enter'){e.preventDefault();try{choose(resolvePartyName(input.value));}catch(err){hint.textContent=err.message;}}};
+ input.onchange=()=>{if(picking||clampPicked())return;try{choose(resolvePartyName(input.value));}catch(err){input.setCustomValidity(err.message);hint.textContent=err.message;}};
  for(const [k,title] of [['atk','攻撃IV（任意）'],['def','防御IV（任意）'],['hp','HP IV（任意）'],['level_override','指定レベル（任意）']]){const l=node('label',title),x=node('input');x.type='number';x.dataset.field=k;x.value=data[k]??'';x.min=k==='level_override'?1:0;x.max=k==='level_override'?50:15;x.step=k==='level_override'?'.5':'1';l.append(x);body.append(l);}
  body.append(hint);const l=node('label'),locked=node('input');locked.type='checkbox';locked.dataset.field='locked';locked.checked=!!data.locked;l.append(locked,document.createTextNode(' 自動構築では固定'));body.append(l);if(data.species)choose(data.species,true);return box;
 }
@@ -41,7 +65,7 @@ function partyRosterEditor(textareaId,max){
  function refresh(provided){cards.replaceChildren();importError=null;try{for(const r of Array.isArray(provided)?provided:parseCsv(text.value))append(r);}catch(err){importError=err;status(err.message);}add.disabled=cards.children.length>=max;}
  text.addEventListener('change',refresh);refresh();return {refresh,rows};
 }
-function readPartyCard(box){const r={};box.querySelectorAll('[data-field]').forEach(x=>{const k=x.dataset.field;if(k==='locked')return;if(k==='species'){if(!x.value.trim())return;r.species=x.dataset.species||resolvePartyName(x.value);return;}if(x.value.trim())r[k]=x.type==='number'?Number(x.value):x.value;});return r;}
-if(typeof module!=='undefined')module.exports={normalizePartyName,partyDisplay,partySearch,resolvePartyName,partyDefaultMoves,partyMoveLabel,resolvePartyMove};
+function readPartyCard(box){const r={};box.querySelectorAll('[data-field]').forEach(x=>{const k=x.dataset.field;if(k==='locked')return;const wrap=x.closest?.('[data-mega-wrap]');if(wrap&&wrap.hidden)return;if(k==='species'){if(!x.value.trim())return;r.species=x.dataset.species||resolvePartyName(x.value);return;}if(x.value.trim())r[k]=(x.type==='number'||k==='mega_level')?Number(x.value):x.value;});return r;}
+if(typeof module!=='undefined')module.exports={normalizePartyName,partyDisplay,partySearch,resolvePartyName,partyDefaultMoves,partyMoveLabel,resolvePartyMove,isPartyMegaSpecies,partyExtraChargedMoves,createMon,readPartyCard};
 
 function partyRosterRows(id){return rosterEditors[id]?rosterEditors[id].rows():parseCsv($(id).value);}

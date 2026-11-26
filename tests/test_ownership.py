@@ -398,3 +398,285 @@ inventory.confirm('crash', 'a', expected_revision=1, state='confirmed_absent')
         self.assertEqual(MissingAnalysis(restored_store).evidence(
             plan, active_versions=self.service.versions, normalizer=self.service), before)
         self.assertEqual(self.service.cache_stats['engine_calls'], 1)
+
+    def test_list_snapshot_filters_pagination_scopes_and_owner_isolation(self):
+        empty = self.inventory.list_snapshot()
+        self.assertEqual(empty, {'ledger_revision': 0, 'items': [], 'has_more': False,
+                                 'next_after': None, 'scopes': [], 'scopes_truncated': False})
+        alt = {**self.observed, 'species_id': 'quagsire_shadow'}
+        self.inventory.register('inst-1', self.observed)
+        self.inventory.confirm('ev-1', 'inst-1', expected_revision=0, state='confirmed_owned')
+        self.inventory.register('inst-2', self.observed)
+        self.inventory.confirm('ev-2', 'inst-2', expected_revision=0, state='confirmed_absent')
+        self.inventory.register('inst-3', alt)
+        rev = self.inventory.revision()
+        self.inventory.confirm_scope('sc-1', expected_ledger_revision=rev,
+                                     species_id=self.observed['species_id'], search='0attack',
+                                     box_range=[1, 50], complete=True, absence_confirmed=False)
+        self.inventory.confirm_scope('sc-2', expected_ledger_revision=rev,
+                                     species_id=self.observed['species_id'], search='0attack',
+                                     box_range=[1, 50], complete=True, absence_confirmed=True)
+
+        page1 = self.inventory.list_snapshot(limit=2)
+        self.assertEqual(page1['ledger_revision'], rev)
+        self.assertEqual([item['instance_id'] for item in page1['items']], ['inst-1', 'inst-2'])
+        self.assertTrue(page1['has_more'])
+        self.assertEqual(page1['next_after'], 'inst-2')
+        self.assertEqual([sc['event_id'] for sc in page1['scopes']], ['sc-2', 'sc-1'])
+        self.assertEqual([sc['current'] for sc in page1['scopes']], [True, False])
+
+        page2 = self.inventory.list_snapshot(after=page1['next_after'], limit=2, include_scopes=False)
+        self.assertEqual([item['instance_id'] for item in page2['items']], ['inst-3'])
+        self.assertFalse(page2['has_more'])
+        self.assertIsNone(page2['next_after'])
+        self.assertNotIn('scopes', page2)
+
+        owned_only = self.inventory.list_snapshot(state='confirmed_owned')
+        self.assertEqual([item['instance_id'] for item in owned_only['items']], ['inst-1'])
+        shadow_only = self.inventory.list_snapshot(species_id='quagsire_shadow')
+        self.assertEqual([item['instance_id'] for item in shadow_only['items']], ['inst-3'])
+        self.assertEqual(shadow_only['scopes'], [])
+
+        # Advancing ledger invalidates previously current scope in the same snapshot.
+        self.inventory.confirm('ev-3', 'inst-3', expected_revision=0, state='confirmed_owned')
+        after_adv = self.inventory.list_snapshot()
+        self.assertEqual(after_adv['ledger_revision'], rev + 1)
+        self.assertTrue(all(not sc['current'] for sc in after_adv['scopes']))
+
+        other = Ownership(BattleStore(self.store.path, owner_scope='other'),
+                          species_ids=self.inventory.species_ids)
+        self.assertEqual(other.list_snapshot(), {'ledger_revision': 0, 'items': [], 'has_more': False,
+                                                 'next_after': None, 'scopes': [], 'scopes_truncated': False})
+
+        for bad in ({'after': 123}, {'limit': 0}, {'limit': 129}, {'limit': True},
+                    {'state': 'keep_candidate'}, {'species_id': 'unknown_mon'}, {'include_scopes': 'yes'}):
+            with self.assertRaises(ValueError):
+                self.inventory.list_snapshot(**bad)
+
+    def test_instance_history_snapshot_reconfirm_and_tamper_detection(self):
+        self.assertIsNone(self.inventory.instance_history('missing'))
+        self.inventory.register('inst-a', self.observed)
+        self.inventory.confirm('ev-own', 'inst-a', expected_revision=0, state='confirmed_owned',
+                               observation=self.observed, preserve_identity=True)
+        self.inventory.confirm('ev-abs', 'inst-a', expected_revision=1, state='confirmed_absent',
+                               preserve_identity=True)
+        updated = {**self.observed, 'current_cp': 1495, 'current_level': 20.5}
+        self.inventory.confirm('ev-reown', 'inst-a', expected_revision=2, state='confirmed_owned',
+                               observation=updated, preserve_identity=True)
+        with self.assertRaises(OwnershipConflict):
+            self.inventory.confirm('ev-bad-iv', 'inst-a', expected_revision=3, state='confirmed_owned',
+                                   observation={**updated, 'ivs': {'attack': 15, 'defense': 15, 'hp': 15}},
+                                   preserve_identity=True)
+        with self.assertRaises(OwnershipConflict):
+            self.inventory.confirm('ev-bad-sp', 'inst-a', expected_revision=3, state='confirmed_owned',
+                                   observation={**updated, 'species_id': 'quagsire_shadow'},
+                                   preserve_identity=True)
+
+        snap = self.inventory.instance_history('inst-a', limit=2)
+        self.assertEqual(snap['instance']['state'], 'confirmed_owned')
+        self.assertEqual(snap['instance']['current_cp'], 1495)
+        self.assertEqual(snap['instance']['revision'], 3)
+        self.assertEqual([e['event_id'] for e in snap['events']], ['ev-own', 'ev-abs'])
+        self.assertTrue(snap['has_more'])
+
+        tail = self.inventory.instance_history('inst-a', after_revision=2, limit=2)
+        self.assertEqual([e['event_id'] for e in tail['events']], ['ev-reown'])
+        self.assertFalse(tail['has_more'])
+
+        other = Ownership(BattleStore(self.store.path, owner_scope='other'),
+                          species_ids=self.inventory.species_ids)
+        self.assertIsNone(other.instance_history('inst-a'))
+
+        with closing(sqlite3.connect(self.store.path)) as db, db:
+            db.execute("UPDATE owned_instances_v1 SET instance_id='inst-tampered' WHERE instance_id='inst-a'")
+        with self.assertRaises(OwnershipUnavailable):
+            self.inventory.list_snapshot()
+        with self.assertRaises(OwnershipUnavailable):
+            self.inventory.instance_history('inst-tampered')
+
+    def test_partial_observation_preserves_omitted_fields_and_512_scan_boundary(self):
+        initial_moves = self.observed['current_moves']
+        created = self.inventory.confirm(
+            'ev-create', 'inst-p1', expected_revision=0, state='confirmed_owned',
+            observation={**self.observed, 'current_cp': 1476, 'current_level': 20.5},
+            register_if_missing=True, preserve_identity=True,
+        )
+        self.assertEqual(created['instance']['current_level'], 20.5)
+        self.assertEqual(created['instance']['current_moves'], initial_moves)
+
+        # Updating only CP (omitting current_level and current_moves) must preserve saved values.
+        cp_only = {'species_id': self.observed['species_id'], 'ivs': self.observed['ivs'], 'current_cp': 1492}
+        ev_cp = self.inventory.confirm(
+            'ev-cp', 'inst-p1', expected_revision=1, state='confirmed_owned',
+            observation=cp_only, register_if_missing=False, preserve_identity=True,
+        )
+        self.assertEqual(ev_cp['instance']['current_cp'], 1492)
+        self.assertEqual(ev_cp['instance']['current_level'], 20.5)
+        self.assertEqual(ev_cp['instance']['current_moves'], initial_moves)
+        # Idempotent replay matches; changing omitted vs explicit None with same event_id conflicts.
+        self.assertEqual(
+            self.inventory.confirm('ev-cp', 'inst-p1', expected_revision=1, state='confirmed_owned',
+                                   observation=cp_only, register_if_missing=False, preserve_identity=True),
+            ev_cp,
+        )
+        with self.assertRaises(OwnershipConflict):
+            self.inventory.confirm(
+                'ev-cp', 'inst-p1', expected_revision=1, state='confirmed_owned',
+                observation={**cp_only, 'current_level': None},
+                register_if_missing=False, preserve_identity=True,
+            )
+
+        # confirmed_absent -> reconfirm with CP only also keeps saved Lv/moves intact.
+        self.inventory.confirm('ev-abs', 'inst-p1', expected_revision=2, state='confirmed_absent',
+                               preserve_identity=True)
+        ev_re = self.inventory.confirm(
+            'ev-re', 'inst-p1', expected_revision=3, state='confirmed_owned',
+            observation={**cp_only, 'current_cp': 1500}, register_if_missing=False, preserve_identity=True,
+        )
+        self.assertEqual(ev_re['instance']['current_cp'], 1500)
+        self.assertEqual(ev_re['instance']['current_level'], 20.5)
+        self.assertEqual(ev_re['instance']['current_moves'], initial_moves)
+
+        # Explicit None clears only that field while omitted fields stay preserved.
+        ev_clear = self.inventory.confirm(
+            'ev-clear-lv', 'inst-p1', expected_revision=4, state='confirmed_owned',
+            observation={**cp_only, 'current_cp': 1500, 'current_level': None},
+            register_if_missing=False, preserve_identity=True,
+        )
+        self.assertIsNone(ev_clear['instance']['current_level'])
+        self.assertEqual(ev_clear['instance']['current_moves'], initial_moves)
+
+        # Backward compatibility: register_if_missing=True still initializes omitted fields to None.
+        minimal_new = self.inventory.confirm(
+            'ev-new-min', 'inst-min', expected_revision=0, state='confirmed_owned',
+            observation=cp_only, register_if_missing=True, preserve_identity=True,
+        )
+        self.assertIsNone(minimal_new['instance']['current_level'])
+        self.assertIsNone(minimal_new['instance']['current_moves'])
+
+        # Bidirectional conflict on new partial events: explicit None -> omitted must also conflict.
+        with self.assertRaises(OwnershipConflict):
+            self.inventory.confirm(
+                'ev-clear-lv', 'inst-p1', expected_revision=4, state='confirmed_owned',
+                observation={**cp_only, 'current_cp': 1500},
+                register_if_missing=False, preserve_identity=True,
+            )
+
+        # Legacy pre-partial event replay compatibility:
+        # Simulate a stored event created with legacy _observation(partial=False) request_hash
+        # and confirm replay with same omitted-field payload returns the stored event without writes,
+        # while modified payload, wrong actor, or foreign owner fails safely.
+        from pvpoke_battle_service import _json_hash
+        from pvpoke_ownership import _pack
+        legacy_fields = self.inventory._observation(cp_only, partial=False)
+        legacy_hash = _json_hash([
+            'instance', self.inventory.actor, 'inst-p1', 5, 'confirmed_owned', legacy_fields,
+        ])
+        legacy_event = {
+            'event_id': 'ev-legacy-update', 'kind': 'instance', 'instance_id': 'inst-p1',
+            'previous_state': 'confirmed_owned', 'new_state': 'confirmed_owned',
+            'input_revision': 5, 'output_revision': 6,
+            'confirmed_at': '2026-11-18T00:00:00.000+00:00',
+            'confirmed_by': self.inventory.actor, 'source': 'manual',
+            'instance': {**self.inventory.get('inst-p1'), 'current_cp': 1492,
+                         'current_level': None, 'current_moves': None, 'revision': 6},
+        }
+        with self.store._writer(critical=True) as db:
+            db.execute('''INSERT INTO ownership_events_v1
+                (owner_scope, event_id, kind, target, request_hash, body, digest)
+                VALUES (?, ?, 'instance', ?, ?, ?, ?)''',
+                (self.inventory.owner, 'ev-legacy-update', 'inst-p1', legacy_hash, *_pack(legacy_event)))
+            rev_before_replay = self.inventory._revision(db)
+            count_before_replay = db.execute('SELECT COUNT(*) FROM ownership_events_v1').fetchone()[0]
+
+        replayed = self.inventory.confirm(
+            'ev-legacy-update', 'inst-p1', expected_revision=5, state='confirmed_owned',
+            observation=cp_only, register_if_missing=False, preserve_identity=True,
+        )
+        self.assertEqual(replayed, legacy_event)
+        with self.store._reader() as db:
+            self.assertEqual(self.inventory._revision(db), rev_before_replay)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM ownership_events_v1').fetchone()[0], count_before_replay)
+        with self.assertRaises(OwnershipConflict):
+            self.inventory.confirm(
+                'ev-legacy-update', 'inst-p1', expected_revision=5, state='confirmed_owned',
+                observation={**cp_only, 'current_cp': 1499},
+                register_if_missing=False, preserve_identity=True,
+            )
+        foreign_actor = Ownership(self.store, species_ids=self.inventory.species_ids, actor='other-actor')
+        with self.assertRaises(OwnershipConflict):
+            foreign_actor.confirm(
+                'ev-legacy-update', 'inst-p1', expected_revision=5, state='confirmed_owned',
+                observation=cp_only, register_if_missing=False, preserve_identity=True,
+            )
+        foreign_owner = Ownership(BattleStore(self.store.path, owner_scope='foreign'),
+                                  species_ids=self.inventory.species_ids)
+        with self.assertRaises(OwnershipConflict):
+            foreign_owner.confirm(
+                'ev-legacy-update', 'inst-p1', expected_revision=5, state='confirmed_owned',
+                observation=cp_only, register_if_missing=False, preserve_identity=True,
+            )
+
+        # Dev-build 600be941 compatibility: untagged partial=True request_hash
+        # must also replay cleanly with zero DB writes for identical omitted-field payloads,
+        # while explicit None, modified CP, wrong actor, or foreign owner raise OwnershipConflict.
+        untagged_partial_fields = self.inventory._observation(cp_only, partial=True)
+        untagged_partial_hash = _json_hash([
+            'instance', self.inventory.actor, 'inst-p1', 6, 'confirmed_owned', untagged_partial_fields,
+        ])
+        untagged_partial_event = {
+            **legacy_event,
+            'event_id': 'ev-600be94-update', 'input_revision': 6, 'output_revision': 7,
+            'instance': {**legacy_event['instance'], 'current_level': 20.5, 'revision': 7},
+        }
+        with self.store._writer(critical=True) as db:
+            db.execute('''INSERT INTO ownership_events_v1
+                (owner_scope, event_id, kind, target, request_hash, body, digest)
+                VALUES (?, ?, 'instance', ?, ?, ?, ?)''',
+                (self.inventory.owner, 'ev-600be94-update', 'inst-p1',
+                 untagged_partial_hash, *_pack(untagged_partial_event)))
+            rev_before_600 = self.inventory._revision(db)
+            count_before_600 = db.execute('SELECT COUNT(*) FROM ownership_events_v1').fetchone()[0]
+
+        self.assertEqual(
+            self.inventory.confirm(
+                'ev-600be94-update', 'inst-p1', expected_revision=6, state='confirmed_owned',
+                observation=cp_only, register_if_missing=False, preserve_identity=True,
+            ),
+            untagged_partial_event,
+        )
+        with self.store._reader() as db:
+            self.assertEqual(self.inventory._revision(db), rev_before_600)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM ownership_events_v1').fetchone()[0], count_before_600)
+        for bad_obs in ({**cp_only, 'current_cp': 1499}, {**cp_only, 'current_level': None, 'current_moves': None}):
+            with self.assertRaises(OwnershipConflict):
+                self.inventory.confirm(
+                    'ev-600be94-update', 'inst-p1', expected_revision=6, state='confirmed_owned',
+                    observation=bad_obs, register_if_missing=False, preserve_identity=True,
+                )
+        with self.assertRaises(OwnershipConflict):
+            foreign_actor.confirm(
+                'ev-600be94-update', 'inst-p1', expected_revision=6, state='confirmed_owned',
+                observation=cp_only, register_if_missing=False, preserve_identity=True,
+            )
+        with self.assertRaises(OwnershipConflict):
+            foreign_owner.confirm(
+                'ev-600be94-update', 'inst-p1', expected_revision=6, state='confirmed_owned',
+                observation=cp_only, register_if_missing=False, preserve_identity=True,
+            )
+
+        # 512-row filtered scan boundary: empty first page with has_more=True, followed by page 2 item.
+        boundary_store = BattleStore(self.root / 'volume' / 'boundary512.sqlite3')
+        boundary_inv = Ownership(boundary_store, species_ids=self.inventory.species_ids)
+        for idx in range(512):
+            boundary_inv.register(f'i-{idx:04d}', cp_only)
+        boundary_inv.confirm('ev-513', 'i-0512', expected_revision=0, state='confirmed_owned',
+                             observation=cp_only, register_if_missing=True)
+        page1 = boundary_inv.list_snapshot(state='confirmed_owned')
+        self.assertEqual(page1['items'], [])
+        self.assertTrue(page1['has_more'])
+        self.assertEqual(page1['next_after'], 'i-0511')
+        page2 = boundary_inv.list_snapshot(after=page1['next_after'], state='confirmed_owned', include_scopes=False)
+        self.assertEqual([item['instance_id'] for item in page2['items']], ['i-0512'])
+        self.assertFalse(page2['has_more'])
+        self.assertIsNone(page2['next_after'])

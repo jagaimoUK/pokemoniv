@@ -198,7 +198,7 @@ def _search_term(entry, forms_by_dex, english_species):
     return (species, tuple(suffix)), None
 
 
-def search_low_scores(params=None, species_catalog=None):
+def search_low_scores(params=None, species_catalog=None, mega_scores=None):
     args = params if isinstance(params, dict) else {}
     mode = args.get("mode", "practical")
     if mode not in PRESETS:
@@ -215,9 +215,50 @@ def search_low_scores(params=None, species_catalog=None):
     exclude_cp_dependent = args.get("exclude_cp_dependent", False)
     if not isinstance(exclude_cp_dependent, bool):
         raise ValueError("CP依存種の除外指定が不正です")
+    all_species_mode = args.get("all_species_mode", False)
+    if not isinstance(all_species_mode, bool):
+        raise ValueError("全種モードの指定が不正です")
+    mega_map = mega_scores if isinstance(mega_scores, dict) else args.get("mega_scores")
     source_date, all_rows = load_snapshot()
     roles = PRESETS[mode]
-    selected = [x for x in all_rows if all(x[k] < threshold for k in roles)]
+    mega_gl_preserved = []
+    if all_species_mode:
+        selected = []
+    else:
+        raw_selected = [x for x in all_rows if all(x[k] < threshold for k in roles)]
+        if isinstance(mega_map, dict):
+            from pvpoke_mega import evaluate_gl_mega_score_70_or
+
+            selected = []
+            for entry in raw_selected:
+                mega_entry = mega_map.get(entry["dex"])
+                if mega_entry is None:
+                    mega_entry = mega_map.get(entry["name"])
+                if isinstance(mega_entry, dict):
+                    mega_overall = mega_entry.get("overall")
+                elif isinstance(mega_entry, (int, float)) and not isinstance(mega_entry, bool):
+                    mega_overall = float(mega_entry)
+                else:
+                    mega_overall = None
+                if mega_overall is not None:
+                    verdict = evaluate_gl_mega_score_70_or(
+                        normal_gl_overall=entry["overall"],
+                        mega_gl_overall=mega_overall,
+                        threshold=threshold,
+                        has_mega_form=True,
+                    )
+                    if verdict["keep"]:
+                        mega_gl_preserved.append({
+                            "name": entry["name"],
+                            "dex": entry["dex"],
+                            "normal_gl_overall": entry["overall"],
+                            "mega_gl_overall": mega_overall,
+                            "reason": verdict["reason"],
+                        })
+                        continue
+                selected.append(entry)
+        else:
+            selected = raw_selected
     selected.sort(key=lambda r: (r["overall"], r["name"]))
     forms_by_dex = {}
     for r in all_rows:
@@ -430,6 +471,7 @@ def search_low_scores(params=None, species_catalog=None):
         "unranked_uncertain_form_count": unranked_uncertain_form_or_name,
         "exclusion_reasons": {
             "specialist_preserved": len(preserved),
+            "mega_gl_preserved": len(mega_gl_preserved),
             "evolution_protected": len(evolution_protected),
             "form_or_name_unsearchable": len(manual),
             "cp_dependent_excluded": len(cp_dependent_excluded),
@@ -438,6 +480,9 @@ def search_low_scores(params=None, species_catalog=None):
             "unranked_uncertain_form_or_name": unranked_uncertain_form_or_name,
             "unranked_manual_review": len(unranked_review),
         },
+        "mega_gl_ranking_status": "verified" if isinstance(mega_map, dict) else "unverified",
+        "mega_gl_preserved_count": len(mega_gl_preserved),
+        "mega_gl_preserved": mega_gl_preserved,
         "quick_query": one_query,
         "quick_species_count": len(safe_dex),
         "quick_covered_rows": quick_covered_rows,

@@ -15,7 +15,8 @@
         "league": {"$ref": "#/$defs/id"},
         "cp_cap": {"type": "integer", "minimum": 10, "maximum": 10000},
         "max_level": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
-        "cup_id": {"$ref": "#/$defs/id", "default": "all"}
+        "cup_id": {"$ref": "#/$defs/id", "default": "all"},
+        "allow_cp_downscaling": {"type": "boolean"}
       }
     },
     "combatants": {
@@ -83,11 +84,12 @@
           }
         },
         "level": {"type": "number", "minimum": 1, "maximum": 100, "multipleOf": 0.5},
+        "mega_level": {"type": "integer", "minimum": 1, "maximum": 4},
         "moves": {
           "type": "object", "additionalProperties": false, "required": ["fast", "charged"],
           "properties": {
             "fast": {"$ref": "#/$defs/moveId"},
-            "charged": {"type": "array", "maxItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/moveId"}}
+            "charged": {"type": "array", "maxItems": 3, "uniqueItems": true, "items": {"$ref": "#/$defs/moveId"}}
           }
         },
         "initial": {

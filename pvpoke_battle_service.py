@@ -17,6 +17,7 @@ from pathlib import Path
 from pvpoke_batch_v2 import CP_CAP, MAX_LEVEL, optimize
 from pvpoke_calculation_version import content_hash
 from pvpoke_direct_backend import DirectMatrixClient, DirectMatrixError
+from pvpoke_mega import MEGA_DOWNSCALING_CUPS, UNSCALED_CUPS, is_mega_form
 
 if TYPE_CHECKING:
     from pvpoke_battle_store import BattleStore
@@ -210,7 +211,9 @@ class BattleService:
         }
         for name in ('pvpoke_node_matrix.js', 'pvpoke_battle_policy.js', 'pvpoke_minior_strategy.js'):
             engine_paths[f'adapter/{name}'] = ROOT / name
-        python_paths = [ROOT / name for name in ('pvpoke_direct_backend.py', 'pvpoke_batch_v2.py', Path(__file__).name)]
+        python_paths = [ROOT / name for name in (
+            'pvpoke_direct_backend.py', 'pvpoke_batch_v2.py', 'pvpoke_mega.py', Path(__file__).name,
+        )]
         self._input_signatures = {
             path: _file_signature(path) for path in [self._data_path, *engine_paths.values(), *python_paths]
         } if store is not None else {}
@@ -228,8 +231,8 @@ class BattleService:
         self.versions = {'engine': self.engine_version, 'game_data': self.data_version}
         self.calculation_version = _json_hash([self.engine_version, self.data_version])
 
-    def _combatant(self, value):
-        _object(value, 'combatant', ('species_id', 'ivs', 'level', 'moves', 'initial'))
+    def _combatant(self, value, *, cp_cap=CP_CAP):
+        _object(value, 'combatant', ('species_id', 'ivs', 'level', 'moves', 'initial'), ('mega_level',))
         species = _identifier(value['species_id'], 'species ID')
         ivs = _object(value['ivs'], 'IVs', ('attack', 'defense', 'hp'))
         attack, defense, stamina = (_integer(ivs[k], k, 0, 15) for k in ('attack', 'defense', 'hp'))
@@ -239,7 +242,7 @@ class BattleService:
         level = float(level)
         moves = _object(value['moves'], 'moves', ('fast', 'charged'))
         fast = _move(moves['fast'])
-        charged = [_move(move) for move in _items(moves['charged'], 'charged moves', 0, 2)]
+        charged = [_move(move) for move in _items(moves['charged'], 'charged moves', 0, 3)]
         if len(set(charged)) != len(charged):
             raise ValueError('Duplicate charged move')
         initial = _object(value['initial'], 'initial state', ('hp', 'energy', 'shields', 'stages'))
@@ -252,12 +255,29 @@ class BattleService:
         pokemon = self.species.get(species)
         if pokemon is None:
             raise ValueError('Unknown species or form')
-        if species.startswith('minior') or level > MAX_LEVEL or len(charged) != 2:
-            raise UnsupportedBattle('This runner requires a supported form, level 50 or lower, and two charged moves')
+        if species.startswith('minior') or level > MAX_LEVEL or len(charged) not in (2, 3):
+            raise UnsupportedBattle('This runner requires a supported form, level 50 or lower, and 2 or 3 charged moves')
+        tags = pokemon.get('tags') or ()
+        is_mega = is_mega_form(species) or ('mega' in tags)
+        raw_mega_level = value.get('mega_level')
+        if raw_mega_level is not None:
+            if not is_mega:
+                raise ValueError('mega_level is only valid for Mega or Primal forms')
+            mega_level = _integer(raw_mega_level, 'mega_level', 1, 4)
+        elif is_mega:
+            mega_level = 4 if 'supermega' in tags else 3
+        else:
+            mega_level = None
+        if len(charged) == 3 and not is_mega:
+            raise ValueError('A third charged move requires a Mega or Primal form')
         row = dict(species=species, fast=fast, charged1=charged[0], charged2=charged[1],
                    atk=attack, hp=stamina, level_override=level, **{'def': defense})
+        if len(charged) == 3:
+            row['charged3'] = charged[2]
+        if mega_level is not None:
+            row['mega_level'] = mega_level
         try:
-            prepared, = optimize([row], self.species, self.cpms, 'battle')
+            prepared, = optimize([row], self.species, self.cpms, 'battle', cp_cap=cp_cap)
         except ValueError:
             raise ValueError('Moves or level do not match the species, form or CP cap') from None
         # Pokemon.initialize applies a fixed HP rule to Shedinja after CPM scaling.
@@ -269,6 +289,8 @@ class BattleService:
             'moves': {'fast': fast, 'charged': charged},
             'initial': {'hp': hp, 'energy': energy, 'shields': shields, 'stages': stages},
         }
+        if mega_level is not None:
+            normalized['mega_level'] = mega_level
         return normalized, {key: item for key, item in prepared.items() if key != 'level_override'}
 
     def _prepare(self, request):
@@ -282,13 +304,28 @@ class BattleService:
                 ('calculation_version', 'policies', 'actions', 'shield_decisions'))
         if request['schema'] != SPEC_SCHEMA:
             raise UnsupportedBattle('Unknown battle spec version')
-        rules = _object(request['rules'], 'rules', ('league', 'cp_cap'), ('max_level', 'cup_id'))
+        rules = _object(request['rules'], 'rules', ('league', 'cp_cap'), ('max_level', 'cup_id', 'allow_cp_downscaling'))
         league = _identifier(rules['league'], 'league')
         cap = _integer(rules['cp_cap'], 'CP cap', 10, 10000)
         level_cap = _integer(rules.get('max_level', MAX_LEVEL), 'max level', 1, 100)
         cup = _identifier(rules.get('cup_id', 'all'), 'cup ID')
-        if (league, cap, level_cap, cup) != ('great', CP_CAP, MAX_LEVEL, 'all'):
-            raise UnsupportedBattle('Only open Great League, CP 1500 and level cap 50 are supported')
+        has_downscale_flag = 'allow_cp_downscaling' in rules
+        allow_downscaling = _boolean(rules['allow_cp_downscaling'], 'allow_cp_downscaling') if has_downscale_flag else None
+
+        supported_cups_great = {'all', *MEGA_DOWNSCALING_CUPS, *UNSCALED_CUPS} - {'ultra_mega'}
+        supported_cups_ultra = {'ultra_mega', 'mega_edition', *UNSCALED_CUPS}
+        if level_cap != MAX_LEVEL or not (
+            (league == 'great' and cap == CP_CAP and cup in supported_cups_great)
+            or (league == 'ultra' and cap == 2500 and cup in supported_cups_ultra)
+        ):
+            raise UnsupportedBattle('Unsupported league, CP cap, level cap, or cup ID')
+        if cup == 'all' and allow_downscaling is True:
+            raise UnsupportedBattle('Open Great League does not support Mega CP downscaling')
+        if cup in UNSCALED_CUPS and allow_downscaling is True:
+            raise UnsupportedBattle('Unscaled cup does not support Mega CP downscaling')
+        if cup in MEGA_DOWNSCALING_CUPS and allow_downscaling is None:
+            allow_downscaling = True
+
         mode = request['mode']
         if mode not in ('standard', 'sandbox'):
             raise ValueError('Invalid battle mode')
@@ -309,11 +346,14 @@ class BattleService:
         bait = [_boolean(value, 'bait') for value in _items(policies.get('bait', [True] * 2), 'bait', 2, 2)]
         if mode == 'sandbox' or actions or decisions or shield != ['standard'] * 2:
             raise UnsupportedBattle('Sandbox actions and manual shield decisions are not executable in this version')
-        combatants, rows = zip(*(self._combatant(value)
+        combatants, rows = zip(*(self._combatant(value, cp_cap=cap)
                                  for value in _items(request['combatants'], 'combatants', 2, 2)))
+        normalized_rules = {'league': league, 'cp_cap': cap, 'max_level': level_cap, 'cup_id': cup}
+        if allow_downscaling is not None:
+            normalized_rules['allow_cp_downscaling'] = allow_downscaling
         spec = {
             'schema': SPEC_SCHEMA, 'mode': mode, 'calculation_version': self.calculation_version,
-            'rules': {'league': league, 'cp_cap': cap, 'max_level': level_cap, 'cup_id': cup},
+            'rules': normalized_rules,
             'combatants': list(combatants), 'actions': [], 'shield_decisions': [],
             'policies': {'attack': list(attack), 'shield': list(shield), 'bait': bait},
         }
@@ -324,6 +364,8 @@ class BattleService:
                         for state in initial],
             'attack_policies': list(attack), 'bait': bait,
         }
+        if cap != CP_CAP:
+            payload['cp_cap'] = cap
         return spec, payload
 
     def simulate(self, request: dict | str | bytes) -> dict:

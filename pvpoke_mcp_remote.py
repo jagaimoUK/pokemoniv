@@ -34,6 +34,10 @@ from pvpoke_party_ui import HTML as PARTY_HTML
 from pvpoke_missing_comparison import APP_PATH as MISSING_APP_PATH, API_PATH as MISSING_API_PATH
 from pvpoke_missing_comparison import PAGE_PATH as MISSING_PAGE_PATH, MAX_REQUEST_BYTES as MAX_MISSING_REQUEST_BYTES
 from pvpoke_missing_comparison import enabled as missing_enabled
+from pvpoke_individual_sync import (
+    ACTIONS as SYNC_ACTIONS, KIND as SYNC_KIND, READER_PATH as READER_SYNC_PATH,
+    WEB_PATH as WEB_SYNC_PATH, IndividualConnections,
+)
 from pvpoke_sandbox_workspace import APP_PATH as SANDBOX_APP_PATH, API_PATH as SANDBOX_API_PATH
 from pvpoke_sandbox_workspace import PAGE_PATH as SANDBOX_PAGE_PATH, enabled as sandbox_enabled
 from pvpoke_sandbox_workspace import OBSERVED_ACTIONS, observed_enabled
@@ -60,14 +64,37 @@ BROWSER_LOGIN = BrowserLogin(API_KEY)
 from visual_backup import VisualBackup, BackupTokens, BackupError, BACKUP_HTML, MAX_ARCHIVE
 VISUAL_BACKUP = VisualBackup()
 BACKUP_TOKENS = BackupTokens(API_KEY)
+INDIVIDUAL_CONNECTIONS = IndividualConnections(API_KEY)
 if VISUAL_BACKUP.enabled:
     threading.Thread(target=VISUAL_BACKUP.probe, daemon=True).start()
+def parse_extra_origins(raw):
+    origins = set()
+    for item in raw.split(','):
+        candidate = item.strip()
+        if not candidate:
+            continue
+        parsed = urlparse(candidate)
+        if parsed.scheme not in ('https', 'http') or not parsed.netloc or parsed.username or parsed.password:
+            raise ValueError(f'Invalid PVP_EXTRA_ORIGINS entry: {candidate!r}')
+        if parsed.path not in ('', '/') or parsed.params or parsed.query or parsed.fragment or '*' in parsed.netloc:
+            raise ValueError(f'Invalid PVP_EXTRA_ORIGINS entry: {candidate!r}')
+        if parsed.scheme == 'http' and parsed.hostname not in ('127.0.0.1', 'localhost'):
+            raise ValueError(f'Non-local PVP_EXTRA_ORIGINS entry must use HTTPS: {candidate!r}')
+        origins.add(f'{parsed.scheme}://{parsed.netloc}')
+    return origins
+
+
 ALLOWED_ORIGINS = {'https://chatgpt.com', 'https://chat.openai.com', f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'}
 VERSION = '2025-06-18'
 # OAuth is enabled only when the authenticated user's Auth0 tenant is configured.
 MCP_URL = os.environ.get('PVP_MCP_URL', 'https://pokemoniv-production.up.railway.app/mcp').rstrip('/')
 APP_ORIGIN = '{0.scheme}://{0.netloc}'.format(urlparse(MCP_URL))
 ALLOWED_ORIGINS.add(APP_ORIGIN)
+try:
+    EXTRA_ORIGINS = parse_extra_origins(os.environ.get('PVP_EXTRA_ORIGINS', ''))
+except ValueError as exc:
+    raise SystemExit(str(exc)) from exc
+ALLOWED_ORIGINS.update(EXTRA_ORIGINS)
 AUTH0_ISSUER_RAW = os.environ.get('AUTH0_ISSUER', '').strip().rstrip('/')
 AUTH0_ISSUER = AUTH0_ISSUER_RAW + '/' if AUTH0_ISSUER_RAW else ''
 JWT_AUDIENCE = os.environ.get('JWT_AUDIENCE', MCP_URL).strip()
@@ -609,9 +636,15 @@ class Handler(BaseHTTPRequestHandler):
             if not missing_enabled():
                 return self.respond(404, {'error': 'Not found'})
             from pvpoke_missing_ui import HTML as missing_html
-            page = missing_html.replace('data-observed-search="0"',
-                                        'data-observed-search="1"' if sandbox_enabled() and observed_enabled()
-                                        else 'data-observed-search="0"')
+            page = missing_html.replace('data-sandbox="0"',
+                                        'data-sandbox="1"' if sandbox_enabled() else 'data-sandbox="0"')
+            page = page.replace('data-tactic-search="0"',
+                                'data-tactic-search="1"'
+                                if sandbox_enabled() and os.environ.get('PVP_TACTIC_SEARCH_ENABLED') == '1'
+                                else 'data-tactic-search="0"')
+            page = page.replace('data-observed-search="0"',
+                                'data-observed-search="1"' if sandbox_enabled() and observed_enabled()
+                                else 'data-observed-search="0"')
         elif self.path in (SANDBOX_PAGE_PATH, SANDBOX_PAGE_PATH + '?observed=1'):
             if not sandbox_enabled():
                 return self.respond(404, {'error': 'Not found'})
@@ -643,17 +676,48 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def app_request(self):
+    def individual_sync_request(self, args, reader_instance):
+        if not missing_enabled():
+            return self.respond(503, {'error': '個体同期を利用できません'})
+        action = args.get('action')
+        if reader_instance is not None:
+            if action not in SYNC_ACTIONS or args.get('instance_id') != reader_instance:
+                return self.respond(403, {'error': 'この個体に接続できません'})
+        if action == 'connections':
+            return self.respond(200, {'items': INDIVIDUAL_CONNECTIONS.store.list_active(SYNC_KIND)})
+        if action == 'revoke':
+            ident = args.get('id')
+            if not isinstance(ident, str) or not re.fullmatch('[0-9a-f]{64}', ident):
+                raise ValueError('接続IDを確認してください')
+            INDIVIDUAL_CONNECTIONS.store.revoke(ident, SYNC_KIND)
+            return self.respond(200, {'revoked': True})
+        if action == 'issue':
+            args = {'action': 'individual_get', 'instance_id': args.get('instance_id')}
+        elif action not in SYNC_ACTIONS:
+            raise ValueError('同期操作を確認してください')
+        try:
+            result = backend._request(MISSING_API_PATH, args, headers={'X-PvPoke-Token': backend._token()}, timeout=20)
+        except backend.BridgeError as exc:
+            for status in (400, 404, 409, 503):
+                if f'HTTP {status}:' in str(exc):
+                    return self.respond(status, {'error': '個体の確認状態または同期内容を確認してください'})
+            return self.respond(503, {'error': '個体の保存先に接続できません'})
+        if action == 'issue':
+            return self.respond(200, {'connection': INDIVIDUAL_CONNECTIONS.issue(result['individual']['instance_id'])})
+        return self.respond(200, result)
+
+    def app_request(self, reader_instance=None):
         """Only explicit app operations; never proxy arbitrary backend paths."""
         if self.path not in ('/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result', '/app-api/cancel',
                              '/app-api/session', '/app-api/logout', '/app-api/visual-backup-connections', '/app-api/visual-backup-revoke', '/app-api/meta-status',
                              '/app-api/meta-preview', '/app-api/meta-apply', '/app-api/meta-presets', '/app-api/meta-preset-save', '/app-api/meta-preset-export', '/app-api/low-score', '/app-api/visual-backup-token', '/app-api/flashcards',
                              '/app-api/party/list', '/app-api/party/get', '/app-api/party/save',
                              '/app-api/party/start', '/app-api/party/status', '/app-api/party/cancel',
-                             '/app-api/party/meta-weights', '/app-api/battles/simulate', MISSING_APP_PATH, SANDBOX_APP_PATH):
+                             '/app-api/party/meta-weights', '/app-api/battles/simulate', MISSING_APP_PATH, SANDBOX_APP_PATH,
+                             WEB_SYNC_PATH, READER_SYNC_PATH):
             return self.respond(404, {'error': 'Not found'})
         origin = self.headers.get('Origin')
-        if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'):
+        if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}', *EXTRA_ORIGINS):
             return self.respond(403, {'error': 'Origin not allowed'})
         if self.headers.get('Content-Type', '').split(';')[0].strip().lower() != 'application/json':
             return self.respond(415, {'error': 'Content-Type must be application/json'})
@@ -661,7 +725,7 @@ class Handler(BaseHTTPRequestHandler):
             size = int(self.headers.get('Content-Length', '0'))
             workspace = self.path in (MISSING_APP_PATH, SANDBOX_APP_PATH)
             battle = self.path in ('/app-api/battles/simulate', SANDBOX_APP_PATH)
-            limit = {MISSING_APP_PATH: MAX_MISSING_REQUEST_BYTES}.get(
+            limit = {MISSING_APP_PATH: MAX_MISSING_REQUEST_BYTES, WEB_SYNC_PATH: 8192, READER_SYNC_PATH: 8192}.get(
                 self.path, MAX_BATTLE_REQUEST_BYTES if battle else MAX_APP_REQUEST_BYTES)
             if not 0 < size <= limit:
                 return self.respond(413, {'error': 'Invalid body size'})
@@ -673,6 +737,8 @@ class Handler(BaseHTTPRequestHandler):
                               parse_constant=_reject_constant)
             if not isinstance(args, dict):
                 raise ValueError('入力はJSONオブジェクトで指定してください')
+            if self.path in (WEB_SYNC_PATH, READER_SYNC_PATH):
+                return self.individual_sync_request(args, reader_instance)
             if workspace:
                 sandbox = self.path == SANDBOX_APP_PATH
                 if sandbox and args.get('action') in ('search_start', 'search_step') and os.environ.get(
@@ -810,7 +876,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def visual_backup_request(self):
         origin = self.headers.get('Origin')
-        if origin and origin != APP_ORIGIN:
+        if origin and origin != APP_ORIGIN and origin not in EXTRA_ORIGINS:
             return self.respond(403, {'error': 'Origin not allowed'})
         if self.headers.get('Content-Type', '').split(';')[0].strip().lower() != 'application/json':
             return self.respond(415, {'error': 'Content-Type must be application/json'})
@@ -937,6 +1003,21 @@ class Handler(BaseHTTPRequestHandler):
                 BACKUP_SLOTS.release()
 
         token = self.headers.get('Authorization', '')
+        if self.path == READER_SYNC_PATH:
+            if not self.rate_allowed('reader-sync-entry', 180, 60):
+                return
+            try:
+                reader_instance = INDIVIDUAL_CONNECTIONS.instance(token)
+            except (sqlite3.Error, OSError):
+                return self.respond(503, {'error': '認証の保存先に接続できません'})
+            if reader_instance is None:
+                return self.unauthorized()
+            if not APP_REQUEST_SLOTS.acquire(blocking=False):
+                return self.respond(503, {'error': '処理中です。少し待って再試行してください'})
+            try:
+                return self.app_request(reader_instance)
+            finally:
+                APP_REQUEST_SLOTS.release()
         is_api_key = safe_equal(token, 'Bearer ' + API_KEY)
         is_app = self.path.startswith('/app-api/')
         app_session = is_app and APP_ACCESS.valid(token)
@@ -975,6 +1056,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == '/app-api/session' and not strong_auth:
             return self.unauthorized()
         if self.path in ('/app-api/visual-backup-token', '/app-api/visual-backup-connections', '/app-api/visual-backup-revoke') and not (strong_auth or cookie_ok):
+            return self.unauthorized()
+        if self.path == WEB_SYNC_PATH and not (strong_auth or cookie_ok):
             return self.unauthorized()
         compute_route = (self.path in ('/app-api/run', '/app-api/party/start') or
                          (self.path == '/app-api/battles/simulate' and

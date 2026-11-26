@@ -45,6 +45,8 @@ from pvpoke_missing_analysis import AnalysisUnavailable
 from pvpoke_missing_comparison import API_PATH as MISSING_API_PATH, MAX_REQUEST_BYTES as MAX_MISSING_REQUEST_BYTES
 from pvpoke_missing_comparison import app_operation as missing_operation, enabled as missing_enabled
 from pvpoke_ownership import OwnershipConflict, OwnershipUnavailable
+from pvpoke_individual_sync import ACTIONS as SYNC_ACTIONS, IndividualUnavailable, app_operation as sync_operation
+from pvpoke_selection_history import ACTIONS as SELECTION_ACTIONS, app_operation as selection_operation
 from pvpoke_sandbox_workspace import API_PATH as SANDBOX_API_PATH, TacticConflict, TacticUnavailable
 from pvpoke_tactic_search import TacticSearchError
 from pvpoke_tactic_evidence import TacticEvidenceUnavailable
@@ -148,6 +150,9 @@ def load_catalog():
                 'types': p.get('types', []),
                 'fastMoves': p.get('fastMoves', []),
                 'chargedMoves': engine.charged_move_pool(p),
+                'extraChargedMoves': p.get('extraChargedMoves', []),
+                'tags': p.get('tags', []),
+                **({'family': p['family']} if isinstance(p.get('family'), dict) else {}),
             }
             for sid, p in species.items()
         }
@@ -173,7 +178,8 @@ def load_catalog():
                                 'name': m.get('name') or m['moveId'],
                                 'name_ja': move_ja.get(m['moveId'], {}).get('ja')}
                                       for m in gm.get('moves', []) if m.get('moveId')},
-                            'presets': presets, 'timestamp': gm.get('timestamp')})
+                            'presets': presets, 'timestamp': gm.get('timestamp'),
+                            'cpms': [float(x) for x in cpms]})
         meta_variants.start(
             WORK, LOCK, STATUS,
             battle_busy=_compute_busy_locked,
@@ -185,6 +191,40 @@ def load_catalog():
         with LOCK:
             CATALOG.update({'ready': False,
                             'error': 'ゲームデータの読み込みに失敗しました。再試行してください'})
+
+
+def _active_selection_context():
+    from pvpoke_battle_service import _json_hash
+    from pvpoke_mega import load_gl_ranking_snapshot, resolve_battle_rules
+
+    gm_version = None
+    try:
+        gm_version = calculation_version(engine.DATA)
+    except Exception:
+        gm_version = None
+    meta_sha = None
+    try:
+        meta_sha = meta_live.get_status(WORK).get('sha256')
+    except Exception:
+        meta_sha = None
+    ranking_date = None
+    try:
+        ranking_date, _ = load_gl_ranking_snapshot()
+    except Exception:
+        ranking_date = None
+    rules_digest = _json_hash(resolve_battle_rules({
+        'league': 'great',
+        'cp_cap': 1500,
+        'max_level': 50.0,
+        'allow_cp_downscaling': False,
+    }))
+    return {
+        'calculation_version': gm_version,
+        'meta_sha256': meta_sha,
+        'ranking_source_date': ranking_date,
+        'policy_version': 'box-first-v3',
+        'rules_digest': rules_digest,
+    }
 
 
 def parse_ivs(raw):
@@ -223,6 +263,35 @@ def normalize_pokemon(row, species, label):
     return [sid, *moves]
 
 
+def normalize_pokemon_options(row, species, label):
+    if not isinstance(row, dict):
+        return {}
+    sid = str(row.get('species') or '').strip().lower()
+    p = species.get(sid) or {}
+    tags = p.get('tags') or ()
+    is_mega = 'mega' in tags
+    opts = {}
+    if row.get('mega_level') is not None:
+        if not is_mega:
+            raise ValueError(f'{label}: mega_level はメガシンカ・ゲンシカイキのみ指定できます')
+        mega_level = row.get('mega_level')
+        if type(mega_level) is not int or not 1 <= mega_level <= 4:
+            raise ValueError(f'{label}: mega_level は 1〜4 の整数で指定してください')
+        opts['mega_level'] = mega_level
+    raw_c3 = row.get('charged3')
+    if raw_c3 is not None and str(raw_c3).strip():
+        c3 = str(raw_c3).strip().upper()
+        extra = p.get('extraChargedMoves') or ()
+        if not is_mega or c3 not in extra:
+            raise ValueError(f'{label}: 追加ゲージ技 {c3} は選択できません')
+        c1 = str(row.get('charged1') or '').strip().upper()
+        c2 = str(row.get('charged2') or '').strip().upper()
+        if c3 in (c1, c2):
+            raise ValueError(f'{label}: 追加ゲージ技が通常のゲージ技と重複しています')
+        opts['charged3'] = c3
+    return opts
+
+
 def prepare_payload(payload):
     with LOCK:
         if not CATALOG['ready']:
@@ -231,6 +300,7 @@ def prepare_payload(payload):
     if not isinstance(payload, dict):
         raise ValueError('入力形式が正しくありません')
     species = normalize_pokemon(payload.get('candidate'), catalog, '自分のポケモン')
+    cand_opts = normalize_pokemon_options(payload.get('candidate'), catalog, '自分のポケモン')
     ivs = parse_ivs(payload.get('ivs'))
     opponents = payload.get('opponents')
     if not isinstance(opponents, list) or not 1 <= len(opponents) <= MAX_OPPS:
@@ -335,11 +405,11 @@ def prepare_payload(payload):
         saved_opponents.append(saved)
         modes.append(mode)
 
-    cdict = [dict(zip(engine.HEADER, row)) for row in crows]
+    cdict = [{**dict(zip(engine.HEADER, row)), **cand_opts} for row in crows]
     cand_prepared = engine.optimize(cdict, full_species, cpms, 'candidates.csv')
     opp_prepared = engine.optimize(odict, full_species, cpms, 'opponents.csv')
     cleaned = {
-        'candidate': dict(zip(engine.HEADER[:4], species)),
+        'candidate': {**dict(zip(engine.HEADER[:4], species)), **cand_opts},
         'ivs': '\n'.join(','.join(map(str, iv)) for iv in ivs),
         'opponents': saved_opponents,
         'opponent_iv_mode': global_mode or 'default',
@@ -359,12 +429,19 @@ def prepare_payload(payload):
 
 def save_input(cleaned, crows, orows):
     WORK.mkdir(parents=True, exist_ok=True)
+    cand_meta = cleaned.get('candidate') or {}
+    cand_extra = [k for k in ('mega_level', 'charged3') if k in cand_meta]
     for path, rows in ((CAND, crows), (OPPS, orows)):
         tmp = path.with_suffix('.csv.tmp')
         with tmp.open('w', encoding='utf-8', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(engine.HEADER + (['level_override'] if path == OPPS else []))
-            writer.writerows(rows)
+            if path == CAND:
+                writer.writerow(engine.HEADER + cand_extra)
+                extra_vals = [cand_meta[k] for k in cand_extra]
+                writer.writerows([list(row) + extra_vals for row in rows])
+            else:
+                writer.writerow(engine.HEADER + ['level_override'])
+                writer.writerows(rows)
         tmp.replace(path)
     tmp = LAST_CONFIG.with_suffix('.json.tmp')
     tmp.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -671,10 +748,12 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
             available = []
+            extra = {}
             if cat.get('ready'):
                 available = app_presets(cat['species'], cat['presets'],
                                        meta_live.active_path(WORK).read_text(encoding='utf-8-sig'))
-            self.respond(200, {**cat, 'app_presets': available, 'saved': saved})
+                extra['selection_context'] = _active_selection_context()
+            self.respond(200, {**cat, 'app_presets': available, 'saved': saved, **extra})
         elif path == '/api/flashcards':
             if self.headers.get('X-PvPoke-Token') != TOKEN:
                 return self.respond(403, {'error': '認証が必要です'})
@@ -776,6 +855,38 @@ class Handler(BaseHTTPRequestHandler):
                         return self.respond(503, {'error': 'Could not list saved tactics'})
                     except ValueError:
                         return self.respond(400, {'error': 'Invalid tactic list request'})
+                if path == MISSING_API_PATH and payload.get('action') in SYNC_ACTIONS:
+                    try:
+                        return self.respond(200, sync_operation(BattleStore.from_volume(), payload))
+                    except IndividualUnavailable:
+                        return self.respond(404, {'error': 'Confirmed individual required'})
+                    except OwnershipConflict:
+                        return self.respond(409, {'error': 'Sync request ID conflicts'})
+                    except (OwnershipUnavailable, BattleStoreError, OSError, sqlite3.Error):
+                        return self.respond(503, {'error': 'Individual storage unavailable'})
+                    except ValueError as exc:
+                        return self.respond(400, {'error': str(exc)})
+                if path == MISSING_API_PATH and payload.get('action') in SELECTION_ACTIONS:
+                    try:
+                        with LOCK:
+                            species_catalog = dict(CATALOG.get('species', {}))
+                            species_ids = frozenset(species_catalog)
+                        return self.respond(
+                            200,
+                            selection_operation(
+                                BattleStore.from_volume(),
+                                payload,
+                                species_ids,
+                                current_context=_active_selection_context(),
+                                species_catalog=species_catalog,
+                            ),
+                        )
+                    except OwnershipConflict:
+                        return self.respond(409, {'error': 'Selection save conflicts with an earlier request'})
+                    except (OwnershipUnavailable, BattleStoreError, OSError, sqlite3.Error):
+                        return self.respond(503, {'error': 'Selection storage unavailable'})
+                    except ValueError as exc:
+                        return self.respond(400, {'error': str(exc)})
                 with LOCK:
                     catalog_ready = CATALOG.get('ready')
                 if not catalog_ready:
@@ -913,6 +1024,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.respond(200, {'ok': True, **result})
                 if path in ('/api/prepare24','/api/run24'):
                     cand_parts = normalize_pokemon(payload.get('candidate'), CATALOG['species'], '自分')
+                    cand_opts = normalize_pokemon_options(payload.get('candidate'), CATALOG['species'], '自分')
+                    cand_dict = {**dict(zip(engine.HEADER[:4], cand_parts)), **cand_opts}
                     iv_list = parse_ivs(payload.get('ivs'))
                     meta_file = meta_live.active_path(WORK)
                     selected_meta = None
@@ -932,6 +1045,8 @@ class Handler(BaseHTTPRequestHandler):
                     preview = {'meta_preset': selected_meta, 'batch24': True, 'batch_mode': batch_mode, 'candidate_count': len(iv_list),
                                'opponent_count': meta_count, 'mode_count': mode_count, 'shield_cases': 6,
                                'battles_upper_bound': len(iv_list)*meta_count*mode_count*6}
+                    if cand_opts:
+                        preview['candidate_mega'] = dict(cand_opts)
                     if path == '/api/run24':
                         force = payload.get('force_recalculate', False)
                         if not isinstance(force, bool):
@@ -945,7 +1060,7 @@ class Handler(BaseHTTPRequestHandler):
                                 saved = result_cache.ResultCache.configured(WORK)
                                 if saved is not None:
                                     cache_context = result_cache.context(
-                                        dict(zip(engine.HEADER[:4], cand_parts)), iv_list, batch_mode,
+                                        cand_dict, iv_list, batch_mode,
                                         content_hash(meta_file), version, engine.CP_CAP, engine.MAX_LEVEL)
                                     cached = None if force else saved.restore(
                                         cache_context, archives.archive_dir(WORK) / 'latest.zip')
@@ -966,7 +1081,7 @@ class Handler(BaseHTTPRequestHandler):
                             BATCH_CONFIG.parent.mkdir(parents=True, exist_ok=True)
                             temp = BATCH_CONFIG.with_suffix('.tmp')
                             temp.write_text(json.dumps({
-                                'candidate': dict(zip(engine.HEADER[:4], cand_parts)),
+                                'candidate': cand_dict,
                                 'ivs': '\n'.join(','.join(map(str, iv)) for iv in iv_list),
                                 'batch_mode': batch_mode,
                             }, ensure_ascii=False), encoding='utf-8')
