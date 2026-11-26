@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Battle spec v1",
+  "description": "One PvPoke battle. The initial adapter executes only standard battles in open Great League (CP 1500, level cap 50), with two charged moves and standard shielding. A syntactically valid but unsupported request is reported as unsupported.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "rules", "combatants", "mode"],
+  "properties": {
+    "schema": {"const": "battle-spec-v1"},
+    "rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["league", "cp_cap"],
+      "properties": {
+        "league": {"$ref": "#/$defs/id"},
+        "cp_cap": {"type": "integer", "minimum": 10, "maximum": 10000},
+        "max_level": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
+        "cup_id": {"$ref": "#/$defs/id", "default": "all"}
+      }
+    },
+    "combatants": {
+      "description": "Self first, opponent second.",
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "items": {"$ref": "#/$defs/combatant"}
+    },
+    "mode": {"enum": ["standard", "sandbox"]},
+    "calculation_version": {
+      "$ref": "#/$defs/hash",
+      "description": "Optional assertion of the active version. The service writes the actual version into normalized results."
+    },
+    "policies": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "attack": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"enum": ["standard", "fast_only"]}, "default": ["standard", "standard"]},
+        "shield": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"enum": ["standard", "manual"]}, "default": ["standard", "standard"]},
+        "bait": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "boolean"}, "default": [true, true]}
+      }
+    },
+    "actions": {
+      "description": "Reserved for Sandbox. IDs and actor/turn pairs must be unique. Turn numbering starts at 1.",
+      "type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/action"}, "default": []
+    },
+    "shield_decisions": {
+      "description": "Reserved for Sandbox. Each decision refers to one opposing charged action.",
+      "type": "array", "maxItems": 1000, "default": [],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action_id", "defender", "use_shield"],
+        "properties": {
+          "action_id": {"$ref": "#/$defs/actionId"},
+          "defender": {"$ref": "#/$defs/side"},
+          "use_shield": {"type": "boolean"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9_]{1,100}$"},
+    "moveId": {"type": "string", "pattern": "^[A-Z0-9_]{1,100}$"},
+    "actionId": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"},
+    "hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "side": {"type": "integer", "minimum": 0, "maximum": 1},
+    "iv": {"type": "integer", "minimum": 0, "maximum": 15},
+    "stages": {
+      "description": "Attack and defense stages, in that order.",
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "items": {"type": "integer", "minimum": -4, "maximum": 4}
+    },
+    "combatant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["species_id", "ivs", "level", "moves", "initial"],
+      "properties": {
+        "species_id": {"$ref": "#/$defs/id", "description": "Exact GameMaster speciesId including form and shadow suffixes."},
+        "ivs": {
+          "type": "object", "additionalProperties": false, "required": ["attack", "defense", "hp"],
+          "properties": {
+            "attack": {"$ref": "#/$defs/iv"},
+            "defense": {"$ref": "#/$defs/iv"},
+            "hp": {"$ref": "#/$defs/iv"}
+          }
+        },
+        "level": {"type": "number", "minimum": 1, "maximum": 100, "multipleOf": 0.5},
+        "moves": {
+          "type": "object", "additionalProperties": false, "required": ["fast", "charged"],
+          "properties": {
+            "fast": {"$ref": "#/$defs/moveId"},
+            "charged": {"type": "array", "maxItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/moveId"}}
+          }
+        },
+        "initial": {
+          "type": "object", "additionalProperties": false, "required": ["hp", "energy", "shields", "stages"],
+          "properties": {
+            "hp": {"oneOf": [{"const": "full"}, {"type": "integer", "minimum": 1, "maximum": 10000}]},
+            "energy": {"type": "integer", "minimum": 0, "maximum": 100},
+            "shields": {"type": "integer", "minimum": 0, "maximum": 2},
+            "stages": {"$ref": "#/$defs/stages"}
+          }
+        }
+      }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "actor", "turn", "kind"],
+      "properties": {
+        "id": {"$ref": "#/$defs/actionId"},
+        "actor": {"$ref": "#/$defs/side"},
+        "turn": {"type": "integer", "minimum": 1, "maximum": 500},
+        "kind": {"enum": ["fast", "charged", "wait"]},
+        "move_id": {"$ref": "#/$defs/moveId"}
+      },
+      "if": {"properties": {"kind": {"const": "wait"}}},
+      "then": {"not": {"required": ["move_id"]}},
+      "else": {"required": ["move_id"]}
+    }
+  }
+}
