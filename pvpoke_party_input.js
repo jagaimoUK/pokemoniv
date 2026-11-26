@@ -65,7 +65,17 @@ function partyRosterEditor(textareaId,max){
  function refresh(provided){cards.replaceChildren();importError=null;try{for(const r of Array.isArray(provided)?provided:parseCsv(text.value))append(r);}catch(err){importError=err;status(err.message);}add.disabled=cards.children.length>=max;}
  text.addEventListener('change',refresh);refresh();return {refresh,rows};
 }
+// Analysis requires six explicitly selected species; draft saves and auto-build remain permissive.
+function validatePartyAnalysisMembers(rows,cat=catalog){
+ if(!Array.isArray(rows)||rows.length!==6)throw Error('自分の6体を指定してください');
+ for(const [i,p] of rows.entries()){
+  const id=String(p?.species||'').trim();
+  if(!id)throw Error('自分の候補: '+(i+1)+'枠目のポケモンが未選択です');
+  if(!cat[id])throw Error('自分の候補: '+(i+1)+'枠目のポケモンが未登録です ('+id+')');
+ }
+ return rows;
+}
 function readPartyCard(box){const r={};box.querySelectorAll('[data-field]').forEach(x=>{const k=x.dataset.field;if(k==='locked')return;const wrap=x.closest?.('[data-mega-wrap]');if(wrap&&wrap.hidden)return;if(k==='species'){if(!x.value.trim())return;r.species=x.dataset.species||resolvePartyName(x.value);return;}if(x.value.trim())r[k]=(x.type==='number'||k==='mega_level')?Number(x.value):x.value;});return r;}
-if(typeof module!=='undefined')module.exports={normalizePartyName,partyDisplay,partySearch,resolvePartyName,partyDefaultMoves,partyMoveLabel,resolvePartyMove,isPartyMegaSpecies,partyExtraChargedMoves,createMon,readPartyCard};
+if(typeof module!=='undefined')module.exports={normalizePartyName,partyDisplay,partySearch,resolvePartyName,partyDefaultMoves,partyMoveLabel,resolvePartyMove,isPartyMegaSpecies,partyExtraChargedMoves,createMon,readPartyCard,validatePartyAnalysisMembers};
 
 function partyRosterRows(id){return rosterEditors[id]?rosterEditors[id].rows():parseCsv($(id).value);}
