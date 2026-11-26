@@ -15,7 +15,9 @@ os.environ['PVP_ENGINE'] = 'direct'
 os.environ['PVP_API_KEY'] = 'fixture-' + 'x'*32
 import pvpoke_batch_v2 as engine
 import pvpoke_mcp_remote as gateway
-from pvpoke_party_backend import PartyBuilder
+from pvpoke_party_backend import PartyBuilder, owned_candidates_for_party
+from pvpoke_battle_store import BattleStore
+from pvpoke_ownership import Ownership
 import pvpoke_meta_live as meta_live
 import pvpoke_meta_presets as meta_presets
 
@@ -37,11 +39,29 @@ js = (ROOT/'vendor/pvpoke/src/js/pokemon/Pokemon.js').read_text()
 engine.DATA = work
 cpms = [float(x) for x in re.search(r'var\s+cpms\s*=\s*\[([^\]]+)\]',js,re.S)[1].split(',') if x.strip()]
 species = {p['speciesId']:p for p in gm['pokemon']}
-catalog = {sid:{'name':p['speciesName'],'fastMoves':p['fastMoves'],'chargedMoves':p['chargedMoves']} for sid,p in species.items()}
+catalog = {sid:{'name':p['speciesName'],'fastMoves':p['fastMoves'],'chargedMoves':p['chargedMoves'],'tags':p.get('tags',[]),'extraChargedMoves':p.get('extraChargedMoves',[])} for sid,p in species.items()}
 from pvpoke_app_catalog import enrich_catalog
 from pvpoke_flashcards import public_catalog
 enrich_catalog(catalog, species)
 party = PartyBuilder(work)
+battle_store = BattleStore(work / 'battle_analysis.sqlite3')
+ownership = Ownership(battle_store, species_ids=species)
+if os.environ.get('PARTY_TEST_OWNED_SYNC') == '1':
+    ownership.confirm(
+        'ev-fix-1', 'inst-fix-azu', expected_revision=0, state='confirmed_owned',
+        observation={'species_id': 'azumarill', 'ivs': {'attack': 0, 'defense': 15, 'hp': 15},
+                     'current_cp': 1499, 'current_level': 45.5,
+                     'current_moves': {'fast': 'BUBBLE', 'charged': ['ICE_BEAM', 'PLAY_ROUGH']}},
+        register_if_missing=True,
+    )
+    ownership.confirm(
+        'ev-fix-2', 'inst-fix-sabmega', expected_revision=0, state='confirmed_owned',
+        observation={'species_id': 'sableye_mega', 'ivs': {'attack': 15, 'defense': 15, 'hp': 15},
+                     'current_cp': 1498, 'current_level': 27.0,
+                     'current_moves': {'fast': 'SHADOW_CLAW', 'charged': ['FOUL_PLAY', 'POWER_GEM']},
+                     'mega_level': 3},
+        register_if_missing=True,
+    )
 fixture_rows = json.loads((ROOT/'tests/fixtures/strategy_rows.json').read_text())
 party.save_party({'name':'Browser fixture','members':fixture_rows})
 meta_rows = fixture_rows + [{'species':'primeape','fast':'COUNTER',
@@ -62,6 +82,7 @@ def request(path, payload=None, **kwargs):
         for m in gm['moves']}}
     action = path.rsplit('/',1)[-1]
     if action == 'meta-weights':return party.meta_weights(args.get('changes'))
+    if action == 'owned-candidates':return owned_candidates_for_party(ownership, catalog)
     if action == 'list':return party.list_parties()
     if action == 'get':return party.get_party(args['id'])
     if action == 'save':return party.save_party(args)

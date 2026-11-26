@@ -129,6 +129,36 @@ const substitutes={sufficient:['十分に代替（この役割）','good'],condi
 const outcomes={self_win:'勝ち',opponent_win:'負け',simultaneous_ko:'同時ひんし'};
 const ownership={confirmed_owned:'所持確認済み',confirmed_absent:'所持していないことを確認済み',unknown:'未確認'};
 const builds={exact:'個体値・CP・Lv・技が一致',unverified:'一致の判定に必要な情報が不足',different:'CP・Lv・技のいずれかが異なる'};
+const PARTY_HANDOFF_KEY='pvpoke_party_handoff_v1';
+function sendOwnedToParty(record,fallbackSpecies,fallbackMoves,fallbackIvs){
+ const sid=String(record?.species_id||fallbackSpecies||'').trim().toLowerCase();
+ if(!sid||!catalog[sid]){status('この個体の種族がカタログに見つかりません。');return;}
+ const p=catalog[sid];
+ const obs=record?.current_moves||{};
+ const fb=fallbackMoves||{};
+ const fast=(obs.fast&&(p.fastMoves||[]).includes(obs.fast))?obs.fast:(fb.fast&&(p.fastMoves||[]).includes(fb.fast))?fb.fast:(p.fastMoves?.[0]||'');
+ const obsC=Array.isArray(obs.charged)?obs.charged:[];
+ const fbC=Array.isArray(fb.charged)?fb.charged:[];
+ const cPool=p.chargedMoves||[];
+ const c1=(obsC[0]&&cPool.includes(obsC[0]))?obsC[0]:(fbC[0]&&cPool.includes(fbC[0]))?fbC[0]:(cPool[0]||'');
+ const c2=(obsC[1]&&cPool.includes(obsC[1])&&obsC[1]!==c1)?obsC[1]:(fbC[1]&&cPool.includes(fbC[1])&&fbC[1]!==c1)?fbC[1]:(cPool.find(m=>m!==c1)||'');
+ const ivs=record?.ivs||fallbackIvs||{};
+ const row={species:sid,fast,charged1:c1,charged2:c2};
+ const atk=ivs.attack??ivs.atk,def=ivs.defense??ivs.def,hp=ivs.hp;
+ if(Number.isInteger(atk)&&Number.isInteger(def)&&Number.isInteger(hp)){row.atk=atk;row.def=def;row.hp=hp;}
+ if(typeof record?.current_level==='number'&&record.current_level>=1&&record.current_level<=50)row.level_override=record.current_level;
+ if(canMegaSpecies(sid)){
+  if(Number.isInteger(record?.mega_level)&&record.mega_level>=1&&record.mega_level<=4)row.mega_level=record.mega_level;
+  const rawC3=record?.charged3||obsC[2]||fb.charged3||fbC[2];
+  if(rawC3&&Array.isArray(p.extraChargedMoves)&&p.extraChargedMoves.includes(rawC3)&&rawC3!==c1&&rawC3!==c2)row.charged3=rawC3;
+ }
+ let queue=[];
+ try{const prev=JSON.parse(localStorage.getItem(PARTY_HANDOFF_KEY)||'[]');if(Array.isArray(prev))queue=prev;}catch(_){queue=[];}
+ const key=r=>[r.species,r.fast,r.charged1,r.charged2,r.atk??'',r.def??'',r.hp??'',r.level_override??'',r.mega_level??'',r.charged3??''].join('|');
+ if(!queue.some(x=>key(x)===key(row)))queue.push(row);
+ try{localStorage.setItem(PARTY_HANDOFF_KEY,JSON.stringify(queue));}catch(_){status('ブラウザ保存領域への書き込みに失敗しました。');return;}
+ status('「'+name(sid)+'」をパーティ作成へ送るキューに追加しました（合計 '+queue.length+'件）。上部の「パーティ作成」リンクから開いてください。');
+}
 function megaStatusBadges(record,targetLevel,megaCondition){
  const items=[];
  if(record?.mega_level!=null)items.push(['手持ち メガLv'+record.mega_level,record?.needs_mega_level?'wait':'good']);
@@ -667,6 +697,9 @@ function renderInventory(parent,candidate,request){
    }
    for(const line of trainingGoalLines(record.training_goal)){
     node('p',line,row,'muted break');
+   }
+   if(record.state==='confirmed_owned'){
+    button(node('div',null,row,'actions'),'パーティ作成へ送る',()=>sendOwnedToParty(record,candidate.species_id,candidate.moves,candidate.ivs),'quiet');
    }
    const panel=detail(row,'この所持記録を更新・履歴を見る','record');
    node('small','記録ID '+record.instance_id+' · rev '+record.revision,panel,'break');
@@ -1483,6 +1516,9 @@ function renderLedgerItem(parent,item){
  tag(tags,ownership[item.state]||'未確認',item.state==='confirmed_owned'?'good':item.state==='confirmed_absent'?'fail':'wait');
  node('p',name(item.species_id)+' '+ivText(item.ivs)+' · CP '+(item.current_cp??'未記録')+' / Lv '+(item.current_level??'未記録'),row,'break');
  node('small','技 '+observedMovesText(item.current_moves)+(item.mega_level!=null?' · メガLv'+item.mega_level:'')+' · rev '+item.revision+(item.confirmed_at?' · '+item.confirmed_at:''),row,'muted break');
+ if(item.state==='confirmed_owned'){
+  button(node('div',null,row,'actions'),'パーティ作成へ送る',()=>sendOwnedToParty(item),'quiet');
+ }
  const panel=detail(row,'履歴・所持状態の更新','record');
  node('small','記録ID '+item.instance_id,panel,'break');
  const historyBox=node('div',null,panel,'stack');
