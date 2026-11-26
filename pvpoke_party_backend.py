@@ -166,6 +166,8 @@ class PartyBuilder:
             # Canonicalize before catalog/legality checks; never change the source CSV.
             if sid.endswith("_shadow-shadow"):
                 sid = sid.removesuffix("-shadow")
+            if not sid:
+                raise ValueError(f"{label}: {i + 1}枠目のポケモンが未選択です")
             p = catalog.get(sid)
             if p is None:
                 raise ValueError(label + ": 未登録ポケモン " + sid)
