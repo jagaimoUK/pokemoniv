@@ -819,3 +819,89 @@ class PartyBuilder:
                 if client is not None:
                     client.close()
         return matrix, stats
+
+
+def owned_candidates_for_party(ownership_store, catalog: dict, *, limit: int = 128) -> dict:
+    """Export confirmed-owned inventory records into validated Party Builder candidate rows."""
+    from pvpoke_mega import is_mega_form
+
+    snap = ownership_store.list_snapshot(state="confirmed_owned", limit=limit, include_scopes=False)
+    items = []
+    skipped = 0
+    for record in snap.get("items") or ():
+        sid = str(record.get("species_id") or "").strip().lower()
+        entry = catalog.get(sid) if isinstance(catalog, dict) else None
+        if not entry:
+            skipped += 1
+            continue
+        fast_pool = list(entry.get("fastMoves") or ())
+        charged_pool = list(entry.get("chargedMoves") or ())
+        if not fast_pool or len(charged_pool) < 2:
+            skipped += 1
+            continue
+        default_moves = entry.get("default_moves") if isinstance(entry.get("default_moves"), dict) else {}
+        obs_moves = record.get("current_moves") if isinstance(record.get("current_moves"), dict) else {}
+        obs_fast = str(obs_moves.get("fast") or "").strip().upper()
+        fast = obs_fast if obs_fast in fast_pool else (
+            default_moves.get("fast") if default_moves.get("fast") in fast_pool else fast_pool[0]
+        )
+        obs_charged = [str(m or "").strip().upper() for m in (obs_moves.get("charged") or ()) if str(m or "").strip()]
+        c1 = obs_charged[0] if len(obs_charged) >= 1 and obs_charged[0] in charged_pool else None
+        c2 = obs_charged[1] if len(obs_charged) >= 2 and obs_charged[1] in charged_pool and obs_charged[1] != c1 else None
+        if not c1:
+            def_c1 = default_moves.get("charged1")
+            c1 = def_c1 if def_c1 in charged_pool and def_c1 != c2 else next((m for m in charged_pool if m != c2), None)
+        if not c2:
+            def_c2 = default_moves.get("charged2")
+            c2 = def_c2 if def_c2 in charged_pool and def_c2 != c1 else next((m for m in charged_pool if m != c1), None)
+        if not c1 or not c2 or c1 == c2:
+            skipped += 1
+            continue
+
+        ivs = record.get("ivs") if isinstance(record.get("ivs"), dict) else {}
+        try:
+            raw_atk = ivs["attack"] if "attack" in ivs else ivs["atk"]
+            raw_def = ivs["defense"] if "defense" in ivs else ivs["def"]
+            atk = int(raw_atk)
+            defense = int(raw_def)
+            hp = int(ivs["hp"])
+        except (KeyError, TypeError, ValueError):
+            skipped += 1
+            continue
+        if not all(0 <= v <= 15 for v in (atk, defense, hp)):
+            skipped += 1
+            continue
+
+        row = {
+            "species": sid,
+            "fast": fast,
+            "charged1": c1,
+            "charged2": c2,
+            "atk": atk,
+            "def": defense,
+            "hp": hp,
+            "instance_id": record.get("instance_id"),
+            "current_cp": record.get("current_cp"),
+        }
+        cur_lv = record.get("current_level")
+        if isinstance(cur_lv, (int, float)) and 1 <= cur_lv <= 50:
+            row["level_override"] = cur_lv
+        tags = set(entry.get("tags") or ())
+        mega_capable = is_mega_form(sid) or ("mega" in tags)
+        raw_ml = record.get("mega_level")
+        if mega_capable and type(raw_ml) is int and 1 <= raw_ml <= 4:
+            row["mega_level"] = raw_ml
+        extra_pool = list(entry.get("extraChargedMoves") or ())
+        raw_c3 = record.get("charged3") or (obs_charged[2] if len(obs_charged) >= 3 else None)
+        if mega_capable and isinstance(raw_c3, str):
+            c3 = raw_c3.strip().upper()
+            if c3 and c3 in extra_pool and c3 not in (c1, c2):
+                row["charged3"] = c3
+        items.append(row)
+
+    return {
+        "ledger_revision": snap.get("ledger_revision", 0),
+        "items": items,
+        "has_more": bool(snap.get("has_more", False)),
+        "skipped_count": skipped,
+    }

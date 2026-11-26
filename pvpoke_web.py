@@ -38,13 +38,13 @@ import pvpoke_meta_live as meta_live
 import pvpoke_meta_presets as meta_presets
 import pvpoke_flashcards as flashcards
 import pvpoke_meta_variants as meta_variants
-from pvpoke_party_backend import PartyBuilder
+from pvpoke_party_backend import PartyBuilder, owned_candidates_for_party
 from pvpoke_battle_service import BattleService, MAX_REQUEST_BYTES as MAX_BATTLE_REQUEST_BYTES, _unique_object, _reject_constant
 from pvpoke_battle_store import BattleStore, BattleStoreError
 from pvpoke_missing_analysis import AnalysisUnavailable
 from pvpoke_missing_comparison import API_PATH as MISSING_API_PATH, MAX_REQUEST_BYTES as MAX_MISSING_REQUEST_BYTES
 from pvpoke_missing_comparison import app_operation as missing_operation, enabled as missing_enabled
-from pvpoke_ownership import OwnershipConflict, OwnershipUnavailable
+from pvpoke_ownership import Ownership, OwnershipConflict, OwnershipUnavailable
 from pvpoke_individual_sync import ACTIONS as SYNC_ACTIONS, IndividualUnavailable, app_operation as sync_operation
 from pvpoke_selection_history import ACTIONS as SELECTION_ACTIONS, app_operation as selection_operation
 from pvpoke_sandbox_workspace import API_PATH as SANDBOX_API_PATH, TacticConflict, TacticUnavailable
@@ -964,6 +964,15 @@ class Handler(BaseHTTPRequestHandler):
                 action = path.rsplit('/', 1)[-1]
                 if action == 'meta-weights':
                     return self.respond(200, PARTY.meta_weights(payload.get('changes')))
+                if action == 'owned-candidates':
+                    if not CATALOG.get('ready'):
+                        raise ValueError('ゲームデータを読み込み中です')
+                    try:
+                        store = BattleStore.from_volume()
+                        ownership = Ownership(store, species_ids=CATALOG['species'])
+                        return self.respond(200, owned_candidates_for_party(ownership, CATALOG['species']))
+                    except (BattleStoreError, OwnershipUnavailable):
+                        return self.respond(503, {'error': '手持ち台帳を読み込めませんでした'})
                 if action == 'list':
                     return self.respond(200, PARTY.list_parties())
                 if action == 'get':

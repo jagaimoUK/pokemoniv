@@ -713,7 +713,7 @@ class Handler(BaseHTTPRequestHandler):
                              '/app-api/meta-preview', '/app-api/meta-apply', '/app-api/meta-presets', '/app-api/meta-preset-save', '/app-api/meta-preset-export', '/app-api/low-score', '/app-api/visual-backup-token', '/app-api/flashcards',
                              '/app-api/party/list', '/app-api/party/get', '/app-api/party/save',
                              '/app-api/party/start', '/app-api/party/status', '/app-api/party/cancel',
-                             '/app-api/party/meta-weights', '/app-api/battles/simulate', MISSING_APP_PATH, SANDBOX_APP_PATH,
+                             '/app-api/party/meta-weights', '/app-api/party/owned-candidates', '/app-api/battles/simulate', MISSING_APP_PATH, SANDBOX_APP_PATH,
                              WEB_SYNC_PATH, READER_SYNC_PATH):
             return self.respond(404, {'error': 'Not found'})
         origin = self.headers.get('Origin')
