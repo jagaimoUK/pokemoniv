@@ -3,6 +3,12 @@ const cat={corsola:{name:'Corsola',name_ja:'サニーゴ',aliases:['サニーゴ
 const moveNames={A:{name:'Tackle',name_ja:'たいあたり'},B:{name:'Hydro Cannon',name_ja:'ハイドロカノン'},C:{name:'Ice Beam',name_ja:'れいとうビーム'},D:{name:'Play Rough',name_ja:'じゃれつく'},X:{name:'Astonish',name_ja:'おどろかす'},Y:{name:'Shadow Ball',name_ja:'シャドーボール'},Z:{name:'Night Shade',name_ja:'ナイトヘッド'}};
 const context={catalog:cat,partyMoveNames:moveNames,module:{exports:{}}};vm.createContext(context);vm.runInContext(fs.readFileSync('pvpoke_party_input.js','utf8'),context);
 const x=context.module.exports;
+const six=Array.from({length:6},()=>({species:'corsola'}));
+assert.equal(x.validatePartyAnalysisMembers(six,cat),six);
+assert.throws(()=>x.validatePartyAnalysisMembers(six.slice(0,5),cat),/6体/);
+assert.throws(()=>x.validatePartyAnalysisMembers(six.map((p,i)=>i===3?{}:p),cat),/4枠目.*未選択/);
+assert.throws(()=>x.validatePartyAnalysisMembers(six.map((p,i)=>i===4?{species:'unregistered_mega'}:p),cat),/5枠目.*未登録/);
+
 assert.equal(x.resolvePartyName('サニーゴ',cat),'corsola');assert.equal(x.resolvePartyName('さにーご',cat),'corsola');assert.equal(x.resolvePartyName('Ｃｏｒｓｏｌａ',cat),'corsola');assert.equal(x.resolvePartyName('ガラルサニーゴ',cat),'corsola_galarian');assert.equal(x.partySearch('サニーゴ',cat).length,2);
 assert.equal(x.partyDefaultMoves(cat.corsola).moves.charged1,'C');assert.equal(x.partyDefaultMoves(cat.corsola_galarian).recommended,false);
 assert.equal(context.parseCsv('サニーゴ')[0].charged1,'C');
