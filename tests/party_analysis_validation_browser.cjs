@@ -60,7 +60,7 @@ const assert=require('node:assert/strict');
 
   // Restore the original six via the existing saved-party UI.
   await page.click('#load');
-  await page.waitForFunction(()=>getMon().every((p,i)=>p.species===window.__fixtureIds?.[i]||!window.__fixtureIds));
+  await page.waitForFunction(ids=>getMon().every((p,i)=>p.species===ids[i]),original.map(p=>p.species));
   const restored=await page.evaluate(()=>getMon());
   assert.deepEqual(restored.map(p=>p.species),original.map(p=>p.species));
 
