@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import math
 import re
 import os
@@ -227,25 +228,33 @@ class PartyBuilder:
     def _unique(rows):
         return list({r["id"]: r for r in reversed(rows)}.values())[::-1]
 
-    def start(self, args, *, catalog, species, cpms, engine, work, global_lock, global_status):
+    def start(self, args, *, catalog, species, cpms, engine, work, global_lock, global_status, release_owner=None):
         if not isinstance(args, dict) or args.get("mode") not in ("analyze", "select", "build", "strategy"):
             raise ValueError("modeはanalyze/select/build/strategyのいずれかです")
         self._mega_policy_from_args(args, engine_cp_cap=getattr(engine, "CP_CAP", 1500))
         if os.environ.get("PVP_ENGINE", "browser").lower() not in ("direct", "node"):
             raise ValueError("パーティ計算はDirectエンジンが必要です")
         with global_lock, self._lock:
-            if self._active is not None or global_status.get("state") == "running":
+            if self._active is not None or global_status.get("state") in ("running", "cancelling"):
                 raise RuntimeError("他の計算中です。完了後に開始してください")
             jid = uuid.uuid4().hex
+            prev_global = (global_status, global_lock, dict(global_status))
             self._active = jid
             self._cancel = False
-            self._record(jid, "queued", {"message": "準備しています", "progress": 0})
-            self._previous_global = (global_status, global_lock, dict(global_status))
-            global_status["state"] = "running"
-            global_status["message"] = "パーティ作成の計算中"
-            task = threading.Thread(target=self._worker, args=(
-                jid, args, catalog, species, cpms, engine, work, global_lock), daemon=True)
-            task.start()
+            self._previous_global = prev_global
+            try:
+                self._record(jid, "queued", {"message": "準備しています", "progress": 0})
+                global_status["state"] = "running"
+                global_status["message"] = "パーティ作成の計算中"
+                task = threading.Thread(target=self._worker, args=(
+                    jid, args, catalog, species, cpms, engine, work, global_lock, release_owner), daemon=True)
+                task.start()
+            except Exception:
+                self._active = None
+                self._previous_global = None
+                global_status["state"] = prev_global[2].get("state", "idle")
+                global_status["message"] = prev_global[2].get("message", "")
+                raise
         return {"job_id": jid, "status": "queued"}
 
     def cancel(self, jid):
@@ -255,7 +264,7 @@ class PartyBuilder:
             self._cancel = True
             return {"cancel_requested": True}
 
-    def _worker(self, jid, args, catalog, species, cpms, engine, work, global_lock):
+    def _worker(self, jid, args, catalog, species, cpms, engine, work, global_lock, release_owner=None):
         started = time.monotonic()
         try:
             result = self._compute(jid, args, catalog, species, cpms, engine, work)
@@ -263,7 +272,18 @@ class PartyBuilder:
             self._record(jid, "done", {"progress": 100, "result": result})
         except Exception as exc:
             status = "cancelled" if str(exc) == "cancelled" else "error"
-            self._record(jid, status, {"message": str(exc)[:400], "progress": 0})
+            # Background exceptions can contain internal file paths, SQL
+            # details or subprocess output. Do not persist them in a status
+            # record readable through the authenticated browser API.
+            if status == "cancelled":
+                message = "cancelled"
+            elif isinstance(exc, ValueError):
+                # Keep established, actionable input-validation feedback.
+                message = str(exc)[:400]
+            else:
+                logging.warning("Party worker failed: %s", type(exc).__name__)
+                message = "パーティ計算に失敗しました。再試行してください"
+            self._record(jid, status, {"message": message, "progress": 0})
         finally:
             # Always acquire the shared web lock before this worker lock.
             # The reverse order could deadlock with a concurrent start request.
@@ -275,6 +295,38 @@ class PartyBuilder:
                         status.clear()
                         status.update(previous)
                         self._previous_global = None
+                    if release_owner is not None:
+                        try:
+                            release_owner()
+                        except Exception:
+                            pass
+
+    @staticmethod
+    def _mega_policy_from_args(args, *, engine_cp_cap=None):
+        from pvpoke_mega import resolve_battle_rules, resolve_party_mega_rules
+        ruleset = args.get("ruleset", "cp1500-lv50")
+        raw_mega = args.get("mega_rules")
+        if raw_mega is not None:
+            if not isinstance(raw_mega, dict):
+                raise ValueError("メガルール設定はオブジェクトで指定してください")
+            rule_input = {"ruleset": ruleset, **raw_mega}
+        else:
+            rule_input = ruleset
+        policy = resolve_party_mega_rules(rule_input)
+        if engine_cp_cap is not None:
+            meta_rules = raw_mega if isinstance(raw_mega, dict) else {}
+            battle_rule = resolve_battle_rules({
+                "league": meta_rules.get("league"),
+                "cup_id": policy["effective_cup"],
+                "cp_cap": meta_rules.get("cp_cap"),
+            })
+            if battle_rule["cp_cap"] not in (None, engine_cp_cap) or policy["effective_cup"] in (
+                "ultra", "open_ultra", "ultra_mega", "master", "open_master"
+            ) and engine_cp_cap == 1500:
+                raise ValueError(f"現在はCP{engine_cp_cap}（スーパーリーグ系）のみ対応しています")
+        if not policy["rule_verified"] or policy["max_megas_in_three"] is None:
+            raise ValueError("大会・カップのメガ許可数が未確認のため、一律1体と仮定して計算できません")
+        return policy
 
     @staticmethod
     def _mega_policy_from_args(args, *, engine_cp_cap=None):
