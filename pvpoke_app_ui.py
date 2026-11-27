@@ -580,12 +580,23 @@ function individualSearches(result,iv){
 function overlayExport(results){
  recommendationExportText(results); // Validate every pair before writing anything.
  const items=results.flatMap(result=>(result.selection?.recommendations||[]).flatMap(row=>
-  [row,...(row.equivalent_candidates||[])].flatMap(iv=>individualSearches(result,iv).map(source=>({
-   search:source.search,nickname:nicknameFor(result,row,iv.ivs).text,ivs:iv.ivs,
-   cp:source.cp||null,species:source.species||result.candidate.species,
-   target_species:result.candidate.species,
-   target_name:catalog[result.candidate.species]?.name_ja||result.display_name||catalog[result.candidate.species]?.name||result.candidate.species
-  })))));
+  [row,...(row.equivalent_candidates||[])].flatMap(iv=>individualSearches(result,iv).map(source=>{
+   const isMega=!!(result.candidate?.species?.endsWith('_mega')||result.candidate?.mega_level||row.mega_level);
+   const item={
+    search:source.search,nickname:nicknameFor(result,row,iv.ivs).text,ivs:iv.ivs,
+    cp:source.cp||null,species:source.species||result.candidate.species,
+    target_species:result.candidate.species,
+    target_name:catalog[result.candidate.species]?.name_ja||result.display_name||catalog[result.candidate.species]?.name||result.candidate.species
+   };
+   if(isMega){
+    item.mega_level=row.mega_level||result.candidate?.mega_level||3;
+    if(result.candidate?.charged3||row.charged3)item.charged3=result.candidate?.charged3||row.charged3;
+    item.super_max_pl_hypothesis_status='unconfirmed_deferred';
+    if(row.needs_evolution!==undefined)item.needs_evolution=row.needs_evolution;
+    if(row.needs_power_up!==undefined)item.needs_power_up=row.needs_power_up;
+   }
+   return item;
+  }))));
  return JSON.stringify({format:'pokemoniv-overlay-v2',items});
 }
 async function copyOverlay(results,button){try{await copy(overlayExport(results),button);}catch(e){message(e.message,true);}}

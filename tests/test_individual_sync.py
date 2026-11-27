@@ -76,3 +76,38 @@ class IndividualSyncTests(unittest.TestCase):
         self.assertIsNone(connections.instance('Bearer ' + token.replace('.known.', '.other.')))
         credentials.revoke(credentials.fingerprint(token), KIND)
         self.assertIsNone(connections.instance('Bearer ' + token))
+
+    def test_mega_individual_sync_preserves_mega_attributes_and_supports_mega_level_edits(self):
+        from pvpoke_individual_sync import validate_mega_sync_individual
+        # Register a mega-capable individual (sableye with mega_level 3)
+        mega_inventory = Ownership(self.store, species_ids={'sableye'})
+        obs = {
+            'species_id': 'sableye',
+            'current_cp': 1490,
+            'ivs': {'attack': 0, 'defense': 15, 'hp': 15},
+            'mega_level': 3,
+        }
+        mega_inventory.register('mega-sableye', obs)
+        mega_inventory.confirm('confirm-mega', 'mega-sableye', expected_revision=0, state='confirmed_owned')
+        res = self.read('mega-sableye')
+        ind = res['individual']
+        self.assertEqual(ind['species_id'], 'sableye')
+        self.assertEqual(ind['mega_level'], 3)
+        self.assertTrue(validate_mega_sync_individual(ind))
+
+        # Edit fields via sync patch
+        patch = {
+            'action': 'individual_patch',
+            'instance_id': 'mega-sableye',
+            'request_id': 'req-mega-1',
+            'changes': {
+                'nickname': {'revision': 0, 'value': 'MegaSab'},
+                'memo': {'revision': 0, 'value': 'Mega Level 3, SuperMAX verified'},
+            },
+        }
+        patch_res = app_operation(self.store, patch)
+        self.assertEqual(patch_res['outcomes'], {'nickname': 'applied', 'memo': 'applied'})
+        self.assertEqual(patch_res['fields']['nickname'], {'revision': 1, 'value': 'MegaSab'})
+        self.assertEqual(patch_res['fields']['memo'], {'revision': 1, 'value': 'Mega Level 3, SuperMAX verified'})
+        self.assertEqual(patch_res['individual']['mega_level'], 3)
+

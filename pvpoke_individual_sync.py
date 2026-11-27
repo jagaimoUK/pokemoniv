@@ -71,7 +71,16 @@ def _confirmed(db, inventory, instance_id):
     record = inventory._instance(db, instance_id) if inventory._exists(db) else None
     if record is None or record['state'] != 'confirmed_owned':
         raise IndividualUnavailable('Confirmed individual required')
-    return {key: record[key] for key in ('instance_id', 'species_id', 'ivs', 'current_cp')}
+    res = {key: record[key] for key in ('instance_id', 'species_id', 'ivs', 'current_cp')}
+    for opt in (
+        'current_level', 'current_moves', 'mega_level', 'charged3',
+        'extra_charged_moves', 'target_level', 'super_max_pl_hypothesis_status',
+        'needs_evolution', 'needs_power_up', 'mega_downscaled',
+        'owned_species_id', 'evaluated_species_id',
+    ):
+        if opt in record and record[opt] is not None:
+            res[opt] = record[opt]
+    return res
 
 
 def _fields(db, owner, instance_id):
@@ -98,6 +107,62 @@ def _changes(value):
                 or 0xD800 <= ord(char) <= 0xDFFF for char in text):
             raise ValueError('Invalid field value')
     return value
+
+
+def validate_mega_sync_individual(individual):
+    """Verify an individual dictionary conforms to the cross-app mega specification."""
+    if type(individual) is not dict:
+        raise ValueError('Individual must be an object')
+    for required in ('instance_id', 'species_id', 'ivs'):
+        if required not in individual:
+            raise ValueError(f'Missing required field: {required}')
+    _id(individual['instance_id'])
+    ivs = individual['ivs']
+    if type(ivs) is not dict or set(ivs) != {'attack', 'defense', 'hp'}:
+        raise ValueError('Invalid IVs in individual')
+    for stat in ('attack', 'defense', 'hp'):
+        if type(ivs[stat]) is not int or not 0 <= ivs[stat] <= 15:
+            raise ValueError(f'Invalid IV {stat}: {ivs[stat]}')
+    if 'current_cp' in individual and individual['current_cp'] is not None:
+        if type(individual['current_cp']) is not int or not 10 <= individual['current_cp'] <= 10000:
+            raise ValueError('Invalid current_cp')
+    if 'mega_level' in individual and individual['mega_level'] is not None:
+        if type(individual['mega_level']) is not int or not 1 <= individual['mega_level'] <= 4:
+            raise ValueError('Mega level must be 1..4')
+    if 'charged3' in individual and individual['charged3'] is not None:
+        if type(individual['charged3']) is not str or not individual['charged3']:
+            raise ValueError('Invalid charged3 move')
+    if 'target_level' in individual and individual['target_level'] is not None:
+        lvl = float(individual['target_level'])
+        if not 1.0 <= lvl <= 55.0:
+            raise ValueError('Target level must be 1.0..55.0')
+    if 'super_max_pl_hypothesis_status' in individual and individual['super_max_pl_hypothesis_status'] is not None:
+        if individual['super_max_pl_hypothesis_status'] not in ('unconfirmed_deferred', 'confirmed_applicable', 'not_applicable'):
+            raise ValueError('Invalid super_max_pl_hypothesis_status')
+    return True
+
+
+def validate_overlay_export_item(item):
+    """Verify an item from pokemoniv-overlay-v2 matches the cross-app schema."""
+    if type(item) is not dict:
+        raise ValueError('Overlay item must be an object')
+    for req in ('search', 'nickname', 'ivs'):
+        if req not in item or type(item[req]) is not str or not item[req]:
+            raise ValueError(f'Missing or invalid required item field: {req}')
+    if any(c in item['search'] for c in '\r\n') or len(item['search']) > 2000:
+        raise ValueError('Invalid search expression')
+    if any(c in item['nickname'] for c in '\r\n') or len(item['nickname']) > 100:
+        raise ValueError('Invalid nickname')
+    ivs_parts = item['ivs'].split('/')
+    if len(ivs_parts) != 3 or not all(p.isdigit() and 0 <= int(p) <= 15 for p in ivs_parts):
+        raise ValueError('Invalid ivs string in overlay item')
+    if 'mega_level' in item and item['mega_level'] is not None:
+        if type(item['mega_level']) is not int or not 1 <= item['mega_level'] <= 4:
+            raise ValueError('Overlay item mega_level must be 1..4')
+    if 'super_max_pl_hypothesis_status' in item and item['super_max_pl_hypothesis_status'] is not None:
+        if item['super_max_pl_hypothesis_status'] != 'unconfirmed_deferred':
+            raise ValueError('Super MAX status must be unconfirmed_deferred')
+    return True
 
 
 def app_operation(store, payload):
