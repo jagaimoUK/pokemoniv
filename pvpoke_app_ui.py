@@ -407,11 +407,14 @@ function moves(row={},sid=el('species').value){
  if(typeof renderReachableEvolutionLinks==='function')renderReachableEvolutionLinks(sid);
 }
 function presetKey(p){return p.key||[p.species,p.fast,p.charged1,p.charged2].join('|');}
+let currentLevelOverride=null;
 function currentCandidate(){
  const out={species:el('species').value.trim(),fast:el('fast').value,charged1:el('charged1').value,charged2:el('charged2').value};
  const megaBox=el('megaMoveSettings'),megaSel=el('megaLevel'),c3Wrap=el('charged3Wrap'),c3Sel=el('charged3');
  if(megaBox&&!megaBox.hidden&&megaSel?.value)out.mega_level=Number(megaSel.value);
  if(c3Wrap&&!c3Wrap.hidden&&c3Sel?.value)out.charged3=c3Sel.value;
+ const lvl=(typeof currentLevelOverride!=='undefined'&&currentLevelOverride!=null)?currentLevelOverride:((typeof importedSingle!=='undefined'&&importedSingle?.candidate?.species===out.species)?importedSingle?.candidate?.level_override:null);
+ if(typeof lvl==='number'&&Number.isFinite(lvl))out.level_override=lvl;
  return out;
 }
 const transferMissing=el('transferMissing');
@@ -420,7 +423,7 @@ transferMissing.onclick=()=>{
  const current=currentCandidate();
  transferToMissingAnalysis(current.species,null,current);
 };
-function setCandidate(p){inputPokemonStatus=null;el('species').value=p.species;el('allSpecies').value=p.species;moves(p);const found=presets.find(x=>['species','fast','charged1','charged2'].every(k=>x[k]===p[k]));el('preset').value=found?presetKey(found):'';}
+function setCandidate(p){inputPokemonStatus=null;currentLevelOverride=(typeof p?.level_override==='number'&&Number.isFinite(p.level_override))?p.level_override:null;el('species').value=p.species;el('allSpecies').value=p.species;moves(p);const found=presets.find(x=>['species','fast','charged1','charged2'].every(k=>x[k]===p[k]));el('preset').value=found?presetKey(found):'';}
 function setPreset(){const p=presets.find(x=>presetKey(x)===el('preset').value);if(p)setCandidate(p);}
 function resolveTypedSpecies(){const raw=el('species').value.normalize('NFKC').trim().toLowerCase();if(['gourgeist','pumpkaboo','パンプジン','バケッチャ'].includes(raw)){message('このポケモンはサイズごとに能力が異なります。こだましゅ/XS、ちゅうだましゅ/通常、おおだましゅ/XL、ギガだましゅ/XXLを指定してください。',true);return;}const found=Object.entries(catalog).filter(([sid,p])=>[sid,p.name,p.name_ja,...(p.aliases||[])].some(x=>x&&String(x).normalize('NFKC').trim().toLowerCase()===raw));if(found.length===1)el('species').value=found[0][0];else if(found.length>1)message('複数のフォルムが一致しました。サイズやフォルムを指定してください。',true);}
 
@@ -1628,7 +1631,16 @@ function planMovesets(jobs,mode='smart'){
   else if(mode==='manual')picked=registered.length?registered:explicit;
   else{const shortlist=shortlistMovesets(sid,pool);picked=shortlist.profiles;incomplete=shortlist.incomplete;const standard=catalog[sid]?.default_moves;if(standard&&validMoveset({species:sid,...standard}))picked=[{species:sid,...standard},...picked].slice(0,6);}
   const required=mode==='manual'?[]:[...explicit,...registered],unique=new Map();
-  for(const c of [...required,...picked]){const candidate={species:sid,fast:c.fast,charged1:c.charged1,charged2:c.charged2};if(!unique.has(movesetKey(candidate)))unique.set(movesetKey(candidate),candidate);}
+  for(const c of [...required,...picked]){
+   const candidate={species:sid,fast:c.fast,charged1:c.charged1,charged2:c.charged2};
+   const lvl=c.level_override??job.candidate?.level_override;
+   if(typeof lvl==='number'&&Number.isFinite(lvl))candidate.level_override=lvl;
+   const ml=c.mega_level??job.candidate?.mega_level;
+   if(ml!=null&&Number.isFinite(Number(ml)))candidate.mega_level=Number(ml);
+   const c3=c.charged3||job.candidate?.charged3;
+   if(c3)candidate.charged3=c3;
+   if(!unique.has(movesetKey(candidate)))unique.set(movesetKey(candidate),candidate);
+  }
   if(!unique.size)throw Error(job.name+'の技一覧が不足しています。技の設定で直接指定してください。');
   const planning={mode,total:pool.length,selected:unique.size,omitted:Math.max(0,pool.length-unique.size),incomplete};
   for(const candidate of unique.values())planned.push({...job,candidate,moveset_group:group,moveset_plan:planning});
@@ -1976,9 +1988,19 @@ async function startSelection(){
  try{
   const current=currentCandidate();
   const keep=importedSingle?.candidate.species===current.species&&importedSingle.ivs.trim()===el('ivs').value.trim();
+  if(keep&&importedSingle?.candidate?.level_override!=null&&current.level_override==null){
+   current.level_override=importedSingle.candidate.level_override;
+  }
   const inputJobs=importedJobs||[{candidate:current,ivs:el('ivs').value,
    name:catalog[el('species').value]?.name_ja||el('species').value,
    source_records:keep?importedSingle.source_records:[],source_sections:keep?importedSingle.source_sections:[],pokemon_status:inputPokemonStatus}];
+  for(const job of inputJobs){
+   if(job.candidate&&job.candidate.level_override==null){
+    const rec=job.source_records?.find(r=>r&&(r.level_override!=null||r.current_level!=null||r.level!=null));
+    const recLvl=rec?.level_override??rec?.current_level??rec?.level;
+    if(recLvl!=null&&!isNaN(Number(recLvl)))job.candidate.level_override=Number(recLvl);
+   }
+  }
   const auto_moves=el('autoMoves').checked===true,threshold=Number(el('moveThreshold').value);
   if(auto_moves&&(!Number.isFinite(threshold)||threshold<0||threshold>1000))throw Error('技の平均Rating下限は0〜1000で指定してください');
   if(auto_moves&&el('evaluation').value!=='app')throw Error('自動の技比較は「アプリで自動推薦」で使用してください');
@@ -2007,7 +2029,7 @@ el('resume').onclick=async()=>{
   else{const result=await finish(await api('result',{run_ref:runRef,wait_seconds:2}));renderSelectionResults([result]);runRef=null;sessionStorage.removeItem('pvpoke-app-run');el('resume').hidden=true;message('計算と結果の確認が完了しました。');}
  }catch(e){handleCalculationError(e);}finally{calculating=false;setBusy(false);}
 };
-el('disconnect').onclick=async()=>{try{await api('logout');}catch(e){message('ログアウトできませんでした。再試行してください。',true);return;}credential='';catalog={};metaState=null;selectedMetaId=null;clearMetaExport();nameEntries=[];opponentLabels.clear();displayedResults=[];nicknameBindings=[];presets=[];lastResult=null;setImportedJobs(null);batchState=null;el('savedSelectionPanel').replaceChildren();el('savedSelectionPanel').hidden=true;el('results').replaceChildren();el('workspace').hidden=true;el('selectionSettingsOpen').hidden=true;el('selectionSettings').hidden=true;el('login').hidden=false;resetMetaUpload();message('接続を解除しました。このブラウザのログイン情報も削除しました。');};
+el('disconnect').onclick=async()=>{try{await api('logout');}catch(e){message('ログアウトできませんでした。再試行してください。',true);return;}credential='';catalog={};metaState=null;selectedMetaId=null;clearMetaExport();nameEntries=[];opponentLabels.clear();displayedResults=[];nicknameBindings=[];presets=[];lastResult=null;setImportedJobs(null);currentLevelOverride=null;batchState=null;el('savedSelectionPanel').replaceChildren();el('savedSelectionPanel').hidden=true;el('results').replaceChildren();el('workspace').hidden=true;el('selectionSettingsOpen').hidden=true;el('selectionSettings').hidden=true;el('login').hidden=false;resetMetaUpload();message('接続を解除しました。このブラウザのログイン情報も削除しました。');};
 // Opt-in reader automation uses the existing authenticated browser and selected meta.
 let readerAutomation=null;
 try{readerAutomation=JSON.parse(sessionStorage.getItem('pokemoniv-reader-automation')||'null');}catch{}
