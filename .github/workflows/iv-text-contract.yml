@@ -9,6 +9,14 @@ on:
       - 'tests/test_iv_text_contract.py'
       - '.github/workflows/iv-text-contract.yml'
   pull_request:
+    # Match the existing main-push scope; unrelated PRs do not change
+    # the Android/Web IV text contract and already receive security CI.
+    paths:
+      - 'pvpoke_app_*.py'
+      - 'contracts/**'
+      - 'tests/test_*input.py'
+      - 'tests/test_iv_text_contract.py'
+      - '.github/workflows/iv-text-contract.yml'
   workflow_dispatch:
 permissions:
   contents: read
