@@ -24,6 +24,7 @@ import pvpoke_matchup_cache as matchup_cache
 from pvpoke_calculation_version import calculation_version, force_recalculate
 import pvpoke_direct_backend as direct_backend
 from pvpoke_data_snapshot import install_snapshot
+from pvpoke_mega import is_mega_form, resolve_battle_rules
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -174,21 +175,34 @@ def charged_move_pool(pokemon, cp_cap=CP_CAP):
     return moves
 
 
-def optimize(rows, species, cpms, fname, cp_cap=CP_CAP):
+def optimize(rows, species, cpms, fname, cp_cap=CP_CAP, rules=None):
+    resolved_rules = resolve_battle_rules(rules) if rules is not None else None
+    effective_cp_cap = resolved_rules['cp_cap'] if (resolved_rules and resolved_rules['cp_cap'] is not None) else cp_cap
+    allow_downscale = bool(resolved_rules and resolved_rules['allow_cp_downscaling'] is True)
+    rule_max_level = resolved_rules['max_level'] if resolved_rules is not None else MAX_LEVEL
+
+    def _compute_cp(stats, row, cpm):
+        return max(10, math.floor(
+            (stats['atk'] + row['atk']) *
+            math.sqrt(stats['def'] + row['def']) *
+            math.sqrt(stats['hp'] + row['hp']) * cpm ** 2 / 10
+        ))
+
     prepared = []
     for idx, row in enumerate(rows, 2):
         p = species.get(row['species'])
         if p is None:
             raise ValueError(f'{fname} {idx}行目: species未登録: {row["species"]}')
+        tags = p.get('tags') or ()
+        is_mega = is_mega_form(row['species']) or ('mega' in tags)
         allowed_fast = set(p['fastMoves'])
-        allowed_charged = set(charged_move_pool(p, cp_cap=cp_cap))
+        allowed_charged = set(charged_move_pool(p, cp_cap=effective_cp_cap))
         for key, allowed in [('fast', allowed_fast), ('charged1', allowed_charged), ('charged2', allowed_charged)]:
             if row[key] not in allowed:
                 raise ValueError(f'{fname} {idx}行目: 未対応の技: {key}={row[key]} ({row["species"]})')
         if row['charged1'] == row['charged2']:
             raise ValueError(f'{fname} {idx}行目: 同じゲージ技が2つ指定されています')
         if row.get('charged3') is not None:
-            tags = p.get('tags') or ()
             extra_charged = set(p.get('extraChargedMoves') or ())
             if 'mega' not in tags or row['charged3'] not in extra_charged:
                 raise ValueError(f'{fname} {idx}行目: 未対応の追加ゲージ技: charged3={row["charged3"]} ({row["species"]})')
@@ -198,7 +212,7 @@ def optimize(rows, species, cpms, fname, cp_cap=CP_CAP):
             if type(row['mega_level']) is not int or not 1 <= row['mega_level'] <= 4:
                 raise ValueError(f'{fname} {idx}行目: 無効なmega_level: {row["mega_level"]}')
         stats = p['baseStats']
-        maxlevel = min(MAX_LEVEL, float(p.get('levelCap', MAX_LEVEL)))
+        maxlevel = min(MAX_LEVEL, rule_max_level, float(p.get('levelCap', MAX_LEVEL)))
         floorlevel = max(1.0, float(p.get('levelFloor', 1.0)))
         possibilities = []
         # Exact half-level increments per PvPoke CPM table, no approximation.
@@ -207,25 +221,50 @@ def optimize(rows, species, cpms, fname, cp_cap=CP_CAP):
             index = half - 2
             if index < 0 or index >= len(cpms):
                 continue
-            cpm = cpms[index]
-            cp = max(10, math.floor(
-                (stats['atk'] + row['atk']) *
-                math.sqrt(stats['def'] + row['def']) *
-                math.sqrt(stats['hp'] + row['hp']) * cpm ** 2 / 10
-            ))
-            if cp <= cp_cap:
+            cp = _compute_cp(stats, row, cpms[index])
+            if cp <= effective_cp_cap:
                 possibilities.append((level, cp))
+        if not possibilities and is_mega and allow_downscale and floorlevel > 1.0:
+            for half in range(2, math.floor(maxlevel * 2) + 1):
+                level = half / 2
+                index = half - 2
+                if index < 0 or index >= len(cpms):
+                    continue
+                cp = _compute_cp(stats, row, cpms[index])
+                if cp <= effective_cp_cap:
+                    possibilities.append((level, cp))
         if not possibilities:
-            raise ValueError(f'{fname} {idx}行目: CP{cp_cap}以下の適正レベルが見つかりません')
+            raise ValueError(f'{fname} {idx}行目: CP{effective_cp_cap}以下の適正レベルが見つかりません')
+        downscaled = False
+        requested = None
+        original_cp = None
         if row.get('level_override') is not None:
             requested = float(row['level_override'])
             selected = [pair for pair in possibilities if abs(pair[0] - requested) < .001]
-            if not selected:
+            if selected:
+                level, cp = selected[0]
+            elif is_mega and allow_downscale:
+                if (not math.isfinite(requested) or requested < 1.0 or requested > maxlevel
+                        or requested * 2 != int(requested * 2)):
+                    raise ValueError(f'{fname} {idx}行目: PvPokeデフォルトのLv{requested:g}がCP上限・レベル上限に適合しません')
+                req_index = int(requested * 2) - 2
+                if req_index < 0 or req_index >= len(cpms):
+                    raise ValueError(f'{fname} {idx}行目: PvPokeデフォルトのLv{requested:g}がCP上限・レベル上限に適合しません')
+                original_cp = _compute_cp(stats, row, cpms[req_index])
+                if original_cp <= effective_cp_cap:
+                    raise ValueError(f'{fname} {idx}行目: PvPokeデフォルトのLv{requested:g}がCP上限・レベル上限に適合しません')
+                level, cp = possibilities[-1]
+                downscaled = True
+            else:
                 raise ValueError(f'{fname} {idx}行目: PvPokeデフォルトのLv{requested:g}がCP上限・レベル上限に適合しません')
-            level, cp = selected[0]
         else:
             level, cp = possibilities[-1]
-        prepared.append({**row, 'level': level, 'cp': cp})
+        entry = {**row, 'level': level, 'cp': cp}
+        if downscaled:
+            entry['downscaled'] = True
+            entry['original_level'] = requested
+            entry['original_cp'] = original_cp
+        prepared.append(entry)
     return prepared
 
 
