@@ -450,3 +450,74 @@ console.log('MAIN_APP_UI_MEGA_CONTROLS_OK');
             self.assertEqual(entry['extraChargedMoves'], ['MOONBLAST_PLUS'])
             self.assertEqual(entry['tags'], ['mega'])
             self.assertEqual(entry['family'], {'id': 'FAMILY_SWABLU', 'parent': 'altaria'})
+
+    def test_optimize_mega_downscaling_rules_and_matrix_simulation(self):
+        fixtures = Path(__file__).resolve().parent / 'fixtures'
+        gm_data = json.loads((fixtures / 'strategy_gamemaster.json').read_text(encoding='utf-8'))
+        rows = json.loads((fixtures / 'strategy_rows.json').read_text(encoding='utf-8'))
+        opp_row = rows[0]
+
+        gm_data['moves'].extend([
+            {'moveId': 'MEGA_BLAST_PLUS', 'name': 'Mega Blast+', 'type': 'dragon', 'power': 80,
+             'energy': 35, 'energyGain': 0, 'cooldown': 500, 'turns': 1, 'isMegaMove': True},
+            {'moveId': 'MEGA_HEAVY', 'name': 'Mega Heavy', 'type': 'normal', 'power': 110,
+             'energy': 90, 'energyGain': 0, 'cooldown': 500, 'turns': 1},
+            {'moveId': 'MEGA_HEAVY_ALT', 'name': 'Mega Heavy Alt', 'type': 'normal', 'power': 120,
+             'energy': 95, 'energyGain': 0, 'cooldown': 500, 'turns': 1},
+        ])
+        gm_data['pokemon'].append({
+            'speciesId': 'altaria_mega',
+            'speciesName': 'Altaria (Mega)',
+            'dex': 334,
+            'types': ['dragon', 'fairy'],
+            'baseStats': self.altaria_mega_stats,
+            'fastMoves': ['DRAGON_BREATH'],
+            'chargedMoves': ['MEGA_HEAVY', 'MEGA_HEAVY_ALT'],
+            'extraChargedMoves': ['MEGA_BLAST_PLUS'],
+            'tags': ['mega'],
+        })
+        species_map = {p['speciesId']: p for p in gm_data['pokemon']}
+        mega_ivs = {'attack': 0, 'defense': 14, 'hp': 15}
+        cap_lvl, cap_cp = max_level_and_cp(self.altaria_mega_stats, mega_ivs, cp_cap=1500, max_level=50.0, cpms=self.cpms)
+        over_lvl = 35.0
+        over_mega_row = {
+            'species': 'altaria_mega', 'fast': 'DRAGON_BREATH',
+            'charged1': 'MEGA_HEAVY', 'charged2': 'MEGA_HEAVY_ALT',
+            'charged3': 'MEGA_BLAST_PLUS', 'mega_level': 4,
+            'atk': 0, 'def': 14, 'hp': 15, 'level_override': over_lvl,
+        }
+
+        # 1. Without downscaling rules or with allow_cp_downscaling=False, CP-exceeding level_override fails.
+        with self.assertRaises(ValueError):
+            optimize([over_mega_row], species_map, self.cpms, 'strict.csv', cp_cap=1500)
+        with self.assertRaises(ValueError):
+            optimize([over_mega_row], species_map, self.cpms, 'strict.csv',
+                     rules={'league': 'great', 'allow_cp_downscaling': False})
+
+        # 2. Non-Mega CP-exceeding level_override is never downscaled even when allow_cp_downscaling=True.
+        opp_over = {**opp_row, 'level_override': 50.0}
+        with self.assertRaises(ValueError):
+            optimize([opp_over], species_map, self.cpms, 'opp_over.csv',
+                     rules={'league': 'great', 'cup_id': 'great_mega', 'allow_cp_downscaling': True})
+
+        # 3. With allow_cp_downscaling=True, Mega is downscaled to cap_lvl / cap_cp and runs Matrix simulation.
+        prepared = optimize([over_mega_row], species_map, self.cpms, 'mega_gl.csv',
+                            rules={'league': 'great', 'cup_id': 'great_mega', 'allow_cp_downscaling': True})
+        self.assertEqual(len(prepared), 1)
+        cand = prepared[0]
+        self.assertEqual(cand['level'], cap_lvl)
+        self.assertEqual(cand['cp'], cap_cp)
+        self.assertLessEqual(cand['cp'], 1500)
+        self.assertTrue(cand['downscaled'])
+        self.assertEqual(cand['original_level'], over_lvl)
+        self.assertGreater(cand['original_cp'], 1500)
+
+        master = self.root / 'gamemaster_downscale.json'
+        master.write_text(json.dumps(gm_data), encoding='utf-8')
+        client = DirectMatrixClient(gamemaster=master, log_dir=self.root)
+        self.addCleanup(client.close)
+        matrix = client.simulate(prepared, [opp_row], (1, 1))
+        self.assertEqual(len(matrix), 2)
+        rating = int(matrix[1][1])
+        self.assertTrue(0 <= rating <= 1000)
+
