@@ -1515,6 +1515,85 @@ console.log('UI_Q1_Q11_E2E_OK');
         proc = subprocess.run(['node', '-e', script], capture_output=True, text=True, check=True, timeout=10)
         self.assertIn('UI_Q1_Q11_E2E_OK', proc.stdout)
 
+    def test_app_ui_mega_supermax_comparison_and_achievement_ratio(self):
+        import json
+        import re
+        import subprocess
+        from pvpoke_app_ui import HTML as APP_HTML
+
+        cmp_match = re.search(
+            r'function computeMegaSuperMaxComparison\(sid,ivsStr\)\{.*?^\}',
+            APP_HTML,
+            re.S | re.M,
+        )
+        render_match = re.search(
+            r'function renderMegaSuperMaxComparison\(row,parent,result\)\{.*?^\}',
+            APP_HTML,
+            re.S | re.M,
+        )
+        cpm_match = re.search(
+            r'function cpmForLevel\(lvl\)\{.*?^\}',
+            APP_HTML,
+            re.S | re.M,
+        )
+        cp_match = re.search(
+            r'function computeCpForSpecies\(sid,ivsObj,lvl\)\{.*?^\}',
+            APP_HTML,
+            re.S | re.M,
+        )
+        self.assertIsNotNone(cmp_match)
+        self.assertIsNotNone(render_match)
+        self.assertIsNotNone(cpm_match)
+        self.assertIsNotNone(cp_match)
+
+        script = f"""
+const catalog = {{
+  sableye_mega: {{
+    baseStats: {{ atk: 141, def: 136, hp: 137 }},
+    tags: ['mega']
+  }}
+}};
+const cpms = {json.dumps(self.cpms)};
+function isMegaSpeciesId(sid){{ return Boolean(sid && (/_(mega|primal)(?:_[xy])?$/.test(sid) || (catalog[sid]?.tags || []).includes('mega'))); }}
+function parseIvsText(text){{
+  const parts = String(text || '').split(/[,\\s/]+/).map(x => x.trim()).filter(Boolean);
+  if (parts.length !== 3) return null;
+  const nums = parts.map(Number);
+  if (!nums.every(n => Number.isInteger(n) && n >= 0 && n <= 15)) return null;
+  return {{ attack: nums[0], defense: nums[1], hp: nums[2] }};
+}}
+function maxLevelForCap(sid, ivsObj, cpCap = 1500, maxLvl = 50) {{
+  if (!catalog[sid]?.baseStats || !Array.isArray(cpms) || !cpms.length || !ivsObj) return null;
+  const top = Math.min(Math.round(maxLvl * 2), cpms.length + 1);
+  for (let d = top; d >= 2; d--) {{
+    const lvl = d / 2;
+    const cp = computeCpForSpecies(sid, ivsObj, lvl);
+    if (cp != null && cp <= cpCap) return {{ level: lvl, cp }};
+  }}
+  return null;
+}}
+{cpm_match.group(0)}
+{cp_match.group(0)}
+{cmp_match.group(0)}
+
+const cmp = computeMegaSuperMaxComparison('sableye_mega', '0,15,15');
+console.log(JSON.stringify(cmp));
+"""
+        proc = subprocess.run(['node', '-e', script], capture_output=True, text=True, check=True, timeout=10)
+        parsed = json.loads(proc.stdout)
+        self.assertEqual(parsed['sid'], 'sableye_mega')
+        self.assertEqual(parsed['cap']['level'], 49.5)
+        self.assertEqual(parsed['cap']['cp'], 1499)
+        self.assertEqual(parsed['cp50'], 1508)
+        self.assertEqual(parsed['cp51'], 1526)
+        self.assertEqual(parsed['cp52'], 1544)
+        self.assertEqual(parsed['maxCp50'], 1668)
+        self.assertEqual(parsed['maxCp51'], 1688)
+        self.assertEqual(parsed['maxCp52'], 1708)
+        self.assertEqual(parsed['ratio50'], '90.4')
+        self.assertEqual(parsed['ratio51'], '90.4')
+        self.assertEqual(parsed['ratio52'], '90.4')
+
 
 if __name__ == '__main__':
     unittest.main()
