@@ -1,21 +1,33 @@
 # PvPoke IV selection server and browser app
 
-Current implementation: a single-user PvPoke calculation server, an authenticated browser app with rule-based IV recommendations, and the existing ChatGPT evaluation path.
+Current implementation: a single-user PvPoke calculation server, an authenticated browser app with rule-based IV recommendations, and a historical ChatGPT evaluation path (not permitted for current MCP use).
 
 - [Current development handoff (Japanese)](docs/development-handoff.md)
 - [Browser input, recommendation and copy behavior](docs/app-selection.md)
 
-The handoff and app documentation describe the current deployed behavior. The original deployment outline and limitations below are historical setup notes and may not describe the current implementation.
+## Deployment status: verify the current production target
 
-## Deployment outline
+**Railway is a historical hosting environment, not the current production hosting environment (per the project owner's 2026-11-21 clarification).** The current production provider, production URL, and deployed commit have **not** been independently verified in this document. Do not infer them from an old URL, a deployment guide, the `RAILWAY_VOLUME_MOUNT_PATH` compatibility variable, or an earlier GitHub PR/comment.
+
+Before describing or changing production, confirm the actual active service and deployment revision from its current hosting configuration. Development PRs and CI success do not establish production deployment. Never deploy to a historical Railway target based on this README. Do not merge PRs or deploy to production without explicit approval.
+
+**Safe environment verification (read-only):** identify the current hosting provider and service from its console, record the live URL and deployed revision/commit from that provider, and compare them with the intended GitHub branch and commit. If the live revision cannot be established, report it as *unverified* and stop before any deploy or data operation. A saved Railway GitHub source connection, an old deployment URL, and a successful preview/CI run are not proof of the current production target. The project owner reported disabling Railway Autodeploy on 2026-11-22; this README does not independently verify that setting or imply that manual Railway deployments are disabled.
+
+**Project safety override (2026-11-25):** the historical ChatGPT-connected PvPoke MCP setup and tool-call examples below are retained as archival documentation only. **Do not connect to or use the ChatGPT PvPoke MCP**, including for testing. Use only permitted in-repository calculation and verification paths, and follow the latest default-branch `AGENTS.md` and the active PR handoff.
+
+The links and instructions below include **historical Railway examples**. They are retained for compatibility and provenance, not as evidence of today's production topology. The dated development handoff is a history of earlier implementations, not a live deployment inventory.
+
+## Historical deployment outline (Railway example; not current production)
+The following numbered steps describe the historical setup only; do not execute them as current instructions.
+
 1. Upload these files to a private GitHub repository, or use a host that supports directory/Dockerfile deployments.
-2. Connect that repo to Railway (or an equivalent host) and create a Dockerfile-backed service.
+2. Historical example: connect that repo to Railway (or an equivalent host) and create a Dockerfile-backed service. This is **not** a current production deployment instruction.
 3. In the host's *secret environment variables* create `PVP_API_KEY`: a random string of **32 or more characters**. Do not put it in a source file, plugin ZIP, or ChatGPT message.
 4. Allocate about **2 GB RAM or more** for Chromium. A 512 MB free tier is unlikely to be reliable; check billing before deploying.
 5. Enable HTTPS on the host, retain exactly one application replica and stable `PORT`. The platform sets `PORT` if needed.
 6. Check `https://YOUR-REAL-HOST/health`. This checks only the Python MCP web server, **not** battle results.
-7. From a **trusted local client**, test initialize, tools/list, tools/call with Authorization: `Bearer <YOUR_SECRET>` and a real PvPoke small battle before connecting ChatGPT.
-8. Once verified, update the **existing** PvPoke IV Selector plugin's `mcp.json` with that real HTTPS `/mcp` URL, transport and API-key auth. Supply secret via the host's connection flow; never in `mcp.json`.
+7. The historical setup included local authenticated protocol and battle tests.
+8. The historical plugin used `mcp.json` with an HTTPS `/mcp` endpoint. Do not configure, connect or reconnect the ChatGPT plugin.
 
 ## Test locally (on a Linux PC with Docker)
 `docker build -t pvpoke-cloud .`
@@ -35,7 +47,7 @@ Then send `POST /mcp` with the Authorization header. Requests with missing or in
 
 ## Auth0 OAuth integration (experimental)
 
-See `AUTH0_SETUP.md` for how to configure Auth0 and Railway safely. The existing API key remains usable for testing.
+See `AUTH0_SETUP.md` for historical Auth0/Railway configuration notes; do not assume they match the current deployment. Current credential validity is unverified; credential changes require explicit approval.
 
 
 ## 24-condition curated meta batch (experimental)
@@ -43,19 +55,19 @@ See `AUTH0_SETUP.md` for how to configure Auth0 and Railway safely. The existing
 The batch option combines 4 automatic opponent IV modes (`default`, `rank1`, `attack`, `defense`) with the existing 6 PvPoke shield situations. It uses the `pvpoke_meta_opponents.csv` snapshot bundled in this private repository. This is a **move-set list only**; source/custom IVs are **never automatically selected**. PvPoke GameMaster supplies the four automatic opponent IV presets.
 
 - Web UI: select your own Pokemon and enter own IVs, then choose **③ メタ全件×4モード×6シールド**.
-- MCP: call `prepare_24_conditions` with your candidate and IV lines; then `start_24_conditions`, poll `get_status`, call `get_24_summary` and `get_results` with `mode` and `shield`.
+- Historical MCP interface: `prepare_24_conditions`, `start_24_conditions`, `get_status`, `get_24_summary` and `get_results`. These names document compatibility, not an authorized ChatGPT workflow.
 - Headless CLI: `python pvpoke_24_workflow.py --prepare` followed by `python pvpoke_24_workflow.py --run`, reading the most recent web input or a specified `--config` file.
 
 `pvpoke_24_conditions.zip` includes 24 `{mode}_{shield}.csv` files, `ranking_summary.csv`, `opponent_modes_report.csv`, validation exclusions, and a manifest. Battle Ratings above/below 500 in the 24 CSVs are **estimated outcomes**, not PvPoke's original win/loss/draw counters. GPT must evaluate competitive S/A roles from the per-opponent ratings and the intended team context.
 
 The current curated file has 87 source lines. The standard Web UI limit of 80 manual opponents does not apply to this batch feature. Running all scenarios for many candidate IVs can be resource-intensive and may take substantially longer than an ordinary six-condition job. Only one batch job may run at a time.
 
-**Verification**: run unit tests and a small end-to-end PvPoke smoke test before trusting results. Railway build success alone cannot validate battle accuracy. Reconnect/refresh the ChatGPT plugin if its cached MCP tool schema does not expose the new operations.
+**Verification**: run unit tests and a small end-to-end PvPoke smoke test before trusting results. Railway build success alone cannot validate battle accuracy. Do not reconnect or refresh the ChatGPT plugin; use permitted repository tests.
 
 
 ## Keep the Project meta move list in sync
 
-Railway cannot read ChatGPT Project attachments directly. When the Project file
+The historical Railway service could not read ChatGPT Project attachments directly. When the Project file
 `pvpokeメタポケモン.txt` changes, export that current file and compare it
 with the bundled snapshot before running 24-condition batches:
 
@@ -70,7 +82,7 @@ The default command is **read-only** and returns exit code 1 if the lists differ
 `--apply` preserves row order, repeated move sets, shadow spelling and all
 four columns. Unexpected extra columns, including embedded IVs, are rejected
 rather than silently discarded. After review, commit
-`pvpoke_meta_opponents.csv` to GitHub and verify Railway's deployment.
+`pvpoke_meta_opponents.csv` to an authorized development branch. Production deployment requires separate explicit approval and verification of the current host.
 There is **no automatic synchronization** from ChatGPT Project storage: the
 current source file must be provided to this command explicitly.
 
@@ -93,15 +105,14 @@ intermediate files remain available to diagnose or retry the calculation.
   archive is copied atomically to `latest.zip` and can be read by MCP
   `get_results` and `get_24_summary` after a server restart.
 - Normal six-condition jobs keep their existing behavior; this cleanup is
-  limited to the **24-condition batch**. No historical ZIP is deleted
-  automatically, so monitor the volume's space usage over time.
+  limited to the **24-condition batch**. The initial implementation did not automatically delete historical ZIPs; a later retention policy is documented below. Current deployed behavior is unverified.
 
 **Deployment note:** Attaching an empty Railway volume causes a redeployment;
 it cannot retroactively rescue ZIPs stored on an earlier deployment's
 ephemeral filesystem. Export any important earlier ZIP first.
 
 
-## Railway volume permissions
+## Historical Railway volume permissions
 
 Railway mounts volumes as root. The Docker image now starts a minimal
 `volume_bootstrap.sh` as root, creates `<mount>/pvpoke_archives`, and
@@ -109,7 +120,7 @@ changes ownership of **that directory only** to `appuser`.
 It immediately executes the existing `start.sh` as unprivileged
 `appuser` through `gosu`; the web server and Chromium never run as root.
 The mount directory is read from `RAILWAY_VOLUME_MOUNT_PATH` and must be
-an absolute path, not the filesystem root. Production mounts at `/data`.
+an absolute path, not the filesystem root. The historical Railway deployment mounted a volume at `/data`; **the current production mount path is unverified here**.
 
 ## One-switch meta batch modes
 
@@ -122,7 +133,7 @@ and result tools. The selection changes **opponent IV modes**, not the user's
 candidate IVs; no source or custom IV mode is automatically inferred.
 Omitting `batch_mode` now runs **simple**, Default opponent IV × 6 shields. Use explicit `batch_mode:"detailed"` for all four opponent IV modes.
 
-For ChatGPT MCP clients, use existing tools without switching plugin:
+Historical MCP interface example (archival only; do not execute through ChatGPT):
 ```text
 prepare_24_conditions({candidate, ivs, batch_mode: "simple"})
 start_24_conditions({candidate, ivs, batch_mode: "simple"})
@@ -130,23 +141,16 @@ get_status({})
 get_24_summary({mode:"default"})
 get_results({mode:"default",shield:"s1"})
 ```
-Use explicit `batch_mode:"detailed"` for all 24.
+The historical interface accepted `batch_mode:"detailed"` for all 24.
 The existing tool names are retained for backward compatibility.
 Simple results contain only `default_*.csv` and summary rows for `default`.
 The ZIP manifest identifies which mode was used and the archive validator
 requires the appropriate six or 24 files. Each run preserves one verified
 historical ZIP plus the latest pointer on the volume.
 
-## ChatGPT Project meta sync without manual Railway deploys
+## Historical ChatGPT Project meta sync (disabled as an operational workflow)
 
-Railway **cannot independently poll ChatGPT Project files**. The plugin now
-provides the authenticated MCP tools `get_meta_status` and
-`sync_meta_opponents({csv_text})`. The plugin skill should read the user's
-current `pvpokeメタポケモン.txt` Project file at the start of each evaluation,
-compare its canonical SHA256 with `get_meta_status`, and call
-`sync_meta_opponents` **only when different**. The submitted CSV must contain
-complete `species,fast,charged1,charged2` rows. This is *per-request*
-automatic sync, not background monitoring.
+The historical Railway service could not independently poll ChatGPT Project files. The former plugin exposed `get_meta_status` and `sync_meta_opponents({csv_text})` for per-request SHA256 comparison and synchronization of complete `species,fast,charged1,charged2` rows. This was not background monitoring. Do not execute this workflow through ChatGPT; use the permitted explicit file-based CLI workflow above.
 
 The server validates all rows against the live GameMaster and rejects
 malformed/unknown/duplicate entries without altering the current source.
@@ -167,7 +171,7 @@ successfully saved, verified ZIP.
 
 # ブラウザだけで個体値厳選
 
-[アプリ版を開く](https://pokemoniv-production.up.railway.app/app)。既存の接続キーで接続し、
+**現在の本番URLはこのREADMEでは未確認です。** 以前のRailway URLを現行アプリとして案内しません。アクセス先は最新の本番デプロイ設定で確認してください。確認済みの環境で既存の接続キーを使用し、
 ポケモン・技・個体値を入力すると、全条件の計算から推薦理由と英語検索式まで表示する。
-GPT評価は従来どおり使用できる。自動判定の基準と接続方法は [アプリ推薦](docs/app-selection.md) を参照。
+ブラウザから手動コピーした結果のGPT評価は可能。ChatGPT接続PvPoke MCPは使用禁止。自動判定の基準と歴史的な接続仕様は [アプリ推薦](docs/app-selection.md) を参照。
 

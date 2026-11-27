@@ -3,15 +3,14 @@
 既存の `run_iv_selection` の既定値は `report_format:decision` のまま。
 GPT評価用のdecision-v2、decision-v1、compactと従来ツールを保持する。
 
-ブラウザ版: https://pokemoniv-production.up.railway.app/app
+**現行本番URLは未確認。** 旧Railway URLは `https://pokemoniv-production.up.railway.app/app`（歴史的記録）であり、現行アクセス先として使用しない。最新のホスティング設定と標準ブランチの `AGENTS.md` を確認する。ChatGPT接続PvPoke MCPの利用・接続・再接続は禁止。以下の接続仕様は当時の記録。
 
-ChatGPTから `get_catalog` を呼ぶと、認証済みの利用者向けに有効60分の
+当時のChatGPT経路では `get_catalog` の応答として、認証済みの利用者向けに有効60分の
 `app_access.url` が返る。そのリンクを開くと接続キーの手入力は不要。
 資格情報はURLフラグメントから読んだ直後にアドレス欄から除去する。
 この短期接続はアプリAPIにだけ有効で、MCP操作には使えない。
 
-通常のURLから開く場合は既存サービスの接続キー（Railwayの `PVP_API_KEY`）または、既存認証で
-受理される有効なアクセストークンを入力する。接続情報はJavaScriptの
+当時の通常URLでは旧Railwayの `PVP_API_KEY` または有効なアクセストークンによる認証を使用した。現行の認証方式・資格情報の有効性は未確認。接続情報はJavaScriptの
 メモリだけに保持し、URL・localStorage・sessionStorageへ保存しない。
 現在はブラウザ専用のOAuthログインボタンは未実装。
 アプリAPIは既存MCPと同じ認証、許可ユーザー、単一ワーカーを使用する。
@@ -149,11 +148,10 @@ Rating>500と500の相手一覧を分け、すべて「推薦根拠となる条�
 
 ブラウザの「GPTで評価」は従来decision-v2を作成してコピーできるようにする。
 アプリからGPT APIを呼び出したり、API利用料を発生させたりはしない。
-ChatGPT内の通常の「個体値厳選」も従来どおりGPT評価で動く。
+手動コピーした結果のGPT評価は可能。旧ChatGPT接続MCP経路は使用禁止。
 
 ブラウザはProjectファイルを直接参照できないので、サーバーのメタスナップショットを
-ジョブに固定する。**Project照合済みとは返さない**。ChatGPT経路はProjectの
-実SHA256で引き続き照合する。対面の除外・重要名の未一致は画面に表示する。
+ジョブに固定する。**Project照合済みとは返さない**。旧ChatGPT経路ではProjectの実SHA256で照合していた（歴史的仕様、現行実行禁止）。対面の除外・重要名の未一致は画面に表示する。
 
 ## 検証
 
