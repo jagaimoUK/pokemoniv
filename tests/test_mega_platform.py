@@ -1634,6 +1634,172 @@ console.log(JSON.stringify(cmp));
             'allow_cp_downscaling': True,
             'rule_explicit': True,
         })
+        backend.start24.assert_called_with(
+            {'species': 'sableye_mega', 'fast': 'SHADOW_CLAW', 'charged1': 'FOUL_PLAY', 'charged2': 'POWER_GEM'},
+            '0,15,15',
+            'simple',
+            rules=workflow._ticket['rules'],
+        )
+
+    def test_rules_propagation_web_run24_and_24_workflow_mega_downscaling(self):
+        import csv
+        import http.client
+        import json
+        import os
+        import sys
+        import threading
+        import zipfile
+        from http.server import ThreadingHTTPServer
+        from unittest.mock import patch
+        import pvpoke_batch_v2 as engine
+        import pvpoke_24_workflow as wf
+        import pvpoke_result_cache as result_cache
+        import pvpoke_web as web
+
+        fixtures = Path(__file__).resolve().parent / 'fixtures'
+        gm_data = json.loads((fixtures / 'strategy_gamemaster.json').read_text(encoding='utf-8'))
+        gm_data['moves'].extend([
+            {'moveId': 'MEGA_BLAST_PLUS', 'name': 'Mega Blast+', 'type': 'dragon', 'power': 80,
+             'energy': 35, 'energyGain': 0, 'cooldown': 500, 'turns': 1, 'isMegaMove': True},
+            {'moveId': 'MEGA_HEAVY', 'name': 'Mega Heavy', 'type': 'normal', 'power': 110,
+             'energy': 90, 'energyGain': 0, 'cooldown': 500, 'turns': 1},
+            {'moveId': 'MEGA_HEAVY_ALT', 'name': 'Mega Heavy Alt', 'type': 'normal', 'power': 120,
+             'energy': 95, 'energyGain': 0, 'cooldown': 500, 'turns': 1},
+        ])
+        gm_data['pokemon'].append({
+            'speciesId': 'altaria_mega',
+            'speciesName': 'Altaria (Mega)',
+            'dex': 334,
+            'types': ['dragon', 'fairy'],
+            'baseStats': {'atk': 222, 'def': 218, 'hp': 181},
+            'fastMoves': ['DRAGON_BREATH'],
+            'chargedMoves': ['MEGA_HEAVY', 'MEGA_HEAVY_ALT'],
+            'extraChargedMoves': ['MEGA_BLAST_PLUS'],
+            'tags': ['mega'],
+        })
+        pokemon_js_path = Path(__file__).resolve().parent.parent / 'vendor/pvpoke/src/js/pokemon/Pokemon.js'
+        pokemon_js_text = pokemon_js_path.read_text(encoding='utf-8')
+        species_map = {p['speciesId']: p for p in gm_data['pokemon']}
+        import re
+        cpms = [float(s.strip()) for s in re.search(r'\bvar\s+cpms\s*=\s*\[([^\]]+)\]', pokemon_js_text, re.S).group(1).split(',') if s.strip()]
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            data_dir = root / 'game_data'
+            data_dir.mkdir()
+            (data_dir / 'gamemaster.json').write_text(json.dumps(gm_data), encoding='utf-8')
+            (data_dir / 'Pokemon.js').write_text(pokemon_js_text, encoding='utf-8')
+            meta_csv = root / 'meta.csv'
+            with meta_csv.open('w', encoding='utf-8', newline='') as fp:
+                w = csv.writer(fp)
+                w.writerow(['azumarill', 'BUBBLE', 'ICE_BEAM', 'PLAY_ROUGH'])
+
+            cfg_path = root / 'batch_config.json'
+            out_dir = root / 'out_24'
+            mega_rules = {'league': 'great', 'cp_cap': 1500, 'cup_id': 'great_mega', 'allow_cp_downscaling': True}
+            cand_payload = {
+                'species': 'altaria_mega',
+                'fast': 'DRAGON_BREATH',
+                'charged1': 'MEGA_HEAVY',
+                'charged2': 'MEGA_HEAVY_ALT',
+                'mega_level': 4,
+                'charged3': 'MEGA_BLAST_PLUS',
+                'level_override': 35.0,
+            }
+
+            # 1. Verify result_cache separates strict vs downscaling rules
+            ctx_strict = result_cache.context(
+                cand_payload, [(0, 14, 15)], 'simple', 'm' * 64, 'v' * 64, 1500, 50,
+                rules={'league': 'great', 'cp_cap': 1500, 'allow_cp_downscaling': False})
+            ctx_down = result_cache.context(
+                cand_payload, [(0, 14, 15)], 'simple', 'm' * 64, 'v' * 64, 1500, 50,
+                rules=mega_rules)
+            self.assertNotEqual(ctx_strict['key'], ctx_down['key'])
+
+            # 2. Verify /api/run24 writes rules to BATCH_CONFIG and rejects strict CP-over Mega
+            work_dir = root / 'work'
+            work_dir.mkdir()
+            prev_web = (web.WORK, web.BATCH_CONFIG, web.BATCH_OUTPUT, web.CATALOG.copy(),
+                        dict(web.STATUS))
+            prev_data = engine.DATA
+            prev_env = os.environ.get('PVP_ENGINE')
+            try:
+                engine.DATA = data_dir
+                web.WORK = work_dir
+                web.BATCH_CONFIG = work_dir / 'batch_config.json'
+                web.BATCH_OUTPUT = work_dir / 'batch_output'
+                web.CATALOG.clear()
+                web.CATALOG.update({'ready': True, 'species': species_map, 'cpms': cpms})
+
+                server = ThreadingHTTPServer(('127.0.0.1', 0), web.Handler)
+                t = threading.Thread(target=server.serve_forever, daemon=True)
+                t.start()
+                self.addCleanup(server.shutdown)
+                self.addCleanup(server.server_close)
+                port = server.server_address[1]
+
+                # 2a. Strict rule (allow_cp_downscaling=False) rejects PL 35.0 Mega in /api/prepare24
+                with patch.object(web.meta_live, 'active_path', return_value=meta_csv):
+                    conn = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
+                    conn.request('POST', '/api/prepare24', json.dumps({
+                        'candidate': cand_payload, 'ivs': '0,14,15', 'batch_mode': 'simple',
+                        'rules': {'league': 'great', 'cp_cap': 1500, 'allow_cp_downscaling': False},
+                    }), {'Content-Type': 'application/json', 'X-PvPoke-Token': web.TOKEN})
+                    resp_strict = conn.getresponse()
+                    resp_strict.read()
+                    self.assertEqual(resp_strict.status, 400)
+                    conn.close()
+
+                    # 2b. Downscaling rule succeeds in /api/run24 and writes rules to BATCH_CONFIG
+                    with patch.object(web, 'background_run'):
+                        conn = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
+                        conn.request('POST', '/api/run24', json.dumps({
+                            'candidate': cand_payload, 'ivs': '0,14,15', 'batch_mode': 'simple',
+                            'rules': mega_rules,
+                        }), {'Content-Type': 'application/json', 'X-PvPoke-Token': web.TOKEN})
+                        resp_ok = conn.getresponse()
+                        body_ok = json.loads(resp_ok.read().decode('utf-8'))
+                        self.assertEqual(resp_ok.status, 200)
+                        self.assertTrue(body_ok['ok'])
+                        self.assertTrue(body_ok['preview']['rules']['allow_cp_downscaling'])
+                        conn.close()
+                saved_cfg = json.loads(web.BATCH_CONFIG.read_text(encoding='utf-8'))
+                self.assertEqual(saved_cfg['rules']['allow_cp_downscaling'], True)
+                self.assertEqual(saved_cfg['candidate']['level_override'], 35.0)
+                web.COMPUTE_OWNER = None
+
+                # 3. Execute pvpoke_24_workflow.main() end-to-end with PVP_ENGINE=direct
+                cfg_path.write_text(json.dumps(saved_cfg), encoding='utf-8')
+                os.environ['PVP_ENGINE'] = 'direct'
+                with patch.object(engine, 'game_data', return_value=(gm_data, cpms, species_map)), \
+                     patch.object(sys, 'argv', [
+                         'pvpoke_24_workflow.py', '--run',
+                         '--config', str(cfg_path),
+                         '--meta', str(meta_csv),
+                         '--output', str(out_dir),
+                         '--batch-mode', 'simple',
+                     ]):
+                    wf.main()
+
+                zip_path = out_dir / 'pvpoke_24_conditions.zip'
+                self.assertTrue(zip_path.is_file())
+                with zipfile.ZipFile(zip_path) as zf:
+                    manifest = json.loads(zf.read('manifest.json').decode('utf-8'))
+                    self.assertEqual(manifest['rules']['allow_cp_downscaling'], True)
+                    self.assertEqual(manifest['cp_cap'], 1500)
+                    summary = zf.read('ranking_summary.csv').decode('utf-8-sig')
+                    self.assertIn('altaria_mega', summary)
+            finally:
+                engine.DATA = prev_data
+                if prev_env is None:
+                    os.environ.pop('PVP_ENGINE', None)
+                else:
+                    os.environ['PVP_ENGINE'] = prev_env
+                web.WORK, web.BATCH_CONFIG, web.BATCH_OUTPUT = prev_web[0], prev_web[1], prev_web[2]
+                web.CATALOG.clear()
+                web.CATALOG.update(prev_web[3])
+                web.STATUS.clear()
+                web.STATUS.update(prev_web[4])
 
 
 if __name__ == '__main__':

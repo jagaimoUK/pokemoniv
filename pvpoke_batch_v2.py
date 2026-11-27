@@ -296,11 +296,16 @@ def export_row_matches(actual, expected):
         return False
 
 
-def prepare(refresh=False):
+def prepare(refresh=False, rules=None):
     setup()
     gm, cpms, species = game_data(refresh=refresh)
-    candidates = optimize(get_rows(CAND), species, cpms, CAND.name)
-    opponents = optimize(get_rows(OPPS), species, cpms, OPPS.name)
+    resolved_rules = resolve_battle_rules(rules) if rules is not None else None
+    effective_cp_cap = (resolved_rules['cp_cap']
+                        if (resolved_rules and resolved_rules['cp_cap'] is not None)
+                        else CP_CAP)
+    effective_max_level = resolved_rules['max_level'] if resolved_rules is not None else MAX_LEVEL
+    candidates = optimize(get_rows(CAND), species, cpms, CAND.name, rules=resolved_rules)
+    opponents = optimize(get_rows(OPPS), species, cpms, OPPS.name, cp_cap=effective_cp_cap)
     DIR.mkdir(exist_ok=True)
     for stem, rows in [('prepared_candidates', candidates), ('prepared_opponents', opponents)]:
         with (DIR / (stem + '.csv')).open('w', newline='', encoding='utf-8') as f:
@@ -308,7 +313,7 @@ def prepare(refresh=False):
             w.writerow(['species', 'fast', 'charged1', 'charged2', 'level', 'atk', 'def', 'hp', 'cp'])
             for r in rows:
                 w.writerow([r[k] for k in ('species', 'fast', 'charged1', 'charged2', 'level', 'atk', 'def', 'hp', 'cp')])
-    print(f'\nCP調整完了: 自分{len(candidates)}体、相手{len(opponents)}体 (CP上限={CP_CAP}; Lv上限={MAX_LEVEL})')
+    print(f'\nCP調整完了: 自分{len(candidates)}体、相手{len(opponents)}体 (CP上限={effective_cp_cap}; Lv上限={effective_max_level})')
     print('使用ゲームデータ:', gm.get('timestamp', '更新日時不明'))
     for side, rows in [('自分', candidates), ('相手', opponents)]:
         for r in rows[:15]:
@@ -555,9 +560,14 @@ def chunks(array, size):
     return [(n, array[n:n+size]) for n in range(0, len(array), size)]
 
 
-def run(refresh=False, shield_set='all'):
+def run(refresh=False, shield_set='all', rules=None):
     run_started = time.monotonic()
-    gm, candidates, opponents = prepare(refresh=refresh)
+    resolved_rules = resolve_battle_rules(rules) if rules is not None else None
+    effective_cp_cap = (resolved_rules['cp_cap']
+                        if (resolved_rules and resolved_rules['cp_cap'] is not None)
+                        else CP_CAP)
+    effective_max_level = resolved_rules['max_level'] if resolved_rules is not None else MAX_LEVEL
+    gm, candidates, opponents = prepare(refresh=refresh, rules=resolved_rules)
     minior_batch = any(str(row['species']).lower().startswith('minior') for row in candidates)
     pairs = SCENARIOS[shield_set]
     OUT.mkdir(parents=True, exist_ok=True)
@@ -577,7 +587,8 @@ def run(refresh=False, shield_set='all'):
     pokemonjs_hash = hashlib.sha256((DATA/'Pokemon.js').read_bytes()).hexdigest()
     fingerprint = hashlib.sha256(json.dumps({
         'candidates': candidates, 'opponents': opponents,
-        'cp_cap': CP_CAP, 'max_level': MAX_LEVEL,
+        'cp_cap': effective_cp_cap, 'max_level': effective_max_level,
+        'rules': resolved_rules,
         'gamemaster_hash': gamemaster_hash, 'pokemonjs_hash': pokemonjs_hash,
         'engine_version': engine_version, 'pairs': pairs, 'candidate_chunk': CAND_CHUNK,
         'opponent_chunk': OPP_CHUNK, 'version': 'minior-hp-3policies-v1' if minior_batch else 5
@@ -593,10 +604,15 @@ def run(refresh=False, shield_set='all'):
     # Never silently reuse old or unannotated Minior matchups.
     if reuse_results and not minior_batch and os.environ.get('PVP_MATCHUP_CACHE', '1').lower() not in ('0', 'false', 'off'):
         try:
+            downscale_mode = ('allow_cp_downscaling'
+                              if (resolved_rules and resolved_rules.get('allow_cp_downscaling') is True)
+                              else '')
+            cup_id = (resolved_rules.get('cup_id') or '') if resolved_rules else ''
             ns = matchup_cache.cache_namespace(
                 gamemaster_hash=gamemaster_hash, pokemonjs_hash=pokemonjs_hash,
-                cp_cap=CP_CAP, max_level=MAX_LEVEL, engine_hash=engine_version,
-                epoch=os.environ.get('PVP_CACHE_EPOCH', ''))
+                cp_cap=effective_cp_cap, max_level=effective_max_level, engine_hash=engine_version,
+                epoch=os.environ.get('PVP_CACHE_EPOCH', ''),
+                downscaling_mode=downscale_mode, cup_id=cup_id)
             cache_dir = pvpoke_archive.archive_dir(DATA.parent)
             cache = matchup_cache.MatchupCache(cache_dir / 'matchups.sqlite3', ns)
             print(f'Matchup cache enabled: {cache.path}', flush=True)
@@ -622,7 +638,7 @@ def run(refresh=False, shield_set='all'):
                     node_client = direct_backend.DirectMatrixClient(
                         gamemaster=DATA / 'gamemaster.json', log_dir=DIR)
                 started = time.monotonic()
-                rows = node_client.simulate(crows, orows, pair)
+                rows = node_client.simulate(crows, orows, pair, cp_cap=effective_cp_cap)
                 if minior_batch:
                     evidence = node_client.last_minior_data
                     if evidence is None or len(evidence) != len(crows):

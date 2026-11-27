@@ -15,6 +15,7 @@ from datetime import datetime
 import io
 import json
 import logging
+import math
 import os
 import signal
 import sqlite3
@@ -289,6 +290,15 @@ def normalize_pokemon_options(row, species, label):
         if c3 in (c1, c2):
             raise ValueError(f'{label}: 追加ゲージ技が通常のゲージ技と重複しています')
         opts['charged3'] = c3
+    raw_lvl = row.get('level_override')
+    if raw_lvl is not None and raw_lvl != '':
+        try:
+            lvl = float(raw_lvl)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f'{label}: level_override は数値で指定してください') from exc
+        if not math.isfinite(lvl) or lvl < 1.0 or lvl > engine.MAX_LEVEL or lvl * 2 != int(lvl * 2):
+            raise ValueError(f'{label}: level_override は 1〜{engine.MAX_LEVEL} の 0.5 刻みで指定してください')
+        opts['level_override'] = lvl
     return opts
 
 
@@ -1036,6 +1046,14 @@ class Handler(BaseHTTPRequestHandler):
                     cand_opts = normalize_pokemon_options(payload.get('candidate'), CATALOG['species'], '自分')
                     cand_dict = {**dict(zip(engine.HEADER[:4], cand_parts)), **cand_opts}
                     iv_list = parse_ivs(payload.get('ivs'))
+                    raw_rules = payload.get('rules')
+                    resolved_rules = None
+                    if raw_rules is not None:
+                        from pvpoke_mega import resolve_battle_rules
+                        resolved_rules = resolve_battle_rules(raw_rules)
+                    if CATALOG.get('cpms') and (resolved_rules is not None or 'level_override' in cand_opts):
+                        cand_rows = [{**cand_dict, 'atk': a, 'def': d, 'hp': h} for a, d, h in iv_list]
+                        engine.optimize(cand_rows, CATALOG['species'], CATALOG['cpms'], 'candidates.csv', rules=resolved_rules)
                     meta_file = meta_live.active_path(WORK)
                     selected_meta = None
                     if payload.get('meta_preset_id') is not None:
@@ -1056,6 +1074,8 @@ class Handler(BaseHTTPRequestHandler):
                                'battles_upper_bound': len(iv_list)*meta_count*mode_count*6}
                     if cand_opts:
                         preview['candidate_mega'] = dict(cand_opts)
+                    if resolved_rules is not None:
+                        preview['rules'] = resolved_rules
                     if path == '/api/run24':
                         force = payload.get('force_recalculate', False)
                         if not isinstance(force, bool):
@@ -1064,13 +1084,18 @@ class Handler(BaseHTTPRequestHandler):
                         cache_context = None
                         reuse = {'reused':False}
                         version = calculation_version(engine.DATA)
+                        effective_cp_cap = (resolved_rules['cp_cap']
+                                            if (resolved_rules and resolved_rules['cp_cap'] is not None)
+                                            else engine.CP_CAP)
+                        effective_max_level = int(resolved_rules['max_level']) if resolved_rules is not None else engine.MAX_LEVEL
                         if version is not None:
                             try:
                                 saved = result_cache.ResultCache.configured(WORK)
                                 if saved is not None:
                                     cache_context = result_cache.context(
                                         cand_dict, iv_list, batch_mode,
-                                        content_hash(meta_file), version, engine.CP_CAP, engine.MAX_LEVEL)
+                                        content_hash(meta_file), version, effective_cp_cap, effective_max_level,
+                                        rules=resolved_rules)
                                     cached = None if force else saved.restore(
                                         cache_context, archives.archive_dir(WORK) / 'latest.zip')
                                     if cached is not None:
@@ -1089,11 +1114,14 @@ class Handler(BaseHTTPRequestHandler):
                         try:
                             BATCH_CONFIG.parent.mkdir(parents=True, exist_ok=True)
                             temp = BATCH_CONFIG.with_suffix('.tmp')
-                            temp.write_text(json.dumps({
+                            batch_payload = {
                                 'candidate': cand_dict,
                                 'ivs': '\n'.join(','.join(map(str, iv)) for iv in iv_list),
                                 'batch_mode': batch_mode,
-                            }, ensure_ascii=False), encoding='utf-8')
+                            }
+                            if resolved_rules is not None:
+                                batch_payload['rules'] = resolved_rules
+                            temp.write_text(json.dumps(batch_payload, ensure_ascii=False), encoding='utf-8')
                             temp.replace(BATCH_CONFIG)
                             CANCEL_REQUESTED = False
                             STATUS.update({'state':'running', 'message':'メタ比較を準備中',

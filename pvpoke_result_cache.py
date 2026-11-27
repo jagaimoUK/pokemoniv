@@ -20,10 +20,13 @@ KEY = re.compile(r"[0-9a-f]{64}")
 
 
 def context(candidate: dict, ivs: list, batch_mode: str, meta_sha256: str,
-            calculation_version: str, cp_cap: int, max_level: int) -> dict:
+            calculation_version: str, cp_cap: int, max_level: int,
+            rules: dict | None = None) -> dict:
     request = dict(candidate=candidate, ivs=ivs, batch_mode=batch_mode,
                    meta_sha256=meta_sha256, calculation_version=calculation_version,
                    cp_cap=cp_cap, max_level=max_level, schema=SCHEMA)
+    if rules is not None:
+        request["rules"] = rules
     key = hashlib.sha256(json.dumps(request, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return {"key": key, "request": request}
 
@@ -35,6 +38,8 @@ def _validate(path: Path, request: dict) -> None:
         if any(manifest.get(k) != request[k] for k in (
                 "batch_mode", "meta_sha256", "calculation_version", "cp_cap", "max_level")):
             raise ValueError("Saved battle conditions differ")
+        if request.get("rules") is not None and manifest.get("rules") != request["rules"]:
+            raise ValueError("Saved battle rules differ")
         if manifest.get("engine", {}).get("browser_fallbacks", 0):
             raise ValueError("A browser fallback has no pinned engine identity")
         if manifest.get("minior_strategy"):

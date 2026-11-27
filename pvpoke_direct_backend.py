@@ -263,7 +263,8 @@ class DirectMatrixClient:
 
             return response
 
-    def simulate(self, candidates: list, opponents: list, shields: tuple[int, int]) -> list[list]:
+    def simulate(self, candidates: list, opponents: list, shields: tuple[int, int], *,
+                 cp_cap: int | None = None) -> list[list]:
         if self._closed or self._poisoned or self.proc is None or self.proc.poll() is not None:
             raise DirectMatrixError("PvPoke Node process is not running")
         payload = {
@@ -272,6 +273,8 @@ class DirectMatrixClient:
             "opponents": opponents,
             "shields": list(shields),
         }
+        if cp_cap is not None:
+            payload["cp_cap"] = int(cp_cap)
         try:
             before = linux_process_rss_mb(self.proc.pid)
             response = self._exchange_frame(payload, timeout_message="PvPoke Node response timed out")
