@@ -567,7 +567,11 @@ def run(refresh=False, shield_set='all', rules=None):
                         if (resolved_rules and resolved_rules['cp_cap'] is not None)
                         else CP_CAP)
     effective_max_level = resolved_rules['max_level'] if resolved_rules is not None else MAX_LEVEL
-    gm, candidates, opponents = prepare(refresh=refresh, rules=resolved_rules)
+    gm, candidates, opponents = (
+        prepare(refresh=refresh, rules=resolved_rules)
+        if resolved_rules is not None
+        else prepare(refresh=refresh)
+    )
     minior_batch = any(str(row['species']).lower().startswith('minior') for row in candidates)
     pairs = SCENARIOS[shield_set]
     OUT.mkdir(parents=True, exist_ok=True)
@@ -638,7 +642,9 @@ def run(refresh=False, shield_set='all', rules=None):
                     node_client = direct_backend.DirectMatrixClient(
                         gamemaster=DATA / 'gamemaster.json', log_dir=DIR)
                 started = time.monotonic()
-                rows = node_client.simulate(crows, orows, pair, cp_cap=effective_cp_cap)
+                rows = (node_client.simulate(crows, orows, pair, cp_cap=effective_cp_cap)
+                        if effective_cp_cap != CP_CAP
+                        else node_client.simulate(crows, orows, pair))
                 if minior_batch:
                     evidence = node_client.last_minior_data
                     if evidence is None or len(evidence) != len(crows):
