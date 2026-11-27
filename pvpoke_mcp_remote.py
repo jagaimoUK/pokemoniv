@@ -527,7 +527,8 @@ def call_tool(name, args):
                              args.get('wait_seconds', 12),
                              args.get('expected_meta_sha256'),
                              args.get('report_format', 'decision'), args.get('selection_policy'),
-                             args.get('meta_preset_id'), args.get('force_recalculate', False), args.get('request_id'))
+                             args.get('meta_preset_id'), args.get('force_recalculate', False), args.get('request_id'),
+                             rules=args.get('rules'))
     if name == 'get_iv_selection_result':
         return IV_RUNNER.result(args['run_ref'], args.get('wait_seconds', 12))
     if name == 'get_status':

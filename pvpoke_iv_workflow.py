@@ -104,13 +104,21 @@ class IVWorkflow:
             focus_limit: int = 20, wait_seconds: int = 12,
             expected_meta_sha256: str | None = None,
             report_format: str = "decision", selection_policy: dict | None = None,
-            meta_preset_id: str | None = None, force_recalculate: bool = False, request_id: str | None = None) -> dict:
+            meta_preset_id: str | None = None, force_recalculate: bool = False, request_id: str | None = None,
+            rules: dict | None = None) -> dict:
         requested_at = time.monotonic()
         if request_id is not None and (not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,80}", request_id)):
             raise ValueError("Invalid calculation request_id")
-        request_body = json.dumps([candidate, ivs, batch_mode, focus_opponents, highlight_limit,
+        resolved_rules = None
+        if rules is not None:
+            from pvpoke_mega import resolve_battle_rules
+            resolved_rules = resolve_battle_rules(rules)
+        req_payload = [candidate, ivs, batch_mode, focus_opponents, highlight_limit,
             review_limit, focus_limit, expected_meta_sha256, report_format, selection_policy,
-            meta_preset_id, force_recalculate], sort_keys=True)
+            meta_preset_id, force_recalculate]
+        if resolved_rules is not None:
+            req_payload.append(resolved_rules)
+        request_body = json.dumps(req_payload, sort_keys=True)
 
         if report_format not in ("decision", "decision-v1", "compact", "app"):
             raise ValueError("report_format must be decision, decision-v1, compact or app")
@@ -187,6 +195,7 @@ class IVWorkflow:
                 "focus_limit": focus_limit,
                 "report_format": report_format,
                 "english_name": english_name, "selection_policy": selection_policy,
+                "rules": resolved_rules,
                 "inventory_form_notice": inventory_form_notice,
                 "requested_at": requested_at,
                 "completed_result": None,
@@ -318,6 +327,8 @@ class IVWorkflow:
                 output["complete"] = app_selection["complete"]
                 output["total_ratings_checked"] = app_selection["total_ratings_checked"]
                 output["reports"] = {}
+            if ticket.get("rules") is not None:
+                output["rules"] = ticket["rules"]
             ticket["completed_result"] = output
             return deepcopy(output)
 
