@@ -100,10 +100,22 @@ def input_config(path: Path) -> tuple[dict, str]:
         cleaned['mega_level'] = cand['mega_level']
     if cand.get('charged3') is not None and str(cand.get('charged3')).strip():
         cleaned['charged3'] = str(cand['charged3']).strip().upper()
+    if cand.get('level_override') is not None:
+        cleaned['level_override'] = float(cand['level_override'])
     return cleaned, '\n'.join(','.join(map(str, iv)) for iv in parsed)
 
 
-def generate_rows(meta: list[dict], species: dict, cpms: list, *, full_modes=MODES):
+def read_config_rules(path: Path) -> dict | None:
+    obj = json.loads(path.read_text(encoding='utf-8'))
+    raw_rules = obj.get('rules')
+    if raw_rules is None:
+        return None
+    from pvpoke_mega import resolve_battle_rules
+    return resolve_battle_rules(raw_rules)
+
+
+def generate_rows(meta: list[dict], species: dict, cpms: list, *, full_modes=MODES,
+                  cp_cap=engine.CP_CAP, level_cap=engine.MAX_LEVEL):
     rows, report, errors = [], [], []
     for mode in full_modes:
         for idx, opponent in enumerate(meta):
@@ -111,9 +123,9 @@ def generate_rows(meta: list[dict], species: dict, cpms: list, *, full_modes=MOD
                 sid = opponent['species']
                 ivs = iv_modes.select_opponent_ivs(species[sid], cpms, mode,
                     moves=[opponent['fast'], opponent['charged1'], opponent['charged2']],
-                    cp_cap=1500, level_cap=engine.MAX_LEVEL)
+                    cp_cap=cp_cap, level_cap=level_cap)
                 iv_row = {**opponent, **dict(zip(IV_FIELDS, ivs[:3])), 'level_override': ivs[3]}
-                prepared = engine.optimize([iv_row], species, cpms, f'{sid}/{mode}')[0]
+                prepared = engine.optimize([iv_row], species, cpms, f'{sid}/{mode}', cp_cap=cp_cap)[0]
                 rows.append(iv_row)
                 report.append({'mode': mode, 'meta_index': idx + 1, **opponent,
                     'atk': ivs[0], 'def': ivs[1], 'hp': ivs[2],
@@ -224,6 +236,11 @@ def main():
     p.add_argument('--output', type=Path, default=Path.home() / 'pvpoke_24_results')
     args = p.parse_args()
     cand, iv_text = input_config(args.config)
+    resolved_rules = read_config_rules(args.config)
+    effective_cp_cap = (resolved_rules['cp_cap']
+                        if (resolved_rules and resolved_rules['cp_cap'] is not None)
+                        else engine.CP_CAP)
+    effective_max_level = int(resolved_rules['max_level']) if resolved_rules is not None else engine.MAX_LEVEL
     gm, cpms, species = engine.game_data()
     species_id = cand['species'].lower()
     if species_id not in species:
@@ -233,12 +250,15 @@ def main():
         own['mega_level'] = cand['mega_level']
     if cand.get('charged3') is not None:
         own['charged3'] = cand['charged3']
+    if cand.get('level_override') is not None:
+        own['level_override'] = cand['level_override']
     own_rows = [{**own, **dict(zip(IV_FIELDS, map(int, iv.split(','))))} for iv in iv_text.splitlines()]
-    own_prepared = engine.optimize(own_rows, species, cpms, 'candidates.csv')
+    own_prepared = engine.optimize(own_rows, species, cpms, 'candidates.csv', rules=resolved_rules)
     meta, source_errors = load_meta(args.meta, species)
     selected_modes = BATCH_MODES[args.batch_mode]
-    rows, opponent_report, mode_errors, counts = generate_rows(meta, species, cpms,
-                                                              full_modes=selected_modes)
+    rows, opponent_report, mode_errors, counts = generate_rows(
+        meta, species, cpms, full_modes=selected_modes,
+        cp_cap=effective_cp_cap, level_cap=effective_max_level)
     target = args.output.resolve()
     target.mkdir(parents=True, exist_ok=True)
     write_csv(target / 'opponent_modes_report.csv',
@@ -246,11 +266,11 @@ def main():
               [[r[k] for k in ['mode','meta_index',*POKE_FIELDS,*IV_FIELDS,'level','cp']] for r in opponent_report])
     errors = [{'stage':'meta', **e} for e in source_errors] + [{'stage':'mode', **e} for e in mode_errors]
     (target / 'excluded_rows.json').write_text(json.dumps(errors, ensure_ascii=False, indent=2), encoding='utf-8')
-    (target / 'manifest.json').write_text(json.dumps({
+    manifest_payload = {
         'created_at': datetime.now(timezone.utc).isoformat(),
         'calculation_version': calculation_version(engine.DATA), 'meta_sha256': content_hash(args.meta),
         'source_file': args.meta.name, 'gamemaster_timestamp': gm.get('timestamp'),
-        'cp_cap': engine.CP_CAP, 'max_level': engine.MAX_LEVEL,
+        'cp_cap': effective_cp_cap, 'max_level': effective_max_level,
         'batch_mode': args.batch_mode,
         'opponent_iv_modes': list(selected_modes),
         'shield_pairs': [list(pair) for pair in engine.SCENARIOS['all']],
@@ -258,7 +278,10 @@ def main():
         'mode_counts': counts, 'excluded': len(errors),
         'candidates': len(own_rows), 'shield_cases': list(SHIELDS),
         'note': 'Each base matrix uses the selected opponent modes. Source IVs are never automatically chosen. S/A grades require GPT analysis.'
-    }, ensure_ascii=False, indent=2), encoding='utf-8')
+    }
+    if resolved_rules is not None:
+        manifest_payload['rules'] = resolved_rules
+    (target / 'manifest.json').write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding='utf-8')
     print(f'自分{len(own_prepared)}体 / 有効なメタ技構成{len(meta)}行 / 対戦相手のモード合計{len(rows)}行')
     print('モード別:', counts, '無効・除外:', len(errors))
     print('想定評価回数:', len(own_rows) * len(rows) * 6)
@@ -275,14 +298,14 @@ def main():
         engine.CAND = job / 'candidates.csv'
         engine.OPPS = job / 'opponents.csv'
         engine.DATA = prev[4]
-        cand_extra = [k for k in ('mega_level', 'charged3') if k in own]
+        cand_extra = [k for k in ('level_override', 'mega_level', 'charged3') if k in own]
         cand_headers = list(engine.HEADER) + cand_extra
         write_csv(engine.CAND, cand_headers,
                   [[row[k] for k in cand_headers] for row in own_rows])
         write_csv(engine.OPPS, engine.HEADER + ['level_override'],
                   [[row[k] for k in engine.HEADER] + [row['level_override']] for row in rows])
         print('PvPoke Matrixで全6シールドを実行します。', flush=True)
-        engine.run(shield_set='all')
+        engine.run(shield_set='all', rules=resolved_rules)
         runs = sorted((job / 'results').glob('run_*/manifest.json'), key=lambda p: p.stat().st_mtime)
         if not runs:
             raise RuntimeError('シミュレーションの結果が生成されませんでした')

@@ -39,6 +39,12 @@ def _canonical(candidate: dict, ivs: str, batch_mode: str) -> tuple[dict, str, t
     own = {"species": candidate["species"].strip().lower()}
     for key in ("fast", "charged1", "charged2"):
         own[key] = candidate[key].strip().upper()
+    if candidate.get("mega_level") is not None:
+        own["mega_level"] = candidate["mega_level"]
+    if candidate.get("charged3") is not None and str(candidate["charged3"]).strip():
+        own["charged3"] = str(candidate["charged3"]).strip().upper()
+    if candidate.get("level_override") is not None:
+        own["level_override"] = float(candidate["level_override"])
     if not isinstance(ivs, str):
         raise ValueError("ivs must be a multiline string")
     rows = []
@@ -172,6 +178,8 @@ class IVWorkflow:
             # /api/run24 already validates inputs and builds the preview atomically.
             english_name = self.backend.candidate_name(own["species"]) if report_format == "app" else None
             force_args = {"force_recalculate": True} if force_recalculate else {}
+            if resolved_rules is not None:
+                force_args["rules"] = resolved_rules
             if meta_preset_id is not None:
                 started = self.backend.start24(own, normalized, batch_mode,
                     meta_preset_id=meta_preset_id, expected_meta_sha256=actual_sha, **force_args)

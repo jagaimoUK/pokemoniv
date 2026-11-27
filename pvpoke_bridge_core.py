@@ -196,14 +196,18 @@ def validate_24(candidate: dict, ivs: str, batch_mode: str = 'simple') -> dict:
     return {'candidate': candidate, 'ivs': ivs, 'batch_mode': batch_mode}
 
 
-def preview24(candidate: dict, ivs: str, batch_mode: str = 'simple') -> dict:
-    return _request('/api/prepare24', validate_24(candidate, ivs, batch_mode),
+def preview24(candidate: dict, ivs: str, batch_mode: str = 'simple', *,
+              rules: dict | None = None) -> dict:
+    payload = validate_24(candidate, ivs, batch_mode)
+    if rules is not None:
+        payload['rules'] = rules
+    return _request('/api/prepare24', payload,
                     headers={'X-PvPoke-Token': _token()}, timeout=75)
 
 
 def start24(candidate: dict, ivs: str, batch_mode: str = 'simple', *,
             meta_preset_id: str | None = None, expected_meta_sha256: str | None = None,
-            force_recalculate: bool = False) -> dict:
+            force_recalculate: bool = False, rules: dict | None = None) -> dict:
     payload = validate_24(candidate, ivs, batch_mode)
     if meta_preset_id is not None:
         payload['meta_preset_id'] = meta_preset_id
@@ -211,6 +215,8 @@ def start24(candidate: dict, ivs: str, batch_mode: str = 'simple', *,
         payload['expected_meta_sha256'] = expected_meta_sha256
     if force_recalculate:
         payload['force_recalculate'] = True
+    if rules is not None:
+        payload['rules'] = rules
     result = _request('/api/run24', payload,
                       headers={'X-PvPoke-Token': _token()}, timeout=75)
     if not result.get('ok'):
