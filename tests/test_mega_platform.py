@@ -1594,6 +1594,47 @@ console.log(JSON.stringify(cmp));
         self.assertEqual(parsed['ratio51'], '90.4')
         self.assertEqual(parsed['ratio52'], '90.4')
 
+    def test_iv_workflow_accepts_and_returns_mega_downscaling_rules(self):
+        from pvpoke_iv_workflow import IVWorkflow
+        from unittest.mock import MagicMock
+
+        backend = MagicMock()
+        backend.status.return_value = {'state': 'idle'}
+        backend.meta_status.return_value = {'sha256': 'a' * 64}
+        backend.start24.return_value = {'preview': {'result_cache': {'reused': False}}}
+
+        def status_after_start():
+            return {'state': 'running', 'started_at': '2026-11-27T00:00:00Z', 'batch24': True}
+
+        backend.status.side_effect = [{'state': 'idle'}, status_after_start()]
+        workflow = IVWorkflow(backend)
+
+        # Invalid rules should fail closed with ValueError
+        with self.assertRaises(ValueError):
+            workflow.run(
+                {'species': 'sableye_mega', 'fast': 'SHADOW_CLAW', 'charged1': 'FOUL_PLAY', 'charged2': 'POWER_GEM'},
+                '0,15,15',
+                rules={'league': 'great', 'cp_cap': 1500, 'allow_cp_downscaling': 'not-a-bool'},
+            )
+
+        # Valid Mega GL rules should be normalized and stored on the ticket
+        backend.status.side_effect = [{'state': 'idle'}, status_after_start(), status_after_start()]
+        res = workflow.run(
+            {'species': 'sableye_mega', 'fast': 'SHADOW_CLAW', 'charged1': 'FOUL_PLAY', 'charged2': 'POWER_GEM'},
+            '0,15,15',
+            wait_seconds=0,
+            rules={'league': 'great', 'cp_cap': 1500, 'cup_id': 'great_mega', 'allow_cp_downscaling': True},
+        )
+        self.assertEqual(res['state'], 'running')
+        self.assertEqual(workflow._ticket['rules'], {
+            'league': 'great',
+            'cup_id': 'great_mega',
+            'cp_cap': 1500,
+            'max_level': 50.0,
+            'allow_cp_downscaling': True,
+            'rule_explicit': True,
+        })
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -85,6 +85,7 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <p id="metaPresetNote" class="note"></p>
 </div><p class="note">カップ別の対戦相手一覧を切り替えます。CP1500対応。出場できるポケモンかどうかはカップのルールも確認してください。</p></div><p class="note">計算条件は右上の「設定」でポケモンごとに指定できます。未設定は通常厳選です。</p><select id="batchMode" hidden aria-hidden="true"><option value="simple">簡易：Default × 6条件</option><option value="detailed">詳細：4つの相手IV × 6条件</option></select>
 <select id="evaluation" hidden aria-hidden="true"><option value="app">アプリで自動推薦</option></select>
+<label for="battleRuleset">大会ルール（メガCP調整）</label><select id="battleRuleset"><option value="cp1500-lv50">通常スーパーリーグ（CP1500厳守・調整なし）</option><option value="great_mega">メガスーパーリーグ（対戦時CP一時ダウンスケーリング有効）</option></select><p id="battleRulesetNote" class="note">メガシンカ個体がCP1500を超える場合、メガスーパーリーグでは対戦時のみCP1500以下に一時調整（ダウンスケーリング）して計算・参加できます。</p>
 <label for="focus">重要な相手（英語名・1行1つ、省略可）</label><textarea id="focus" style="min-height:80px" placeholder="Corviknight&#10;Feraligatr"></textarea><p class="note">名前が一致する技構成をすべて重視します。省略時は独自の役割を全対面から探します。</p>
 <details  id="moveSettings"><summary>技の設定</summary>
 <label class="checkline" for="autoMoves"><input id="autoMoves" type="checkbox"> 有力な技構成も自動で比較</label>
@@ -997,17 +998,71 @@ function render(result,append=false){
  const rejected=Object.entries(selection.dominated_by);if(rejected.length){const d=node('details','',panel);node('summary','全条件で他候補以下の個体（'+rejected.length+'）',d);for(const [iv,rivals] of rejected)node('p',iv+' → '+rivals.join(', '),d);}
  refreshNicknames();
 }
+function currentBattleRules(){
+ const val=el('battleRuleset')?.value||'cp1500-lv50';
+ if(val==='great_mega')return {league:'great',cp_cap:1500,max_level:50,cup_id:'great_mega',allow_cp_downscaling:true};
+ return {league:'great',cp_cap:1500,max_level:50,cup_id:'all',allow_cp_downscaling:false};
+}
+function computeMegaDownscaleStatus(row,result){
+ const sid=result?.candidate?.species;
+ const isMega=!!(sid&&(/_(mega|primal)(?:_[xy])?$/.test(sid)||(catalog[sid]?.tags||[]).includes('mega')));
+ if(!isMega&&!row?.mega_downscaled)return null;
+ const rules=result?.rules||currentBattleRules();
+ const cpCap=Number(rules.cp_cap)||1500;
+ const maxLvl=Number(rules.max_level)||50;
+ const allowDownscale=rules.allow_cp_downscaling===true;
+ const ivs=parseIvsText(row?.ivs);
+ const matches=(result?.source_records||[]).filter(r=>r.ivs===row?.ivs);
+ const sourceCps=matches.map(r=>Number(r.cp)).filter(Number.isFinite);
+ const maxSourceCp=sourceCps.length?Math.max(...sourceCps):null;
+ const exceedsSource=maxSourceCp!==null&&maxSourceCp>cpCap;
+ const level50Cp=(ivs&&catalog[sid]?.baseStats&&cpms.length)?computeCpForSpecies(sid,ivs,50):null;
+ const exceedsCap=exceedsSource||!!row?.mega_downscaled||(level50Cp!==null&&level50Cp>cpCap&&maxSourceCp!==null&&maxSourceCp>cpCap);
+ if(!exceedsSource&&!row?.mega_downscaled){
+  // Also check if owned source_record at its current CP would exceed cap upon mega evolution
+  if(maxSourceCp!==null&&ivs&&catalog[sid]?.baseStats&&cpms.length){
+   const capAt=maxLevelForCap(sid,ivs,cpCap,maxLvl);
+   const baseSid=sid.replace(/_(mega|primal)(?:_[xy])?$/,'');
+   if(capAt&&catalog[baseSid]?.baseStats){
+    const baseEqCp=computeCpForSpecies(baseSid,ivs,capAt.level);
+    if(maxSourceCp>baseEqCp){
+     if(allowDownscale)return {status:'downscaled_eligible',sourceCp:maxSourceCp,battleCp:capAt.cp,battleLevel:capAt.level};
+     return {status:'exceeds_cap_ineligible',sourceCp:maxSourceCp,capCp:cpCap};
+    }
+   }
+  }
+  return null;
+ }
+ if(allowDownscale){
+  const capAt=(ivs&&catalog[sid]?.baseStats&&cpms.length)?maxLevelForCap(sid,ivs,cpCap,maxLvl):null;
+  return {status:'downscaled_eligible',sourceCp:maxSourceCp,battleCp:capAt?.cp||row?.cp||cpCap,battleLevel:capAt?.level||row?.level||null};
+ }
+ return {status:'exceeds_cap_ineligible',sourceCp:maxSourceCp,capCp:cpCap};
+}
 function megaStatusNotes(row,result){
  const notes=[];
  if(row.needs_evolution)notes.push('要進化');
  if(row.needs_power_up)notes.push(row.level!=null?'PL'+row.level+'まで強化が必要':'目標PLまで強化が必要');
- if(row.mega_downscaled)notes.push('一時ダウンスケーリング可（未証明）');
+ const ds=(result?.rules&&typeof computeMegaDownscaleStatus==='function')?computeMegaDownscaleStatus(row,result):null;
+ if(ds?.status==='downscaled_eligible'){
+  const src=ds.sourceCp!=null?'実CP'+ds.sourceCp+' → ':'';
+  const lvl=ds.battleLevel!=null?' / PL'+ds.battleLevel:'';
+  notes.push('対戦時CP一時ダウンスケーリング適用（参加可：'+src+'対戦CP'+ds.battleCp+lvl+'）');
+ }else if(ds?.status==='exceeds_cap_ineligible'){
+  const src=ds.sourceCp!=null?'（実CP'+ds.sourceCp+'）':'';
+  notes.push('CP上限超過：無補正ルールでは参加不可'+src);
+ }else if(row.mega_downscaled){
+  notes.push('一時ダウンスケーリング可（未証明）');
+ }
  const sm=row.mega_condition?.super_max_pl_hypothesis_status||result?.mega_condition?.super_max_pl_hypothesis_status;
  if(sm==='unconfirmed_deferred')notes.push('スーパー MAX PL+2 仮説保留');
  return notes;
 }
 function renderRecommendation(row,panel,result){
   const card=node('article','',panel,'recommendation');node('h2',row.rank+'位｜'+row.ivs+'｜'+row.grade,card);node('div',row.role,card,'badge');
+  const ds=computeMegaDownscaleStatus(row,result);
+  if(ds?.status==='downscaled_eligible')node('div','一時ダウンスケーリング適用（参加可）',card,'badge');
+  else if(ds?.status==='exceeds_cap_ineligible')node('div','CP上限超過（無補正不可）',card,'badge');
   const megaNotes=megaStatusNotes(row,result);
   if(megaNotes.length)node('p',megaNotes.join(' ／ '),card,'note');
   if(result.gourgeist_group)node('p',result.display_name||catalog[result.candidate.species]?.name_ja||result.candidate.species,card,'note');
@@ -1803,6 +1858,7 @@ async function executeBatch(){
   if(batchState.run_ref){runRef=batchState.run_ref;result=await api('result',{run_ref:runRef,wait_seconds:2});}
   else{
    const data={candidate:job.candidate,ivs:job.ivs,batch_mode:job.batch_mode||batchState.batch_mode||'simple',focus_opponents:batchState.focus,report_format:batchState.report_format,selection_policy:batchState.policy,force_recalculate:batchState.force_recalculate===true,wait_seconds:0};
+   if(batchState.rules)data.rules=batchState.rules;
    if(batchState.meta_sha256)data.expected_meta_sha256=batchState.meta_sha256;
    if(batchState.meta_preset_id)data.meta_preset_id=batchState.meta_preset_id;
    batchState.start_request_id=batchState.start_request_id||calculationRequestId();cacheBatch();
@@ -1937,6 +1993,7 @@ async function startSelection(){
    index:0,results:[],run_ref:null,meta_preset_id:selectedMetaId,meta_sha256:chosenMeta().sha256,
    batch_mode:'simple',focus:el('focus').value.split('\n').map(x=>x.trim()).filter(Boolean),
    report_format:el('evaluation').value==='app'?'app':'decision',force_recalculate:el('forceRecalculate').checked===true,
+   rules:currentBattleRules(),
    policy:{meaningful_win_lead:Number(el('lead').value)}};
   cacheBatch();await executeBatch();
  }catch(e){handleCalculationError(e);}finally{calculating=false;setBusy(false);}
