@@ -6,6 +6,7 @@ import argparse
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -35,7 +36,11 @@ CPMS_RE = re.compile(r"\bvar\s+cpms\s*=\s*\[([^\]]+)\]", re.S)
 
 
 def download(url: str, limit: int = 12_000_000) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": "pokemoniv-event-update/1.0"})
+    headers = {"User-Agent": "pokemoniv-event-update/1.0"}
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token and "api.github.com" in url:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(request, timeout=25) as response:
         body = response.read(limit + 1)
     if len(body) > limit:

@@ -25,7 +25,8 @@ class PresetHTTPTests(unittest.TestCase):
         self.patches=[patch.dict(os.environ,{'PVP_ARCHIVE_DIR':self.tmp.name}),
             patch.object(web,'WORK',self.work),patch.object(web,'BATCH_CONFIG',self.work/'input.json'),
             patch.dict(web.CATALOG,{'ready':True,'species':SPECIES}),
-            patch.dict(web.STATUS,{'state':'idle'})]
+            patch.dict(web.STATUS,{'state':'idle'}),
+            patch.object(web,'COMPUTE_OWNER',None)]
         for p in self.patches:p.start()
         self.server=ThreadingHTTPServer(('127.0.0.1',0),web.Handler)
         self.thread=threading.Thread(target=self.server.serve_forever,daemon=True);self.thread.start()

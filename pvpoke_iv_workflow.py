@@ -39,6 +39,12 @@ def _canonical(candidate: dict, ivs: str, batch_mode: str) -> tuple[dict, str, t
     own = {"species": candidate["species"].strip().lower()}
     for key in ("fast", "charged1", "charged2"):
         own[key] = candidate[key].strip().upper()
+    if candidate.get("mega_level") is not None:
+        own["mega_level"] = candidate["mega_level"]
+    if candidate.get("charged3") is not None and str(candidate["charged3"]).strip():
+        own["charged3"] = str(candidate["charged3"]).strip().upper()
+    if candidate.get("level_override") is not None:
+        own["level_override"] = float(candidate["level_override"])
     if not isinstance(ivs, str):
         raise ValueError("ivs must be a multiline string")
     rows = []
@@ -57,7 +63,7 @@ def _canonical(candidate: dict, ivs: str, batch_mode: str) -> tuple[dict, str, t
     return own, "\n".join(",".join(str(x) for x in row) for row in rows), tuple(rows)
 
 
-def _verify_zip(archive: ZipFile, ticket: dict) -> None:
+def _verify_zip(archive: ZipFile, ticket: dict) -> dict:
     """Do not mistake the previous persisted ZIP for the just-started job."""
     import json
     manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
@@ -88,6 +94,7 @@ def _verify_zip(archive: ZipFile, ticket: dict) -> None:
             if triple not in expected_ivs or triple in seen:
                 raise ValueError("The saved ZIP candidate IVs differ from the job")
             seen.add(triple)
+    return manifest
 
 
 class IVWorkflow:
@@ -103,13 +110,21 @@ class IVWorkflow:
             focus_limit: int = 20, wait_seconds: int = 12,
             expected_meta_sha256: str | None = None,
             report_format: str = "decision", selection_policy: dict | None = None,
-            meta_preset_id: str | None = None, force_recalculate: bool = False, request_id: str | None = None) -> dict:
+            meta_preset_id: str | None = None, force_recalculate: bool = False, request_id: str | None = None,
+            rules: dict | None = None) -> dict:
         requested_at = time.monotonic()
         if request_id is not None and (not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,80}", request_id)):
             raise ValueError("Invalid calculation request_id")
-        request_body = json.dumps([candidate, ivs, batch_mode, focus_opponents, highlight_limit,
+        resolved_rules = None
+        if rules is not None:
+            from pvpoke_mega import resolve_battle_rules
+            resolved_rules = resolve_battle_rules(rules)
+        req_payload = [candidate, ivs, batch_mode, focus_opponents, highlight_limit,
             review_limit, focus_limit, expected_meta_sha256, report_format, selection_policy,
-            meta_preset_id, force_recalculate], sort_keys=True)
+            meta_preset_id, force_recalculate]
+        if resolved_rules is not None:
+            req_payload.append(resolved_rules)
+        request_body = json.dumps(req_payload, sort_keys=True)
 
         if report_format not in ("decision", "decision-v1", "compact", "app"):
             raise ValueError("report_format must be decision, decision-v1, compact or app")
@@ -163,6 +178,8 @@ class IVWorkflow:
             # /api/run24 already validates inputs and builds the preview atomically.
             english_name = self.backend.candidate_name(own["species"]) if report_format == "app" else None
             force_args = {"force_recalculate": True} if force_recalculate else {}
+            if resolved_rules is not None:
+                force_args["rules"] = resolved_rules
             if meta_preset_id is not None:
                 started = self.backend.start24(own, normalized, batch_mode,
                     meta_preset_id=meta_preset_id, expected_meta_sha256=actual_sha, **force_args)
@@ -186,6 +203,7 @@ class IVWorkflow:
                 "focus_limit": focus_limit,
                 "report_format": report_format,
                 "english_name": english_name, "selection_policy": selection_policy,
+                "rules": resolved_rules,
                 "inventory_form_notice": inventory_form_notice,
                 "requested_at": requested_at,
                 "completed_result": None,
@@ -254,8 +272,8 @@ class IVWorkflow:
                 return deepcopy(ticket["completed_result"])
             analysis_started = time.monotonic()
             with self.backend._zip() as archive:
-                _verify_zip(archive, ticket)
-                calculation_revision = json.loads(archive.read("manifest.json")).get("calculation_version")
+                manifest = _verify_zip(archive, ticket)
+                calculation_revision = manifest.get("calculation_version")
                 modes = ("default",) if ticket["batch_mode"] == "simple" else MODES
                 app_selection = None
                 if ticket["report_format"] == "app":
@@ -307,6 +325,9 @@ class IVWorkflow:
                     "scope": "server only; excludes GPT evaluation and final response",
                 },
             }
+            # A restored ZIP records the old run's counters, not this request's.
+            if not ticket["result_cache"].get("reused"):
+                output["matchup_cache"] = manifest.get("matchup_cache", {"enabled": False})
             if app_selection is not None:
                 if ticket.get('inventory_form_notice'):
                     app_selection.setdefault('input_notices', []).append(ticket['inventory_form_notice'])
@@ -314,6 +335,8 @@ class IVWorkflow:
                 output["complete"] = app_selection["complete"]
                 output["total_ratings_checked"] = app_selection["total_ratings_checked"]
                 output["reports"] = {}
+            if ticket.get("rules") is not None:
+                output["rules"] = ticket["rules"]
             ticket["completed_result"] = output
             return deepcopy(output)
 

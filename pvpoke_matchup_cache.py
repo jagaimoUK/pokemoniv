@@ -22,14 +22,32 @@ FIELDS = ("species", "fast", "charged1", "charged2", "atk", "def",
           "hp", "level", "cp", "level_override")
 
 
-def cache_namespace(*, gamemaster_hash, pokemonjs_hash, cp_cap, max_level, epoch="", engine_hash=""):
-    """Do not share results across different Pokémon data or operator epochs."""
+def cache_namespace(
+    *,
+    gamemaster_hash,
+    pokemonjs_hash,
+    cp_cap,
+    max_level,
+    epoch="",
+    engine_hash="",
+    mega_level=None,
+    downscaling_mode="",
+    super_max_mode="",
+    cup_id="",
+):
+    """Do not share results across different Pokémon data, operator epochs, or Mega conditions."""
     data = [VERSION, gamemaster_hash, pokemonjs_hash, cp_cap, max_level, epoch, engine_hash]
+    if mega_level is not None or downscaling_mode or super_max_mode or cup_id:
+        data.extend([mega_level, downscaling_mode, super_max_mode, cup_id])
     return hashlib.sha256(json.dumps(data, separators=(",", ":")).encode()).hexdigest()
 
 
 def _prepared(row):
-    return [row.get(k) for k in FIELDS]
+    base = [row.get(k) for k in FIELDS]
+    extras = [row.get("charged3"), row.get("mega_level")]
+    if any(v is not None for v in extras):
+        base.extend(extras)
+    return base
 
 
 def _winner_counts(ratings):

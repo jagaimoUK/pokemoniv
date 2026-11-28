@@ -8,21 +8,39 @@ import hashlib
 import re
 import sqlite3
 from pvpoke_input_limits import MAX_APP_REQUEST_BYTES
+from pvpoke_battle_service import MAX_REQUEST_BYTES as MAX_BATTLE_REQUEST_BYTES, _unique_object, _reject_constant
 import base64
 import threading
 import logging
 import os
 import hmac
+import time
 from functools import lru_cache
 from urllib.parse import urlparse
-import jwt
-from jwt import PyJWKClient, InvalidTokenError
+try:
+    import jwt
+    from jwt import PyJWKClient, InvalidTokenError
+except ImportError:
+    jwt = None
+    PyJWKClient = None
+    class InvalidTokenError(Exception):
+        pass
 from http.server import BaseHTTPRequestHandler
 from pvpoke_http_security import BoundedHTTPServer, RateBudget, safe_equal
 import pvpoke_bridge_core as backend
 from pvpoke_iv_workflow import IVWorkflow
 from pvpoke_app_ui import HTML as APP_HTML
 from pvpoke_party_ui import HTML as PARTY_HTML
+from pvpoke_missing_comparison import APP_PATH as MISSING_APP_PATH, API_PATH as MISSING_API_PATH
+from pvpoke_missing_comparison import PAGE_PATH as MISSING_PAGE_PATH, MAX_REQUEST_BYTES as MAX_MISSING_REQUEST_BYTES
+from pvpoke_missing_comparison import enabled as missing_enabled
+from pvpoke_individual_sync import (
+    ACTIONS as SYNC_ACTIONS, KIND as SYNC_KIND, READER_PATH as READER_SYNC_PATH,
+    WEB_PATH as WEB_SYNC_PATH, IndividualConnections,
+)
+from pvpoke_sandbox_workspace import APP_PATH as SANDBOX_APP_PATH, API_PATH as SANDBOX_API_PATH
+from pvpoke_sandbox_workspace import PAGE_PATH as SANDBOX_PAGE_PATH, enabled as sandbox_enabled
+from pvpoke_sandbox_workspace import OBSERVED_ACTIONS, observed_enabled
 from pvpoke_app_access import AppAccess, BrowserLogin
 from pvpoke_app_input import parse_import
 from pvpoke_score_search import search_low_scores
@@ -36,6 +54,7 @@ IV_RUNNER = IVWorkflow(backend)
 RATE_BUDGET = RateBudget()
 BACKUP_SLOTS = threading.BoundedSemaphore(1)
 APP_REQUEST_SLOTS = threading.BoundedSemaphore(4)
+MCP_COMPUTE_TOOLS = frozenset({'start_battle', 'start_24_conditions', 'run_iv_selection'})
 
 HOST, PORT = os.environ.get('PVP_BIND_HOST', '0.0.0.0'), int(os.environ.get('PORT', '8787'))
 API_KEY = os.environ.get('PVP_API_KEY', '')
@@ -45,14 +64,37 @@ BROWSER_LOGIN = BrowserLogin(API_KEY)
 from visual_backup import VisualBackup, BackupTokens, BackupError, BACKUP_HTML, MAX_ARCHIVE
 VISUAL_BACKUP = VisualBackup()
 BACKUP_TOKENS = BackupTokens(API_KEY)
+INDIVIDUAL_CONNECTIONS = IndividualConnections(API_KEY)
 if VISUAL_BACKUP.enabled:
     threading.Thread(target=VISUAL_BACKUP.probe, daemon=True).start()
+def parse_extra_origins(raw):
+    origins = set()
+    for item in raw.split(','):
+        candidate = item.strip()
+        if not candidate:
+            continue
+        parsed = urlparse(candidate)
+        if parsed.scheme not in ('https', 'http') or not parsed.netloc or parsed.username or parsed.password:
+            raise ValueError(f'Invalid PVP_EXTRA_ORIGINS entry: {candidate!r}')
+        if parsed.path not in ('', '/') or parsed.params or parsed.query or parsed.fragment or '*' in parsed.netloc:
+            raise ValueError(f'Invalid PVP_EXTRA_ORIGINS entry: {candidate!r}')
+        if parsed.scheme == 'http' and parsed.hostname not in ('127.0.0.1', 'localhost'):
+            raise ValueError(f'Non-local PVP_EXTRA_ORIGINS entry must use HTTPS: {candidate!r}')
+        origins.add(f'{parsed.scheme}://{parsed.netloc}')
+    return origins
+
+
 ALLOWED_ORIGINS = {'https://chatgpt.com', 'https://chat.openai.com', f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'}
 VERSION = '2025-06-18'
 # OAuth is enabled only when the authenticated user's Auth0 tenant is configured.
 MCP_URL = os.environ.get('PVP_MCP_URL', 'https://pokemoniv-production.up.railway.app/mcp').rstrip('/')
 APP_ORIGIN = '{0.scheme}://{0.netloc}'.format(urlparse(MCP_URL))
 ALLOWED_ORIGINS.add(APP_ORIGIN)
+try:
+    EXTRA_ORIGINS = parse_extra_origins(os.environ.get('PVP_EXTRA_ORIGINS', ''))
+except ValueError as exc:
+    raise SystemExit(str(exc)) from exc
+ALLOWED_ORIGINS.update(EXTRA_ORIGINS)
 AUTH0_ISSUER_RAW = os.environ.get('AUTH0_ISSUER', '').strip().rstrip('/')
 AUTH0_ISSUER = AUTH0_ISSUER_RAW + '/' if AUTH0_ISSUER_RAW else ''
 JWT_AUDIENCE = os.environ.get('JWT_AUDIENCE', MCP_URL).strip()
@@ -68,32 +110,248 @@ if AUTH0_ENABLED:
         raise SystemExit('PVP_MCP_URL must use HTTPS')
     JWKS = PyJWKClient(AUTH0_ISSUER + '.well-known/jwks.json', cache_keys=True, timeout=5)
 
+_JWKS_KEY_CACHE = {}  # {kid: (key, expire_time)} max 16 items
+_JWKS_NEG_CACHE = {}  # {kid: expire_time} max 128 items
+_JWT_BAD_SIG_CACHE = {}  # {token_digest: expire_time} max 512 items
+_JWT_GOOD_SIG_CACHE = {}  # {token_digest: expire_time} max 32 items (rate-gate helper only; never skips jwt.decode)
+_JWKS_CACHE_LOCK = threading.Lock()
+_LAST_JWKS_REFRESH_AT = 0.0
+_JWKS_FULL_SET_FRESH_UNTIL = 0.0
+JWKS_SLOTS = threading.BoundedSemaphore(2)
+OAUTH_VERIFY_SLOTS = threading.BoundedSemaphore(2)
+JWKS_FETCH_TIMEOUT = 5.0
 
-def oauth_token_valid(raw):
-    if not AUTH0_ENABLED or not raw.startswith('Bearer '):
+
+def _unverified_claims_match(token):
+    parts = token.split('.')
+    if len(parts) != 3 or any(not p for p in parts):
         return False
-    token = raw[7:]
-    try:
-        key = JWKS.get_signing_key_from_jwt(token)
-        claims = jwt.decode(token, key.key, algorithms=['RS256'],
-                            audience=JWT_AUDIENCE, issuer=AUTH0_ISSUER,
-                            options={'require': ['iss', 'aud', 'exp', 'sub']}, leeway=15)
-        if not safe_equal(str(claims.get('sub', '')), AUTH0_ALLOWED_SUB):
+    padded = parts[1] + '=' * (-len(parts[1]) % 4)
+    unverified = json.loads(base64.urlsafe_b64decode(padded.encode('ascii')).decode('utf-8'))
+    if not isinstance(unverified, dict):
+        return False
+    if unverified.get('iss') != AUTH0_ISSUER:
+        return False
+    aud_claim = unverified.get('aud')
+    if isinstance(aud_claim, list):
+        if JWT_AUDIENCE not in aud_claim:
             return False
+    elif aud_claim != JWT_AUDIENCE:
+        return False
+    if not safe_equal(str(unverified.get('sub', '')), AUTH0_ALLOWED_SUB):
+        return False
+    exp = unverified.get('exp')
+    if isinstance(exp, bool) or not isinstance(exp, (int, float)) or exp + 15 < time.time():
+        return False
+    if OAUTH_SCOPE:
+        scopes = set(str(unverified.get('scope', '')).split())
+        permissions = unverified.get('permissions', [])
+        if not isinstance(permissions, list):
+            permissions = []
+        if OAUTH_SCOPE not in (scopes | set(str(x) for x in permissions)):
+            return False
+    return True
+
+
+def _cache_negative_kid(kid, now):
+    with _JWKS_CACHE_LOCK:
+        if len(_JWKS_NEG_CACHE) >= 128 and kid not in _JWKS_NEG_CACHE:
+            oldest = min(_JWKS_NEG_CACHE.keys(), key=lambda k: _JWKS_NEG_CACHE[k])
+            del _JWKS_NEG_CACHE[oldest]
+        _JWKS_NEG_CACHE[kid] = now + 15.0
+
+
+def _cache_bad_sig(token_digest, now):
+    with _JWKS_CACHE_LOCK:
+        _JWT_GOOD_SIG_CACHE.pop(token_digest, None)
+        if len(_JWT_BAD_SIG_CACHE) >= 512 and token_digest not in _JWT_BAD_SIG_CACHE:
+            oldest = min(_JWT_BAD_SIG_CACHE.keys(), key=lambda k: _JWT_BAD_SIG_CACHE[k])
+            del _JWT_BAD_SIG_CACHE[oldest]
+        _JWT_BAD_SIG_CACHE[token_digest] = now + 30.0
+
+
+def _cache_good_sig(token_digest, now, exp_unix):
+    ttl = max(1.0, min(300.0, float(exp_unix) - time.time() + 15.0))
+    with _JWKS_CACHE_LOCK:
+        _JWT_BAD_SIG_CACHE.pop(token_digest, None)
+        if len(_JWT_GOOD_SIG_CACHE) >= 32 and token_digest not in _JWT_GOOD_SIG_CACHE:
+            oldest = min(_JWT_GOOD_SIG_CACHE.keys(), key=lambda k: _JWT_GOOD_SIG_CACHE[k])
+            del _JWT_GOOD_SIG_CACHE[oldest]
+        _JWT_GOOD_SIG_CACHE[token_digest] = now + ttl
+
+
+def _evaluate_oauth_token(raw, rate_checker=None):
+    global _LAST_JWKS_REFRESH_AT, _JWKS_FULL_SET_FRESH_UNTIL
+    if not AUTH0_ENABLED or jwt is None or not isinstance(raw, str) or not raw.startswith('Bearer ') or len(raw) > 4096 or not raw.isascii():
+        return 'invalid'
+    token = raw[7:]
+    allow_fn = rate_checker if rate_checker is not None else RATE_BUDGET.allow
+    budget_obj = getattr(allow_fn, '__self__', None)
+    can_peek = hasattr(budget_obj, 'available')
+    token_digest = hmac.new(API_KEY.encode('ascii'), token.encode('ascii'), 'sha256').hexdigest()
+    ran_rsa = False
+    try:
+        header = jwt.get_unverified_header(token)
+        if header.get('alg') != 'RS256':
+            return 'invalid'
+        kid = header.get('kid')
+        if not isinstance(kid, str) or not (1 <= len(kid) <= 128):
+            return 'invalid'
+        if not _unverified_claims_match(token):
+            return 'invalid'
+
+        key = None
+        was_known = False
+        known_good_sig = False
+        now = time.monotonic()
+        with _JWKS_CACHE_LOCK:
+            bad_expire = _JWT_BAD_SIG_CACHE.get(token_digest)
+            if bad_expire is not None:
+                if bad_expire > now:
+                    return 'invalid'
+                del _JWT_BAD_SIG_CACHE[token_digest]
+            good_expire = _JWT_GOOD_SIG_CACHE.get(token_digest)
+            if good_expire is not None:
+                if good_expire > now:
+                    known_good_sig = True
+                else:
+                    del _JWT_GOOD_SIG_CACHE[token_digest]
+            entry = _JWKS_KEY_CACHE.get(kid)
+            if entry is not None:
+                cached_key, expire = entry
+                was_known = True
+                if expire > now:
+                    key = cached_key
+            if key is None:
+                neg_expire = _JWKS_NEG_CACHE.get(kid)
+                if neg_expire is not None:
+                    if neg_expire > now:
+                        return 'invalid'
+                    del _JWKS_NEG_CACHE[kid]
+                if not was_known and _JWKS_FULL_SET_FRESH_UNTIL > now:
+                    if len(_JWKS_NEG_CACHE) >= 128 and kid not in _JWKS_NEG_CACHE:
+                        oldest = min(_JWKS_NEG_CACHE.keys(), key=lambda k: _JWKS_NEG_CACHE[k])
+                        del _JWKS_NEG_CACHE[oldest]
+                    _JWKS_NEG_CACHE[kid] = now + 15.0
+                    return 'invalid'
+
+        if key is None:
+            if was_known:
+                if not allow_fn('known-jwks', 10, 60):
+                    return 'rate_limited'
+            else:
+                if not allow_fn('unauth-jwks', 10, 60):
+                    with _JWKS_CACHE_LOCK:
+                        cooldown_ok = (now - _LAST_JWKS_REFRESH_AT) >= 15.0
+                    if not (cooldown_ok and allow_fn('emergency-jwks', 1, 15)):
+                        return 'rate_limited'
+
+            if not JWKS_SLOTS.acquire(blocking=False):
+                return 'unavailable'
+            try:
+                fetch_deadline = time.monotonic() + JWKS_FETCH_TIMEOUT
+                fetched_keys = None
+                if hasattr(JWKS, 'get_signing_keys'):
+                    try:
+                        fetched_keys = JWKS.get_signing_keys(refresh=True)
+                    except TypeError:
+                        fetched_keys = JWKS.get_signing_keys()
+                if time.monotonic() > fetch_deadline:
+                    return 'unavailable'
+                if isinstance(fetched_keys, list) and fetched_keys:
+                    refreshed_at = time.monotonic()
+                    present_kids = set()
+                    with _JWKS_CACHE_LOCK:
+                        _LAST_JWKS_REFRESH_AT = refreshed_at
+                        _JWKS_FULL_SET_FRESH_UNTIL = refreshed_at + 5.0
+                        for item in fetched_keys:
+                            item_kid = getattr(item, 'key_id', None)
+                            if isinstance(item_kid, str) and 1 <= len(item_kid) <= 128:
+                                present_kids.add(item_kid)
+                                if len(_JWKS_KEY_CACHE) >= 16 and item_kid not in _JWKS_KEY_CACHE:
+                                    oldest = min(_JWKS_KEY_CACHE.keys(), key=lambda k: _JWKS_KEY_CACHE[k][1])
+                                    del _JWKS_KEY_CACHE[oldest]
+                                _JWKS_KEY_CACHE[item_kid] = (item, refreshed_at + 300)
+                                _JWKS_NEG_CACHE.pop(item_kid, None)
+                        if was_known and kid not in present_kids:
+                            _JWKS_KEY_CACHE.pop(kid, None)
+                        if kid in _JWKS_KEY_CACHE:
+                            key = _JWKS_KEY_CACHE[kid][0]
+                else:
+                    key = JWKS.get_signing_key_from_jwt(token)
+                    if time.monotonic() > fetch_deadline:
+                        return 'unavailable'
+                    if key is not None:
+                        refreshed_at = time.monotonic()
+                        with _JWKS_CACHE_LOCK:
+                            _LAST_JWKS_REFRESH_AT = refreshed_at
+                            if len(_JWKS_KEY_CACHE) >= 16 and kid not in _JWKS_KEY_CACHE:
+                                oldest = min(_JWKS_KEY_CACHE.keys(), key=lambda k: _JWKS_KEY_CACHE[k][1])
+                                del _JWKS_KEY_CACHE[oldest]
+                            _JWKS_KEY_CACHE[kid] = (key, refreshed_at + 300)
+                            _JWKS_NEG_CACHE.pop(kid, None)
+                if key is None:
+                    _cache_negative_kid(kid, time.monotonic())
+                    return 'invalid'
+            finally:
+                JWKS_SLOTS.release()
+
+        if not known_good_sig:
+            if can_peek:
+                if not budget_obj.available('unauth-oauth-sig', 60, 60):
+                    return 'rate_limited'
+            else:
+                if not allow_fn('unauth-oauth-sig', 60, 60):
+                    return 'rate_limited'
+
+        if not OAUTH_VERIFY_SLOTS.acquire(timeout=0.05):
+            return 'unavailable'
+        try:
+            ran_rsa = True
+            claims = jwt.decode(token, key.key, algorithms=['RS256'],
+                                audience=JWT_AUDIENCE, issuer=AUTH0_ISSUER,
+                                options={'require': ['iss', 'aud', 'exp', 'sub']}, leeway=15)
+        finally:
+            OAUTH_VERIFY_SLOTS.release()
+        if not safe_equal(str(claims.get('sub', '')), AUTH0_ALLOWED_SUB):
+            _cache_bad_sig(token_digest, time.monotonic())
+            if can_peek:
+                allow_fn('unauth-oauth-sig', 60, 60)
+            return 'invalid'
         if OAUTH_SCOPE:
             scopes = set(str(claims.get('scope', '')).split())
             permissions = claims.get('permissions', [])
             if not isinstance(permissions, list):
                 permissions = []
             if OAUTH_SCOPE not in (scopes | set(str(x) for x in permissions)):
-                return False
-        return True
-    except (InvalidTokenError, ValueError, KeyError, OSError) as exc:
+                _cache_bad_sig(token_digest, time.monotonic())
+                if can_peek:
+                    allow_fn('unauth-oauth-sig', 60, 60)
+                return 'invalid'
+        _cache_good_sig(token_digest, time.monotonic(), claims['exp'])
+        return 'ok'
+    except (InvalidTokenError, ValueError, KeyError, TypeError, RecursionError) as exc:
+        if ran_rsa:
+            _cache_bad_sig(token_digest, time.monotonic())
+            if can_peek:
+                allow_fn('unauth-oauth-sig', 60, 60)
         logging.warning('OAuth token rejected: %s', type(exc).__name__)
-        return False
+        return 'invalid'
+    except OSError as exc:
+        logging.warning('OAuth authentication unavailable: %s', type(exc).__name__)
+        return 'unavailable'
     except Exception as exc:
         logging.warning('OAuth authentication unavailable: %s', type(exc).__name__)
-        return False
+        return 'unavailable'
+
+
+_OAUTH_LAST_OUTCOME = threading.local()
+
+
+def oauth_token_valid(raw, rate_checker=None):
+    status = _evaluate_oauth_token(raw, rate_checker=rate_checker)
+    _OAUTH_LAST_OUTCOME.status = status
+    return status == 'ok'
 
 
 POKEMON = {
@@ -269,7 +527,8 @@ def call_tool(name, args):
                              args.get('wait_seconds', 12),
                              args.get('expected_meta_sha256'),
                              args.get('report_format', 'decision'), args.get('selection_policy'),
-                             args.get('meta_preset_id'), args.get('force_recalculate', False), args.get('request_id'))
+                             args.get('meta_preset_id'), args.get('force_recalculate', False), args.get('request_id'),
+                             rules=args.get('rules'))
     if name == 'get_iv_selection_result':
         return IV_RUNNER.result(args['run_ref'], args.get('wait_seconds', 12))
     if name == 'get_status':
@@ -314,14 +573,17 @@ class Handler(BaseHTTPRequestHandler):
                          "; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; "
                          "base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'")
 
-    def rate_allowed(self, name, count, seconds):
-        if RATE_BUDGET.allow(name, count, seconds):
-            return True
+    def send_rate_limited(self):
         self.send_response(429)
         self.send_header('Retry-After', '10')
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Content-Length', '0')
         self.end_headers()
+
+    def rate_allowed(self, name, count, seconds):
+        if RATE_BUDGET.allow(name, count, seconds):
+            return True
+        self.send_rate_limited()
         return False
 
     def read_body(self, size):
@@ -371,7 +633,42 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def app_page(self):
-        data = (browser_migration.page() if self.path == '/app/migration' else flashcards.page() if self.path == '/flashcards' else PARTY_HTML if self.path == '/app/party' else APP_HTML).encode('utf-8')
+        if self.path == MISSING_PAGE_PATH:
+            if not missing_enabled():
+                return self.respond(404, {'error': 'Not found'})
+            from pvpoke_missing_ui import HTML as missing_html
+            page = missing_html.replace('data-sandbox="0"',
+                                        'data-sandbox="1"' if sandbox_enabled() else 'data-sandbox="0"')
+            page = page.replace('data-tactic-search="0"',
+                                'data-tactic-search="1"'
+                                if sandbox_enabled() and os.environ.get('PVP_TACTIC_SEARCH_ENABLED') == '1'
+                                else 'data-tactic-search="0"')
+            page = page.replace('data-observed-search="0"',
+                                'data-observed-search="1"' if sandbox_enabled() and observed_enabled()
+                                else 'data-observed-search="0"')
+        elif self.path in (SANDBOX_PAGE_PATH, SANDBOX_PAGE_PATH + '?observed=1'):
+            if not sandbox_enabled():
+                return self.respond(404, {'error': 'Not found'})
+            from pvpoke_sandbox_ui import HTML as sandbox_html
+            page = sandbox_html.replace(
+                '<!--MISSING_ANALYSIS_NAV-->', '<a href="/app/missing">不足分析</a>' if missing_enabled() else '')
+            page = page.replace('data-tactic-search="0"',
+                                'data-tactic-search="1"' if os.environ.get('PVP_TACTIC_SEARCH_ENABLED') == '1'
+                                else 'data-tactic-search="0"')
+            if observed_enabled():
+                page = page.replace('data-observed-search="0"', 'data-observed-search="1"')
+        elif self.path == '/app/migration':
+            page = browser_migration.page()
+        elif self.path == '/flashcards':
+            page = flashcards.page()
+        elif self.path == '/app/party':
+            page = PARTY_HTML
+        else:
+            tools = ('<a href="/app/missing">不足分析</a>' if missing_enabled() else '')
+            if sandbox_enabled():
+                tools += '<a href="/app/sandbox">Sandbox</a>'
+            page = APP_HTML.replace('<!--MISSING_ANALYSIS_NAV-->', tools)
+        data = page.encode('utf-8')
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.send_header('Content-Length', str(len(data)))
@@ -380,27 +677,106 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def app_request(self):
+    def individual_sync_request(self, args, reader_instance):
+        if not missing_enabled():
+            return self.respond(503, {'error': '個体同期を利用できません'})
+        action = args.get('action')
+        if reader_instance is not None:
+            if action not in SYNC_ACTIONS or args.get('instance_id') != reader_instance:
+                return self.respond(403, {'error': 'この個体に接続できません'})
+        if action == 'connections':
+            return self.respond(200, {'items': INDIVIDUAL_CONNECTIONS.store.list_active(SYNC_KIND)})
+        if action == 'revoke':
+            ident = args.get('id')
+            if not isinstance(ident, str) or not re.fullmatch('[0-9a-f]{64}', ident):
+                raise ValueError('接続IDを確認してください')
+            INDIVIDUAL_CONNECTIONS.store.revoke(ident, SYNC_KIND)
+            return self.respond(200, {'revoked': True})
+        if action == 'issue':
+            args = {'action': 'individual_get', 'instance_id': args.get('instance_id')}
+        elif action not in SYNC_ACTIONS:
+            raise ValueError('同期操作を確認してください')
+        try:
+            result = backend._request(MISSING_API_PATH, args, headers={'X-PvPoke-Token': backend._token()}, timeout=20)
+        except backend.BridgeError as exc:
+            for status in (400, 404, 409, 503):
+                if f'HTTP {status}:' in str(exc):
+                    return self.respond(status, {'error': '個体の確認状態または同期内容を確認してください'})
+            return self.respond(503, {'error': '個体の保存先に接続できません'})
+        if action == 'issue':
+            return self.respond(200, {'connection': INDIVIDUAL_CONNECTIONS.issue(result['individual']['instance_id'])})
+        return self.respond(200, result)
+
+    def app_request(self, reader_instance=None):
         """Only explicit app operations; never proxy arbitrary backend paths."""
         if self.path not in ('/app-api/catalog', '/app-api/import', '/app-api/run', '/app-api/result', '/app-api/cancel',
                              '/app-api/session', '/app-api/logout', '/app-api/visual-backup-connections', '/app-api/visual-backup-revoke', '/app-api/meta-status',
                              '/app-api/meta-preview', '/app-api/meta-apply', '/app-api/meta-presets', '/app-api/meta-preset-save', '/app-api/meta-preset-export', '/app-api/low-score', '/app-api/visual-backup-token', '/app-api/flashcards',
                              '/app-api/party/list', '/app-api/party/get', '/app-api/party/save',
                              '/app-api/party/start', '/app-api/party/status', '/app-api/party/cancel',
-                             '/app-api/party/meta-weights'):
+                             '/app-api/party/meta-weights', '/app-api/party/owned-candidates', '/app-api/battles/simulate', MISSING_APP_PATH, SANDBOX_APP_PATH,
+                             WEB_SYNC_PATH, READER_SYNC_PATH):
             return self.respond(404, {'error': 'Not found'})
         origin = self.headers.get('Origin')
-        if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}'):
+        if origin and origin not in (APP_ORIGIN, f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}', *EXTRA_ORIGINS):
             return self.respond(403, {'error': 'Origin not allowed'})
         if self.headers.get('Content-Type', '').split(';')[0].strip().lower() != 'application/json':
             return self.respond(415, {'error': 'Content-Type must be application/json'})
         try:
             size = int(self.headers.get('Content-Length', '0'))
-            if not 0 < size <= MAX_APP_REQUEST_BYTES:
+            workspace = self.path in (MISSING_APP_PATH, SANDBOX_APP_PATH)
+            battle = self.path in ('/app-api/battles/simulate', SANDBOX_APP_PATH)
+            limit = {MISSING_APP_PATH: MAX_MISSING_REQUEST_BYTES, WEB_SYNC_PATH: 8192, READER_SYNC_PATH: 8192}.get(
+                self.path, MAX_BATTLE_REQUEST_BYTES if battle else MAX_APP_REQUEST_BYTES)
+            if not 0 < size <= limit:
                 return self.respond(413, {'error': 'Invalid body size'})
-            args = json.loads(self.read_body(size))
+            raw = self.read_body(size)
+            # All app routes must interpret the same JSON identically.
+            # Duplicate keys and non-finite numbers cannot override state or
+            # produce ambiguous validation results on legacy endpoints.
+            args = json.loads(raw, object_pairs_hook=_unique_object,
+                              parse_constant=_reject_constant)
             if not isinstance(args, dict):
                 raise ValueError('入力はJSONオブジェクトで指定してください')
+            if self.path in (WEB_SYNC_PATH, READER_SYNC_PATH):
+                return self.individual_sync_request(args, reader_instance)
+            if workspace:
+                sandbox = self.path == SANDBOX_APP_PATH
+                if sandbox and args.get('action') in ('search_start', 'search_step') and os.environ.get(
+                        'PVP_TACTIC_SEARCH_ENABLED') != '1':
+                    return self.respond(503, {'error': 'Tactic search is disabled'})
+                if sandbox and args.get('action') in OBSERVED_ACTIONS and not observed_enabled():
+                    return self.respond(503, {'error': 'Observed search is disabled'})
+                if not (sandbox_enabled() if sandbox else missing_enabled()):
+                    return self.respond(503, {'error': 'Analysis workspace is disabled'})
+                if sandbox and args.get('action') in ('simulate', 'standard', 'search_start', 'search_step', 'observed_start', 'observed_step') and not self.rate_allowed('compute-owner', 12, 60):
+                    return
+                endpoint = SANDBOX_API_PATH if sandbox else MISSING_API_PATH
+                try:
+                    result = backend._request(endpoint, args, headers={'X-PvPoke-Token': backend._token()}, timeout=65)
+                except backend.BridgeError as exc:
+                    for status in (400, 409, 413, 422, 503):
+                        if f'HTTP {status}:' in str(exc):
+                            return self.respond(status, {'error': 'Analysis workspace request rejected or unavailable'})
+                    return self.respond(503, {'error': 'Analysis workspace unavailable'})
+                return self.respond(200, result)
+            if self.path == '/app-api/battles/simulate':
+                if os.environ.get('PVP_BATTLE_API_ENABLED') != '1':
+                    return self.respond(503, {'error': 'Battle API is disabled'})
+                try:
+                    result = backend._request('/api/battles/simulate', args,
+                                              headers={'X-PvPoke-Token': backend._token()},
+                                              timeout=65)
+                except backend.BridgeError as exc:
+                    # Internal paths, exception details and tracebacks stay private.
+                    error = str(exc)
+                    for status in (400, 409, 413, 422, 503):
+                        if f'HTTP {status}:' in error:
+                            return self.respond(status, {'error': 'Battle request rejected or unavailable'})
+                    return self.respond(503, {'error': 'Battle service unavailable'})
+                if type(result) is not dict or result.get('status') != 'complete':
+                    return self.respond(503, {'error': 'Battle result incomplete'})
+                return self.respond(200, result)
             if self.path.startswith('/app-api/party/'):
                 try:
                     result = backend._request('/api/party/' + self.path.rsplit('/', 1)[-1], args,
@@ -459,7 +835,7 @@ class Handler(BaseHTTPRequestHandler):
                 cat = backend._request('/api/catalog')
                 if not cat.get('ready'):
                     raise ValueError('ゲームデータを読み込み中です。少し待ってください')
-                result = parse_import(args.get('text'), cat, args.get('current'))
+                result = parse_import(args.get('text'), cat, args.get('current'), args.get('registered_movesets'))
             elif self.path == '/app-api/cancel':
                 result = IV_RUNNER.cancel(args.get('run_ref'))
             elif self.path == '/app-api/run':
@@ -477,57 +853,70 @@ class Handler(BaseHTTPRequestHandler):
                 result['meta_verified_against_project'] = False
                 result['meta_verification_source'] = 'server snapshot; Project file unavailable in browser'
             self.respond(200, result)
-        except (ValueError, TypeError, KeyError, backend.BridgeError) as exc:
+        except RecursionError:
+            self.respond(400, {'error': 'Request JSON is too deeply nested'})
+        except backend.BridgeError as exc:
+            # The upstream message can contain internal hostnames, paths,
+            # response bodies, or credentials. Never serialize it to a browser.
+            # Preserve useful, explicitly recognized client-error status codes.
+            upstream = re.match(r'^ローカルアプリ HTTP (400|404|409|413|422):', str(exc))
+            status = int(upstream.group(1)) if upstream else 503
+            message = ('入力内容または保存状態を確認してください' if upstream
+                       else '内部計算サービスに接続できません。再試行してください')
+            self.respond(status, {'error': message})
+        except ValueError as exc:
+            # Existing explicit input validation remains useful to the user.
             self.respond(400, {'error': str(exc)})
-        except Exception:
-            logging.exception('App request failed')
+        except (TypeError, KeyError):
+            # These may originate from internal code or data structures.
+            self.respond(400, {'error': '入力形式が正しくありません'})
+        except Exception as exc:
+            # Exception messages/tracebacks may contain upstream secrets or data.
+            logging.error('App request failed: %s', type(exc).__name__)
             self.respond(500, {'error': 'アプリの処理に失敗しました'})
 
     def visual_backup_request(self):
-        if not self.rate_allowed('backup-entry', 120, 60):
-            return
-        raw = self.headers.get('Authorization', '')
-        token = raw[7:] if raw.startswith('Bearer ') else ''
+        origin = self.headers.get('Origin')
+        if origin and origin != APP_ORIGIN and origin not in EXTRA_ORIGINS:
+            return self.respond(403, {'error': 'Origin not allowed'})
+        if self.headers.get('Content-Type', '').split(';')[0].strip().lower() != 'application/json':
+            return self.respond(415, {'error': 'Content-Type must be application/json'})
         try:
-            token_ok = BACKUP_TOKENS.valid(token)
-        except (sqlite3.Error, OSError):
-            return self.respond(503, {'error': '認証の保存先に接続できません。少し待って再試行してください'})
-        if not token_ok:
-            return self.unauthorized()
-        if not self.rate_allowed('backup-owner', 12, 60):
-            return
-        origin=self.headers.get('Origin')
-        if origin and origin != APP_ORIGIN:
-            return self.respond(403, {'error':'Origin not allowed'})
-        if self.headers.get('Content-Type','').split(';')[0].strip().lower() != 'application/json':
-            return self.respond(415, {'error':'Content-Type must be application/json'})
-        try:
-            if self.path not in ('/visual-backup/v1/status','/visual-backup/v1/upload','/visual-backup/v1/download'):
-                return self.respond(404, {'error':'Not found'})
-            limit=(MAX_ARCHIVE*4//3+4096) if self.path.endswith('/upload') else 4096
-            size=int(self.headers.get('Content-Length','0'))
+            if self.path not in ('/visual-backup/v1/status', '/visual-backup/v1/upload', '/visual-backup/v1/download'):
+                return self.respond(404, {'error': 'Not found'})
+            limit = (MAX_ARCHIVE * 4 // 3 + 4096) if self.path.endswith('/upload') else 4096
+            size = int(self.headers.get('Content-Length', '0'))
             if not 0 < size <= limit:
-                return self.respond(413, {'error':'バックアップの容量上限を超えています'})
-            args=json.loads(self.read_body(size))
-            if not isinstance(args,dict):
+                return self.respond(413, {'error': 'バックアップの容量上限を超えています'})
+            args = json.loads(self.read_body(size), object_pairs_hook=_unique_object,
+                            parse_constant=_reject_constant)
+            if not isinstance(args, dict):
                 raise ValueError()
             if self.path.endswith('/status'):
-                return self.respond(200,VISUAL_BACKUP.head())
+                return self.respond(200, VISUAL_BACKUP.head())
             if self.path.endswith('/download'):
-                return self.respond(200,VISUAL_BACKUP.download())
-            data=base64.b64decode(args.get('archive',''),validate=True)
-            return self.respond(200,VISUAL_BACKUP.upload(data,args.get('expectedEtag')))
+                return self.respond(200, VISUAL_BACKUP.download())
+            data = base64.b64decode(args.get('archive', ''), validate=True)
+            return self.respond(200, VISUAL_BACKUP.upload(data, args.get('expectedEtag')))
         except BackupError as exc:
-            return self.respond(exc.status, {'error':str(exc)})
-        except (ValueError,TypeError,KeyError):
-            return self.respond(400, {'error':'バックアップの入力が正しくありません'})
+            return self.respond(exc.status, {'error': str(exc)})
+        except (ValueError, TypeError, KeyError):
+            return self.respond(400, {'error': 'バックアップの入力が正しくありません'})
         except Exception as exc:
-            logging.warning('Visual backup request failed: %s',type(exc).__name__)
-            return self.respond(503, {'error':'保存先に接続できません。端末内の見本は残っています'})
+            logging.warning('Visual backup request failed: %s', type(exc).__name__)
+            return self.respond(503, {'error': '保存先に接続できません。端末内の見本は残っています'})
 
     def do_GET(self):
-        if self.path != '/health' and not self.rate_allowed('public', 300, 60):
-            return
+        if self.path != '/health':
+            is_app_shell = (
+                self.path in ('/', '/app', '/app/party', '/app/migration',
+                              MISSING_PAGE_PATH, SANDBOX_PAGE_PATH, SANDBOX_PAGE_PATH + '?observed=1')
+                or self.path.startswith('/app?')
+            )
+            bucket = 'public-get' if is_app_shell else 'public-reader-get'
+            limit = 300 if is_app_shell else 120
+            if not self.rate_allowed(bucket, limit, 60):
+                return
         if self.path == '/reader-api/v1/flashcards':
             tag = flashcards.etag()
             if self.headers.get('If-None-Match') == tag:
@@ -542,7 +931,8 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        if self.path in ('/flashcards', '/app/party', '/app/migration'):
+        if self.path in ('/flashcards', '/app/party', '/app/migration', MISSING_PAGE_PATH, SANDBOX_PAGE_PATH,
+                         SANDBOX_PAGE_PATH + '?observed=1'):
             return self.app_page()
         # This one read-only route contains only global, fixed PvP rankings
         # transformed into GO search terms. Do not expose private app APIs,
@@ -552,8 +942,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, cached_reader_cleanup())
             except ValueError as exc:
                 return self.respond(503, {'error': str(exc)})
-            except Exception:
-                logging.exception('Reader cleanup response unavailable')
+            except Exception as exc:
+                logging.error('Reader cleanup response unavailable: %s', type(exc).__name__)
                 return self.respond(503, {'error': '検索式を生成できませんでした'})
         if self.path == '/reader-backup':
             data=BACKUP_HTML.encode('utf-8')
@@ -581,39 +971,100 @@ class Handler(BaseHTTPRequestHandler):
                               'visual_backup':{'enabled':VISUAL_BACKUP.enabled,'storage_probe':VISUAL_BACKUP.probe_ok}})
         else:
             self.respond(405, {'error': 'POST /mcp for MCP requests'})
+
     def do_POST(self):
-        if not self.rate_allowed('entry', 300, 60):
-            return
+        # Framing check first with zero budget cost
         if self.headers.get('Transfer-Encoding') or len(self.headers.get_all('Content-Length', [])) != 1:
             return self.respond(400, {'error': 'Invalid request framing'})
+
+        # Reject unknown POST paths before checking JWTs, cookies, or owner budgets.
+        # In particular, POST /health must never become a costly auth entry point.
+        if not (self.path == '/mcp' or self.path.startswith('/app-api/')
+                or self.path.startswith('/visual-backup/v1/')):
+            return self.respond(404, {'error': 'Not found'})
+
         if self.path.startswith('/visual-backup/v1/'):
+            raw = self.headers.get('Authorization', '')
+            token = raw[7:] if raw.startswith('Bearer ') else ''
+            try:
+                token_ok = BACKUP_TOKENS.valid(token)
+            except (sqlite3.Error, OSError):
+                return self.respond(503, {'error': '認証の保存先に接続できません。少し待って再試行してください'})
+            if not token_ok:
+                if not self.rate_allowed('unauth-backup', 60, 60):
+                    return
+                return self.unauthorized()
+            if not self.rate_allowed('backup-owner', 12, 60):
+                return
             if not BACKUP_SLOTS.acquire(blocking=False):
                 return self.respond(503, {'error': 'バックアップの処理中です。少し待って再試行してください'})
             try:
                 return self.visual_backup_request()
             finally:
                 BACKUP_SLOTS.release()
+
         token = self.headers.get('Authorization', '')
+        if self.path == READER_SYNC_PATH:
+            if not self.rate_allowed('reader-sync-entry', 180, 60):
+                return
+            try:
+                reader_instance = INDIVIDUAL_CONNECTIONS.instance(token)
+            except (sqlite3.Error, OSError):
+                return self.respond(503, {'error': '認証の保存先に接続できません'})
+            if reader_instance is None:
+                return self.unauthorized()
+            if not APP_REQUEST_SLOTS.acquire(blocking=False):
+                return self.respond(503, {'error': '処理中です。少し待って再試行してください'})
+            try:
+                return self.app_request(reader_instance)
+            finally:
+                APP_REQUEST_SLOTS.release()
         is_api_key = safe_equal(token, 'Bearer ' + API_KEY)
         is_app = self.path.startswith('/app-api/')
         app_session = is_app and APP_ACCESS.valid(token)
-        oauth_ok = (not is_api_key and not app_session and len(token) <= 4096 and token.isascii() and oauth_token_valid(token))
+        cookie_ok = False
+        if is_app:
+            try:
+                cookie_ok = BROWSER_LOGIN.valid(self.headers.get('Cookie', ''))
+            except (sqlite3.Error, OSError):
+                return self.respond(503, {'error': '認証の保存先に接続できません。少し待って再試行してください'})
+
+        oauth_ok = False
+        if not (is_api_key or app_session or cookie_ok) and AUTH0_ENABLED and token.startswith('Bearer ') and len(token) <= 4096 and token.isascii():
+            _OAUTH_LAST_OUTCOME.status = None
+            oauth_ok = oauth_token_valid(token, rate_checker=RATE_BUDGET.allow)
+            if not oauth_ok:
+                outcome = getattr(_OAUTH_LAST_OUTCOME, 'status', None)
+                if outcome == 'rate_limited':
+                    self.send_rate_limited()
+                    return
+                if outcome == 'unavailable':
+                    return self.respond(503, {'error': '認証サービスに一時的に接続できません'})
+
         strong_auth = is_api_key or oauth_ok
         bearer_ok = strong_auth or app_session
-        try:
-            cookie_ok = is_app and BROWSER_LOGIN.valid(self.headers.get('Cookie', ''))
-        except (sqlite3.Error, OSError):
-            return self.respond(503, {'error': '認証の保存先に接続できません。少し待って再試行してください'})
-        if not (bearer_ok or cookie_ok):
-            self.unauthorized()
+        authenticated = bearer_ok or cookie_ok
+
+        if not authenticated:
+            if not self.rate_allowed('unauth-entry', 180, 60):
+                return
+            return self.unauthorized()
+
+        if not self.rate_allowed('owner-entry', 300, 60):
             return
+
         # A remembered cookie cannot mint a new one: relogin requires a real key.
         if self.path == '/app-api/session' and not strong_auth:
-            self.unauthorized()
-            return
+            return self.unauthorized()
         if self.path in ('/app-api/visual-backup-token', '/app-api/visual-backup-connections', '/app-api/visual-backup-revoke') and not (strong_auth or cookie_ok):
             return self.unauthorized()
-        if self.path in ('/app-api/run', '/app-api/party/start') and not self.rate_allowed('compute-owner', 12, 60):
+        if self.path == WEB_SYNC_PATH and not (strong_auth or cookie_ok):
+            return self.unauthorized()
+        compute_route = (self.path in ('/app-api/run', '/app-api/party/start') or
+                         (self.path == '/app-api/battles/simulate' and
+                          os.environ.get('PVP_BATTLE_API_ENABLED') == '1') or
+                         (self.path == MISSING_APP_PATH and missing_enabled()))
+        if compute_route and not self.rate_allowed('compute-owner', 12, 60):
             return
         if self.path in ('/app-api/session', '/app-api/visual-backup-token') and not self.rate_allowed('issue-owner', 12, 60):
             return
@@ -626,8 +1077,7 @@ class Handler(BaseHTTPRequestHandler):
                 APP_REQUEST_SLOTS.release()
             return
         if self.path != '/mcp':
-            self.respond(404, {'error': 'Not found'})
-            return
+            return self.respond(404, {'error': 'Not found'})
         origin = self.headers.get('Origin')
         if origin and origin not in ALLOWED_ORIGINS:
             self.respond(403, {'error': 'Origin not allowed'})
@@ -641,7 +1091,9 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < size <= 1_000_000:
                 self.respond(413, {'error': 'Invalid body size'})
                 return
-            data = json.loads(self.read_body(size))
+            data = json.loads(self.read_body(size),
+                              object_pairs_hook=_unique_object,
+                              parse_constant=_reject_constant)
             if not isinstance(data, dict) or data.get('jsonrpc') != '2.0' or not isinstance(data.get('method'), str):
                 self.respond(400, {'jsonrpc':'2.0','id':data.get('id') if isinstance(data,dict) else None,
                                    'error':{'code':-32600,'message':'Invalid Request'}})
@@ -668,26 +1120,48 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(200, {'jsonrpc':'2.0','id':id_,
                                        'error':{'code':-32602, 'message':'Unknown tool'}})
                     return
+                acquired_slot = False
+                if name in MCP_COMPUTE_TOOLS:
+                    if not self.rate_allowed('compute-owner', 12, 60):
+                        return
+                    if not APP_REQUEST_SLOTS.acquire(blocking=False):
+                        self.respond(503, {'error': '処理中です。少し待って再試行してください'})
+                        return
+                    acquired_slot = True
                 try:
-                    output = call_tool(name, params.get('arguments') or {})
-                    result = {'content':[{'type':'text','text':json.dumps(output,ensure_ascii=False,separators=(',',':'))}],
-                              'isError':False}
-                except Exception as e:
-                    result = {'content':[{'type':'text','text':f'{type(e).__name__}: {e}'}],
-                              'isError':True}
+                    try:
+                        output = call_tool(name, params.get('arguments') or {})
+                        result = {'content':[{'type':'text','text':json.dumps(output,ensure_ascii=False,separators=(',',':'))}],
+                                  'isError':False}
+                    except ValueError as exc:
+                        # User-input validation stays actionable without exposing
+                        # unexpected infrastructure exceptions.
+                        result = {'content':[{'type':'text','text':str(exc)}],
+                                  'isError':True}
+                    except Exception as exc:
+                        logging.warning('MCP tool request failed: %s', type(exc).__name__)
+                        result = {'content':[{'type':'text',
+                                              'text':'処理に失敗しました。入力と接続状況を確認してください'}],
+                                  'isError':True}
+                    self.respond(200, {'jsonrpc':'2.0','id':id_,'result':result})
+                finally:
+                    if acquired_slot:
+                        APP_REQUEST_SLOTS.release()
+                return
             else:
                 self.respond(200, {'jsonrpc':'2.0','id':id_,
                                    'error':{'code':-32601,'message':'Method not found'}})
                 return
             self.respond(200, {'jsonrpc':'2.0','id':id_,'result':result})
-        except Exception as e:
+        except Exception as exc:
+            logging.warning('MCP request rejected: %s', type(exc).__name__)
             self.respond(400, {'jsonrpc':'2.0','id':None,
-                               'error':{'code':-32700,'message':f'Parse error: {str(e)[:200]}'}})
+                               'error':{'code':-32700,'message':'Invalid JSON-RPC request'}})
 
 if __name__ == '__main__':
     print(f'Local MCP test server: http://{HOST}:{PORT}/mcp', flush=True)
     print('Authenticated prototype server. HTTPS must be terminated by hosting platform.', flush=True)
-    BoundedHTTPServer((HOST, PORT), Handler).serve_forever()
+    BoundedHTTPServer((HOST, PORT), Handler, max_workers=48).serve_forever()
 
 
 

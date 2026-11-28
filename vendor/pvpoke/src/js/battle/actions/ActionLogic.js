@@ -1117,6 +1117,15 @@ class ActionLogic {
 					poke.chargedMoves.indexOf(poke.activeChargedMoves[1]),
 					{shielded: false, buffs: false, priority: poke.priority});
 				break;
+
+			case "CHARGED_MOVE_2":
+				action = new TimelineAction(
+					"charged",
+					poke.index,
+					turns,
+					poke.chargedMoves.indexOf(poke.activeChargedMoves[2]),
+					{shielded: false, buffs: false, priority: poke.priority});
+				break;
 		}
 
 		return action;

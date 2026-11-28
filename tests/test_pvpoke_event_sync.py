@@ -67,5 +67,31 @@ FILES = {
                                                             "Pokemon.js": "d" * 64})
 
 
+    def test_download_authorization_header(self):
+        from unittest.mock import patch, MagicMock
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{"ok": true}'
+        mock_response.__enter__.return_value = mock_response
+
+        with patch("urllib.request.urlopen", return_value=mock_response) as mock_urlopen, \
+             patch.dict("os.environ", {"GITHUB_TOKEN": "ghp_secret_test_token"}):
+            sync.download("https://api.github.com/repos/pvpoke/pvpoke/commits/master")
+            req = mock_urlopen.call_args[0][0]
+            self.assertEqual(req.headers.get("Authorization"), "Bearer ghp_secret_test_token")
+
+        with patch("urllib.request.urlopen", return_value=mock_response) as mock_urlopen, \
+             patch.dict("os.environ", {}, clear=True):
+            sync.download("https://api.github.com/repos/pvpoke/pvpoke/commits/master")
+            req = mock_urlopen.call_args[0][0]
+            self.assertIsNone(req.headers.get("Authorization"))
+
+        with patch("urllib.request.urlopen", return_value=mock_response) as mock_urlopen, \
+             patch.dict("os.environ", {"GITHUB_TOKEN": "ghp_secret_test_token"}):
+            sync.download("https://raw.githubusercontent.com/test.json")
+            req = mock_urlopen.call_args[0][0]
+            self.assertIsNone(req.headers.get("Authorization"))
+
+
 if __name__ == "__main__":
     unittest.main()
+

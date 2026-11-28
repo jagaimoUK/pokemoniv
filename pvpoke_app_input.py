@@ -46,7 +46,8 @@ def app_presets(species: dict, legacy: list[dict], meta_text: str) -> list[dict]
     return rows
 
 
-def parse_import(text: str, catalog: dict, current: dict | None = None) -> dict:
+def parse_import(text: str, catalog: dict, current: dict | None = None,
+                 registered_movesets: dict | None = None) -> dict:
     if not isinstance(text, str) or not text.strip() or len(text) > MAX_IMPORT_CHARS:
         raise ValueError('ポケモン名と個体値、またはCSVを貼り付けてください')
     species = catalog.get('species', {})
@@ -54,6 +55,9 @@ def parse_import(text: str, catalog: dict, current: dict | None = None) -> dict:
     current = current or {}
     if not isinstance(current, dict):
         raise ValueError('現在のポケモン情報が不正です')
+    registered_movesets = {} if registered_movesets is None else registered_movesets
+    if not isinstance(registered_movesets, dict) or len(registered_movesets) > 500:
+        raise ValueError('登録技構成の形式を確認してください')
     def normalized(word):
         return re.sub(r'\s+', ' ', unicodedata.normalize('NFKC', word).strip().casefold())
     aliases = {}
@@ -206,6 +210,23 @@ def parse_import(text: str, catalog: dict, current: dict | None = None) -> dict:
         p = species[sid]
         return (len(moves) == 3 and moves[0] in p.get('fastMoves', [])
                 and all(x in p.get('chargedMoves', []) for x in moves[1:]) and moves[1] != moves[2])
+    def selected_registered(sid):
+        """Browser-owned enabled configurations; never trust unvalidated move IDs."""
+        rows = registered_movesets.get(sid, [])
+        if not isinstance(rows, list) or len(rows) > 100:
+            raise ValueError(f'{species[sid].get("name_ja") or sid}: 登録技構成の形式を確認してください')
+        selected = []
+        for row in rows:
+            if not isinstance(row, dict) or row.get('species') != sid:
+                raise ValueError(f'{species[sid].get("name_ja") or sid}: 登録技構成の種類が一致しません')
+            if row.get('enabled') is False:
+                continue
+            values = tuple(row.get(k) for k in FIELDS[1:])
+            if not all(isinstance(value, str) for value in values) or not valid(sid, values):
+                raise ValueError(f'{species[sid].get("name_ja") or sid}: 登録技構成が現在のPvPokeデータと一致しません。設定で確認してください')
+            selected.append(values)
+        return selected
+
     jobs, notices = {}, []
     for index, part in enumerate(sections):
         if not part['ivs']:
@@ -225,9 +246,19 @@ def parse_import(text: str, catalog: dict, current: dict | None = None) -> dict:
                 warnings.append('ポケモン名の指定がないため現在フォームの種類を使います')
             moves, source = part['moves'], '入力で指定'
             if moves is None:
-                if part['species'] is None and sid == current.get('species') and all(current.get(k) for k in FIELDS[1:]):
+                # An explicit form choice takes precedence only for unnamed input.
+                # Named species use their saved enabled movesets before a catalog default.
+                use_current = (part['species'] is None and sid == current.get('species')
+                               and all(current.get(k) for k in FIELDS[1:]))
+                registered = [] if use_current else selected_registered(sid)
+                if use_current:
                     moves = tuple(current[k].upper() for k in FIELDS[1:])
                     source = '現在フォームの技構成'
+                elif registered:
+                    # The browser planner expands ALL enabled configurations.
+                    # The parser only needs one valid initial candidate.
+                    moves = registered[0]
+                    source = 'ポケモンごとの厳選設定'
                 elif p.get('default_moves'):
                     moves = tuple(p['default_moves'][k] for k in FIELDS[1:])
                     source = p.get('default_moves_source', 'PvPoke GL推奨技')

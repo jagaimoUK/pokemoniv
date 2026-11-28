@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Battle result v1",
+  "description": "Incomplete and unsuccessful results do not imply a loss. Executed moves describe resolution events, not requested actions or the start of a move.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status"],
+  "properties": {
+    "schema": {"const": "battle-result-v1"},
+    "status": {"enum": ["complete", "partial", "invalid", "unsupported", "failed", "cancelled"]},
+    "error": {
+      "type": "object", "additionalProperties": false, "required": ["message"],
+      "properties": {"message": {"type": "string", "minLength": 1}}
+    },
+    "battle_key": {"$ref": "battle-spec-v1.schema.json#/$defs/hash"},
+    "spec": {"$ref": "battle-spec-v1.schema.json"},
+    "versions": {
+      "type": "object", "additionalProperties": false, "required": ["engine", "game_data"],
+      "properties": {
+        "engine": {"$ref": "battle-spec-v1.schema.json#/$defs/hash"},
+        "game_data": {"$ref": "battle-spec-v1.schema.json#/$defs/hash"}
+      }
+    },
+    "outcome": {"enum": ["self_win", "opponent_win", "simultaneous_ko", "timeout", "boundary"]},
+    "rating": {"type": "integer", "minimum": 0, "maximum": 1000},
+    "terminal": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["hp", "max_hp", "energy_points", "shields", "buffs"],
+        "properties": {
+          "hp": {"$ref": "#/$defs/count"},
+          "max_hp": {"type": "integer", "minimum": 1},
+          "energy_points": {"type": "integer", "minimum": 0, "maximum": 100},
+          "shields": {"$ref": "#/$defs/shields"},
+          "buffs": {"$ref": "battle-spec-v1.schema.json#/$defs/stages"}
+        }
+      }
+    },
+    "shields_used": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"$ref": "#/$defs/shields"}},
+    "damage": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["fast", "charged"],
+        "properties": {"fast": {"$ref": "#/$defs/count"}, "charged": {"$ref": "#/$defs/count"}}
+      }
+    },
+    "executed_moves": {"type": "array", "items": {"$ref": "#/$defs/resolvedMove"}},
+    "action_results": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["action_id", "requested_turn", "status"],
+        "properties": {
+          "action_id": {"$ref": "battle-spec-v1.schema.json#/$defs/actionId"},
+          "requested_turn": {"$ref": "#/$defs/turn"},
+          "status": {"enum": ["executed", "rejected", "not_reached"]},
+          "executed_turn": {"$ref": "#/$defs/turn"},
+          "reason": {"type": "string", "minLength": 1}
+        },
+        "if": {"properties": {"status": {"const": "executed"}}},
+        "then": {"required": ["executed_turn"]},
+        "else": {"required": ["reason"], "not": {"required": ["executed_turn"]}}
+      }
+    },
+    "turns": {"$ref": "#/$defs/count"},
+    "simulation_elapsed_ms": {"$ref": "#/$defs/count"},
+    "compute_wall_ms": {"type": "number", "minimum": 0}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"enum": ["complete", "partial"]}}},
+      "then": {
+        "required": ["battle_key", "spec", "versions", "outcome", "rating", "terminal",
+                     "shields_used", "damage", "executed_moves", "action_results",
+                     "turns", "simulation_elapsed_ms", "compute_wall_ms"],
+        "not": {"required": ["error"]}
+      },
+      "else": {
+        "required": ["error"],
+        "propertyNames": {"enum": ["schema", "status", "error"]}
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "complete"}}},
+      "then": {"properties": {"outcome": {"enum": ["self_win", "opponent_win", "simultaneous_ko"]}}}
+    },
+    {
+      "if": {"properties": {"status": {"const": "partial"}}},
+      "then": {"properties": {"outcome": {"enum": ["timeout", "boundary"]}}}
+    }
+  ],
+  "$defs": {
+    "count": {"type": "integer", "minimum": 0},
+    "turn": {"type": "integer", "minimum": 1},
+    "shields": {"type": "integer", "minimum": 0, "maximum": 2},
+    "resolvedMove": {
+      "type": "object", "additionalProperties": false,
+      "required": ["index", "turn", "actor", "kind", "move_id", "damage", "shielded", "target_hp"],
+      "properties": {
+        "index": {"$ref": "#/$defs/count"},
+        "turn": {"$ref": "#/$defs/turn"},
+        "actor": {"$ref": "battle-spec-v1.schema.json#/$defs/side"},
+        "kind": {"enum": ["fast", "charged"]},
+        "move_id": {"$ref": "battle-spec-v1.schema.json#/$defs/moveId"},
+        "damage": {"$ref": "#/$defs/count"},
+        "shielded": {"type": "boolean"},
+        "target_hp": {"$ref": "#/$defs/count"},
+        "action_id": {"$ref": "battle-spec-v1.schema.json#/$defs/actionId"}
+      }
+    }
+  }
+}

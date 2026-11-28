@@ -1,9 +1,10 @@
 FROM node:22-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS node-runtime
 FROM python:3.12-slim-trixie@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159 AS runtime
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PVP_ENGINE=direct PVP_ALLOW_BROWSER=0
-RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade apt libapt-pkg7.0 zlib1g \
+RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade apt libapt-pkg7.0 zlib1g libzstd1 \
     && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' apt)" ge 3.0.4 \
     && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' zlib1g)" ge '1:1.3.dfsg+really1.3.1-1+deb13u1' \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libzstd1)" ge '1.5.7+dfsg-1+deb13u1' \
     && apt-get install -y --no-install-recommends nginx libstdc++6 ca-certificates gosu && rm -rf /var/lib/apt/lists/* \
     && useradd -m -u 10001 appuser
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
@@ -19,6 +20,8 @@ RUN python -c "from pathlib import Path; from pvpoke_data_snapshot import instal
 COPY pvpoke_node_matrix.js /app/pvpoke_node_matrix.js
 COPY pvpoke_minior_strategy.js /app/pvpoke_minior_strategy.js
 COPY pvpoke_battle_policy.js /app/pvpoke_battle_policy.js
+COPY pvpoke_iv_boundaries.js /app/pvpoke_iv_boundaries.js
+COPY pvpoke_sandbox_runner.js pvpoke_observed_native_runner.js /app/
 RUN node -e "if(require('./pvpoke_battle_policy.js').SCHEMA !== 'strategy-detail-v1') process.exit(1)"
 COPY flashcards.html flashcards_core.js flashcards_ui.js /app/
 COPY pvpoke_party_strategy_ui.js pvpoke_party_input.js /app/

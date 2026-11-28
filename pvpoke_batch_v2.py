@@ -24,6 +24,7 @@ import pvpoke_matchup_cache as matchup_cache
 from pvpoke_calculation_version import calculation_version, force_recalculate
 import pvpoke_direct_backend as direct_backend
 from pvpoke_data_snapshot import install_snapshot
+from pvpoke_mega import is_mega_form, resolve_battle_rules
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -115,8 +116,11 @@ def get_rows(path):
         raise ValueError(f'ファイルがありません: {path}。先に --setup を実行してください')
     with path.open(encoding='utf-8-sig', newline='') as f:
         reader = csv.DictReader(f)
-        if reader.fieldnames not in (HEADER, HEADER + ['level_override']):
-            raise ValueError(f'{path.name}: 列名が不正です。必要な列: {HEADER} (任意でlevel_override)')
+        expected_base = set(HEADER)
+        allowed_extra = {'level_override', 'mega_level', 'charged3'}
+        fields = list(reader.fieldnames or ())
+        if not expected_base.issubset(fields) or len(fields) != len(set(fields)) or set(fields) - expected_base - allowed_extra:
+            raise ValueError(f'{path.name}: 列名が不正です。必要な列: {HEADER} (任意でlevel_override, mega_level, charged3)')
         rows = []
         for i, row in enumerate(reader, 2):
             if not any((v or '').strip() for v in row.values()):
@@ -141,6 +145,18 @@ def get_rows(path):
                 if not math.isfinite(override) or override < 1 or override > MAX_LEVEL or override * 2 != int(override * 2):
                     raise ValueError(f'{path.name} {i}行目: 指定レベルは1〜{MAX_LEVEL}の0.5刻みです')
                 vals['level_override'] = override
+            raw_mega_level = (row.get('mega_level') or '').strip()
+            if raw_mega_level:
+                try:
+                    mega_level = int(raw_mega_level)
+                except ValueError as e:
+                    raise ValueError(f'{path.name} {i}行目: mega_levelは1〜4の整数です') from e
+                if not 1 <= mega_level <= 4:
+                    raise ValueError(f'{path.name} {i}行目: 無効なmega_level: {mega_level}')
+                vals['mega_level'] = mega_level
+            raw_charged3 = (row.get('charged3') or '').strip()
+            if raw_charged3:
+                vals['charged3'] = raw_charged3.upper()
             rows.append(vals)
     if not rows:
         raise ValueError(f'{path.name}: データ行がありません')
@@ -159,21 +175,44 @@ def charged_move_pool(pokemon, cp_cap=CP_CAP):
     return moves
 
 
-def optimize(rows, species, cpms, fname):
+def optimize(rows, species, cpms, fname, cp_cap=CP_CAP, rules=None):
+    resolved_rules = resolve_battle_rules(rules) if rules is not None else None
+    effective_cp_cap = resolved_rules['cp_cap'] if (resolved_rules and resolved_rules['cp_cap'] is not None) else cp_cap
+    allow_downscale = bool(resolved_rules and resolved_rules['allow_cp_downscaling'] is True)
+    rule_max_level = resolved_rules['max_level'] if resolved_rules is not None else MAX_LEVEL
+
+    def _compute_cp(stats, row, cpm):
+        return max(10, math.floor(
+            (stats['atk'] + row['atk']) *
+            math.sqrt(stats['def'] + row['def']) *
+            math.sqrt(stats['hp'] + row['hp']) * cpm ** 2 / 10
+        ))
+
     prepared = []
     for idx, row in enumerate(rows, 2):
         p = species.get(row['species'])
         if p is None:
             raise ValueError(f'{fname} {idx}行目: species未登録: {row["species"]}')
+        tags = p.get('tags') or ()
+        is_mega = is_mega_form(row['species']) or ('mega' in tags)
         allowed_fast = set(p['fastMoves'])
-        allowed_charged = set(charged_move_pool(p))
+        allowed_charged = set(charged_move_pool(p, cp_cap=effective_cp_cap))
         for key, allowed in [('fast', allowed_fast), ('charged1', allowed_charged), ('charged2', allowed_charged)]:
             if row[key] not in allowed:
                 raise ValueError(f'{fname} {idx}行目: 未対応の技: {key}={row[key]} ({row["species"]})')
         if row['charged1'] == row['charged2']:
             raise ValueError(f'{fname} {idx}行目: 同じゲージ技が2つ指定されています')
+        if row.get('charged3') is not None:
+            extra_charged = set(p.get('extraChargedMoves') or ())
+            if 'mega' not in tags or row['charged3'] not in extra_charged:
+                raise ValueError(f'{fname} {idx}行目: 未対応の追加ゲージ技: charged3={row["charged3"]} ({row["species"]})')
+            if row['charged3'] in (row['charged1'], row['charged2']):
+                raise ValueError(f'{fname} {idx}行目: 同じゲージ技が重複しています')
+        if row.get('mega_level') is not None:
+            if type(row['mega_level']) is not int or not 1 <= row['mega_level'] <= 4:
+                raise ValueError(f'{fname} {idx}行目: 無効なmega_level: {row["mega_level"]}')
         stats = p['baseStats']
-        maxlevel = min(MAX_LEVEL, float(p.get('levelCap', MAX_LEVEL)))
+        maxlevel = min(MAX_LEVEL, rule_max_level, float(p.get('levelCap', MAX_LEVEL)))
         floorlevel = max(1.0, float(p.get('levelFloor', 1.0)))
         possibilities = []
         # Exact half-level increments per PvPoke CPM table, no approximation.
@@ -182,25 +221,50 @@ def optimize(rows, species, cpms, fname):
             index = half - 2
             if index < 0 or index >= len(cpms):
                 continue
-            cpm = cpms[index]
-            cp = max(10, math.floor(
-                (stats['atk'] + row['atk']) *
-                math.sqrt(stats['def'] + row['def']) *
-                math.sqrt(stats['hp'] + row['hp']) * cpm ** 2 / 10
-            ))
-            if cp <= CP_CAP:
+            cp = _compute_cp(stats, row, cpms[index])
+            if cp <= effective_cp_cap:
                 possibilities.append((level, cp))
+        if not possibilities and is_mega and allow_downscale and floorlevel > 1.0:
+            for half in range(2, math.floor(maxlevel * 2) + 1):
+                level = half / 2
+                index = half - 2
+                if index < 0 or index >= len(cpms):
+                    continue
+                cp = _compute_cp(stats, row, cpms[index])
+                if cp <= effective_cp_cap:
+                    possibilities.append((level, cp))
         if not possibilities:
-            raise ValueError(f'{fname} {idx}行目: CP{CP_CAP}以下の適正レベルが見つかりません')
+            raise ValueError(f'{fname} {idx}行目: CP{effective_cp_cap}以下の適正レベルが見つかりません')
+        downscaled = False
+        requested = None
+        original_cp = None
         if row.get('level_override') is not None:
             requested = float(row['level_override'])
             selected = [pair for pair in possibilities if abs(pair[0] - requested) < .001]
-            if not selected:
+            if selected:
+                level, cp = selected[0]
+            elif is_mega and allow_downscale:
+                if (not math.isfinite(requested) or requested < 1.0 or requested > maxlevel
+                        or requested * 2 != int(requested * 2)):
+                    raise ValueError(f'{fname} {idx}行目: PvPokeデフォルトのLv{requested:g}がCP上限・レベル上限に適合しません')
+                req_index = int(requested * 2) - 2
+                if req_index < 0 or req_index >= len(cpms):
+                    raise ValueError(f'{fname} {idx}行目: PvPokeデフォルトのLv{requested:g}がCP上限・レベル上限に適合しません')
+                original_cp = _compute_cp(stats, row, cpms[req_index])
+                if original_cp <= effective_cp_cap:
+                    raise ValueError(f'{fname} {idx}行目: PvPokeデフォルトのLv{requested:g}がCP上限・レベル上限に適合しません')
+                level, cp = possibilities[-1]
+                downscaled = True
+            else:
                 raise ValueError(f'{fname} {idx}行目: PvPokeデフォルトのLv{requested:g}がCP上限・レベル上限に適合しません')
-            level, cp = selected[0]
         else:
             level, cp = possibilities[-1]
-        prepared.append({**row, 'level': level, 'cp': cp})
+        entry = {**row, 'level': level, 'cp': cp}
+        if downscaled:
+            entry['downscaled'] = True
+            entry['original_level'] = requested
+            entry['original_cp'] = original_cp
+        prepared.append(entry)
     return prepared
 
 
@@ -232,11 +296,16 @@ def export_row_matches(actual, expected):
         return False
 
 
-def prepare(refresh=False):
+def prepare(refresh=False, rules=None):
     setup()
     gm, cpms, species = game_data(refresh=refresh)
-    candidates = optimize(get_rows(CAND), species, cpms, CAND.name)
-    opponents = optimize(get_rows(OPPS), species, cpms, OPPS.name)
+    resolved_rules = resolve_battle_rules(rules) if rules is not None else None
+    effective_cp_cap = (resolved_rules['cp_cap']
+                        if (resolved_rules and resolved_rules['cp_cap'] is not None)
+                        else CP_CAP)
+    effective_max_level = resolved_rules['max_level'] if resolved_rules is not None else MAX_LEVEL
+    candidates = optimize(get_rows(CAND), species, cpms, CAND.name, rules=resolved_rules)
+    opponents = optimize(get_rows(OPPS), species, cpms, OPPS.name, cp_cap=effective_cp_cap)
     DIR.mkdir(exist_ok=True)
     for stem, rows in [('prepared_candidates', candidates), ('prepared_opponents', opponents)]:
         with (DIR / (stem + '.csv')).open('w', newline='', encoding='utf-8') as f:
@@ -244,7 +313,7 @@ def prepare(refresh=False):
             w.writerow(['species', 'fast', 'charged1', 'charged2', 'level', 'atk', 'def', 'hp', 'cp'])
             for r in rows:
                 w.writerow([r[k] for k in ('species', 'fast', 'charged1', 'charged2', 'level', 'atk', 'def', 'hp', 'cp')])
-    print(f'\nCP調整完了: 自分{len(candidates)}体、相手{len(opponents)}体 (CP上限={CP_CAP}; Lv上限={MAX_LEVEL})')
+    print(f'\nCP調整完了: 自分{len(candidates)}体、相手{len(opponents)}体 (CP上限={effective_cp_cap}; Lv上限={effective_max_level})')
     print('使用ゲームデータ:', gm.get('timestamp', '更新日時不明'))
     for side, rows in [('自分', candidates), ('相手', opponents)]:
         for r in rows[:15]:
@@ -491,9 +560,18 @@ def chunks(array, size):
     return [(n, array[n:n+size]) for n in range(0, len(array), size)]
 
 
-def run(refresh=False, shield_set='all'):
+def run(refresh=False, shield_set='all', rules=None):
     run_started = time.monotonic()
-    gm, candidates, opponents = prepare(refresh=refresh)
+    resolved_rules = resolve_battle_rules(rules) if rules is not None else None
+    effective_cp_cap = (resolved_rules['cp_cap']
+                        if (resolved_rules and resolved_rules['cp_cap'] is not None)
+                        else CP_CAP)
+    effective_max_level = resolved_rules['max_level'] if resolved_rules is not None else MAX_LEVEL
+    gm, candidates, opponents = (
+        prepare(refresh=refresh, rules=resolved_rules)
+        if resolved_rules is not None
+        else prepare(refresh=refresh)
+    )
     minior_batch = any(str(row['species']).lower().startswith('minior') for row in candidates)
     pairs = SCENARIOS[shield_set]
     OUT.mkdir(parents=True, exist_ok=True)
@@ -513,7 +591,8 @@ def run(refresh=False, shield_set='all'):
     pokemonjs_hash = hashlib.sha256((DATA/'Pokemon.js').read_bytes()).hexdigest()
     fingerprint = hashlib.sha256(json.dumps({
         'candidates': candidates, 'opponents': opponents,
-        'cp_cap': CP_CAP, 'max_level': MAX_LEVEL,
+        'cp_cap': effective_cp_cap, 'max_level': effective_max_level,
+        'rules': resolved_rules,
         'gamemaster_hash': gamemaster_hash, 'pokemonjs_hash': pokemonjs_hash,
         'engine_version': engine_version, 'pairs': pairs, 'candidate_chunk': CAND_CHUNK,
         'opponent_chunk': OPP_CHUNK, 'version': 'minior-hp-3policies-v1' if minior_batch else 5
@@ -529,10 +608,15 @@ def run(refresh=False, shield_set='all'):
     # Never silently reuse old or unannotated Minior matchups.
     if reuse_results and not minior_batch and os.environ.get('PVP_MATCHUP_CACHE', '1').lower() not in ('0', 'false', 'off'):
         try:
+            downscale_mode = ('allow_cp_downscaling'
+                              if (resolved_rules and resolved_rules.get('allow_cp_downscaling') is True)
+                              else '')
+            cup_id = (resolved_rules.get('cup_id') or '') if resolved_rules else ''
             ns = matchup_cache.cache_namespace(
                 gamemaster_hash=gamemaster_hash, pokemonjs_hash=pokemonjs_hash,
-                cp_cap=CP_CAP, max_level=MAX_LEVEL, engine_hash=engine_version,
-                epoch=os.environ.get('PVP_CACHE_EPOCH', ''))
+                cp_cap=effective_cp_cap, max_level=effective_max_level, engine_hash=engine_version,
+                epoch=os.environ.get('PVP_CACHE_EPOCH', ''),
+                downscaling_mode=downscale_mode, cup_id=cup_id)
             cache_dir = pvpoke_archive.archive_dir(DATA.parent)
             cache = matchup_cache.MatchupCache(cache_dir / 'matchups.sqlite3', ns)
             print(f'Matchup cache enabled: {cache.path}', flush=True)
@@ -558,7 +642,9 @@ def run(refresh=False, shield_set='all'):
                     node_client = direct_backend.DirectMatrixClient(
                         gamemaster=DATA / 'gamemaster.json', log_dir=DIR)
                 started = time.monotonic()
-                rows = node_client.simulate(crows, orows, pair)
+                rows = (node_client.simulate(crows, orows, pair, cp_cap=effective_cp_cap)
+                        if effective_cp_cap != CP_CAP
+                        else node_client.simulate(crows, orows, pair))
                 if minior_batch:
                     evidence = node_client.last_minior_data
                     if evidence is None or len(evidence) != len(crows):
@@ -589,7 +675,7 @@ def run(refresh=False, shield_set='all'):
             except (OSError, ValueError, RuntimeError) as error:
                 if minior_batch:
                     # Browser fallback lacks our Minior HP and charge policy hooks.
-                    raise RuntimeError(f'メテノ戦術比較失敗（通常PvPoke結果へフォールバックしません）: {error}') from error
+                    raise RuntimeError('メテノ戦術比較失敗（通常PvPoke結果へフォールバックしません）') from error
                 raise RuntimeError('Direct計算に失敗しました。安全のためブラウザーへ自動切替しません') from error
         identity = (tuple(tuple(r.get(k) for k in HEADER + ['level', 'cp']) for r in crows),
                     tuple(tuple(r.get(k) for k in HEADER + ['level', 'cp']) for r in orows))

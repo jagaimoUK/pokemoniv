@@ -21,6 +21,13 @@ for(const mutate of [
 ]){const invalid=structuredClone(incoming);mutate(invalid);assert.throws(()=>M.validate(invalid));}
 const withModes=structuredClone(incoming);withModes.local['pvpoke-app-selection-modes-v1']='{"corsola":"detailed"}';
 M.validate(withModes);assert.equal(M.covers(withModes,withModes),true);
+assert.match(M.previewText(withModes),/詳細厳選 1種/);
+assert.match(M.previewText(incoming),/厳選設定は未保存/);
+const invalidMode=structuredClone(withModes);
+invalidMode.local['pvpoke-app-selection-modes-v1']='{"corsola":"simple","quagsire":"detailed"}';
+assert.match(M.previewText(invalidMode),/無効な設定 1件/);
+invalidMode.local['pvpoke-app-selection-modes-v1']='not-json';
+assert.match(M.previewText(invalidMode),/厳選設定が不正/);
 const changedMode=structuredClone(withModes);changedMode.local['pvpoke-app-selection-modes-v1']='{"quagsire":"detailed"}';
 assert(M.conflicts(changedMode,withModes).includes('local:pvpoke-app-selection-modes-v1'));
 assert(!require('fs').readFileSync('pvpoke_browser_migration.js','utf8').includes('document.cookie'));

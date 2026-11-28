@@ -86,10 +86,22 @@ async function verifyIntegrity(data){
  if(bytes.byteLength!==integrity.bytes||(await seal(unsigned)).integrity.value!==integrity.value)fail();
  return data;
 }
+function modePreview(data){
+ const raw=data.local['pvpoke-app-selection-modes-v1'];
+ if(raw==null)return 'ポケモンごとの厳選設定は未保存（詳細厳選の登録があれば、元のサイトの同じChromeプロファイルで確認してください）';
+ try{
+  const modes=JSON.parse(raw);
+  if(!modes||typeof modes!=='object'||Array.isArray(modes))throw Error('Invalid modes');
+  const entries=Object.entries(modes);
+  const valid=entries.filter(([key,value])=>/^[a-z0-9_]+$/.test(key)&&!['__proto__','constructor','prototype'].includes(key)&&value==='detailed').length;
+  const suffix=valid!==entries.length?'。無効な設定 '+(entries.length-valid)+'件はアプリで反映されません':'';
+  return 'ポケモンごとの詳細厳選 '+valid+'種（通常厳選は既定値）'+suffix;
+ }catch{return '厳選設定が不正なためアプリに反映されません。元のサイトで設定を確認してください';}
+}
 function previewText(data){
  const local=Object.values(data.local).filter(x=>x!==null).length;
  const session=Object.values(data.session).filter(x=>x!==null).length;
- return 'ブラウザ内：技構成・厳選設定 '+local+'項目、計算再開情報 '+session+'項目、フラッシュカード設定 '+data.flashcards.kv.length+'件、復習記録 '+data.flashcards.reviews.length+'件。サーバーのSQLite・ZIPやAndroidの読み取り履歴は含みません。';
+ return 'ブラウザ内：技構成・厳選設定 '+local+'項目（'+modePreview(data)+'）、計算再開情報 '+session+'項目、フラッシュカード設定 '+data.flashcards.kv.length+'件、復習記録 '+data.flashcards.reviews.length+'件。サーバーのSQLite・ZIPやAndroidの読み取り履歴は含みません。';
 }
 function download(data){
  const blob=new Blob([JSON.stringify(data)],{type:'application/json'}),url=URL.createObjectURL(blob);
@@ -148,7 +160,7 @@ $('migrationFile').onchange=async()=>{
 };
 $('migrationImport').onclick=async()=>{
  const data=root.migrationPending;if(!data)return;$('migrationImport').disabled=true;
- try{await restore(data);root.migrationPending=null;say('復元と照合が完了しました。このタブで「厳選アプリへ」を開いてください。ログインは接続キーでやり直してください。');}
+ try{const restored=await restore(data);root.migrationPending=null;say('復元と照合が完了しました。'+modePreview(restored)+'。このタブで「厳選アプリへ」を開いてください。ログインは接続キーでやり直してください。');}
  catch(error){say('復元できませんでした。'+error.message);}
 };
 })(typeof globalThis==='object'?globalThis:this);

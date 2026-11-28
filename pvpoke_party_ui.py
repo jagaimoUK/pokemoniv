@@ -49,22 +49,32 @@ dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100
 .heatmap th:first-child{min-width:95px;position:sticky;left:0;background:#203138;z-index:1;text-align:left}
 .heatmap td{white-space:pre-line;font-variant-numeric:tabular-nums;padding:8px 2px;border-radius:8px}
 .heat-win{background:#236e96;color:#fff}.heat-mid{background:#85819e;color:#fff}.heat-loss{background:#953276;color:#fff}.heat-unknown{background:#52615d;color:#fff}
+.guide-banner{padding:11px 14px;margin:10px 0 14px;border:1px solid #96debf;border-left:5px solid #96debf;border-radius:14px;background:rgba(150,222,191,.1);font-size:14px;line-height:1.6}
+.step-pill{display:inline-block;padding:1px 8px;margin-right:5px;border-radius:999px;background:#96debf;color:#112b23;font-weight:800;font-size:12px}
+.guide-hint{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;margin:4px 0;border-radius:8px;background:rgba(150,222,191,.15);border-left:3px solid #96debf;color:#96debf;font-size:13px;font-weight:700}
 @media(max-width:550px){main{padding:12px 10px 110px}section{padding:12px}.mon{padding:8px}.fields{grid-template-columns:1fr}}
 </style></head><body><main><nav><a href="/app">← 個体値厳選</a><a href="/flashcards">フラッシュカード</a></nav>
 <h1>見せ合い6体・選出3体</h1><p>重要メタへの穴、15ペアの補完、20組の3体、相手6体への選出を分析するにぇ。Battle Ratingは実戦勝率ではありません。</p>
 <section id="auth"><h2>アプリに接続</h2><p>ログイン済みのブラウザでは自動接続します。</p><div class="tools"><input id="key" type="password" autocomplete="off" placeholder="接続キー"><button id="login">接続する</button></div></section>
 <div id="workspace" hidden>
+<div class="guide-banner" role="note"><strong>👉 全体の流れ：</strong><span class="step-pill">Step 1</span>ルールと6体メンバーを入力 ➜ <span class="step-pill">Step 2</span>画面下の「6体を分析」をタップ</div>
 <section id="partyLibrary"><details open><summary>パーティを保存・切り替え</summary>
 <p>自分6体と相手6体、技・個体値、詳細戦略の相手と条件をパーティごとに保存できます。保存済みは最大32件です。</p>
 <label for="partyName">パーティ名</label><input id="partyName" value="新しいパーティ" maxlength="60">
 <p id="partyState" role="status">新規パーティ（未保存）</p>
+<p class="guide-hint">👇 パーティを保存・更新するときはここをタップ</p>
 <div class="tools"><button id="save">保存・上書き</button><button id="saveAs">別パーティとして保存</button></div>
 <label for="saved">保存済みのパーティ</label><select id="saved"><option value="">読み込むパーティを選ぶ</option></select>
 <button id="load">選んだパーティを読み込む</button>
 </details></section>
 <div class="tabs"><button data-tab="compose" aria-pressed="true">構築</button><button data-tab="weakness">弱点・補完</button><button data-tab="selection">相手と選出</button><button data-tab="strategy">詳細戦略</button><button data-tab="settings">保存・設定</button></div>
-<div id="compose"><section><h2>自分の6体</h2><p>各枠をタップして技と個体値を編集。IV省略時はPvPoke標準値を使用します。CP1500/Lv50・同一図鑑番号は1枠。</p><div class="grid" id="members"></div></section>
+<div id="compose"><section><h2>自分の6体</h2><p class="guide-hint">👇 Step 1: ここで大会ルール（メガ上限）と6体のポケモン・技を選択</p><p>各枠をタップして技と個体値を編集。IV省略時はPvPoke標準値を使用します。CP1500/Lv50・同一図鑑番号は1枠（6体登録時は複数メガ可、3体選出は下の大会ルールに従います）。</p>
+<div id="megaRuleSettings"><label for="partyRuleset">大会ルール（メガシンカ上限）<select id="partyRuleset"><option value="cp1500-lv50">通常スーパーリーグ（CP1500 / 3体選出メガ0体）</option><option value="great_mega">スーパーリーグ・メガエディション（CP1500 / 6体複数可・3体選出メガ1体）</option><option value="mega_edition">メガエディション標準（CP1500 / 6体複数可・3体選出メガ1体）</option><option value="custom">カスタム大会（3体選出メガ上限を明示指定）</option></select></label>
+<div id="customMegaRulesWrap" class="fields" hidden><label for="customCupId">カップID（任意）<input id="customCupId" placeholder="例：special_double_mega"></label><label for="maxMegasInThree">3体選出メガ許可数（0〜3体）<select id="maxMegasInThree"><option value="0">0体（メガ禁止）</option><option value="1" selected>1体</option><option value="2">2体</option><option value="3">3体</option></select></label><label for="maxMegasInSix">6体登録メガ上限（1〜6体）<select id="maxMegasInSix"><option value="1">1体</option><option value="2">2体</option><option value="3">3体</option><option value="4">4体</option><option value="5">5体</option><option value="6" selected>6体</option></select></label></div></div>
+<p class="guide-hint">👇 各カードの「例：サニーゴ」をタップしてポケモン名を入力（技・IVは自動設定されます）</p>
+<div class="grid" id="members"></div></section>
 <section><h2>自動構築</h2><p>名前から候補を追加します。固定枠を残して最大48候補から探索します。</p>
+<div class="tools"><button id="loadOwnedPool" type="button">手持ち一覧から候補を読み込む</button></div>
 <textarea id="pool" placeholder="azumarill,BUBBLE,ICE_BEAM,PLAY_ROUGH,0,15,15"></textarea>
 <label><input id="strategyRefinement" type="checkbox" checked> 詳細戦略を構築と補完に反映</label>
 <p>一次探索の上位最大3案を、共通の重要相手最大3条件で追加比較します。未評価がある場合は順位を維持します。外すと従来の高速な静的評価のみ。1体交換候補の順位は静的評価です。</p>
@@ -110,7 +120,7 @@ dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100
 <p id="metaWeightSaveStatus" role="status"></p>
 <p>重要度はポケモンごとに自動保存し、別のメタや再読み込み後も引き継ぎます。パーティ保存時には現在の値も記録します。詳細戦略では重要度は使用しません。メタは最大500技構成に対応します。</p></section></div>
 <section><h2>計算状況と結果</h2><div id="status" role="status" aria-live="polite">接続を確認しています。</div><div id="result"></div></section>
-</div></main><footer><div class="tools"><button id="analyze" disabled>6体を分析</button><button id="cancel" disabled>計算を中止</button></div></footer>
+</div></main><footer><div class="tools"><p class="guide-hint" style="display:block;width:100%;margin:0 0 6px">👇 Step 2: メンバーが決まったらここをタップして6体を分析</p><button id="analyze" disabled>6体を分析</button><button id="cancel" disabled>計算を中止</button></div></footer>
 <datalist id="speciesList"></datalist><script>
 'use strict';
 const $=id=>document.getElementById(id);
@@ -130,7 +140,7 @@ async function api(path,body={}){
 }
 /*PARTY_INPUT*/
 function renderMon(rows=[]){$('members').replaceChildren();for(let i=0;i<6;i++)$('members').append(createMon(rows[i]||{}))}
-function getMon(){return [...$('members').children].map(readPartyCard)}
+function getMon(){return [...$('members').children].map((box,i)=>readPartyCard(box,i))}
 function locks(){return [...$('members').children].flatMap((box,i)=>box.querySelector('[data-field=locked]').checked?[i]:[])}
 function normalizeMetaId(value){
  const s=String(value||'').trim().toLowerCase();
@@ -262,7 +272,7 @@ function applyRecommendedSwap(result,item){
   status('対象枠が変更または固定されています。再分析してください。');return;
  }
  rows[item.slot]={species:next.species,fast:next.moves[0],charged1:next.moves[1],charged2:next.moves[2],
-  atk:next.ivs[0],def:next.ivs[1],hp:next.ivs[2],level_override:next.level};
+  atk:next.ivs[0],def:next.ivs[1],hp:next.ivs[2],level_override:next.level,...(next.mega_level!=null?{mega_level:next.mega_level}:{}),...(next.charged3?{charged3:next.charged3}:{})};
  renderMon(rows);inputRevision++;lastReportRevision=-1;latest=null;strategyTargets();
  $('swapAdvice').replaceChildren(node('p','入れ替えを反映しました。以下の数値は変更前のものです。再分析してください。'));
  $('partyState').textContent='未保存の変更あり（上部の保存・上書きで記録）';
@@ -388,7 +398,7 @@ function applyCompletedParty(result,plan){
  }
  const next=plan.roster.map((id,i)=>{
   const p=result.labels[id];if(!p)throw Error('提案のデータが見つかりません');
-  return id===result.roster[i]?{...current[i]}:{species:p.species,fast:p.moves[0],charged1:p.moves[1],charged2:p.moves[2],atk:p.ivs[0],def:p.ivs[1],hp:p.ivs[2],level_override:p.level};
+  return id===result.roster[i]?{...current[i]}:{species:p.species,fast:p.moves[0],charged1:p.moves[1],charged2:p.moves[2],atk:p.ivs[0],def:p.ivs[1],hp:p.ivs[2],level_override:p.level,...(p.mega_level!=null?{mega_level:p.mega_level}:{}),...(p.charged3?{charged3:p.charged3}:{})};
  });
  renderMon(next.map((m,i)=>({...m,locked:fixed.includes(i)})));
  inputRevision++;lastReportRevision=-1;latest=null;strategyTargets();
@@ -494,7 +504,9 @@ function show(result){latest=result;lastReportRevision=inputRevision;
   }li.append(detail);pairs.append(li);
  });root.append(pairs);
  root.append(node('h3','注目ペアのCore Breaker'));const cb=node('ul');result.pairs.slice(0,5).forEach(x=>{if(x.core_breakers.length)cb.append(node('li',x.members.map(label).join(' + ')+' に共通して有利: '+x.core_breakers.slice(0,3).map(z=>label(z.opponent)).join('、')))});root.append(cb);
- root.append(node('h3','20組の3体別の穴'));const triples=node('ul');result.triples.forEach(x=>triples.append(node('li',x.members.map(label).join(' / ')+' D0 '+pct(x.summary.d0)+' D1 '+pct(x.summary.d1))));root.append(triples);
+ root.append(node('h3',result.triples.length+'組の3体別の穴'));
+ if(result.mega_policy)addLine(root,'大会ルール上限: 6体登録メガ最大'+result.mega_policy.max_megas_in_six+'体 / 3体選出メガ最大'+result.mega_policy.max_megas_in_three+'体');
+ const triples=node('ul');result.triples.forEach(x=>triples.append(node('li',x.members.map(label).join(' / ')+' D0 '+pct(x.summary.d0)+' D1 '+pct(x.summary.d1))));root.append(triples);
  const sel=$('selectionResult');sel.replaceChildren();if(result.selection.status==='計算済み'){sel.append(node('h3','推奨選出（先頭が初手）'));result.selection.recommendations.forEach((x,i)=>{const b=node('div',null,'result');b.append(node('strong',(i+1)+'案: '+x.selection.map(label).join(' → ')));addLine(b,'保守的な静的比較値 '+x.worst+' / 危険な相手選出 '+x.worst_opponent.map(label).join(' / '));sel.append(b)})}else addLine(sel,result.selection.missing_condition||result.selection.status);
  $('result').replaceChildren(node('p','キャッシュ再利用 '+result.cache.hits+' / 新規セル '+result.cache.computed+' / '+result.elapsed_seconds+'秒'),
  node('p','未計算: '+result.not_calculated.join('、')));
@@ -503,8 +515,37 @@ function show(result){latest=result;lastReportRevision=inputRevision;
  const target=proposed?$('swapAdvice'):$(currentTab==='selection'?'selectionResult':'weakResult');
  requestAnimationFrame(()=>target.scrollIntoView({block:'start',behavior:'smooth'}));
 }
+function toggleCustomMegaRules(){const custom=$('partyRuleset')?.value==='custom';if($('customMegaRulesWrap'))$('customMegaRulesWrap').hidden=!custom;}
+function partyRulePayload(){
+ const preset=$('partyRuleset')?.value||'cp1500-lv50';
+ if(preset==='cp1500-lv50')return {ruleset:'cp1500-lv50'};
+ if(preset==='custom'){
+  const cup=($('customCupId')?.value||'').trim()||'custom_cup';
+  return {ruleset:'cp1500-lv50',mega_rules:{cup_id:cup,max_megas_in_three:Number($('maxMegasInThree')?.value??1),max_megas_in_six:Number($('maxMegasInSix')?.value??6)}};
+ }
+ return {ruleset:preset,mega_rules:{cup_id:preset}};
+}
+function restorePartyRules(ruleset,megaRules){
+ const sel=$('partyRuleset');if(!sel)return;
+ const hasExplicit=megaRules&&typeof megaRules==='object'&&megaRules.max_megas_in_three!=null;
+ const cup=megaRules?.cup_id||(ruleset&&ruleset!=='cp1500-lv50'?ruleset:'');
+ if(hasExplicit|| (cup&&!['cp1500-lv50','great_mega','mega_edition'].includes(cup))){
+  sel.value='custom';
+  if($('customCupId'))$('customCupId').value=cup;
+  if($('maxMegasInThree')&&megaRules?.max_megas_in_three!=null)$('maxMegasInThree').value=String(megaRules.max_megas_in_three);
+  if($('maxMegasInSix')&&megaRules?.max_megas_in_six!=null)$('maxMegasInSix').value=String(megaRules.max_megas_in_six);
+ }else if(cup==='great_mega'||cup==='mega_edition'){
+  sel.value=cup;
+ }else{
+  sel.value='cp1500-lv50';
+ }
+ toggleCustomMegaRules();
+}
+$('partyRuleset')?.addEventListener('change',()=>{inputRevision++;toggleCustomMegaRules();});
 function partyCalculationRequest(mode,findSwaps=false,autoComplete=false){
- const request={mode,members:getMon(),locked_slots:locks(),meta_preset_id:$('meta').value,meta_sha256:metaItems.find(x=>x.id===$('meta').value)?.sha256,group_weights:mode==='strategy'?{}:getWeights(),ruleset:'cp1500-lv50',strategy_refinement:$('strategyRefinement').checked};
+ const members=getMon();
+ if(mode!=='build')validatePartyAnalysisMembers(members);
+ const request={mode,members,locked_slots:locks(),meta_preset_id:$('meta').value,meta_sha256:metaItems.find(x=>x.id===$('meta').value)?.sha256,group_weights:mode==='strategy'?{}:getWeights(),...partyRulePayload(),strategy_refinement:$('strategyRefinement').checked};
  if(findSwaps||autoComplete)request.candidate_pool=partyRosterRows('pool');
  if(findSwaps)request.auto_replacements=true;
  if(autoComplete)request.auto_complete=true;
@@ -532,18 +573,68 @@ $('recommend').onclick=()=>wrap('analyze',true);
 $('autoComplete').onclick=()=>wrap('analyze',false,true);
 $('build').onclick=()=>wrap('build');$('select').onclick=()=>wrap('select');
 $('cancel').onclick=()=>activeJob&&api('party/cancel',{job_id:activeJob}).then(()=>status('中止要求を送信しました'));
+const PARTY_HANDOFF_KEY='pvpoke_party_handoff_v1';
+function partyCandidateKey(r){return [r.species,r.fast,r.charged1,r.charged2,r.atk??'',r.def??'',r.hp??'',r.level_override??'',r.mega_level??'',r.charged3??''].join('|');}
+function mergeOwnedIntoPool(incoming){
+ let existing=[];try{existing=partyRosterRows('pool');}catch(_){existing=[];}
+ const seen=new Set(existing.map(partyCandidateKey));
+ const merged=[...existing];let added=0;
+ for(const item of incoming){
+  if(!item||!item.species||!catalog[item.species])continue;
+  if(merged.length>=48)break;
+  const k=partyCandidateKey(item);
+  if(seen.has(k))continue;
+  seen.add(k);merged.push(item);added++;
+ }
+ rosterEditors.pool.refresh(merged);
+ return {added,total:merged.length};
+}
+function consumePartyHandoff(){
+ let raw=null;try{raw=localStorage.getItem(PARTY_HANDOFF_KEY);if(raw)localStorage.removeItem(PARTY_HANDOFF_KEY);}catch(_){return;}
+ if(!raw)return;
+ let items;try{items=JSON.parse(raw);}catch(_){return;}
+ if(!Array.isArray(items)||!items.length)return;
+ const valid=items.filter(x=>x&&x.species&&catalog[x.species]);
+ if(!valid.length)return;
+ let slots=[];try{slots=getMon();}catch(_){slots=Array.from({length:6},()=>({}));}
+ while(slots.length<6)slots.push({});
+ let placed=0;const overflow=[];
+ for(const item of valid){
+  const emptyIdx=slots.findIndex(m=>!m||!m.species);
+  if(emptyIdx>=0){slots[emptyIdx]=item;placed++;}else{overflow.push(item);}
+ }
+ if(placed>0){renderMon(slots);inputRevision++;}
+ let poolAdded=0;
+ if(overflow.length){poolAdded=mergeOwnedIntoPool(overflow).added;}
+ const hasMega=valid.some(x=>isPartyMegaSpecies(x.species,catalog[x.species]));
+ const names=valid.slice(0,3).map(x=>partyDisplay(x.species)).join(' / ')+(valid.length>3?' 他':'');
+ const megaHint=(hasMega&&$('partyRuleset')?.value==='cp1500-lv50')?'（メガ個体を含むため、必要に応じて大会ルールを変更してください）':'';
+ status('手持ち・不足分析から '+valid.length+'件（'+names+'）を読み込みました'+megaHint);
+}
+$('loadOwnedPool').onclick=async()=>{
+ try{
+  $('loadOwnedPool').disabled=true;
+  const res=await api('party/owned-candidates',{});
+  const items=Array.isArray(res.items)?res.items:[];
+  if(!items.length){status('手持ち一覧（確認済み個体）に登録がありません。不足個体分析から登録してください。');return;}
+  const {added,total}=mergeOwnedIntoPool(items);
+  const megaCount=items.filter(x=>isPartyMegaSpecies(x.species,catalog[x.species])).length;
+  status('手持ちから '+items.length+'件（うちメガ個体 '+megaCount+'件）を取得し、候補プールへ '+added+'件追加しました（合計 '+total+'件）');
+ }catch(e){status(e.message);}finally{$('loadOwnedPool').disabled=false;}
+};
 function populateSaved(items,selected=partyId){$('saved').replaceChildren(new Option('読み込むパーティを選ぶ',''));items.forEach(x=>$('saved').append(new Option(x.name,x.id)));$('saved').value=selected||'';}
 async function setup(){
  const [cat,presets,saved,defaults]=await Promise.all([api('catalog'),api('meta-presets'),api('party/list'),api('party/meta-weights')]);
  metaWeightDefaults=defaults.weights||{};restoreMetaWeightValues();
  if(!cat.ready)throw Error('ゲームデータがまだ準備中です');catalog=cat.species;partyMoveNames=cat.moves||{};metaItems=presets.items;
  for(const m of metaItems.filter(x=>x.available!==false)){let o=new Option(m.name+' ('+m.rows+'件)',m.id);$('meta').append(o)}$('meta').value=presets.default_id;
- populateSaved(saved.items);renderMon();await loadMetaWeightRows();if(!rosterEditors.enemy){rosterEditors.enemy=partyRosterEditor('enemy',6);rosterEditors.pool=partyRosterEditor('pool',48);rosterEditors.strategyEnemy=partyRosterEditor('strategyEnemy',6);rosterEditors.hypotheses=partyRosterEditor('hypotheses',8);}$('workspace').hidden=false;$('auth').hidden=true;$('analyze').disabled=false;status('6体を入力すると分析できます')}
+ populateSaved(saved.items);renderMon();await loadMetaWeightRows();if(!rosterEditors.enemy){rosterEditors.enemy=partyRosterEditor('enemy',6);rosterEditors.pool=partyRosterEditor('pool',48);rosterEditors.strategyEnemy=partyRosterEditor('strategyEnemy',6);rosterEditors.hypotheses=partyRosterEditor('hypotheses',8);}$('workspace').hidden=false;$('auth').hidden=true;$('analyze').disabled=false;status('6体を入力すると分析できます');consumePartyHandoff();}
 $('login').onclick=async()=>{key=$('key').value.trim();try{await setup();if(key)await api('session',{}).catch(()=>{})}catch(e){$('workspace').hidden=false;status(e.message)}};
 async function saveParty(asNew=false){try{
  await flushMetaWeights();
  const obj={id:asNew?null:partyId,revision:asNew?0:revision,name:$('partyName').value,members:getMon(),locked_slots:locks(),
   meta_preset_id:$('meta').value,meta_sha256:metaItems.find(x=>x.id===$('meta').value)?.sha256,group_weights:getWeights(),
+  ...partyRulePayload(),
   strategy:{...getStrategy(),enemy_csv:$('strategyEnemy').value},strategy_refinement:$('strategyRefinement').checked,opponents:partyRosterRows('enemy'),candidate_pool:partyRosterRows('pool'),
   opponent_uncertainty:$('opponentUncertainty').checked,opponent_hypotheses:partyRosterRows('hypotheses')};
  const r=await api('party/save',obj);partyId=r.id;revision=r.revision;
@@ -556,6 +647,7 @@ $('saveAs').onclick=()=>saveParty(true);
 $('load').onclick=async()=>{try{
  const id=$('saved').value;if(!id)throw Error('読み込むパーティを選んでください');
  const p=await api('party/get',{id});partyId=p.id;revision=p.revision;$('partyName').value=p.name;
+ restorePartyRules(p.ruleset,p.mega_rules);
  renderMon((p.members||[]).map((m,i)=>({...m,locked:(p.locked_slots||[]).includes(i)})));
  if(metaItems.some(x=>x.id===p.meta_preset_id))$('meta').value=p.meta_preset_id;
  restoreMetaWeightValues(p.group_weights);await loadMetaWeightRows();
