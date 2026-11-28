@@ -330,7 +330,47 @@ class PartyMegaImportanceAndSwapTests(unittest.TestCase):
                 self.assertEqual(ovr_item["move_sources"]["normal"], "override")
                 self.assertEqual(ovr_item["unique_mega_win_count"], 0)
 
+    def test_mega_importance_captures_multi_shield_d1_and_rating_dominance(self):
+        roster = ["a", "b", "c", "d", "e", "charizard_mega_y"]
+        opponents = ["opp1", "opp2"]
+        weights = {"opp1": 0.5, "opp2": 0.5}
+        matrix = {}
+        for shield in ((2, 2), (1, 1), (0, 0)):
+            for m in ("a", "b", "c", "d", "e"):
+                # Member 'a' already covers opp1 (so d1=1 without Mega on opp1), nobody covers opp2 in 1-1/0-0
+                matrix[(m, "opp1", shield)] = 560 if m == "a" else 420
+                matrix[(m, "opp2", shield)] = 560 if (m == "a" and shield == (2, 2)) else 420
+            # Normal Charizard wins opp1 barely in 2-2, loses opp2 in 1-1/0-0
+            matrix[("charizard", "opp1", shield)] = 460
+            matrix[("charizard", "opp2", shield)] = 560 if shield == (2, 2) else 440
+            # Mega Charizard dominates opp1 (reducing D1!) and wins opp2 across 1-1 and 0-0
+            matrix[("charizard_mega_y", "opp1", shield)] = 700
+            matrix[("charizard_mega_y", "opp2", shield)] = 680 if shield != (2, 2) else 720
+
+        variants = {
+            5: {
+                "normal": "charizard",
+                "mega": "charizard_mega_y",
+                "active_kind": "mega",
+            }
+        }
+        imp = core.evaluate_mega_importance(
+            roster, variants, opponents, matrix, weights,
+            mega_policy={"max_megas_in_three": 1},
+        )
+        item = imp["items"][0]
+        # 2-2 unique wins is 1 (opp1), multi-shield unique weight captures 1-1/0-0 opp2 as well
+        self.assertGreater(item["score_breakdown"]["weighted_d1_reduction"], 0)
+        self.assertGreater(item["score_breakdown"]["weighted_rating_lift"], 100.0)
+        self.assertGreater(item["score_breakdown"]["party_impact"], 0)
+        self.assertGreater(item["score_breakdown"]["solo_lift"], 10.0)
+        self.assertGreaterEqual(item["importance_index"], 50.0)
+        self.assertIn("2-2", item["party_contribution"]["by_shield"])
+        self.assertIn("1-1", item["party_contribution"]["by_shield"])
+        self.assertIn("0-0", item["party_contribution"]["by_shield"])
+
     def test_ui_contains_mega_importance_and_manual_swap_controls(self):
+        import pvpoke_app_ui
         for token in (
             "megaImportanceSection",
             "manualSwapSection",
@@ -340,9 +380,23 @@ class PartyMegaImportanceAndSwapTests(unittest.TestCase):
             "party/compare-swap",
             "party/mega-importance",
             "mega-moves-editor",
+            "calcDock",
+            "calcDockMeta",
+            "calcDockBar",
+            "dockStart",
+            "mega-diag-list",
         ):
             self.assertIn(token, pvpoke_party_ui.HTML)
+        for token in (
+            "calcDock",
+            "calcDockMeta",
+            "calcDockBar",
+            "appDockStart",
+            "calcDockJump",
+        ):
+            self.assertIn(token, pvpoke_app_ui.HTML)
 
 
 if __name__ == "__main__":
     unittest.main()
+

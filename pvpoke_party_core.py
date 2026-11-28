@@ -593,7 +593,7 @@ def compare_single_swap(roster, slot, replacement_id, opponents, matrix, weights
 
 
 def _solo_summary(member_id, opponents, matrix, weights, shields=STANDARD):
-    coverage = win_weight = unknown = 0.0
+    coverage = win_weight = unknown = rating_sum = rated_weight = 0.0
     wins = evaluated = 0
     for enemy in opponents:
         w = weights.get(enemy, 0)
@@ -603,25 +603,31 @@ def _solo_summary(member_id, opponents, matrix, weights, shields=STANDARD):
             continue
         evaluated += 1
         coverage += w * strength(rating)
+        rating_sum += w * rating
+        rated_weight += w
         if rating > 500:
             wins += 1
             win_weight += w
+    avg_rating = round(rating_sum / rated_weight, 1) if rated_weight > 0 else None
     return {
         "id": member_id,
         "coverage": round(coverage, 6),
         "wins": wins,
         "evaluated": evaluated,
         "win_weight": round(win_weight, 6),
+        "avg_rating": avg_rating,
         "unknown_weight": round(unknown, 6),
     }
 
 
 def evaluate_mega_importance(roster, variants_by_slot, opponents, matrix, weights,
                              *, mega_policy=None, shields_list=((2, 2), (1, 1), (0, 0))):
-    """Quantify Mega Evolution importance from solo form diffs and party contribution."""
+    """Quantify Mega Evolution importance from multi-shield form diffs, depth, and party contribution."""
     rule_allowed = True
     if isinstance(mega_policy, dict) and mega_policy.get("max_megas_in_three") == 0:
         rule_allowed = False
+
+    base_shield_weights = {(2, 2): 0.50, (1, 1): 0.30, (0, 0): 0.20}
 
     items = []
     for slot, info in sorted(variants_by_slot.items()):
@@ -645,26 +651,31 @@ def evaluate_mega_importance(roster, variants_by_slot, opponents, matrix, weight
                 }
 
         non_mega_ids = [cid for cid in (normal_id, shadow_id) if cid]
-        unique_wins = []
-        unique_win_weight = 0.0
-        for enemy in opponents:
-            w = weights.get(enemy, 0)
-            m_rating = lookup(matrix, mega_id, enemy, STANDARD)
-            if m_rating is None or m_rating <= 500:
-                continue
-            non_ratings = [lookup(matrix, cid, enemy, STANDARD) for cid in non_mega_ids]
-            if non_ratings and all(r is not None and r <= 500 for r in non_ratings):
-                unique_win_weight += w
-                unique_wins.append({
-                    "opponent": enemy,
-                    "mega_rating": m_rating,
-                    "normal_rating": lookup(matrix, normal_id, enemy, STANDARD) if normal_id else None,
-                    "shadow_rating": lookup(matrix, shadow_id, enemy, STANDARD) if shadow_id else None,
-                    "weight": round(w, 6),
-                })
-        unique_wins.sort(key=lambda x: (-x["weight"], -x["mega_rating"]))
 
-        # Party contribution: mega roster vs best non-mega baseline roster
+        def _unique_wins_for_shield(sh):
+            wins_list = []
+            win_w = 0.0
+            for enemy in opponents:
+                w = weights.get(enemy, 0)
+                m_rating = lookup(matrix, mega_id, enemy, sh)
+                if m_rating is None or m_rating <= 500:
+                    continue
+                non_ratings = [lookup(matrix, cid, enemy, sh) for cid in non_mega_ids]
+                if non_ratings and all(r is not None and r <= 500 for r in non_ratings):
+                    win_w += w
+                    wins_list.append({
+                        "opponent": enemy,
+                        "mega_rating": m_rating,
+                        "normal_rating": lookup(matrix, normal_id, enemy, sh) if normal_id else None,
+                        "shadow_rating": lookup(matrix, shadow_id, enemy, sh) if shadow_id else None,
+                        "weight": round(w, 6),
+                    })
+            wins_list.sort(key=lambda x: (-x["weight"], -x["mega_rating"]))
+            return wins_list, win_w
+
+        unique_wins, unique_win_weight = _unique_wins_for_shield(STANDARD)
+
+        # Party contribution: mega roster vs best non-mega baseline roster (2-2 reference + per shield)
         mega_roster = list(roster)
         mega_roster[slot] = mega_id
         mega_team = team_summary(mega_roster, opponents, matrix, weights, STANDARD)
@@ -696,15 +707,77 @@ def evaluate_mega_importance(roster, variants_by_slot, opponents, matrix, weight
             d0_reduction = 0.0
             d1_reduction = 0.0
 
+        # Multi-shield weighted evaluation across available shields
+        active_shields = [
+            s for s in shields_list
+            if forms["mega"]["by_shield"].get(f"{s[0]}-{s[1]}", {}).get("evaluated", 0) > 0
+        ]
+        if not active_shields:
+            active_shields = [STANDARD]
+        raw_sw = {s: base_shield_weights.get(s, 1.0 / len(active_shields)) for s in active_shields}
+        sw_total = sum(raw_sw.values()) or 1.0
+        norm_sw = {s: raw_sw[s] / sw_total for s in active_shields}
+
+        weighted_cov_gain = 0.0
+        weighted_sev_red = 0.0
+        weighted_d1_red = 0.0
+        weighted_unique_weight = 0.0
+        weighted_solo_lift = 0.0
+        weighted_rating_lift = 0.0
+        party_by_shield = {}
+
+        for sh in active_shields:
+            sk = f"{sh[0]}-{sh[1]}"
+            sw = norm_sw[sh]
+            m_team_s = team_summary(mega_roster, opponents, matrix, weights, sh)
+            b_team_s = None
+            if baseline_kind and info.get(baseline_kind):
+                alt_r = list(roster)
+                alt_r[slot] = info[baseline_kind]
+                b_team_s = team_summary(alt_r, opponents, matrix, weights, sh)
+            if b_team_s is not None:
+                cg_s = m_team_s["coverage"] - b_team_s["coverage"]
+                sr_s = b_team_s["severity0"] - m_team_s["severity0"]
+                d1_s = b_team_s["d1"] - m_team_s["d1"]
+            else:
+                cg_s = sr_s = d1_s = 0.0
+            weighted_cov_gain += sw * cg_s
+            weighted_sev_red += sw * sr_s
+            weighted_d1_red += sw * d1_s
+            party_by_shield[sk] = {
+                "coverage_gain": round(cg_s, 6),
+                "severity_reduction": round(sr_s, 6),
+                "d1_reduction": round(d1_s, 6),
+            }
+
+            _, uw_s = _unique_wins_for_shield(sh)
+            weighted_unique_weight += sw * uw_s
+
+            mega_solo_s = forms["mega"]["by_shield"][sk]
+            non_mega_solos_s = [forms[k]["by_shield"][sk] for k in ("normal", "shadow") if k in forms]
+            best_non_cov_s = max((x["coverage"] for x in non_mega_solos_s), default=mega_solo_s["coverage"])
+            weighted_solo_lift += sw * (mega_solo_s["coverage"] - best_non_cov_s)
+            if mega_solo_s["avg_rating"] is not None:
+                non_avgs = [x["avg_rating"] for x in non_mega_solos_s if x["avg_rating"] is not None]
+                best_non_avg_s = max(non_avgs) if non_avgs else mega_solo_s["avg_rating"]
+                weighted_rating_lift += sw * (mega_solo_s["avg_rating"] - best_non_avg_s)
+
         best_non_mega_solo = max(
             (forms[k]["solo"]["coverage"] for k in ("normal", "shadow") if k in forms),
             default=forms["mega"]["solo"]["coverage"],
         )
         solo_coverage_lift = round(forms["mega"]["solo"]["coverage"] - best_non_mega_solo, 6)
 
-        party_impact_score = min(50.0, max(0.0, coverage_gain * 500.0 + severity_reduction * 250.0))
-        unique_win_score = min(30.0, max(0.0, unique_win_weight * 200.0))
-        solo_lift_score = min(20.0, max(0.0, solo_coverage_lift * 200.0))
+        party_impact_score = min(
+            50.0,
+            max(0.0, weighted_cov_gain * 500.0 + weighted_sev_red * 250.0 + max(0.0, weighted_d1_red) * 150.0),
+        )
+        eff_unique_weight = max(unique_win_weight, weighted_unique_weight)
+        unique_win_score = min(30.0, max(0.0, eff_unique_weight * 250.0))
+        solo_lift_score = min(
+            20.0,
+            max(0.0, weighted_solo_lift * 220.0 + max(0.0, weighted_rating_lift) * 0.15),
+        )
         index = round(party_impact_score + unique_win_score + solo_lift_score, 1)
 
         if index >= 75.0:
@@ -715,6 +788,17 @@ def evaluate_mega_importance(roster, variants_by_slot, opponents, matrix, weight
             tier = "補完次第"
         else:
             tier = "非メガで代用可"
+
+        diagnostic_notes = []
+        s22_cov = forms["mega"]["by_shield"].get("2-2", {}).get("coverage", 0.0)
+        s11_cov = forms["mega"]["by_shield"].get("1-1", {}).get("coverage", 0.0)
+        s00_cov = forms["mega"]["by_shield"].get("0-0", {}).get("coverage", 0.0)
+        if max(s11_cov, s00_cov) - s22_cov >= 0.05:
+            diagnostic_notes.append("シールドが少ない対面（1-1 / 0-0）でメガの火力優位が出やすい傾向があります。")
+        if (weighted_solo_lift >= 0.03 or weighted_rating_lift >= 15.0) and coverage_gain < 0.015:
+            diagnostic_notes.append("単体性能は上がっていますが、他5体で既にカバー済みの相手が多いためパーティ全体の補完率伸びが控えめです。")
+        if weighted_solo_lift < -0.02 and non_mega_ids:
+            diagnostic_notes.append("CP1500制限下では攻撃上昇に伴い耐久（PL）が下がるため、通常/シャドウより耐えにくい対面があります。")
 
         items.append({
             "slot": slot,
@@ -735,6 +819,7 @@ def evaluate_mega_importance(roster, variants_by_slot, opponents, matrix, weight
                 "severity_reduction": severity_reduction,
                 "d0_reduction": d0_reduction,
                 "d1_reduction": d1_reduction,
+                "by_shield": party_by_shield,
             },
             "importance_index": index,
             "tier": tier,
@@ -742,7 +827,11 @@ def evaluate_mega_importance(roster, variants_by_slot, opponents, matrix, weight
                 "party_impact": round(party_impact_score, 1),
                 "unique_wins": round(unique_win_score, 1),
                 "solo_lift": round(solo_lift_score, 1),
+                "weighted_d1_reduction": round(weighted_d1_red, 6),
+                "weighted_rating_lift": round(weighted_rating_lift, 1),
+                "multi_shield_unique_weight": round(weighted_unique_weight, 6),
             },
+            "diagnostic_notes": diagnostic_notes,
             "rule_allowed": rule_allowed,
         })
 
@@ -750,7 +839,8 @@ def evaluate_mega_importance(roster, variants_by_slot, opponents, matrix, weight
     return {
         "items": items,
         "rule_allowed": rule_allowed,
-        "shields": [list(STANDARD)],
-        "scope": "基準シールド2-2における同種族比較（通常/シャドウ/メガ）とパーティ貢献度の指数化（0〜100）です。",
+        "shields": [list(s) for s in shields_list],
+        "scope": "主要シールド（2-2 / 1-1 / 0-0）加重による同種族比較（通常/シャドウ/メガ）、回答の厚み・圧倒度・パーティ貢献度の指数化（0〜100）です。",
     }
+
 
