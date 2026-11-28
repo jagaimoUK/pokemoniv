@@ -1948,6 +1948,101 @@ console.log(JSON.stringify(texts));
         self.assertIsNone(unknown_cmp['hypothesis_1']['candy_xl_diff'])
         self.assertIsNone(unknown_cmp['hypothesis_2']['stardust_diff'])
 
+    def test_browser_fallback_mega_level_charged3_guards(self):
+        import csv
+        import json
+        import os
+        from unittest.mock import patch
+        import pvpoke_batch_v2 as engine
+
+        base_row = {
+            'species': 'altaria_mega',
+            'fast': 'DRAGON_BREATH',
+            'charged1': 'DRAGON_PULSE',
+            'charged2': 'MOONBLAST',
+            'level': 17.5,
+            'atk': 0,
+            'def': 14,
+            'hp': 15,
+            'cp': 1478,
+        }
+        self.assertEqual(
+            engine.pvpline(base_row),
+            'altaria_mega,DRAGON_BREATH,DRAGON_PULSE,MOONBLAST,17.5,0,14,15',
+        )
+        with self.assertRaises(ValueError):
+            engine.pvpline({**base_row, 'mega_level': 4})
+        with self.assertRaises(ValueError):
+            engine.pvpline({**base_row, 'charged3': 'SKY_ATTACK'})
+
+        # export_row_matches rejects extra-field truncation while keeping 8-col shadow compatibility.
+        expected_8 = ['quagsire_shadow', 'MUD_SHOT', 'AQUA_TAIL', 'STONE_EDGE', '29', '0', '14', '15']
+        actual_8 = ['quagsire_shadow-shadow', 'MUD_SHOT', 'AQUA_TAIL', 'STONE_EDGE', '29.0', '0', '14', '15']
+        self.assertTrue(engine.export_row_matches(actual_8, expected_8))
+        self.assertFalse(engine.export_row_matches(actual_8, expected_8 + ['4']))
+
+        # prepare() preserves mega_level and charged3 columns when present.
+        fixtures = Path(__file__).resolve().parent / 'fixtures'
+        gm_data = json.loads((fixtures / 'strategy_gamemaster.json').read_text(encoding='utf-8'))
+        rows = json.loads((fixtures / 'strategy_rows.json').read_text(encoding='utf-8'))
+        opp_row = rows[0]
+        gm_data['moves'].append({
+            'moveId': 'MEGA_SKY', 'name': 'Mega Sky', 'type': 'flying', 'power': 80,
+            'energy': 45, 'energyGain': 0, 'cooldown': 500, 'turns': 1, 'isMegaMove': True,
+        })
+        gm_data['pokemon'].append({
+            'speciesId': 'altaria_mega',
+            'speciesName': 'Altaria (Mega)',
+            'dex': 334,
+            'types': ['dragon', 'fairy'],
+            'baseStats': self.altaria_mega_stats,
+            'fastMoves': ['DRAGON_BREATH'],
+            'chargedMoves': ['DRAGON_PULSE', 'MOONBLAST'],
+            'extraChargedMoves': ['MEGA_SKY'],
+            'tags': ['mega'],
+        })
+        species_map = {p['speciesId']: p for p in gm_data['pokemon']}
+        work = self.root / 'browser_guard_work'
+        work.mkdir(exist_ok=True)
+        cand_csv = work / 'candidates.csv'
+        opp_csv = work / 'opponents.csv'
+        cand_csv.write_text(
+            'species,fast,charged1,charged2,atk,def,hp,mega_level,charged3\n'
+            'altaria_mega,DRAGON_BREATH,DRAGON_PULSE,MOONBLAST,0,14,15,4,MEGA_SKY\n',
+            encoding='utf-8',
+        )
+        opp_csv.write_text(
+            'species,fast,charged1,charged2,atk,def,hp\n'
+            f"{opp_row['species']},{opp_row['fast']},{opp_row['charged1']},{opp_row['charged2']},{opp_row['atk']},{opp_row['def']},{opp_row['hp']}\n",
+            encoding='utf-8',
+        )
+        prev = (engine.DIR, engine.CAND, engine.OPPS, engine.DATA, engine.OUT, os.environ.get('PVP_ENGINE'))
+        try:
+            engine.DIR = work
+            engine.CAND = cand_csv
+            engine.OPPS = opp_csv
+            engine.DATA = work
+            engine.OUT = work / 'out'
+            (work / 'gamemaster.json').write_text(json.dumps(gm_data), encoding='utf-8')
+            with patch.object(engine, 'setup'), \
+                 patch.object(engine, 'game_data', return_value=(gm_data, self.cpms, species_map)):
+                engine.prepare()
+                with (work / 'prepared_candidates.csv').open(encoding='utf-8') as f:
+                    header = next(csv.reader(f))
+                self.assertEqual(header[-2:], ['mega_level', 'charged3'])
+
+                # Browser mode must fail closed before chromium_connect() when mega_level/charged3 is present.
+                os.environ['PVP_ENGINE'] = 'browser'
+                with patch.object(engine, 'chromium_connect', side_effect=AssertionError('must not launch browser')):
+                    with self.assertRaisesRegex(ValueError, 'mega_level / charged3'):
+                        engine.run(shield_set='all')
+        finally:
+            engine.DIR, engine.CAND, engine.OPPS, engine.DATA, engine.OUT = prev[:5]
+            if prev[5] is None:
+                os.environ.pop('PVP_ENGINE', None)
+            else:
+                os.environ['PVP_ENGINE'] = prev[5]
+
 
 if __name__ == '__main__':
     unittest.main()
