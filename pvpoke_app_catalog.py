@@ -1,12 +1,38 @@
 """Japanese aliases and validated PvPoke defaults for the active game data."""
 from collections import defaultdict
+import json
+from pathlib import Path
 
 from pvpoke_app_defaults import NAMES_JA, GL_MOVES, SOURCES
 from pvpoke_app_labels import assign_nickname_codes, japanese_form_suffix
 from pvpoke_app_sizes import pumpkin_aliases, pumpkin_display_name
 
 
+
+def load_pvpoke_gl_updates() -> tuple[dict, str]:
+    """Best-effort public ranking overlay; the pinned snapshot is always a fallback."""
+    path = Path(__file__).resolve().parent / 'data' / 'pvpoke_recommended_moves.json'
+    try:
+        raw = json.loads(path.read_text(encoding='utf-8'))
+        if raw.get('schema') != 1 or raw.get('league') != 'great':
+            return {}, ''
+        moves = raw.get('moves')
+        if not isinstance(moves, dict):
+            return {}, ''
+        return moves, str(raw.get('source_commit', ''))[:12]
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}, ''
+
+
+def legal_moves(moves, entry):
+    return (isinstance(moves, (list, tuple)) and len(moves) == 3
+            and moves[0] in entry.get('fastMoves', [])
+            and all(m in entry.get('chargedMoves', []) for m in moves[1:])
+            and moves[1] != moves[2])
+
+
 def enrich_catalog(payload: dict, species: dict) -> None:
+    updated, updated_commit = load_pvpoke_gl_updates()
     by_dex = defaultdict(list)
     for sid, p in species.items():
         by_dex[p.get('dex')].append(sid)
@@ -81,14 +107,23 @@ def enrich_catalog(payload: dict, species: dict) -> None:
             entry['name_ja'] = pumpkin_name
             aliases.extend(pumpkin_aliases(sid))
         entry['aliases'] = list(dict.fromkeys(aliases))
-        moves = GL_MOVES.get(sid)
-        move_source = 'PvPoke GL overall / ' + SOURCES['retrieved']
-        if not moves and ('mega' in sid or 'primal' in sid):
-            from pvpoke_mega import base_species_id
-            base_moves = GL_MOVES.get(base_species_id(sid))
-            if base_moves:
-                moves = base_moves
-                move_source = '通常形態の推奨技を継承'
+        moves = updated.get(sid)
+        move_source = 'PvPoke GL overall / ' + updated_commit
+        if not legal_moves(moves, entry):
+            # A delayed or partial ranking must not erase the last valid default.
+            moves = GL_MOVES.get(sid)
+            move_source = 'PvPoke GL overall / ' + SOURCES['retrieved']
+            if not moves and ('mega' in sid or 'primal' in sid):
+                from pvpoke_mega import base_species_id
+                base_moves = updated.get(base_species_id(sid))
+                if legal_moves(base_moves, entry):
+                    moves = base_moves
+                    move_source = '通常形態の推奨技を継承'
+                else:
+                    base_moves = GL_MOVES.get(base_species_id(sid))
+                    if base_moves:
+                        moves = base_moves
+                        move_source = '通常形態の推奨技を継承'
         if not moves and sid in ('minior_meteor', 'minior_core'):
             # An explicit, GameMaster-validated provisional moveset until a
             # curated PvPoke GL recommendation becomes available.
