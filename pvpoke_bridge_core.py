@@ -340,6 +340,19 @@ def summary24(offset: int = 0, limit: int = 20, mode: str | None = None) -> dict
                 'has_more':offset+limit<len(data), 'rows':data[offset:offset+limit]}
 
 
+def selection_pool(species_ids: list[str]) -> dict:
+    if not isinstance(species_ids, list) or not 1 <= len(species_ids) <= 128 or any(
+        not isinstance(item, str) or not item.strip() for item in species_ids
+    ):
+        raise ValueError('species_ids must contain 1..128 non-empty species IDs')
+    return _request(
+        '/api/missing-analysis',
+        {'action': 'selection_pool', 'species_ids': [item.strip().lower() for item in species_ids]},
+        headers={'X-PvPoke-Token': _token()},
+        timeout=15,
+    )
+
+
 def healthcheck() -> dict:
     out = {'server_url': BASE, 'catalog': catalog(), 'status': status()}
     out['status']['logs'] = out['status'].get('logs', [])[-3:]

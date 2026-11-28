@@ -716,6 +716,7 @@ class Handler(BaseHTTPRequestHandler):
                              '/app-api/party/start', '/app-api/party/status', '/app-api/party/cancel',
                              '/app-api/party/meta-weights', '/app-api/party/owned-candidates',
                              '/app-api/party/compare-swap', '/app-api/party/mega-importance',
+                             '/app-api/selection-diff',
                              '/app-api/battles/simulate', MISSING_APP_PATH, SANDBOX_APP_PATH,
                              WEB_SYNC_PATH, READER_SYNC_PATH):
             return self.respond(404, {'error': 'Not found'})
@@ -849,9 +850,28 @@ class Handler(BaseHTTPRequestHandler):
                     args['expected_meta_sha256'] = backend.meta_status()['sha256']
                 args.setdefault('report_format', 'app')
                 result = call_tool('run_iv_selection', args)
+            elif self.path == '/app-api/selection-diff':
+                if args.get('expected_meta_sha256') is None and args.get('meta_preset_id') is None:
+                    args['expected_meta_sha256'] = backend.meta_status()['sha256']
+                result = IV_RUNNER.run_with_selection_pool(
+                    args['candidate'], args['ivs'],
+                    args.get('batch_mode') or 'simple',
+                    args.get('focus_opponents'),
+                    args.get('highlight_limit', 20),
+                    args.get('review_limit', 8),
+                    args.get('focus_limit', 20),
+                    args.get('wait_seconds', 12),
+                    args.get('expected_meta_sha256'),
+                    args.get('selection_policy'),
+                    args.get('meta_preset_id'),
+                    args.get('force_recalculate', False),
+                    args.get('request_id'),
+                    rules=args.get('rules'),
+                    selection_pool=args.get('selection_pool'),
+                )
             else:
                 result = IV_RUNNER.result(args.get('run_ref'), args.get('wait_seconds', 12))
-            if self.path in ('/app-api/run', '/app-api/result'):
+            if self.path in ('/app-api/run', '/app-api/result', '/app-api/selection-diff'):
                 result['meta_verified_against_project'] = False
                 result['meta_verification_source'] = 'server snapshot; Project file unavailable in browser'
             self.respond(200, result)
@@ -1062,7 +1082,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.unauthorized()
         if self.path == WEB_SYNC_PATH and not (strong_auth or cookie_ok):
             return self.unauthorized()
-        compute_route = (self.path in ('/app-api/run', '/app-api/party/start',
+        compute_route = (self.path in ('/app-api/run', '/app-api/selection-diff', '/app-api/party/start',
                                         '/app-api/party/compare-swap', '/app-api/party/mega-importance') or
                          (self.path == '/app-api/battles/simulate' and
                           os.environ.get('PVP_BATTLE_API_ENABLED') == '1') or

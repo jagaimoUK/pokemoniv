@@ -141,6 +141,21 @@ def resolve_battle_rules(rules: Mapping[str, Any] | None) -> dict[str, Any]:
         raise ValueError('rules must be a mapping')
     league = rules.get('league')
     cup_id = rules.get('cup_id')
+    ruleset = rules.get('ruleset')
+    if ruleset is not None:
+        if not isinstance(ruleset, str) or not ruleset.strip():
+            raise ValueError('ruleset must be a non-empty string when specified')
+        ruleset = ruleset.strip()
+        if cup_id is None:
+            if ruleset in ('great_mega', 'ultra_mega') or ruleset not in NON_MEGA_RULESETS:
+                cup_id = ruleset
+        if league is None:
+            if ruleset in ('great_mega', 'cp1500-lv50', 'great', 'open_great'):
+                league = 'great'
+            elif ruleset in ('ultra_mega', 'ultra', 'open_ultra'):
+                league = 'ultra'
+            elif ruleset in ('master', 'open_master'):
+                league = 'master'
     raw_cap = rules.get('cp_cap')
     if raw_cap is not None:
         if isinstance(raw_cap, bool) or not isinstance(raw_cap, int) or not 10 <= raw_cap <= 10000:
@@ -193,6 +208,8 @@ def resolve_battle_rules(rules: Mapping[str, Any] | None) -> dict[str, Any]:
     }
     if has_super_max_mode:
         resolved['super_max_mode'] = super_max_mode
+    if ruleset is not None:
+        resolved['ruleset'] = ruleset
     return resolved
 
 
