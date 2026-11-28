@@ -85,9 +85,20 @@ def _pool(service, template, floors):
     return rows, stats
 
 
+def _condition_boundary_names(has_candidate_c3, condition):
+    names = list(BOUNDARY_NAMES)
+    if has_candidate_c3:
+        names.append('charged_3')
+    if condition['opponent'].get('charged3'):
+        names.append('incoming_charged_3')
+    return tuple(names)
+
+
 def _profiles(service, rows, conditions):
     request = {'gamemaster_path': str(service.client.gamemaster),
                'candidates': list(rows.values()), 'conditions': conditions}
+    has_candidate_c3 = any('charged3' in row for row in rows.values())
+    expected_names = [_condition_boundary_names(has_candidate_c3, cond) for cond in conditions]
     try:
         proc = subprocess.run(['node', str(PROFILER)], input=_canonical_json(request),
                               capture_output=True, check=True, timeout=20,
@@ -95,8 +106,9 @@ def _profiles(service, rows, conditions):
         profiles = json.loads(proc.stdout)
         if (type(profiles) is not list or len(profiles) != len(rows) or
                 any(type(cells) is not list or len(cells) != len(conditions) or
-                    any(type(cell) is not list or len(cell) != len(BOUNDARY_NAMES) or
-                        any(type(n) is not int or abs(n) > 10000 for n in cell) for cell in cells)
+                    any(type(cell) is not list or len(cell) != len(expected_names[slot]) or
+                        any(type(n) is not int or abs(n) > 10000 for n in cell)
+                        for slot, cell in enumerate(cells))
                     for cells in profiles)):
             raise ValueError('Invalid static profile')
         return {index: tuple(map(tuple, cells)) for index, cells in zip(rows, profiles)}
@@ -104,8 +116,9 @@ def _profiles(service, rows, conditions):
         raise AnalysisUnavailable('Could not calculate static IV boundaries') from exc
 
 
-def _prioritize(profiles, stats, condition_count, default_index=None):
-    by_condition = [[set() for _ in BOUNDARY_NAMES] for _ in range(condition_count)]
+def _prioritize(profiles, stats, condition_count, default_index=None, *, condition_boundary_names=None):
+    names_by_slot = condition_boundary_names or [BOUNDARY_NAMES] * condition_count
+    by_condition = [[set() for _ in names] for names in names_by_slot]
     scores = Counter()
     frequencies = Counter(profiles.values())
     for index, cells in profiles.items():
@@ -132,7 +145,8 @@ def _prioritize(profiles, stats, condition_count, default_index=None):
         (back if signature in seen else front).append(idx)
         seen.add(signature)
     return list(dict.fromkeys(anchors + front + back)), [
-        {name: _bitset(indices) for name, indices in zip(BOUNDARY_NAMES, flags)} for flags in by_condition
+        {name: _bitset(indices) for name, indices in zip(names, flags)}
+        for names, flags in zip(names_by_slot, by_condition)
     ]
 
 
@@ -205,7 +219,13 @@ class IVSearch:
             default_index = None
         else:
             default_index = (a << 8) | (d << 4) | h
-        order, boundaries = _prioritize(profiles, stats, len(conditions), default_index)
+        has_candidate_c3 = any('charged3' in row for row in rows.values())
+        boundary_names = [_condition_boundary_names(has_candidate_c3, cond) for cond in conditions]
+        if any(len(names) != len(BOUNDARY_NAMES) for names in boundary_names):
+            order, boundaries = _prioritize(profiles, stats, len(conditions), default_index,
+                                            condition_boundary_names=boundary_names)
+        else:
+            order, boundaries = _prioritize(profiles, stats, len(conditions), default_index)
         plan = {'source': source, 'order': order, 'boundaries': boundaries}
         body = _canonical_json(plan)
         if len(body) > MAX_PLAN_BYTES:
@@ -259,7 +279,13 @@ class IVSearch:
         original = opponent['ivs']
         original_index = (original['attack'] << 8) | (
             original['defense'] << 4) | original['hp']
-        order, boundary_rows = _prioritize(profiles, stats, 1, original_index)
+        has_candidate_c3 = any('charged3' in row for row in rows.values())
+        boundary_names = [_condition_boundary_names(has_candidate_c3, cond) for cond in conditions]
+        if any(len(names) != len(BOUNDARY_NAMES) for names in boundary_names):
+            order, boundary_rows = _prioritize(profiles, stats, 1, original_index,
+                                               condition_boundary_names=boundary_names)
+        else:
+            order, boundary_rows = _prioritize(profiles, stats, 1, original_index)
         if self._check_inputs() != version:
             raise AnalysisUnavailable('Opponent IV profiler inputs changed during calculation')
         boundaries = boundary_rows[0]
