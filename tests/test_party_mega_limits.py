@@ -515,7 +515,7 @@ assert.deepEqual(partyRulePayload(), {
 });
 console.log('PARTY_UI_MEGA_CONTROLS_OK');
 """
-        proc = subprocess.run(['node', '-e', script], capture_output=True, text=True, check=True, timeout=10)
+        proc = subprocess.run(['node', '-'], input=script, capture_output=True, text=True, check=True, timeout=10)
         self.assertIn('PARTY_UI_MEGA_CONTROLS_OK', proc.stdout)
 
 
