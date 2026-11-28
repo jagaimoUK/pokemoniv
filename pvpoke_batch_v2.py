@@ -268,7 +268,17 @@ def optimize(rows, species, cpms, fname, cp_cap=CP_CAP, rules=None):
     return prepared
 
 
+def _has_mega_extras(row):
+    return (row.get('mega_level') is not None
+            or (row.get('charged3') is not None and bool(str(row.get('charged3')).strip())))
+
+
 def pvpline(row):
+    if _has_mega_extras(row):
+        raise ValueError(
+            'ブラウザモード(pvpline)はmega_level/charged3に未対応です。'
+            'Directエンジン(PVP_ENGINE=direct)を使用してください'
+        )
     return ','.join(map(str, [row['species'], row['fast'], row['charged1'], row['charged2'],
                               f'{row["level"]:g}', row['atk'], row['def'], row['hp']]))
 
@@ -285,6 +295,8 @@ def canonical_export_species(species_id):
 def export_row_matches(actual, expected):
     """Verify move, IV and level fields while accepting shadow export notation."""
     if len(actual) < 8 or len(expected) < 8:
+        return False
+    if len(expected) > 8 and (len(actual) < len(expected) or actual[8:] != expected[8:]):
         return False
     if canonical_export_species(actual[0]) != canonical_export_species(expected[0]):
         return False
@@ -308,11 +320,14 @@ def prepare(refresh=False, rules=None):
     opponents = optimize(get_rows(OPPS), species, cpms, OPPS.name, cp_cap=effective_cp_cap)
     DIR.mkdir(exist_ok=True)
     for stem, rows in [('prepared_candidates', candidates), ('prepared_opponents', opponents)]:
+        cols = ['species', 'fast', 'charged1', 'charged2', 'level', 'atk', 'def', 'hp', 'cp']
+        if any(_has_mega_extras(r) for r in rows):
+            cols.extend(['mega_level', 'charged3'])
         with (DIR / (stem + '.csv')).open('w', newline='', encoding='utf-8') as f:
             w = csv.writer(f)
-            w.writerow(['species', 'fast', 'charged1', 'charged2', 'level', 'atk', 'def', 'hp', 'cp'])
+            w.writerow(cols)
             for r in rows:
-                w.writerow([r[k] for k in ('species', 'fast', 'charged1', 'charged2', 'level', 'atk', 'def', 'hp', 'cp')])
+                w.writerow([r.get(k, '') if r.get(k) is not None else '' for k in cols])
     print(f'\nCP調整完了: 自分{len(candidates)}体、相手{len(opponents)}体 (CP上限={effective_cp_cap}; Lv上限={effective_max_level})')
     print('使用ゲームデータ:', gm.get('timestamp', '更新日時不明'))
     for side, rows in [('自分', candidates), ('相手', opponents)]:
@@ -582,6 +597,8 @@ def run(refresh=False, shield_set='all', rules=None):
     use_direct = selected_engine in ('direct', 'node')
     if minior_batch and not use_direct:
         raise ValueError('メテノのフォルム連動計算にはDirect Nodeエンジンが必要です')
+    if not use_direct and any(_has_mega_extras(r) for r in (*candidates, *opponents)):
+        raise ValueError('mega_level / charged3 を含む計算にはDirect Nodeエンジンが必要です')
     backend_fallbacks = 0
     print(f'PvPoke Matrix engine selected: {selected_engine}', flush=True)
     engine_version = calculation_version(DATA)
@@ -677,8 +694,14 @@ def run(refresh=False, shield_set='all', rules=None):
                     # Browser fallback lacks our Minior HP and charge policy hooks.
                     raise RuntimeError('メテノ戦術比較失敗（通常PvPoke結果へフォールバックしません）') from error
                 raise RuntimeError('Direct計算に失敗しました。安全のためブラウザーへ自動切替しません') from error
-        identity = (tuple(tuple(r.get(k) for k in HEADER + ['level', 'cp']) for r in crows),
-                    tuple(tuple(r.get(k) for k in HEADER + ['level', 'cp']) for r in orows))
+        if any(_has_mega_extras(r) for r in (*crows, *orows)):
+            raise RuntimeError(
+                'mega_level / charged3 を含む計算はブラウザモードに未対応です。'
+                'Directエンジン(PVP_ENGINE=direct)を使用してください'
+            )
+        identity_keys = HEADER + ['level', 'cp', 'mega_level', 'charged3']
+        identity = (tuple(tuple(r.get(k) for k in identity_keys) for r in crows),
+                    tuple(tuple(r.get(k) for k in identity_keys) for r in orows))
         if page is None:
             info = chromium_connect()
             print('Chromium:', info.get('Browser'), flush=True)
