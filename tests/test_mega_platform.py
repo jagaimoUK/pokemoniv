@@ -1593,6 +1593,48 @@ console.log(JSON.stringify(cmp));
         self.assertEqual(parsed['ratio50'], '90.4')
         self.assertEqual(parsed['ratio51'], '90.4')
         self.assertEqual(parsed['ratio52'], '90.4')
+        self.assertEqual(parsed['costComparison']['maxBase']['candy_xl'], 296)
+        self.assertEqual(parsed['costComparison']['maxBase']['stardust'], 250000)
+        cap_cost = parsed['costComparison']['cap']
+        self.assertEqual(cap_cost['refStart'], 40)
+        self.assertEqual(cap_cost['base']['candy_xl'], 276)
+        self.assertEqual(cap_cost['h1']['paid_target_level'], 47.5)
+        self.assertEqual((cap_cost['h1']['xlDiff'], cap_cost['h1']['dustDiff']), (-77, -57000))
+        self.assertEqual(cap_cost['h2']['paid_target_level'], 46.5)
+        self.assertEqual((cap_cost['h2']['xlDiff'], cap_cost['h2']['dustDiff']), (-111, -84000))
+
+        # Verify renderMegaSuperMaxComparison renders XL/dust diffs and unconfirmed disclaimer.
+        render_script = f"""
+{cpm_match.group(0)}
+{cp_match.group(0)}
+{cmp_match.group(0)}
+{render_match.group(0)}
+const catalog = {{ sableye_mega: {{ baseStats: {{ atk: 141, def: 136, hp: 137 }}, tags: ['mega'] }} }};
+const cpms = {json.dumps(self.cpms)};
+function isMegaSpeciesId(sid){{ return Boolean(sid && (/_(mega|primal)(?:_[xy])?$/.test(sid) || (catalog[sid]?.tags || []).includes('mega'))); }}
+function parseIvsText(text){{ const p = String(text).split(',').map(Number); return {{ attack: p[0], defense: p[1], hp: p[2] }}; }}
+function maxLevelForCap(sid, ivsObj, cpCap = 1500, maxLvl = 50) {{
+  for (let d = Math.round(maxLvl * 2); d >= 2; d--) {{
+    const lvl = d / 2; const cp = computeCpForSpecies(sid, ivsObj, lvl);
+    if (cp != null && cp <= cpCap) return {{ level: lvl, cp }};
+  }}
+  return null;
+}}
+const texts = [];
+function node(tag, text, parent, cls) {{
+  if (text) texts.push(String(text));
+  return {{ tag, text, children: [], className: cls || '' }};
+}}
+renderMegaSuperMaxComparison({{ ivs: '0,15,15' }}, {{}}, {{ candidate: {{ species: 'sableye_mega' }} }});
+console.log(JSON.stringify(texts));
+"""
+        rproc = subprocess.run(['node', '-e', render_script], capture_output=True, text=True, check=True, timeout=10)
+        rendered = '\n'.join(json.loads(rproc.stdout))
+        self.assertIn('アメXL(PL40→)', rendered)
+        self.assertIn('199 (-77)', rendered)
+        self.assertIn('165 (-111)', rendered)
+        self.assertIn('未確定参考値', rendered)
+        self.assertIn('ゲーム内確定仕様ではありません', rendered)
 
     def test_iv_workflow_accepts_and_returns_mega_downscaling_rules(self):
         from pvpoke_iv_workflow import IVWorkflow
@@ -1872,6 +1914,39 @@ console.log(JSON.stringify(cmp));
         }, iv_floors=(14, 14, 15))
         self.assertIn('charged_3', preview['boundary_ivs'])
         self.assertEqual(len(preview['representatives'][0]['static_profile']), 9)
+
+    def test_super_max_cost_comparison_and_pl50_compatibility(self):
+        from pvpoke_mega import compute_power_up_cost, compute_super_max_cost_comparison
+
+        # Existing PL50 cap compatibility in compute_power_up_cost.
+        capped = compute_power_up_cost(49.5, 52.0, mega_level=4)
+        self.assertTrue(capped['target_level_capped_at_50'])
+        self.assertEqual(capped['paid_target_level'], 50.0)
+        self.assertEqual((capped['stardust'], capped['candy_xl']), (15000, 20))
+
+        # Master League / PL50 MAX comparison: paid cap stays at PL50, so diffs are 0.
+        ml_cmp = compute_super_max_cost_comparison(40.0, 50.0)
+        self.assertEqual(ml_cmp['super_max_pl_hypothesis_status'], 'unconfirmed_deferred')
+        self.assertIn('ゲーム内確定仕様ではありません', ml_cmp['super_max_pl_note'])
+        self.assertEqual((ml_cmp['baseline']['candy_xl'], ml_cmp['baseline']['stardust']), (296, 250000))
+        self.assertEqual((ml_cmp['hypothesis_1']['effective_level'], ml_cmp['hypothesis_1']['candy_xl_diff']), (52.0, 0))
+        self.assertEqual((ml_cmp['hypothesis_2']['effective_level'], ml_cmp['hypothesis_2']['candy_xl_diff']), (53.0, 0))
+
+        # GL/UL target PL < 50 (e.g. PL 49.5): Hypothesis 1 (-2 PL) and Hypothesis 2 (-3 PL) XL/dust savings.
+        gl_cmp = compute_super_max_cost_comparison(40.0, 49.5)
+        self.assertEqual((gl_cmp['baseline']['candy_xl'], gl_cmp['baseline']['stardust']), (276, 235000))
+        self.assertEqual(gl_cmp['hypothesis_1']['paid_target_level'], 47.5)
+        self.assertEqual((gl_cmp['hypothesis_1']['candy_xl'], gl_cmp['hypothesis_1']['candy_xl_diff'], gl_cmp['hypothesis_1']['stardust_diff']),
+                         (199, -77, -57000))
+        self.assertEqual(gl_cmp['hypothesis_2']['paid_target_level'], 46.5)
+        self.assertEqual((gl_cmp['hypothesis_2']['candy_xl'], gl_cmp['hypothesis_2']['candy_xl_diff'], gl_cmp['hypothesis_2']['stardust_diff']),
+                         (165, -111, -84000))
+
+        # Unknown current level keeps diffs unverified (None) without guessing.
+        unknown_cmp = compute_super_max_cost_comparison(None, 49.5)
+        self.assertFalse(unknown_cmp['hypothesis_1']['cost_verified'])
+        self.assertIsNone(unknown_cmp['hypothesis_1']['candy_xl_diff'])
+        self.assertIsNone(unknown_cmp['hypothesis_2']['stardust_diff'])
 
 
 if __name__ == '__main__':

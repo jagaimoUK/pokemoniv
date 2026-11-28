@@ -773,6 +773,74 @@ def compute_power_up_cost(
     }
 
 
+def compute_super_max_cost_comparison(
+    current_level: float | None,
+    target_level: float = 50.0,
+    *,
+    lucky: bool = False,
+    purified: bool = False,
+    shadow: bool = False,
+) -> dict[str, Any]:
+    """Compare theoretical power-up costs for Super MAX PL+2 hypotheses without claiming confirmed rules.
+
+    - Hypothesis 1 (PL50 + 2 = 52): +2 PL boost from Super MAX (saves 2.0 PL of paid power-ups below PL50).
+    - Hypothesis 2 (PL51 + 2 = 53): Buddy +1 plus Super MAX +2 (saves 3.0 PL of paid power-ups below PL50).
+    Paid power-ups always remain capped at PL 50.0.
+    """
+    target_doubled = _validate_half_level(target_level, 'target_level', max_level=50.0)
+    effective_target = target_doubled / 2.0
+    is_max_cap = target_doubled >= 100
+
+    h1_paid_target = 50.0 if is_max_cap else max(1.0, effective_target - 2.0)
+    h2_paid_target = 50.0 if is_max_cap else max(1.0, effective_target - 3.0)
+
+    baseline_cost = compute_power_up_cost(
+        current_level, effective_target, lucky=lucky, purified=purified, shadow=shadow, mega_level=3,
+    )
+
+    def _entry(label: str, paid_target: float, boosted_level: float, ml: int | None) -> dict[str, Any]:
+        cost = compute_power_up_cost(
+            current_level, paid_target, lucky=lucky, purified=purified, shadow=shadow, mega_level=ml,
+        )
+        verified = bool(cost['cost_verified'] and baseline_cost['cost_verified'])
+        return {
+            'label': label,
+            'paid_target_level': cost['paid_target_level'],
+            'effective_level': boosted_level,
+            'power_ups': cost['power_ups'],
+            'stardust': cost['stardust'],
+            'candy': cost['candy'],
+            'candy_xl': cost['candy_xl'],
+            'stardust_diff': (cost['stardust'] - baseline_cost['stardust']) if verified else None,
+            'candy_diff': (cost['candy'] - baseline_cost['candy']) if verified else None,
+            'candy_xl_diff': (cost['candy_xl'] - baseline_cost['candy_xl']) if verified else None,
+            'cost_verified': cost['cost_verified'],
+        }
+
+    return {
+        'current_level': baseline_cost['current_level'],
+        'target_level': effective_target,
+        'super_max_pl_hypothesis_status': 'unconfirmed_deferred',
+        'super_max_pl_note': (
+            'スーパー MAX PL+2 仮説保留（仮説1・仮説2の育成コスト差は未確定参考値であり、'
+            'ゲーム内確定仕様ではありません）'
+        ),
+        'baseline': _entry('通常MAX基準（補正なし）', effective_target, effective_target, 3),
+        'hypothesis_1': _entry(
+            'スーパーMAX 仮説1（通常+2＝PL52相当）',
+            h1_paid_target,
+            52.0 if is_max_cap else effective_target,
+            4,
+        ),
+        'hypothesis_2': _entry(
+            'スーパーMAX 仮説2（相棒ブースト+2＝PL53相当）',
+            h2_paid_target,
+            53.0 if is_max_cap else effective_target,
+            4,
+        ),
+    }
+
+
 def build_training_goal(
     owned_record: Mapping[str, Any] | None,
     *,
