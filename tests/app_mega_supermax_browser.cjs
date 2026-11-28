@@ -121,7 +121,7 @@ const server = http.createServer(async (req, res) => {
     assert.equal(await costRows.count(), 3, '3 cap cost rows (Base, Hyp1, Hyp2)');
     assert((await costRows.nth(1).textContent()).includes('199 (-77)'));
     assert((await costRows.nth(2).textContent()).includes('165 (-111)'));
-    assert((await cmpDetails.innerText()).includes('未確定参考値'));
+    assert((await cmpDetails.textContent()).includes('未確定参考値'));
 
     assert.deepEqual(errors, [], 'No page errors occurred');
     console.log('App Mega Super MAX browser test PASS: PL50/51 vs PL+2 comparison table and achievement ratios verified successfully');
