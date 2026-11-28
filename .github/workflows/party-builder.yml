@@ -59,4 +59,7 @@ jobs:
       - name: Isolated ownership sync browser contract
         run: |
           docker run --rm -v "$PWD:/work" -w /work -e STRATEGY_CHROMIUM_PATH=/usr/bin/chromium --entrypoint node pokemoniv-party-ci tests/party_ownership_sync_browser.cjs
+      - name: Isolated Mega importance and manual swap browser contract
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work -e STRATEGY_CHROMIUM_PATH=/usr/bin/chromium --entrypoint node pokemoniv-party-ci tests/party_mega_importance_and_swap_browser.cjs
 

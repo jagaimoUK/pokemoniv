@@ -144,6 +144,8 @@ class PartyBuilder:
         return {"job_id": job_id, "status": row[0], **json.loads(row[1])}
 
     def _record(self, jid, status, data):
+        if not jid:
+            return
         with self._lock, self._db() as db:
             db.execute("""INSERT INTO runs(id,status,details,updated) VALUES(?,?,?,?)
                        ON CONFLICT(id) DO UPDATE SET status=excluded.status,
@@ -807,7 +809,7 @@ class PartyBuilder:
                                 db.commit()
                             done += len(own_chunk) * len(opp_chunk)
                             with self._lock:
-                                if self._cancel:
+                                if jid and self._cancel:
                                     raise ValueError("cancelled")
                             self._record(jid, "running", {"progress": min(95, 2 + int(91 * done / total)),
                                 "message": "比較用の全シールド条件を計算しています" if full_conditions else "対面を計算しています", "cache": stats})
@@ -819,6 +821,254 @@ class PartyBuilder:
                 if client is not None:
                     client.close()
         return matrix, stats
+
+    @staticmethod
+    def _default_member_row(sid, catalog, *, template=None):
+        entry = catalog.get(sid)
+        if entry is None:
+            raise ValueError("未登録ポケモン " + str(sid))
+        fast_pool = list(entry.get("fastMoves") or ())
+        charged_pool = list(entry.get("chargedMoves") or ())
+        defaults = list(entry.get("defaultMoves") or ())
+        fast = defaults[0] if len(defaults) > 0 and defaults[0] in fast_pool else (fast_pool[0] if fast_pool else "")
+        c1 = defaults[1] if len(defaults) > 1 and defaults[1] in charged_pool else (charged_pool[0] if charged_pool else "")
+        c2 = defaults[2] if len(defaults) > 2 and defaults[2] in charged_pool and defaults[2] != c1 else ""
+        if not c2:
+            c2 = next((m for m in charged_pool if m != c1), c1)
+        row = {"species": sid, "fast": fast, "charged1": c1, "charged2": c2}
+        if isinstance(template, dict):
+            if template.get("fast") in fast_pool:
+                row["fast"] = template["fast"]
+            t_c1 = template.get("charged1")
+            t_c2 = template.get("charged2")
+            if t_c1 in charged_pool and t_c2 in charged_pool and t_c1 != t_c2:
+                row["charged1"], row["charged2"] = t_c1, t_c2
+            for k in ("atk", "def", "hp"):
+                if type(template.get(k)) is int and 0 <= template[k] <= 15:
+                    row[k] = template[k]
+            from pvpoke_mega import is_mega_form
+            if is_mega_form(sid) and type(template.get("mega_level")) is int and 1 <= template["mega_level"] <= 4:
+                row["mega_level"] = template["mega_level"]
+        return row
+
+    @staticmethod
+    def _labels_for(items):
+        return {
+            p["id"]: {
+                "species": p["species"],
+                "moves": [p["fast"], p["charged1"], p["charged2"]],
+                "ivs": [p["atk"], p["def"], p["hp"]],
+                "cp": p["cp"],
+                "level": p["level"],
+                **({"mega_level": p["mega_level"]} if p.get("mega_level") is not None else {}),
+                **({"charged3": p["charged3"]} if p.get("charged3") is not None else {}),
+            }
+            for p in items
+        }
+
+    def _load_meta_and_weights(self, args, catalog, species, cpms, engine, work):
+        preset_id = args.get("meta_preset_id") or "legacy"
+        meta_file, preset = presets.snapshot(work, preset_id, catalog, args.get("meta_sha256"))
+        with meta_file.open(encoding="utf-8-sig", newline="") as stream:
+            meta_raw = [dict(zip(engine.HEADER[:4], row)) for row in csv.reader(stream) if row]
+        if len(meta_raw) > MAX_META:
+            raise ValueError(f"メタは最大{MAX_META}技構成です。プリセットを絞ってください")
+        meta = self._unique(self._normalize(meta_raw, catalog, species, cpms, engine, "メタ"))
+        weights = core.weight_rows(meta, args.get("group_weights"))
+        meta = [row for row in meta if weights[row["id"]] > 0]
+        return meta, weights, preset
+
+    def compare_swap(self, args, *, catalog, species, cpms, engine, work):
+        mega_policy = self._mega_policy_from_args(args, engine_cp_cap=getattr(engine, "CP_CAP", 1500))
+        own_raw = args.get("members")
+        if not isinstance(own_raw, list) or len(own_raw) != 6:
+            raise ValueError("比較するパーティは6体必要です")
+        slot = args.get("slot")
+        if type(slot) is not int or not 0 <= slot < 6:
+            raise ValueError("交換枠は0〜5の整数で指定してください")
+        rep_raw = args.get("replacement")
+        if not isinstance(rep_raw, dict):
+            raise ValueError("交換先のポケモンを指定してください")
+
+        members = self._normalize(own_raw, catalog, species, cpms, engine, "自分の6体")
+        if len({p["id"] for p in members}) != 6:
+            raise ValueError("同じポケモン・技・個体値の重複があります")
+        if len({p["roster_clause_id"] for p in members}) != 6:
+            raise ValueError("同種のポケモンは6体へ重複登録できません")
+
+        replacement_list = self._normalize([rep_raw], catalog, species, cpms, engine, "交換先")
+        replacement = replacement_list[0]
+        after_members = list(members)
+        after_members[slot] = replacement
+        if len({p["roster_clause_id"] for p in after_members}) != 6:
+            raise ValueError("交換後の6体に同種重複があります")
+
+        from pvpoke_mega import is_mega_form
+        after_megas_in_six = sum(1 for p in after_members if is_mega_form(p["species"]))
+        if after_megas_in_six > mega_policy["max_megas_in_six"]:
+            raise ValueError(f"交換後の6体登録がメガ上限（最大{mega_policy['max_megas_in_six']}体）を超えています")
+
+        enemy_raw = args.get("opponents") or []
+        if enemy_raw and len(enemy_raw) != 6:
+            raise ValueError("相手を指定する場合は6体にしてください")
+        enemy = self._normalize(enemy_raw, catalog, species, cpms, engine, "相手6体") if enemy_raw else []
+        meta, weights, preset = self._load_meta_and_weights(args, catalog, species, cpms, engine, work)
+        version = calculation_version(engine.DATA)
+        if version is None:
+            raise ValueError("エンジンの計算版を検証できません。キャッシュを使わず中止しました")
+
+        pool = self._unique(members + [replacement])
+        matrix, stats = self._matrix(
+            None, pool, self._unique(meta + enemy), version, engine, work,
+            enemy_ids={p["id"] for p in enemy}, full_conditions=True)
+
+        before_ids = [p["id"] for p in members]
+        selected = []
+        group_ids = set()
+        for target in enemy:
+            key = target["roster_clause_id"]
+            if key not in group_ids:
+                selected.append(target)
+                group_ids.add(key)
+
+        def risk_key(target):
+            ratings = [max((matrix.get((p, target["id"], shield), 500) for p in before_ids), default=500)
+                       for shield in core.ALL_SHIELDS]
+            best = min((x for x in ratings if x is not None), default=500)
+            return (-int(best <= 500), -weights.get(target["id"], 0), best, target["species"])
+
+        for target in sorted(meta, key=risk_key):
+            key = target["roster_clause_id"]
+            if key not in group_ids:
+                selected.append(target)
+                group_ids.add(key)
+            if len(selected) >= 20:
+                break
+        display_targets = [p["id"] for p in selected[:20]]
+
+        opponents = [p["id"] for p in meta]
+        comparison = core.compare_single_swap(
+            before_ids, slot, replacement["id"], opponents, matrix, weights,
+            display_targets=display_targets)
+
+        return {
+            "kind": "swap_comparison",
+            "comparison": comparison,
+            "replacement": {
+                "species": replacement["species"],
+                "fast": replacement["fast"],
+                "charged1": replacement["charged1"],
+                "charged2": replacement["charged2"],
+                "atk": replacement["atk"],
+                "def": replacement["def"],
+                "hp": replacement["hp"],
+                "level_override": replacement["level"],
+                **({"mega_level": replacement["mega_level"]} if replacement.get("mega_level") is not None else {}),
+                **({"charged3": replacement["charged3"]} if replacement.get("charged3") is not None else {}),
+            },
+            "labels": self._labels_for(self._unique(pool + meta + enemy)),
+            "mega_policy": {
+                **mega_policy,
+                "after_megas_in_six": after_megas_in_six,
+            },
+            "meta": {"id": preset["id"], "name": preset["name"], "sha256": preset["sha256"]},
+            "cache": stats,
+        }
+
+    def mega_importance(self, args, *, catalog, species, cpms, engine, work):
+        mega_policy = self._mega_policy_from_args(args, engine_cp_cap=getattr(engine, "CP_CAP", 1500))
+        own_raw = args.get("members")
+        if not isinstance(own_raw, list) or len(own_raw) != 6:
+            raise ValueError("比較するパーティは6体必要です")
+        target_slot = args.get("slot")
+        if target_slot is not None and (type(target_slot) is not int or not 0 <= target_slot < 6):
+            raise ValueError("対象枠は0〜5の整数で指定してください")
+
+        members = self._normalize(own_raw, catalog, species, cpms, engine, "自分の6体")
+        if len({p["id"] for p in members}) != 6:
+            raise ValueError("同じポケモン・技・個体値の重複があります")
+
+        from pvpoke_mega import base_species_id, is_mega_form, is_shadow_form, mega_forms_for_base
+        all_species_ids = set(catalog.keys())
+        variants_by_slot = {}
+        variant_nodes = []
+
+        slots = [target_slot] if target_slot is not None else list(range(len(members)))
+        for slot in slots:
+            member = members[slot]
+            sid = member["species"]
+            raw_template = own_raw[slot] if isinstance(own_raw[slot], dict) else {}
+            if is_mega_form(sid):
+                base_sid = base_species_id(sid)
+                mega_sids = [sid]
+                active_kind = "mega"
+            elif is_shadow_form(sid):
+                base_sid = sid.removesuffix("_shadow")
+                mega_sids = mega_forms_for_base(base_sid, all_species_ids, catalog)
+                active_kind = "shadow"
+            else:
+                base_sid = sid
+                mega_sids = mega_forms_for_base(base_sid, all_species_ids, catalog)
+                active_kind = "normal"
+
+            if not mega_sids:
+                continue
+
+            mega_sid = mega_sids[0]
+            shadow_sid = f"{base_sid}_shadow" if f"{base_sid}_shadow" in catalog else None
+            normal_sid = base_sid if base_sid in catalog else None
+
+            slot_map = {"active_kind": active_kind}
+            for kind, vsid in (("normal", normal_sid), ("shadow", shadow_sid), ("mega", mega_sid)):
+                if not vsid:
+                    continue
+                if vsid == sid:
+                    p_obj = member
+                else:
+                    row = self._default_member_row(vsid, catalog, template=raw_template)
+                    p_obj = self._normalize([row], catalog, species, cpms, engine, f"{slot + 1}枠目の{kind}形態")[0]
+                slot_map[kind] = p_obj["id"]
+                variant_nodes.append(p_obj)
+            variants_by_slot[slot] = slot_map
+
+        meta, weights, preset = self._load_meta_and_weights(args, catalog, species, cpms, engine, work)
+        opponents = [p["id"] for p in meta]
+        if not variants_by_slot:
+            return {
+                "kind": "mega_importance",
+                "mega_importance": {
+                    "items": [],
+                    "rule_allowed": mega_policy["max_megas_in_three"] > 0,
+                    "shields": [list(core.STANDARD)],
+                    "scope": "現在の6体にメガシンカ対象ポケモンが含まれていません。",
+                },
+                "labels": self._labels_for(self._unique(members + meta)),
+                "mega_policy": mega_policy,
+                "meta": {"id": preset["id"], "name": preset["name"], "sha256": preset["sha256"]},
+                "cache": {"hits": 0, "computed": 0},
+            }
+
+        version = calculation_version(engine.DATA)
+        if version is None:
+            raise ValueError("エンジンの計算版を検証できません。キャッシュを使わず中止しました")
+
+        pool = self._unique(members + variant_nodes)
+        matrix, stats = self._matrix(
+            None, pool, meta, version, engine, work,
+            enemy_ids=set(), full_conditions=False)
+
+        importance = core.evaluate_mega_importance(
+            [p["id"] for p in members], variants_by_slot, opponents, matrix, weights,
+            mega_policy=mega_policy)
+
+        return {
+            "kind": "mega_importance",
+            "mega_importance": importance,
+            "labels": self._labels_for(self._unique(pool + meta)),
+            "mega_policy": mega_policy,
+            "meta": {"id": preset["id"], "name": preset["name"], "sha256": preset["sha256"]},
+            "cache": stats,
+        }
 
 
 def owned_candidates_for_party(ownership_store, catalog: dict, *, limit: int = 128) -> dict:

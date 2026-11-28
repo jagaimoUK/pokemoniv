@@ -1,6 +1,6 @@
 // Name resolution is shared by cards and bulk import. Persist stable species IDs.
 function normalizePartyName(value){return String(value||'').normalize('NFKC').trim().toLowerCase().replace(/[ぁ-ゖ]/g,c=>String.fromCharCode(c.charCodeAt(0)+0x60));}
-function partyDisplay(id,cat=catalog){const p=cat[id];if(!p)return id;let ja=p.name_ja||p.name||id;if(id.split('_').includes('shadow')&&!ja.includes('シャドウ'))ja='シャドウ'+ja;return ja;}
+function partyDisplay(id,cat=catalog){const p=cat[id];if(!p)return id;let ja=p.name_ja||p.name||id;if(id.split('_').includes('shadow')&&!ja.includes('シャドウ'))ja='シャドウ'+ja;if(isPartyMegaSpecies(id,p)&&!ja.includes('メガ')&&!ja.includes('ゲンシ'))ja='メガ'+ja;return ja;}
 function partySearch(query,cat=catalog){const q=normalizePartyName(query);if(!q)return [];return Object.entries(cat).map(([id,p])=>({id,p,terms:[id,p.name,p.name_ja,...(p.aliases||[])].filter(Boolean).map(normalizePartyName)})).filter(r=>r.terms.some(t=>t.includes(q))).sort((a,b)=>Number(b.terms.includes(q))-Number(a.terms.includes(q))||a.id.localeCompare(b.id)).slice(0,20);}
 function resolvePartyName(value,cat=catalog){
  const q=normalizePartyName(value);

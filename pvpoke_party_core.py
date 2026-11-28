@@ -506,3 +506,251 @@ def beam_search(candidates, opponents, matrix, weights, *, locks=(),
             "beam_width": width, "expansion": expansion,
             "explored_candidates": len(candidates),
             "scope": "指定候補内の暫定構築。グローバル最適は保証しません"}
+
+
+def _explain_swap_for_shields(before, after, old, new, opponents, matrix, weights, shields=STANDARD, limit=8):
+    benefits, costs = [], []
+    for enemy in opponents:
+        a = [lookup(matrix, own, enemy, shields) for own in before]
+        b = [lookup(matrix, own, enemy, shields) for own in after]
+        if any(v is None for v in a + b):
+            continue
+        na, nb = sum(v > 500 for v in a), sum(v > 500 for v in b)
+        row = {
+            "opponent": enemy,
+            "weak_members": [own for own, v in zip(before, a) if v <= 500],
+            "before_answers": na,
+            "after_answers": nb,
+            "before_best": max(a),
+            "after_best": max(b),
+            "out_rating": lookup(matrix, old, enemy, shields),
+            "in_rating": lookup(matrix, new, enemy, shields),
+            "weight": weights.get(enemy, 0),
+        }
+        if nb > na or max(b) > max(a):
+            benefits.append(row)
+        if nb < na or max(b) < max(a):
+            costs.append(row)
+    benefits.sort(key=lambda r: (r["before_answers"] != 0, -r["weight"],
+                                r["before_answers"], -r["after_best"]))
+    costs.sort(key=lambda r: (r["after_answers"] != 0, -r["weight"], r["after_answers"]))
+    return {
+        "shields": list(shields),
+        "benefits": benefits[:limit],
+        "costs": costs[:limit],
+        "benefit_count": len(benefits),
+        "cost_count": len(costs),
+    }
+
+
+def compare_single_swap(roster, slot, replacement_id, opponents, matrix, weights,
+                        *, shields_list=ALL_SHIELDS, display_targets=None, limit=8):
+    """Compare a manual single-slot swap across all shield conditions."""
+    if not isinstance(slot, int) or not 0 <= slot < len(roster):
+        raise ValueError("交換枠の指定が不正です")
+    before_roster = list(roster)
+    old_id = before_roster[slot]
+    after_roster = list(before_roster)
+    after_roster[slot] = replacement_id
+    targets = list(display_targets) if display_targets is not None else list(opponents)
+
+    by_shield = {}
+    for shield in shields_list:
+        key = f"{shield[0]}-{shield[1]}"
+        before_sum = team_summary(before_roster, opponents, matrix, weights, shield)
+        after_sum = team_summary(after_roster, opponents, matrix, weights, shield)
+        diff = _explain_swap_for_shields(
+            before_roster, after_roster, old_id, replacement_id,
+            opponents, matrix, weights, shields=shield, limit=limit)
+        by_shield[key] = {
+            "shields": list(shield),
+            "before": before_sum,
+            "after": after_sum,
+            "coverage_delta": round(after_sum["coverage"] - before_sum["coverage"], 6),
+            "severity_delta": round(after_sum["severity0"] - before_sum["severity0"], 6),
+            "d0_delta": round(after_sum["d0"] - before_sum["d0"], 6),
+            "d1_delta": round(after_sum["d1"] - before_sum["d1"], 6),
+            "benefits": diff["benefits"],
+            "costs": diff["costs"],
+            "benefit_count": diff["benefit_count"],
+            "cost_count": diff["cost_count"],
+            "before_heatmap": party_matchup_heatmap(before_roster, targets, matrix, shield),
+            "after_heatmap": party_matchup_heatmap(after_roster, targets, matrix, shield),
+        }
+
+    std_key = "2-2" if "2-2" in by_shield else next(iter(by_shield))
+    return {
+        "slot": slot,
+        "old": old_id,
+        "new": replacement_id,
+        "before_roster": before_roster,
+        "after_roster": after_roster,
+        "heatmap_targets": targets,
+        "shields": [list(s) for s in shields_list],
+        "by_shield": by_shield,
+        "summary": by_shield[std_key],
+    }
+
+
+def _solo_summary(member_id, opponents, matrix, weights, shields=STANDARD):
+    coverage = win_weight = unknown = 0.0
+    wins = evaluated = 0
+    for enemy in opponents:
+        w = weights.get(enemy, 0)
+        rating = lookup(matrix, member_id, enemy, shields)
+        if rating is None:
+            unknown += w
+            continue
+        evaluated += 1
+        coverage += w * strength(rating)
+        if rating > 500:
+            wins += 1
+            win_weight += w
+    return {
+        "id": member_id,
+        "coverage": round(coverage, 6),
+        "wins": wins,
+        "evaluated": evaluated,
+        "win_weight": round(win_weight, 6),
+        "unknown_weight": round(unknown, 6),
+    }
+
+
+def evaluate_mega_importance(roster, variants_by_slot, opponents, matrix, weights,
+                             *, mega_policy=None, shields_list=((2, 2), (1, 1), (0, 0))):
+    """Quantify Mega Evolution importance from solo form diffs and party contribution."""
+    rule_allowed = True
+    if isinstance(mega_policy, dict) and mega_policy.get("max_megas_in_three") == 0:
+        rule_allowed = False
+
+    items = []
+    for slot, info in sorted(variants_by_slot.items()):
+        mega_id = info.get("mega")
+        if not mega_id:
+            continue
+        normal_id = info.get("normal")
+        shadow_id = info.get("shadow")
+        active_kind = info.get("active_kind") or ("mega" if roster[slot] == mega_id else "normal")
+
+        forms = {}
+        for kind, cid in (("normal", normal_id), ("shadow", shadow_id), ("mega", mega_id)):
+            if cid:
+                forms[kind] = {
+                    "id": cid,
+                    "solo": _solo_summary(cid, opponents, matrix, weights, STANDARD),
+                    "by_shield": {
+                        f"{s[0]}-{s[1]}": _solo_summary(cid, opponents, matrix, weights, s)
+                        for s in shields_list
+                    },
+                }
+
+        non_mega_ids = [cid for cid in (normal_id, shadow_id) if cid]
+        unique_wins = []
+        unique_win_weight = 0.0
+        for enemy in opponents:
+            w = weights.get(enemy, 0)
+            m_rating = lookup(matrix, mega_id, enemy, STANDARD)
+            if m_rating is None or m_rating <= 500:
+                continue
+            non_ratings = [lookup(matrix, cid, enemy, STANDARD) for cid in non_mega_ids]
+            if non_ratings and all(r is not None and r <= 500 for r in non_ratings):
+                unique_win_weight += w
+                unique_wins.append({
+                    "opponent": enemy,
+                    "mega_rating": m_rating,
+                    "normal_rating": lookup(matrix, normal_id, enemy, STANDARD) if normal_id else None,
+                    "shadow_rating": lookup(matrix, shadow_id, enemy, STANDARD) if shadow_id else None,
+                    "weight": round(w, 6),
+                })
+        unique_wins.sort(key=lambda x: (-x["weight"], -x["mega_rating"]))
+
+        # Party contribution: mega roster vs best non-mega baseline roster
+        mega_roster = list(roster)
+        mega_roster[slot] = mega_id
+        mega_team = team_summary(mega_roster, opponents, matrix, weights, STANDARD)
+
+        baseline_kind = None
+        baseline_team = None
+        if non_mega_ids:
+            candidates = []
+            for kind in ("normal", "shadow"):
+                cid = info.get(kind)
+                if not cid:
+                    continue
+                alt_roster = list(roster)
+                alt_roster[slot] = cid
+                alt_sum = team_summary(alt_roster, opponents, matrix, weights, STANDARD)
+                candidates.append((alt_sum["coverage"], -alt_sum["severity0"], kind, alt_sum))
+            if candidates:
+                candidates.sort(reverse=True)
+                _, _, baseline_kind, baseline_team = candidates[0]
+
+        if baseline_team is not None:
+            coverage_gain = round(mega_team["coverage"] - baseline_team["coverage"], 6)
+            severity_reduction = round(baseline_team["severity0"] - mega_team["severity0"], 6)
+            d0_reduction = round(baseline_team["d0"] - mega_team["d0"], 6)
+            d1_reduction = round(baseline_team["d1"] - mega_team["d1"], 6)
+        else:
+            coverage_gain = 0.0
+            severity_reduction = 0.0
+            d0_reduction = 0.0
+            d1_reduction = 0.0
+
+        best_non_mega_solo = max(
+            (forms[k]["solo"]["coverage"] for k in ("normal", "shadow") if k in forms),
+            default=forms["mega"]["solo"]["coverage"],
+        )
+        solo_coverage_lift = round(forms["mega"]["solo"]["coverage"] - best_non_mega_solo, 6)
+
+        party_impact_score = min(50.0, max(0.0, coverage_gain * 500.0 + severity_reduction * 250.0))
+        unique_win_score = min(30.0, max(0.0, unique_win_weight * 200.0))
+        solo_lift_score = min(20.0, max(0.0, solo_coverage_lift * 200.0))
+        index = round(party_impact_score + unique_win_score + solo_lift_score, 1)
+
+        if index >= 75.0:
+            tier = "必須級"
+        elif index >= 50.0:
+            tier = "有力"
+        elif index >= 25.0:
+            tier = "補完次第"
+        else:
+            tier = "非メガで代用可"
+
+        items.append({
+            "slot": slot,
+            "active_id": roster[slot],
+            "active_kind": active_kind,
+            "mega_id": mega_id,
+            "normal_id": normal_id,
+            "shadow_id": shadow_id,
+            "baseline_kind": baseline_kind,
+            "forms": forms,
+            "unique_mega_wins": unique_wins[:10],
+            "unique_mega_win_count": len(unique_wins),
+            "unique_mega_win_weight": round(unique_win_weight, 6),
+            "party_contribution": {
+                "mega": mega_team,
+                "baseline": baseline_team,
+                "coverage_gain": coverage_gain,
+                "severity_reduction": severity_reduction,
+                "d0_reduction": d0_reduction,
+                "d1_reduction": d1_reduction,
+            },
+            "importance_index": index,
+            "tier": tier,
+            "score_breakdown": {
+                "party_impact": round(party_impact_score, 1),
+                "unique_wins": round(unique_win_score, 1),
+                "solo_lift": round(solo_lift_score, 1),
+            },
+            "rule_allowed": rule_allowed,
+        })
+
+    items.sort(key=lambda x: (-x["importance_index"], x["slot"]))
+    return {
+        "items": items,
+        "rule_allowed": rule_allowed,
+        "shields": [list(STANDARD)],
+        "scope": "基準シールド2-2における同種族比較（通常/シャドウ/メガ）とパーティ貢献度の指数化（0〜100）です。",
+    }
+

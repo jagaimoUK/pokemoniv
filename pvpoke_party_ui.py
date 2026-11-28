@@ -52,6 +52,15 @@ dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100
 .guide-banner{padding:11px 14px;margin:10px 0 14px;border:1px solid #96debf;border-left:5px solid #96debf;border-radius:14px;background:rgba(150,222,191,.1);font-size:14px;line-height:1.6}
 .step-pill{display:inline-block;padding:1px 8px;margin-right:5px;border-radius:999px;background:#96debf;color:#112b23;font-weight:800;font-size:12px}
 .guide-hint{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;margin:4px 0;border-radius:8px;background:rgba(150,222,191,.15);border-left:3px solid #96debf;color:#96debf;font-size:13px;font-weight:700}
+.mega-index-card{padding:12px;margin:10px 0;border:1px solid #6a9586;border-radius:16px;background:#263c3b}
+.mega-badge{display:inline-block;padding:3px 10px;border-radius:999px;background:#96debf;color:#112b23;font-weight:800;font-size:13px;margin-right:8px}
+.mega-badge.warn{background:#e7b17a;color:#28190b}
+.mini-table{width:100%;border-collapse:collapse;margin:8px 0;font-size:13px}
+.mini-table th,.mini-table td{border:1px solid #4c6a5f;padding:6px 8px;text-align:left}
+.mini-table th{background:#1b2d30}
+.diff-gain{box-shadow:inset 0 0 0 2px #96debf}
+.diff-loss{box-shadow:inset 0 0 0 2px #f29bc5}
+.diff-tag{display:inline-block;font-size:12px;font-weight:700;padding:1px 6px;border-radius:6px;margin-top:4px;background:rgba(0,0,0,.35)}
 @media(max-width:550px){main{padding:12px 10px 110px}section{padding:12px}.mon{padding:8px}.fields{grid-template-columns:1fr}}
 </style></head><body><main><nav><a href="/app">← 個体値厳選</a><a href="/flashcards">フラッシュカード</a></nav>
 <h1>見せ合い6体・選出3体</h1><p>重要メタへの穴、15ペアの補完、20組の3体、相手6体への選出を分析するにぇ。Battle Ratingは実戦勝率ではありません。</p>
@@ -85,7 +94,10 @@ dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100
 <p>メタに含まれる相手の別技構成を追加できます。対象外の種・上限を超える技構成は計算せず、結果に範囲を表示します。1体交換候補の順位は静的評価のままです。</p></details>
 <div class="tools"><button id="autoComplete">自動補完を最後まで実行</button><button id="recommend">1体だけ入れ替え候補を探す</button><button id="build">候補から6体を提案</button></div>
 <p>自動補完は最大10回の1体交換を繰り返し探索し、最大3案と相性表を表示します。改善が止まっても全対面への完全対応は保証しません。候補欄が空ならメタから最大24種の仮候補を利用（所持・技・IVの確認が必要）。追加探索はシールド2-2の静的比較です。</p></section></div>
-<div id="weakness" hidden><section><h2>弱点・補完</h2><div id="swapAdvice"></div><div id="weakResult">分析後に表示します。</div></section></div>
+<div id="weakness" hidden>
+<section id="megaImportanceSection"><h2>メガシンカの重要性指数（通常 / シャドウ / メガ比較）</h2><p>パーティ内のメガ候補について、通常・シャドウとの単体差（固有の勝ち筋）と、パーティ全体の補完率・深刻度への貢献を0〜100の指数で表します。</p><div class="tools"><button id="runMegaImportance" type="button">メガ重要性を比較する</button></div><div id="megaImportanceResult">「メガ重要性を比較する」を押すと比較結果を表示します。</div></section>
+<section id="manualSwapSection"><h2>1体交換して相性比較（全シールド対応）</h2><p>入れ替えたい1枠を選び、同種族の別形態（例：ヤミラミ ↔ メガヤミラミ）や任意のポケモンと交換したときの補完率・相性表をシールド別に比較します。</p><div class="fields"><label for="manualSwapSlot">入れ替える枠<select id="manualSwapSlot"></select></label><label for="manualSwapSearch">交換先のポケモン（IDまたは名前）<input id="manualSwapSearch" list="speciesList" placeholder="例：sableye_mega / ヤミラミ"></label></div><div id="manualSwapQuickForms" class="tools" style="margin:8px 0"></div><div class="tools"><button id="runManualSwap" type="button">この1体交換を相性比較で調べる</button></div><div id="manualSwapResult"></div></section>
+<section><h2>弱点・補完</h2><div id="swapAdvice"></div><div id="weakResult">分析後に表示します。</div></section></div>
 <div id="selection" hidden><section><h2>相手6体</h2><p>名前から選ぶと推奨技が入ります。技をタップして変更できます。</p><textarea id="enemy" placeholder="clodsire,POISON_STING,STONE_EDGE,EARTHQUAKE"></textarea><button id="select">相手6体への選出を比較</button>
 <p>双方ともチーム全体のシールドは2枚。静的な近似であり、実際の3対3勝率ではありません。</p><div id="selectionResult"></div></section></div>
 <div id="strategy" hidden>
@@ -666,8 +678,293 @@ $('load').onclick=async()=>{try{
 $('workspace').addEventListener('input',()=>{
  inputRevision++;
  const root=$('strategyResult');if(root.dataset.calculated&&!root.querySelector('[data-stale]')){const msg=node('p','入力が変更されています。以下は以前の条件の結果です。再計算してください。');msg.dataset.stale='true';root.prepend(msg)}
+ refreshManualSwapControls();
 });
-setup().catch(()=>{status('ログインが必要です。接続キーを入力してください。')});
+function baseSpeciesForSwap(sid){
+ return String(sid||'').replace(/_shadow-shadow$/,'_shadow').replace(/_shadow$/,'').replace(/_(?:mega|primal)(?:_[xy])?$/,'');
+}
+function quickFormsForSpecies(sid){
+ if(!sid||!catalog||!Object.keys(catalog).length)return [];
+ const base=baseSpeciesForSwap(sid);
+ const candidates=[base,base+'_shadow',base+'_mega',base+'_mega_x',base+'_mega_y',base+'_primal'];
+ const seen=new Set();
+ const out=[];
+ for(const c of candidates){
+  if(!c||c===sid||seen.has(c)||!catalog[c])continue;
+  seen.add(c);out.push(c);
+ }
+ return out;
+}
+function refreshManualSwapControls(){
+ const sel=$('manualSwapSlot'),quick=$('manualSwapQuickForms');
+ if(!sel||!quick)return;
+ let members=[];try{members=getMon();}catch(_){members=[];}
+ const prev=sel.value;
+ sel.replaceChildren();
+ members.forEach((m,i)=>{
+  const label=(i+1)+'枠目: '+(m&&m.species?partyDisplay(m.species):'未選択');
+  sel.append(new Option(label,String(i)));
+ });
+ if(prev!==''&&Number(prev)>=0&&Number(prev)<members.length)sel.value=prev;
+ const idx=Number(sel.value||0);
+ const curSid=members[idx]?.species||'';
+ quick.replaceChildren();
+ const forms=quickFormsForSpecies(curSid);
+ if(!forms.length){
+  if(curSid)quick.append(node('small','同種族の別形態候補はありません（下の入力欄から任意のポケモンを選べます）。'));
+  return;
+ }
+ quick.append(node('small','同種族の別形態: '));
+ for(const fsid of forms){
+  const btn=node('button',partyDisplay(fsid)+'と比較');
+  btn.type='button';
+  btn.onclick=()=>{$('manualSwapSearch').value=fsid;runManualSwapComparison(idx,fsid);};
+  quick.append(btn);
+ }
+}
+$('manualSwapSlot')?.addEventListener('change',refreshManualSwapControls);
+document.querySelectorAll('.tabs button').forEach(b=>b.addEventListener('click',()=>{if(b.dataset.tab==='weakness')refreshManualSwapControls();}));
+function resolveSpeciesFromInput(raw){
+ if(typeof resolvePartyName==='function'){
+  const sid=resolvePartyName(raw,catalog);
+  if(sid)return sid;
+ }
+ const q=String(raw||'').trim();
+ if(!q)return '';
+ const lower=q.toLowerCase();
+ if(catalog[lower])return lower;
+ return '';
+}
+function buildReplacementRow(sid,template){
+ let pool=[];try{pool=partyRosterRows('pool');}catch(_){pool=[];}
+ const pooled=pool.find(r=>r.species===sid);
+ if(pooled)return {...pooled};
+ const entry=catalog[sid]||{};
+ const fasts=entry.fastMoves||[];
+ const chargeds=entry.chargedMoves||[];
+ const defs=entry.defaultMoves||[];
+ const fast=defs[0]&&fasts.includes(defs[0])?defs[0]:(fasts[0]||'');
+ const c1=defs[1]&&chargeds.includes(defs[1])?defs[1]:(chargeds[0]||'');
+ const c2=(defs[2]&&chargeds.includes(defs[2])&&defs[2]!==c1)?defs[2]:(chargeds.find(m=>m!==c1)||c1);
+ const row={species:sid,fast,charged1:c1,charged2:c2};
+ if(template&&baseSpeciesForSwap(template.species)===baseSpeciesForSwap(sid)){
+  if(fasts.includes(template.fast))row.fast=template.fast;
+  if(chargeds.includes(template.charged1)&&chargeds.includes(template.charged2)&&template.charged1!==template.charged2){
+   row.charged1=template.charged1;row.charged2=template.charged2;
+  }
+  if([template.atk,template.def,template.hp].every(v=>Number.isInteger(v)&&v>=0&&v<=15)){
+   row.atk=template.atk;row.def=template.def;row.hp=template.hp;
+  }
+  if(isPartyMegaSpecies(sid,entry)&&Number.isInteger(template.mega_level))row.mega_level=template.mega_level;
+ }
+ return row;
+}
+function openSwapComparisonDialog(res){
+ const cmp=res.comparison,labels=res.labels||{};
+ const disp=id=>partyDisplay(labels[id]?.species||id);
+ const fmt=v=>(100*v).toFixed(1)+'%';
+ const signedPct=v=>(v>=0?'+':'')+(100*v).toFixed(1)+'%';
+ const signedNum=v=>(v>=0?'+':'')+v.toFixed(3);
+ let dlg=document.querySelector('dialog.manual-swap-dialog');
+ if(!dlg){dlg=node('dialog',null,'party-comparison manual-swap-dialog');dlg.setAttribute('aria-label','パーティの相性比較（1体交換）');$('weakness').append(dlg);}
+ dlg.replaceChildren();
+ const header=node('div',null,'compare-header'),close=node('button','比較を閉じる');
+ header.append(node('h2','1体交換の相性比較: '+disp(cmp.old)+' → '+disp(cmp.new)),close);
+ dlg.append(header);
+ const content=node('div',null,'compare-content');dlg.append(content);
+ const prevOverflow=document.body.style.overflow;
+ close.onclick=()=>dlg.close();
+ dlg.onclose=()=>{document.body.style.overflow=prevOverflow;};
+ document.body.style.overflow='hidden';
+ dlg.showModal();
+
+ const controls=node('div',null,'compare-controls');
+ controls.addEventListener('input',e=>e.stopPropagation());
+ function mkSelect(title,options,value){const l=node('label',title),x=node('select');
+  x.setAttribute('aria-label',title);for(const [v,t] of options)x.append(new Option(t,String(v)));x.value=String(value);l.append(x);controls.append(l);return x;}
+ const own=mkSelect('自分のシールド',[[0,'0枚'],[1,'1枚'],[2,'2枚']],2);
+ const enemy=mkSelect('相手のシールド',[[0,'0枚'],[1,'1枚'],[2,'2枚']],2);
+ const mode=mkSelect('比較表示',[['summary','全体の対応力（差分ハイライト）'],['slots','ポケモン別の相性']],'summary');
+ content.append(controls);
+
+ const metricsBox=node('div',null,'completion-card');content.append(metricsBox);
+ const applyBtn=node('button','この交換をパーティに反映（'+(cmp.slot+1)+'枠目を変更）');
+ applyBtn.type='button';
+ applyBtn.onclick=()=>{
+  const cur=getMon();
+  cur[cmp.slot]={...res.replacement,locked:Boolean(cur[cmp.slot]?.locked)};
+  renderMon(cur);refreshManualSwapControls();inputRevision++;
+  dlg.close();
+  status((cmp.slot+1)+'枠目を '+disp(cmp.new)+' に変更しました。再分析してください。');
+ };
+ content.append(applyBtn);
+
+ const opponent=node('h3',null,'compare-opponent'),paging=node('div',null,'tools compare-paging'),outer=node('div',null,'compare-scroll');
+ const previous=node('button','前へ'),next=node('button','次へ'),info=node('span');
+ paging.append(previous,info,next);content.append(opponent,paging,outer);
+ let page=0;
+ const symbol=v=>v==null?'?':v>=550?'○':v<=450?'×':'△';
+ const tone=v=>v==null?'heat-unknown':v>=550?'heat-win':v<=450?'heat-loss':'heat-mid';
+ function stats(row){const r=row?.ratings||[];return r.length!==6||r.some(x=>x==null)?{best:null,answers:null}:{best:Math.max(...r),answers:r.filter(x=>x>500).length};}
+
+ function draw(){
+  const key=own.value+'-'+enemy.value;
+  const s=cmp.by_shield?.[key];
+  if(!s){outer.replaceChildren(node('p','選択したシールド条件のデータがありません。'));return;}
+  metricsBox.replaceChildren();
+  addLine(metricsBox,'シールド条件: 自分 '+own.value+'枚 / 相手 '+enemy.value+'枚');
+  addLine(metricsBox,'補完率: '+fmt(s.before.coverage)+' → '+fmt(s.after.coverage)+'（'+signedPct(s.coverage_delta)+'）');
+  addLine(metricsBox,'深刻度: '+s.before.severity0.toFixed(3)+' → '+s.after.severity0.toFixed(3)+'（'+signedNum(s.severity_delta)+'）');
+  addLine(metricsBox,'改善した相手: '+s.benefit_count+'件 / 悪化した相手: '+s.cost_count+'件');
+  if(res.mega_policy&&res.mega_policy.max_megas_in_three===0&&isPartyMegaSpecies(res.replacement?.species,catalog[res.replacement?.species])){
+   addLine(metricsBox,'※ 現在の大会ルール（3体選出メガ0体）では対戦選出にメガ枠を使えません。');
+  }
+
+  const before=s.before_heatmap||[],after=s.after_heatmap||[];
+  const afterMap=new Map(after.map(r=>[r.opponent,r]));
+  const rows=before.map(r=>({before:r,after:afterMap.get(r.opponent)}));
+  const table=node('table',null,'heatmap compare-heatmap'),thead=node('thead'),head=node('tr');
+  table.dataset.shields=key;table.dataset.mode=mode.value;
+  const slots=mode.value==='slots',size=slots?1:10;
+  page=Math.max(0,Math.min(page,Math.max(0,Math.ceil(rows.length/size)-1)));
+  if(slots)head.append(node('th','交換前'),node('th','交換後'));
+  else head.append(node('th','相手'),node('th','交換前'),node('th','交換後'));
+  thead.append(head);table.append(thead);const body=node('tbody');
+  opponent.textContent=slots&&rows[page]?'対 '+disp(rows[page].before.opponent):'全体の対応力（'+key+' シールド）';
+
+  for(const r of rows.slice(page*size,page*size+size)){
+   if(!slots){
+    const tr=node('tr');tr.append(node('th',disp(r.before.opponent)));
+    const va=stats(r.before),vb=stats(r.after);
+    const tdA=node('td');tdA.className=tone(va.best);
+    tdA.append(node('span',va.best==null?'?':symbol(va.best)+' '+va.best),node('small',va.answers==null?'未計算':'勝てる担当 '+va.answers+'体'));
+    const tdB=node('td');tdB.className=tone(vb.best);
+    let diffLabel='';
+    if(va.best!=null&&vb.best!=null){
+     if(vb.answers>va.answers||(vb.answers===va.answers&&vb.best>va.best)){tdB.classList.add('diff-gain');diffLabel='改善 +'+(vb.best-va.best);}
+     else if(vb.answers<va.answers||(vb.answers===va.answers&&vb.best<va.best)){tdB.classList.add('diff-loss');diffLabel='悪化 '+(vb.best-va.best);}
+    }
+    tdB.append(node('span',vb.best==null?'?':symbol(vb.best)+' '+vb.best),node('small',vb.answers==null?'未計算':'勝てる担当 '+vb.answers+'体'));
+    if(diffLabel)tdB.append(node('small',diffLabel,'diff-tag'));
+    tr.append(tdA,tdB);body.append(tr);
+   }else{
+    for(let i=0;i<6;i++){
+     const tr=node('tr');
+     const va=r.before?.ratings?.[i]??null,vb=r.after?.ratings?.[i]??null;
+     const tdA=node('td');tdA.className=tone(va);
+     tdA.append(node('strong',disp(cmp.before_roster[i])),node('span',symbol(va)+' '+(va??'?')));
+     const tdB=node('td');tdB.className=tone(vb);
+     tdB.append(node('strong',disp(cmp.after_roster[i])),node('span',symbol(vb)+' '+(vb??'?')));
+     if(va!=null&&vb!=null&&vb!==va){
+      tdB.classList.add(vb>va?'diff-gain':'diff-loss');
+      tdB.append(node('small',(vb>va?'+':'')+(vb-va),'diff-tag'));
+     }
+     tr.append(tdA,tdB);body.append(tr);
+    }
+   }
+  }
+  table.append(body);outer.replaceChildren(table);
+  info.textContent=rows.length?(page*size+1)+'–'+Math.min(rows.length,page*size+size)+' / '+rows.length:'比較データがありません';
+  previous.textContent=slots?'前の相手':'前へ';next.textContent=slots?'次の相手':'次へ';
+  previous.disabled=page===0;next.disabled=(page+1)*size>=rows.length;
+ }
+ for(const x of [own,enemy])x.onchange=()=>draw();
+ mode.onchange=()=>{page=0;draw();};
+ previous.onclick=()=>{page--;draw();};next.onclick=()=>{page++;draw();};
+ draw();
+}
+async function runManualSwapComparison(explicitSlot=null,explicitSid=null){
+ try{
+  const members=getMon();
+  validatePartyAnalysisMembers(members);
+  const slot=explicitSlot!=null?explicitSlot:Number($('manualSwapSlot')?.value||0);
+  const sid=explicitSid||resolveSpeciesFromInput($('manualSwapSearch')?.value||'');
+  if(!sid)throw Error('交換先のポケモンを指定してください');
+  const replacement=buildReplacementRow(sid,members[slot]);
+  $('runManualSwap').disabled=true;
+  status('1体交換（全シールド）を比較しています...');
+  const payload={
+   members,slot,replacement,
+   opponents:partyRosterRows('enemy'),
+   meta_preset_id:$('meta').value,
+   meta_sha256:metaItems.find(x=>x.id===$('meta').value)?.sha256,
+   group_weights:getWeights(),
+   ...partyRulePayload(),
+  };
+  const res=await api('party/compare-swap',payload);
+  const std=res.comparison?.summary;
+  const out=$('manualSwapResult');out.replaceChildren();
+  if(std){
+   const disp=id=>partyDisplay(res.labels?.[id]?.species||id);
+   addLine(out,'直近の比較: '+disp(res.comparison.old)+' → '+disp(res.comparison.new)+' / 補完率 '+((std.coverage_delta>=0?'+':'')+(100*std.coverage_delta).toFixed(1)+'%')+'（詳細は比較ダイアログで確認）');
+  }
+  openSwapComparisonDialog(res);
+  status('1体交換の相性比較を表示しました。');
+ }catch(e){status(e.message);}finally{if($('runManualSwap'))$('runManualSwap').disabled=false;}
+}
+$('runManualSwap')?.addEventListener('click',()=>runManualSwapComparison());
+function renderMegaImportance(res){
+ const root=$('megaImportanceResult');root.replaceChildren();
+ const imp=res.mega_importance,labels=res.labels||{};
+ const disp=id=>partyDisplay(labels[id]?.species||id);
+ const fmt=v=>(100*v).toFixed(1)+'%';
+ if(!imp||!imp.items||!imp.items.length){
+  addLine(root,imp?.scope||'現在の6体にメガシンカ対象ポケモンが含まれていません。');return;
+ }
+ if(!imp.rule_allowed){
+  addLine(root,'※ 現在の大会ルールは「3体選出メガ0体」です。対戦選出にメガ枠を使えないため、下の指数はメガ許可ルールを想定した参考値です。');
+ }
+ for(const item of imp.items){
+  const card=node('div',null,'mega-index-card');
+  const badge=node('span','重要性指数 '+item.importance_index.toFixed(1)+' / 100（'+item.tier+'）','mega-badge'+(item.rule_allowed?'':' warn'));
+  const title=node('h3');title.append(badge,(item.slot+1)+'枠目: '+disp(item.mega_id));
+  card.append(title);
+  const bd=item.score_breakdown;
+  addLine(card,'内訳: パーティ貢献 '+bd.party_impact+' /50 + 固有の勝ち筋 '+bd.unique_wins+' /30 + 単体底上げ '+bd.solo_lift+' /20');
+  const pc=item.party_contribution;
+  if(pc.baseline){
+   const baseLabel=item.baseline_kind==='shadow'?'シャドウ':'通常';
+   addLine(card,'パーティ貢献（'+baseLabel+' → メガ）: 補完率 '+fmt(pc.baseline.coverage)+' → '+fmt(pc.mega.coverage)+'（'+(pc.coverage_gain>=0?'+':'')+fmt(pc.coverage_gain)+'） / 深刻度 '+pc.baseline.severity0.toFixed(3)+' → '+pc.mega.severity0.toFixed(3));
+  }
+  const tbl=node('table',null,'mini-table');
+  const thead=node('thead'),hr=node('tr');
+  ['形態','単体カバー率','メタ勝ち数(2-2)'].forEach(t=>hr.append(node('th',t)));
+  thead.append(hr);tbl.append(thead);
+  const tbody=node('tbody');
+  for(const [kind,label] of [['normal','通常'],['shadow','シャドウ'],['mega','メガ']]){
+   const f=item.forms?.[kind];if(!f)continue;
+   const tr=node('tr');
+   tr.append(node('td',label+(item.active_kind===kind?'（現在）':'')),node('td',fmt(f.solo.coverage)),node('td',f.solo.wins+' / '+f.solo.evaluated));
+   tbody.append(tr);
+  }
+  tbl.append(tbody);card.append(tbl);
+  if(item.unique_mega_win_count>0){
+   const topNames=item.unique_mega_wins.slice(0,5).map(u=>disp(u.opponent)+'('+u.mega_rating+')').join('、');
+   addLine(card,'通常・シャドウでは勝てずメガで初めて勝てる相手: '+item.unique_mega_win_count+'件（'+topNames+'）');
+  }else{
+   addLine(card,'通常・シャドウでは勝てずメガで初めて勝てる相手: 0件');
+  }
+  root.append(card);
+ }
+}
+$('runMegaImportance')?.addEventListener('click',async()=>{
+ try{
+  const members=getMon();validatePartyAnalysisMembers(members);
+  $('runMegaImportance').disabled=true;
+  status('メガシンカの重要性指数を計算しています...');
+  const payload={
+   members,
+   meta_preset_id:$('meta').value,
+   meta_sha256:metaItems.find(x=>x.id===$('meta').value)?.sha256,
+   group_weights:getWeights(),
+   ...partyRulePayload(),
+  };
+  const res=await api('party/mega-importance',payload);
+  renderMegaImportance(res);
+  status('メガシンカの重要性指数を計算しました。');
+ }catch(e){status(e.message);}finally{if($('runMegaImportance'))$('runMegaImportance').disabled=false;}
+});
+setup().then(()=>refreshManualSwapControls()).catch(()=>{status('ログインが必要です。接続キーを入力してください。')});
 /*STRATEGY_UI*/
 </script></body></html>'''
 
