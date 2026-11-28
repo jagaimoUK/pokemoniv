@@ -287,6 +287,9 @@ function maxLevelForCap(sid,ivsObj,cpCap=1500,maxLvl=50){
 function computeMegaSuperMaxComparison(sid,ivsStr){
  const ivsObj=parseIvsText(ivsStr);
  if(!ivsObj||!catalog[sid]?.baseStats||!Array.isArray(cpms)||!cpms.length)return null;
+ const halfRuns=[[200,1,0,4],[400,1,0,4],[600,1,0,4],[800,1,0,4],[1000,1,0,4],[1300,2,0,4],[1600,2,0,4],[1900,2,0,4],[2200,2,0,4],[2500,2,0,4],[3000,3,0,4],[3500,3,0,4],[4000,3,0,2],[4000,4,0,2],[4500,4,0,4],[5000,4,0,4],[6000,6,0,4],[7000,8,0,4],[8000,10,0,4],[9000,12,0,4],[10000,15,0,2],[10000,0,10,2],[11000,0,10,2],[11000,0,12,2],[12000,0,12,2],[12000,0,15,2],[13000,0,15,2],[13000,0,17,2],[14000,0,17,2],[14000,0,20,2],[15000,0,20,2]];
+ const halfCosts=[];for(const [d,c,x,n] of halfRuns)for(let k=0;k<n;k++)halfCosts.push([d,c,x]);
+ const costBetween=(cur,tgt)=>{const c2=Math.round(cur*2),t2=Math.min(100,Math.round(tgt*2));let stardust=0,candy=0,candy_xl=0;for(let h=c2;h<t2;h++){const r=halfCosts[h-2];if(r){stardust+=r[0];candy+=r[1];candy_xl+=r[2];}}return {paid_target_level:t2/2,stardust,candy,candy_xl};};
  const perfectIvs={attack:15,defense:15,hp:15};
  const cap=maxLevelForCap(sid,ivsObj,1500,50);
  const cp50=computeCpForSpecies(sid,ivsObj,50.0);
@@ -298,7 +301,21 @@ function computeMegaSuperMaxComparison(sid,ivsStr){
  const ratio50=cp50!=null&&maxCp50?((cp50/maxCp50)*100).toFixed(1):null;
  const ratio51=cp51!=null&&maxCp51?((cp51/maxCp51)*100).toFixed(1):null;
  const ratio52=cp52!=null&&maxCp52?((cp52/maxCp52)*100).toFixed(1):null;
- return {sid,ivs:ivsStr,cap,cp50,cp51,cp52,maxCp50,maxCp51,maxCp52,ratio50,ratio51,ratio52};
+ const maxBase=costBetween(40,50);
+ let capCost=null;
+ if(cap){
+  const refStart=cap.level>40?40:1;
+  const base=costBetween(refStart,cap.level);
+  const h1=costBetween(refStart,Math.max(1,cap.level-2));
+  const h2=costBetween(refStart,Math.max(1,cap.level-3));
+  capCost={
+   refStart,
+   base,
+   h1:{...h1,xlDiff:h1.candy_xl-base.candy_xl,dustDiff:h1.stardust-base.stardust,candyDiff:h1.candy-base.candy},
+   h2:{...h2,xlDiff:h2.candy_xl-base.candy_xl,dustDiff:h2.stardust-base.stardust,candyDiff:h2.candy-base.candy}
+  };
+ }
+ return {sid,ivs:ivsStr,cap,cp50,cp51,cp52,maxCp50,maxCp51,maxCp52,ratio50,ratio51,ratio52,costComparison:{maxBase,cap:capCost}};
 }
 function discoverReachableForms(sid){
  const p=catalog[sid];
@@ -1131,14 +1148,17 @@ function renderMegaSuperMaxComparison(row,parent,result){
  node('th','CP',hRow);
  node('th','最大CP(100%)',hRow);
  node('th','CP達成率',hRow);
+ node('th','アメXL(PL40→)',hRow);
+ node('th','すな(PL40→)',hRow);
  const tbody=node('tbody','',table);
  const pIvs=parseIvsText(row.ivs),maxIvs={attack:15,defense:15,hp:15};
  const cp53=computeCpForSpecies(sid,pIvs,53.0),maxCp53=computeCpForSpecies(sid,maxIvs,53.0);
+ const maxBase=cmp.costComparison?.maxBase||{candy_xl:296,stardust:250000};
  const rows=[
-  {label:'通常 MAX（PL50）',pl:'50.0',cp:cmp.cp50,max:cmp.maxCp50,ratio:cmp.ratio50,cls:''},
-  {label:'相棒ブースト（PL51）',pl:'51.0',cp:cmp.cp51,max:cmp.maxCp51,ratio:cmp.ratio51,cls:''},
-  {label:'スーパーMAX 仮説1（PL50+2=52）',pl:'52.0',cp:cmp.cp52,max:cmp.maxCp52,ratio:cmp.ratio52,cls:'supermax-row'},
-  {label:'スーパーMAX 仮説2（PL51+2=53）',pl:'53.0',cp:cp53,max:maxCp53,ratio:cp53!=null&&maxCp53?((cp53/maxCp53)*100).toFixed(1):null,cls:'supermax-row'}
+  {label:'通常 MAX（PL50）',pl:'50.0',cp:cmp.cp50,max:cmp.maxCp50,ratio:cmp.ratio50,xl:String(maxBase.candy_xl),dust:maxBase.stardust.toLocaleString(),cls:''},
+  {label:'相棒ブースト（PL51）',pl:'51.0',cp:cmp.cp51,max:cmp.maxCp51,ratio:cmp.ratio51,xl:maxBase.candy_xl+' (±0)',dust:maxBase.stardust.toLocaleString()+' (±0)',cls:''},
+  {label:'スーパーMAX 仮説1（PL50+2=52）',pl:'52.0',cp:cmp.cp52,max:cmp.maxCp52,ratio:cmp.ratio52,xl:maxBase.candy_xl+' (±0・参考)',dust:maxBase.stardust.toLocaleString()+' (±0・参考)',cls:'supermax-row'},
+  {label:'スーパーMAX 仮説2（PL51+2=53）',pl:'53.0',cp:cp53,max:maxCp53,ratio:cp53!=null&&maxCp53?((cp53/maxCp53)*100).toFixed(1):null,xl:maxBase.candy_xl+' (±0・参考)',dust:maxBase.stardust.toLocaleString()+' (±0・参考)',cls:'supermax-row'}
  ];
  for(const r of rows){
   const tr=node('tr','',tbody,r.cls);
@@ -1148,8 +1168,33 @@ function renderMegaSuperMaxComparison(row,parent,result){
   node('td',r.max!=null?String(r.max):'-',tr);
   const tdRatio=node('td',r.ratio!=null?r.ratio+'%':'-',tr);
   if(r.ratio!=null)tdRatio.className='ratio-val';
+  node('td',r.xl,tr);
+  node('td',r.dust,tr);
  }
- node('p','※スーパーMAX（PL+2）の補正仕様は未確定のため、仮説1（通常MAXから+2＝PL52）と仮説2（相棒ブーストから+2＝PL53）の試算値を参考表示しています。ゲーム内確定仕様ではありません。',wrap,'note');
+ const capCost=cmp.costComparison?.cap;
+ if(cmp.cap&&capCost){
+  const fmtDiff=v=>v===0?'±0':(v>0?'+'+v:String(v));
+  const capTbl=node('table','',wrap,'mega-cost-table');
+  const ch=node('tr','',node('thead','',capTbl));
+  node('th','GL目標PL '+cmp.cap.level+' 到達コスト（PL'+capCost.refStart+'→）',ch);
+  node('th','実強化PL',ch);
+  node('th','アメXL (差)',ch);
+  node('th','すな (差)',ch);
+  const cb=node('tbody','',capTbl);
+  const capRows=[
+   {label:'通常強化（補正なし）',pl:capCost.base.paid_target_level,xl:capCost.base.candy_xl+' (基準)',dust:capCost.base.stardust.toLocaleString()+' (基準)',cls:''},
+   {label:'仮説1（PL+2ブースト想定）',pl:capCost.h1.paid_target_level,xl:capCost.h1.candy_xl+' ('+fmtDiff(capCost.h1.xlDiff)+')',dust:capCost.h1.stardust.toLocaleString()+' ('+fmtDiff(capCost.h1.dustDiff)+')',cls:'supermax-row'},
+   {label:'仮説2（相棒+1＋PL+2想定）',pl:capCost.h2.paid_target_level,xl:capCost.h2.candy_xl+' ('+fmtDiff(capCost.h2.xlDiff)+')',dust:capCost.h2.stardust.toLocaleString()+' ('+fmtDiff(capCost.h2.dustDiff)+')',cls:'supermax-row'}
+  ];
+  for(const cr of capRows){
+   const tr=node('tr','',cb,cr.cls);
+   node('td',cr.label,tr);
+   node('td',String(cr.pl),tr);
+   node('td',cr.xl,tr);
+   node('td',cr.dust,tr);
+  }
+ }
+ node('p','※スーパーMAX（PL+2）の補正仕様は未確定のため、仮説1（通常MAXから+2＝PL52）と仮説2（相棒ブーストから+2＝PL53）のCP・アメXL・すなの試算値を未確定参考値として表示しています。ゲーム内確定仕様ではありません。',wrap,'note');
 }
 function metaNotice(text,error=false){el('metaNotice').textContent=text;el('metaNotice').style.color=error?'#ffb6b6':'';}
 function resetMetaUpload(){metaPending=null;el('metaApply').disabled=true;el('metaPreview').hidden=true;el('metaPreview').textContent='';el('metaFile').value='';el('metaText').value='';}

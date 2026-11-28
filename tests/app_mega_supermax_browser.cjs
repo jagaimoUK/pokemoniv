@@ -117,6 +117,12 @@ const server = http.createServer(async (req, res) => {
     const row3 = await rows.nth(3).textContent();
     assert(row3.includes('スーパーMAX 仮説2（PL51+2=53）') && row3.includes('53.0'));
 
+    const costRows = cmpDetails.locator('table.mega-cost-table tbody tr');
+    assert.equal(await costRows.count(), 3, '3 cap cost rows (Base, Hyp1, Hyp2)');
+    assert((await costRows.nth(1).textContent()).includes('199 (-77)'));
+    assert((await costRows.nth(2).textContent()).includes('165 (-111)'));
+    assert((await cmpDetails.textContent()).includes('未確定参考値'));
+
     assert.deepEqual(errors, [], 'No page errors occurred');
     console.log('App Mega Super MAX browser test PASS: PL50/51 vs PL+2 comparison table and achievement ratios verified successfully');
   } finally {
