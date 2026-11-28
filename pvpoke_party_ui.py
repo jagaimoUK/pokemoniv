@@ -725,17 +725,14 @@ function refreshManualSwapControls(){
 $('manualSwapSlot')?.addEventListener('change',refreshManualSwapControls);
 document.querySelectorAll('.tabs button').forEach(b=>b.addEventListener('click',()=>{if(b.dataset.tab==='weakness')refreshManualSwapControls();}));
 function resolveSpeciesFromInput(raw){
+ if(typeof resolvePartyName==='function'){
+  const sid=resolvePartyName(raw,catalog);
+  if(sid)return sid;
+ }
  const q=String(raw||'').trim();
  if(!q)return '';
  const lower=q.toLowerCase();
  if(catalog[lower])return lower;
- for(const sid of Object.keys(catalog)){
-  if(partyDisplay(sid).toLowerCase()===lower)return sid;
-  if(String(catalog[sid]?.speciesName||'').toLowerCase()===lower)return sid;
- }
- for(const sid of Object.keys(catalog)){
-  if(partyDisplay(sid).toLowerCase().includes(lower)||sid.includes(lower))return sid;
- }
  return '';
 }
 function buildReplacementRow(sid,template){
