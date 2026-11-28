@@ -827,6 +827,7 @@ class Handler(BaseHTTPRequestHandler):
         if path not in ('/api/prepare','/api/run','/api/prepare24','/api/run24','/api/cancel','/api/meta/sync','/api/meta/preview','/api/meta/presets',
                         '/api/party/list','/api/party/get','/api/party/save',
                         '/api/party/start','/api/party/status','/api/party/cancel','/api/party/meta-weights',
+                        '/api/party/compare-swap','/api/party/mega-importance',
                          '/api/battles/simulate', MISSING_API_PATH, SANDBOX_API_PATH):
             return self.respond(404, {'error': '見つかりません'})
         # Only same-origin JS with the random session token can start a job.
@@ -996,6 +997,25 @@ class Handler(BaseHTTPRequestHandler):
                     return self.respond(200, PARTY.run_status(payload.get('job_id')))
                 if action == 'cancel':
                     return self.respond(200, PARTY.cancel(payload.get('job_id')))
+                if action in ('compare-swap', 'mega-importance'):
+                    if not CATALOG.get('ready'):
+                        raise ValueError('ゲームデータを読み込み中です')
+                    token = try_reserve_compute('party')
+                    if token is None:
+                        return self.respond(409, {'error': 'Another battle calculation is running'})
+                    _, cpms, full_species = engine.game_data()
+                    try:
+                        if action == 'compare-swap':
+                            response = PARTY.compare_swap(
+                                payload, catalog=CATALOG['species'],
+                                species=full_species, cpms=cpms, engine=engine, work=WORK)
+                        else:
+                            response = PARTY.mega_importance(
+                                payload, catalog=CATALOG['species'],
+                                species=full_species, cpms=cpms, engine=engine, work=WORK)
+                    finally:
+                        release_compute(token)
+                    return self.respond(200, response)
                 if action == 'start':
                     if not CATALOG.get('ready'):
                         raise ValueError('ゲームデータを読み込み中です')

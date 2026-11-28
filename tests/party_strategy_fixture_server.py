@@ -90,6 +90,8 @@ def request(path, payload=None, **kwargs):
         engine=engine,work=work,global_lock=lock,global_status=state)
     if action == 'status':return party.run_status(args['job_id'])
     if action == 'cancel':return party.cancel(args['job_id'])
+    if action == 'compare-swap':return party.compare_swap(args,catalog=catalog,species=species,cpms=cpms,engine=engine,work=work)
+    if action == 'mega-importance':return party.mega_importance(args,catalog=catalog,species=species,cpms=cpms,engine=engine,work=work)
     raise ValueError(path)
 gateway.backend._request = request
 gateway.backend._token = lambda:'fixture-token'
