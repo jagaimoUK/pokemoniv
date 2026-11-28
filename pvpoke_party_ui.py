@@ -69,7 +69,24 @@ dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100
 .move-source-badge.shared{background:#2d5d4e;color:#96debf}
 .move-source-badge.override{background:#5d4d2d;color:#f5d58c}
 #manualSwapMovesWrap{margin:8px 0;padding:10px;border:1px solid #4c6a5f;border-radius:12px;background:#1d3031}
-@media(max-width:550px){main{padding:12px 10px 110px}section{padding:12px}.mon{padding:8px}.fields{grid-template-columns:1fr}}
+.mega-diag-list{margin:8px 0;padding:8px 12px 8px 26px;border-radius:10px;background:rgba(231,177,122,.12);border-left:3px solid #e7b17a;font-size:13px;color:#f3dfc6}
+.calc-dock{position:fixed;right:16px;bottom:108px;z-index:45;width:min(340px,calc(100vw - 24px));padding:12px 14px;border:1px solid #82bca8;border-radius:16px;background:rgba(19,36,40,.96);box-shadow:0 8px 24px rgba(0,0,0,.55);backdrop-filter:blur(6px)}
+.calc-dock.done{border-color:#96debf}.calc-dock.error{border-color:#e28da3;background:rgba(56,28,36,.96)}
+.calc-dock-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.calc-dock-title{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px;min-width:0}
+.calc-dock-spin{width:14px;height:14px;border:2px solid rgba(150,222,191,.3);border-top-color:#96debf;border-radius:50%;flex:none;animation:calcSpin .8s linear infinite}
+.calc-dock.done .calc-dock-spin,.calc-dock.error .calc-dock-spin{display:none}
+@keyframes calcSpin{to{transform:rotate(360deg)}}
+.calc-dock-meta{font-size:12px;color:#b8d7cc;font-variant-numeric:tabular-nums;margin:4px 0 6px}
+.calc-dock-msg{font-size:13px;color:#e2f1e9;line-height:1.45;overflow-wrap:anywhere}
+.calc-dock-bar{height:7px;border-radius:999px;background:#102024;overflow:hidden;margin:6px 0}
+.calc-dock-fill{height:100%;width:0%;background:linear-gradient(90deg,#5db494,#96debf);transition:width .35s ease}
+.calc-dock-bar.indeterminate .calc-dock-fill{width:38%;animation:calcIndet 1.2s ease-in-out infinite}
+@keyframes calcIndet{0%{transform:translateX(-110%)}100%{transform:translateX(280%)}}
+.calc-dock-actions{display:flex;gap:6px;flex:none}
+.calc-dock-actions button{min-height:32px;padding:4px 10px;font-size:12px;border-radius:10px}
+@media(max-width:760px){.calc-dock{left:8px;right:8px;width:auto;bottom:108px}}
+@media(max-width:550px){main{padding:12px 10px 124px}section{padding:12px}.mon{padding:8px}.fields{grid-template-columns:1fr}}
 </style></head><body><main><nav><a href="/app">← 個体値厳選</a><a href="/flashcards">フラッシュカード</a></nav>
 <h1>見せ合い6体・選出3体</h1><p>重要メタへの穴、15ペアの補完、20組の3体、相手6体への選出を分析するにぇ。Battle Ratingは実戦勝率ではありません。</p>
 <section id="auth"><h2>アプリに接続</h2><p>ログイン済みのブラウザでは自動接続します。</p><div class="tools"><input id="key" type="password" autocomplete="off" placeholder="接続キー"><button id="login">接続する</button></div></section>
@@ -140,7 +157,7 @@ dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100
 <p id="metaWeightSaveStatus" role="status"></p>
 <p>重要度はポケモンごとに自動保存し、別のメタや再読み込み後も引き継ぎます。パーティ保存時には現在の値も記録します。詳細戦略では重要度は使用しません。メタは最大500技構成に対応します。</p></section></div>
 <section><h2>計算状況と結果</h2><div id="status" role="status" aria-live="polite">接続を確認しています。</div><div id="result"></div></section>
-</div></main><footer><div class="tools"><p class="guide-hint" style="display:block;width:100%;margin:0 0 6px">👇 Step 2: メンバーが決まったらここをタップして6体を分析</p><button id="analyze" disabled>6体を分析</button><button id="cancel" disabled>計算を中止</button></div></footer>
+</div></main><aside id="calcDock" class="calc-dock" role="status" aria-live="polite" hidden><div class="calc-dock-head"><div class="calc-dock-title"><span class="calc-dock-spin" aria-hidden="true"></span><span id="calcDockTitle">計算中</span></div><div class="calc-dock-actions"><button id="calcDockCancel" type="button" hidden>中止</button><button id="calcDockClose" type="button" hidden>閉じる</button></div></div><div id="calcDockBar" class="calc-dock-bar indeterminate"><div id="calcDockFill" class="calc-dock-fill"></div></div><div id="calcDockMeta" class="calc-dock-meta"></div><div id="calcDockMsg" class="calc-dock-msg"></div></aside><footer><div class="tools"><p class="guide-hint" style="display:block;width:100%;margin:0 0 6px">👇 Step 2: メンバーが決まったらここをタップして6体を分析</p><button id="analyze" disabled>6体を分析</button><button id="cancel" disabled>計算を中止</button></div></footer>
 <datalist id="speciesList"></datalist><script>
 'use strict';
 const $=id=>document.getElementById(id);
@@ -151,6 +168,60 @@ let metaWeightRows=[],metaWeightValues={},metaWeightCache=new Map(),metaWeightTi
 let metaWeightDefaults={},pendingMetaWeights={},metaWeightSaving=null,metaWeightSaveTimer;
 function node(tag,text,cls){const n=document.createElement(tag);if(text!=null)n.textContent=text;if(cls)n.className=cls;return n}
 function status(text){$('status').textContent=text}
+let calcDockState={running:false,startedAt:0,progress:null,serverEta:null,serverAt:0,canCancel:false,timer:null};
+function fmtDur(sec){const s=Math.max(0,Math.round(sec));const m=Math.floor(s/60),r=s%60;return m>0?(m+'分'+String(r).padStart(2,'0')+'秒'):(r+'秒');}
+function renderCalcDockMeta(){
+ if(!calcDockState.running)return;
+ const elapsed=(Date.now()-calcDockState.startedAt)/1000;
+ const parts=[];
+ if(calcDockState.progress!=null)parts.push(Math.round(calcDockState.progress)+'%');
+ parts.push('経過 '+fmtDur(elapsed));
+ let eta=null;
+ if(calcDockState.serverEta!=null){
+  const drift=(Date.now()-calcDockState.serverAt)/1000;
+  eta=Math.max(1,Math.round(calcDockState.serverEta-drift));
+ }else if(calcDockState.progress!=null&&calcDockState.progress>=5&&calcDockState.progress<100&&elapsed>=1.5){
+  eta=Math.max(1,Math.round(elapsed*(100-calcDockState.progress)/calcDockState.progress));
+ }
+ parts.push(eta!=null?'残り 約'+fmtDur(eta):'残り時間計算中…');
+ $('calcDockMeta').textContent=parts.join(' ・ ');
+}
+function dockStart(title,msg,canCancel=false){
+ if(calcDockState.timer)clearInterval(calcDockState.timer);
+ calcDockState={running:true,startedAt:Date.now(),progress:null,serverEta:null,serverAt:0,canCancel,timer:null};
+ const d=$('calcDock');d.hidden=false;d.className='calc-dock';
+ $('calcDockTitle').textContent=title||'計算中';
+ $('calcDockMsg').textContent=msg||'処理を開始しています…';
+ $('calcDockBar').className='calc-dock-bar indeterminate';$('calcDockFill').style.width='38%';
+ $('calcDockCancel').hidden=!canCancel;$('calcDockCancel').disabled=false;$('calcDockClose').hidden=true;
+ renderCalcDockMeta();
+ calcDockState.timer=setInterval(renderCalcDockMeta,1000);
+}
+function dockUpdate({progress=null,etaSeconds=null,message=null}={}){
+ if(!calcDockState.running)return;
+ if(typeof progress==='number'&&Number.isFinite(progress)){
+  calcDockState.progress=Math.max(0,Math.min(100,progress));
+  $('calcDockBar').className='calc-dock-bar';$('calcDockFill').style.width=calcDockState.progress+'%';
+ }
+ if(typeof etaSeconds==='number'&&Number.isFinite(etaSeconds)&&etaSeconds>0){
+  calcDockState.serverEta=etaSeconds;calcDockState.serverAt=Date.now();
+ }
+ if(message!=null)$('calcDockMsg').textContent=message;
+ renderCalcDockMeta();
+}
+function dockFinish(ok,title,msg){
+ if(calcDockState.timer){clearInterval(calcDockState.timer);calcDockState.timer=null;}
+ const elapsed=calcDockState.startedAt?((Date.now()-calcDockState.startedAt)/1000):0;
+ calcDockState.running=false;
+ const d=$('calcDock');d.hidden=false;d.className='calc-dock '+(ok?'done':'error');
+ $('calcDockTitle').textContent=title||(ok?'計算完了':'計算を終了しました');
+ $('calcDockMsg').textContent=msg||'';
+ $('calcDockBar').className='calc-dock-bar';$('calcDockFill').style.width=ok?'100%':'0%';
+ $('calcDockMeta').textContent=elapsed>=0.1?('所要時間 '+fmtDur(elapsed)):'';
+ $('calcDockCancel').hidden=true;$('calcDockClose').hidden=false;
+}
+$('calcDockClose').onclick=()=>{$('calcDock').hidden=true;};
+$('calcDockCancel').onclick=()=>{$('calcDockCancel').disabled=true;$('cancel').click();};
 function tab(target){currentTab=target;$('analyze').textContent=target==='strategy'?'詳細条件を比較':'6体を分析';if(target==='strategy')strategyTargets();['compose','weakness','selection','strategy','settings'].forEach(id=>$(id).hidden=id!==target);document.querySelectorAll('[data-tab]').forEach(x=>x.setAttribute('aria-pressed',String(x.dataset.tab===target)))}
 document.querySelectorAll('[data-tab]').forEach(x=>x.onclick=()=>tab(x.dataset.tab));
 async function api(path,body={}){
@@ -580,19 +651,23 @@ async function run(mode,findSwaps=false,autoComplete=false){if(activeJob)return;
  await flushMetaWeights();
  const request=partyCalculationRequest(mode,findSwaps,autoComplete),submitted=JSON.stringify(request);
  function inputsStillMatch(){try{return submitted===JSON.stringify(partyCalculationRequest(mode,findSwaps,autoComplete))}catch(_){return false}}
+ const modeTitle=mode==='strategy'?'詳細戦略を計算中':mode==='build'?'候補から6体を構築中':mode==='select'?'選出を比較中':autoComplete?'自動補完を実行中':findSwaps?'入れ替え候補を探索中':'パーティを分析中';
  const r=await api('party/start',request);activeJob=r.job_id;$('cancel').disabled=false;$('analyze').disabled=true;status('計算中...');
+ dockStart(modeTitle,'準備しています…',true);
  for(;;){await new Promise(resolve=>setTimeout(resolve,2000));let s=await api('party/status',{job_id:activeJob});
- if(s.status==='done'){if(!inputsStillMatch()){status('計算中に入力が変更されました。以前の入力の結果は表示しません。再計算してください。')}else{if(s.result.kind==='strategy')showStrategy(s.result);else show(s.result);status('計算完了。実戦勝率ではありません。')}break}
- if(s.status==='error'||s.status==='cancelled'){status(s.message||s.status);break}
- status('計算中 '+(s.progress||0)+'% / '+(s.message||''))}
+ if(s.status==='done'){if(!inputsStillMatch()){const msg='計算中に入力が変更されました。以前の入力の結果は表示しません。再計算してください。';status(msg);dockFinish(false,'入力変更のため破棄',msg);}else{if(s.result.kind==='strategy')showStrategy(s.result);else show(s.result);const msg='計算完了。実戦勝率ではありません。';status(msg);dockFinish(true,'計算完了',msg);}break}
+ if(s.status==='error'||s.status==='cancelled'){const msg=s.message||s.status;status(msg);dockFinish(false,s.status==='cancelled'?'計算を中止しました':'計算エラー',msg);break}
+ const etaTxt=typeof s.eta_seconds==='number'&&s.eta_seconds>0?' / 残り約'+fmtDur(s.eta_seconds):'';
+ status('計算中 '+(s.progress||0)+'% / '+(s.message||'')+etaTxt);
+ dockUpdate({progress:s.progress,etaSeconds:s.eta_seconds,message:s.message||'対面を計算しています'});}
  activeJob=null;$('cancel').disabled=true;$('analyze').disabled=false;
 }
-async function wrap(mode,findSwaps=false,autoComplete=false){try{await run(mode,findSwaps,autoComplete)}catch(e){status(e.message);activeJob=null;$('cancel').disabled=true;$('analyze').disabled=false}}
+async function wrap(mode,findSwaps=false,autoComplete=false){try{await run(mode,findSwaps,autoComplete)}catch(e){status(e.message);if(calcDockState.running)dockFinish(false,'計算エラー',e.message);activeJob=null;$('cancel').disabled=true;$('analyze').disabled=false}}
 $('analyze').onclick=()=>{if(currentTab==='strategy')strategyTargets();wrap(currentTab==='strategy'?'strategy':'analyze')};
 $('recommend').onclick=()=>wrap('analyze',true);
 $('autoComplete').onclick=()=>wrap('analyze',false,true);
 $('build').onclick=()=>wrap('build');$('select').onclick=()=>wrap('select');
-$('cancel').onclick=()=>activeJob&&api('party/cancel',{job_id:activeJob}).then(()=>status('中止要求を送信しました'));
+$('cancel').onclick=()=>activeJob&&api('party/cancel',{job_id:activeJob}).then(()=>{status('中止要求を送信しました');dockUpdate({message:'中止要求を送信しました…'});});
 const PARTY_HANDOFF_KEY='pvpoke_party_handoff_v1';
 function partyCandidateKey(r){return [r.species,r.fast,r.charged1,r.charged2,r.atk??'',r.def??'',r.hp??'',r.level_override??'',r.mega_level??'',r.charged3??''].join('|');}
 function mergeOwnedIntoPool(incoming){
@@ -1041,6 +1116,7 @@ async function runManualSwapComparison(explicitSlot=null,explicitSid=null){
   const replacement=useEdited?{...manualSwapEditedRow.row}:buildReplacementRow(sid,members[slot]);
   $('runManualSwap').disabled=true;
   status('1体交換（全シールド）を比較しています...');
+  dockStart('1体交換を比較中',partyDisplay(sid)+'との全9シールド比較を実行しています…',false);
   const payload={
    members,slot,replacement,
    opponents:partyRosterRows('enemy'),
@@ -1058,7 +1134,8 @@ async function runManualSwapComparison(explicitSlot=null,explicitSid=null){
   }
   openSwapComparisonDialog(res);
   status('1体交換の相性比較を表示しました。');
- }catch(e){status(e.message);}finally{if($('runManualSwap'))$('runManualSwap').disabled=false;}
+  dockFinish(true,'1体交換の比較完了',partyDisplay(sid)+'との全シールド比較を表示しました。');
+ }catch(e){status(e.message);if(calcDockState.running)dockFinish(false,'比較エラー',e.message);}finally{if($('runManualSwap'))$('runManualSwap').disabled=false;}
 }
 $('runManualSwap')?.addEventListener('click',()=>runManualSwapComparison());
 function formatFormMovesSummary(lbl){
@@ -1098,15 +1175,16 @@ function renderMegaImportance(res){
   const title=node('h3');title.append(badge,(item.slot+1)+'枠目: '+disp(item.mega_id));
   card.append(title);
   const bd=item.score_breakdown;
-  addLine(card,'内訳: パーティ貢献 '+bd.party_impact+' /50 + 固有の勝ち筋 '+bd.unique_wins+' /30 + 単体底上げ '+bd.solo_lift+' /20');
+  const ratingTxt=typeof bd.weighted_rating_lift==='number'?(' / 平均Rating差 '+(bd.weighted_rating_lift>=0?'+':'')+bd.weighted_rating_lift.toFixed(1)):'';
+  addLine(card,'内訳（2-2/1-1/0-0加重）: パーティ貢献 '+bd.party_impact+' /50 + 固有の勝ち筋 '+bd.unique_wins+' /30 + 単体底上げ '+bd.solo_lift+' /20'+ratingTxt);
   const pc=item.party_contribution;
   if(pc.baseline){
    const baseLabel=item.baseline_kind==='shadow'?'シャドウ':'通常';
-   addLine(card,'パーティ貢献（'+baseLabel+' → メガ）: 補完率 '+fmt(pc.baseline.coverage)+' → '+fmt(pc.mega.coverage)+'（'+(pc.coverage_gain>=0?'+':'')+fmt(pc.coverage_gain)+'） / 深刻度 '+pc.baseline.severity0.toFixed(3)+' → '+pc.mega.severity0.toFixed(3));
+   addLine(card,'パーティ貢献（'+baseLabel+' → メガ、2-2基準）: 補完率 '+fmt(pc.baseline.coverage)+' → '+fmt(pc.mega.coverage)+'（'+(pc.coverage_gain>=0?'+':'')+fmt(pc.coverage_gain)+'） / 深刻度 '+pc.baseline.severity0.toFixed(3)+' → '+pc.mega.severity0.toFixed(3));
   }
   const tbl=node('table',null,'mini-table');
   const thead=node('thead'),hr=node('tr');
-  ['形態','使用技','単体カバー率','メタ勝ち数(2-2)'].forEach(t=>hr.append(node('th',t)));
+  ['形態','使用技','単体カバー率(2-2/1-1/0-0)','メタ勝ち数(2-2)'].forEach(t=>hr.append(node('th',t)));
   thead.append(hr);tbl.append(thead);
   const tbody=node('tbody');
   for(const [kind,label] of [['normal','通常'],['shadow','シャドウ'],['mega','メガ']]){
@@ -1120,7 +1198,11 @@ function renderMegaImportance(res){
     const sbadge=node('span',srcLabel,'move-source-badge'+(src==='shared_moveset'?' shared':src==='override'?' override':''));
     moveTd.append(sbadge);
    }
-   tr.append(node('td',label+(item.active_kind===kind?'（現在）':'')),moveTd,node('td',fmt(f.solo.coverage)),node('td',f.solo.wins+' / '+f.solo.evaluated));
+   const bs=f.by_shield||{};
+   const covParts=['2-2','1-1','0-0'].filter(k=>bs[k]&&bs[k].evaluated>0).map(k=>fmt(bs[k].coverage));
+   const covText=covParts.length>1?covParts.join(' / '):fmt(f.solo.coverage);
+   const avgText=f.solo.avg_rating!=null?'（平均'+f.solo.avg_rating+'）':'';
+   tr.append(node('td',label+(item.active_kind===kind?'（現在）':'')),moveTd,node('td',covText+avgText),node('td',f.solo.wins+' / '+f.solo.evaluated));
    tbody.append(tr);
   }
   tbl.append(tbody);card.append(tbl);
@@ -1129,6 +1211,11 @@ function renderMegaImportance(res){
    addLine(card,'通常・シャドウでは勝てずメガで初めて勝てる相手: '+item.unique_mega_win_count+'件（'+topNames+'）');
   }else{
    addLine(card,'通常・シャドウでは勝てずメガで初めて勝てる相手: 0件');
+  }
+  if(Array.isArray(item.diagnostic_notes)&&item.diagnostic_notes.length){
+   const ul=node('ul',null,'mega-diag-list');
+   for(const note of item.diagnostic_notes)ul.append(node('li',note));
+   card.append(ul);
   }
 
   const editorDetails=node('details',null,'mega-moves-editor');
@@ -1175,6 +1262,7 @@ async function executeMegaImportance(){
   const members=getMon();validatePartyAnalysisMembers(members);
   $('runMegaImportance').disabled=true;
   status('メガシンカの重要性指数を計算しています...');
+  dockStart('メガ重要度を計算中','通常・シャドウ・メガの多シールド比較を実行しています…',false);
   const payload={
    members,
    meta_preset_id:$('meta').value,
@@ -1187,7 +1275,8 @@ async function executeMegaImportance(){
   const res=await api('party/mega-importance',payload);
   renderMegaImportance(res);
   status('メガシンカの重要性指数を計算しました。');
- }catch(e){status(e.message);}finally{if($('runMegaImportance'))$('runMegaImportance').disabled=false;}
+  dockFinish(true,'メガ重要度の計算完了','通常・シャドウ・メガの比較結果を表示しました。');
+ }catch(e){status(e.message);if(calcDockState.running)dockFinish(false,'計算エラー',e.message);}finally{if($('runMegaImportance'))$('runMegaImportance').disabled=false;}
 }
 $('runMegaImportance')?.addEventListener('click',()=>executeMegaImportance());
 setup().then(()=>refreshManualSwapControls()).catch(()=>{status('ログインが必要です。接続キーを入力してください。')});

@@ -245,7 +245,11 @@ class PartyBuilder:
             self._cancel = False
             self._previous_global = prev_global
             try:
-                self._record(jid, "queued", {"message": "準備しています", "progress": 0})
+                self._active_started = time.monotonic()
+                self._record(jid, "queued", {
+                    "message": "準備しています", "progress": 0,
+                    "elapsed_seconds": 0.0, "eta_seconds": None,
+                })
                 global_status["state"] = "running"
                 global_status["message"] = "パーティ作成の計算中"
                 task = threading.Thread(target=self._worker, args=(
@@ -253,6 +257,7 @@ class PartyBuilder:
                 task.start()
             except Exception:
                 self._active = None
+                self._active_started = None
                 self._previous_global = None
                 global_status["state"] = prev_global[2].get("state", "idle")
                 global_status["message"] = prev_global[2].get("message", "")
@@ -268,10 +273,12 @@ class PartyBuilder:
 
     def _worker(self, jid, args, catalog, species, cpms, engine, work, global_lock, release_owner=None):
         started = time.monotonic()
+        with self._lock:
+            self._active_started = started
         try:
             result = self._compute(jid, args, catalog, species, cpms, engine, work)
             result["elapsed_seconds"] = round(time.monotonic() - started, 2)
-            self._record(jid, "done", {"progress": 100, "result": result})
+            self._record(jid, "done", {"progress": 100, "elapsed_seconds": result["elapsed_seconds"], "eta_seconds": 0, "result": result})
         except Exception as exc:
             status = "cancelled" if str(exc) == "cancelled" else "error"
             # Background exceptions can contain internal file paths, SQL
@@ -302,33 +309,6 @@ class PartyBuilder:
                             release_owner()
                         except Exception:
                             pass
-
-    @staticmethod
-    def _mega_policy_from_args(args, *, engine_cp_cap=None):
-        from pvpoke_mega import resolve_battle_rules, resolve_party_mega_rules
-        ruleset = args.get("ruleset", "cp1500-lv50")
-        raw_mega = args.get("mega_rules")
-        if raw_mega is not None:
-            if not isinstance(raw_mega, dict):
-                raise ValueError("メガルール設定はオブジェクトで指定してください")
-            rule_input = {"ruleset": ruleset, **raw_mega}
-        else:
-            rule_input = ruleset
-        policy = resolve_party_mega_rules(rule_input)
-        if engine_cp_cap is not None:
-            meta_rules = raw_mega if isinstance(raw_mega, dict) else {}
-            battle_rule = resolve_battle_rules({
-                "league": meta_rules.get("league"),
-                "cup_id": policy["effective_cup"],
-                "cp_cap": meta_rules.get("cp_cap"),
-            })
-            if battle_rule["cp_cap"] not in (None, engine_cp_cap) or policy["effective_cup"] in (
-                "ultra", "open_ultra", "ultra_mega", "master", "open_master"
-            ) and engine_cp_cap == 1500:
-                raise ValueError(f"現在はCP{engine_cp_cap}（スーパーリーグ系）のみ対応しています")
-        if not policy["rule_verified"] or policy["max_megas_in_three"] is None:
-            raise ValueError("大会・カップのメガ許可数が未確認のため、一律1体と仮定して計算できません")
-        return policy
 
     @staticmethod
     def _mega_policy_from_args(args, *, engine_cp_cap=None):
@@ -759,6 +739,7 @@ class PartyBuilder:
         matrix, stats = dict(known or {}), {"hits": 0, "computed": 0}
         total = len(pool) * len(opponents) * 9
         done = 0
+        matrix_started = time.monotonic()
         with self._db() as db:
             client = None
             try:
@@ -811,8 +792,24 @@ class PartyBuilder:
                             with self._lock:
                                 if jid and self._cancel:
                                     raise ValueError("cancelled")
-                            self._record(jid, "running", {"progress": min(95, 2 + int(91 * done / total)),
-                                "message": "比較用の全シールド条件を計算しています" if full_conditions else "対面を計算しています", "cache": stats})
+                                job_started = getattr(self, "_active_started", None) or matrix_started
+                            now = time.monotonic()
+                            job_elapsed = round(max(0.0, now - job_started), 1)
+                            phase_elapsed = max(0.0, now - matrix_started)
+                            eta_seconds = (
+                                max(1, int(round(phase_elapsed * (total - done) / done)))
+                                if total > 0 and 0 < done < total and phase_elapsed >= 0.5
+                                else (0 if total > 0 and done >= total else None)
+                            )
+                            self._record(jid, "running", {
+                                "progress": min(95, 2 + int(91 * done / total)) if total else 95,
+                                "elapsed_seconds": job_elapsed,
+                                "eta_seconds": eta_seconds,
+                                "done_cells": done,
+                                "total_cells": total,
+                                "message": "比較用の全シールド条件を計算しています" if full_conditions else "対面を計算しています",
+                                "cache": stats,
+                            })
                 # Bound storage size; never delete parties or saved analyses.
                 db.execute("""DELETE FROM cells WHERE key IN
                            (SELECT key FROM cells ORDER BY created DESC LIMIT -1 OFFSET 120000)""")
@@ -890,6 +887,9 @@ class PartyBuilder:
                     row["charged3"] = c3
                 elif c3 == "" and meta_src is override_moves:
                     row.pop("charged3", None)
+        if is_mega_form(sid) and "mega_level" not in row:
+            tags = entry.get("tags") or ()
+            row["mega_level"] = 4 if "supermega" in tags else 3
         return (row, move_source) if return_source else row
 
     @staticmethod
@@ -1134,17 +1134,29 @@ class PartyBuilder:
         importance = core.evaluate_mega_importance(
             [p["id"] for p in members], variants_by_slot, opponents, matrix, weights,
             mega_policy=mega_policy)
+        labels_map = self._labels_for(self._unique(pool + meta))
         for item in importance.get("items") or ():
             slot_sources = move_sources_by_slot.get(item.get("slot"), {})
             item["move_sources"] = dict(slot_sources)
             for kind, form_entry in (item.get("forms") or {}).items():
                 if isinstance(form_entry, dict) and kind in slot_sources:
                     form_entry["move_source"] = slot_sources[kind]
+            mega_lbl = labels_map.get(item.get("mega_id")) or {}
+            mega_sid = mega_lbl.get("species")
+            mega_cat = catalog.get(mega_sid) if mega_sid else None
+            extra_moves = list((mega_cat or {}).get("extraChargedMoves") or ())
+            if extra_moves and not mega_lbl.get("charged3"):
+                notes = item.setdefault("diagnostic_notes", [])
+                notes.insert(
+                    0,
+                    "追加ゲージ技（3つ目）が未設定のため、メガレベルによる技ダメージ補正が反映されていません。"
+                    "下の「技を確認・変更」で追加ゲージ技を設定して再分析すると評価が変わる場合があります。",
+                )
 
         return {
             "kind": "mega_importance",
             "mega_importance": importance,
-            "labels": self._labels_for(self._unique(pool + meta)),
+            "labels": labels_map,
             "mega_policy": mega_policy,
             "meta": {"id": preset["id"], "name": preset["name"], "sha256": preset["sha256"]},
             "cache": stats,

@@ -34,6 +34,22 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 .mega-cmp-table th:first-child,.mega-cmp-table td:first-child{text-align:left}
 .mega-cmp-table tr.supermax-row{background:rgba(144,221,188,.07)}
 .mega-cmp-table .ratio-val{color:#90ddbc;font-weight:600}
+.calc-dock{position:fixed;right:14px;bottom:14px;z-index:45;width:min(340px,calc(100vw - 24px));padding:12px 14px;border:1px solid #76b1dc;border-radius:16px;background:rgba(16,28,43,.96);box-shadow:0 8px 24px rgba(0,0,0,.55);backdrop-filter:blur(6px)}
+.calc-dock.done{border-color:#90ddbc}.calc-dock.error{border-color:#e28da3;background:rgba(62,28,38,.96)}
+.calc-dock-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.calc-dock-title{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px;min-width:0}
+.calc-dock-spin{width:14px;height:14px;border:2px solid rgba(144,221,188,.3);border-top-color:#90ddbc;border-radius:50%;flex:none;animation:calcSpin .8s linear infinite}
+.calc-dock.done .calc-dock-spin,.calc-dock.error .calc-dock-spin{display:none}
+@keyframes calcSpin{to{transform:rotate(360deg)}}
+.calc-dock-meta{font-size:12px;color:#b2cbe4;font-variant-numeric:tabular-nums;margin:4px 0 6px}
+.calc-dock-msg{font-size:13px;color:#e8eef9;line-height:1.45;overflow-wrap:anywhere}
+.calc-dock-bar{height:7px;border-radius:999px;background:#0b1320;overflow:hidden;margin:6px 0}
+.calc-dock-fill{height:100%;width:0%;background:linear-gradient(90deg,#3d8ec9,#90ddbc);transition:width .35s ease}
+.calc-dock-bar.indeterminate .calc-dock-fill{width:38%;animation:calcIndet 1.2s ease-in-out infinite}
+@keyframes calcIndet{0%{transform:translateX(-110%)}100%{transform:translateX(280%)}}
+.calc-dock-actions{display:flex;gap:6px;flex:none}
+.calc-dock-actions button{min-height:32px;padding:4px 10px;font-size:12px;border-radius:10px}
+@media(max-width:760px){.calc-dock{left:8px;right:8px;width:auto;bottom:10px}main{padding-bottom:130px}}
 </style></head><body><nav class="quick-nav" aria-label="ページ内の移動"><a href="/app/party" aria-label="パーティ作成">6/3<br>構築</a><!--MISSING_ANALYSIS_NAV--><a href="#pageTop" aria-label="ページ上部に戻る">↑<br>上へ</a></nav><main id="pageTop">
 <header><div class="eyebrow">PVP IV SELECTION</div><div class="page-heading"><h1>役割から選ぶ、個体値厳選</h1><button id="selectionSettingsOpen" class="secondary settings-button" type="button" aria-controls="selectionSettings" aria-expanded="false" hidden>⚙ 設定</button></div><p>対戦計算からおすすめ・理由・検索式まで。アプリの自動推薦と、これまでのGPT評価を使い分けられます。</p></header>
 <section class="card" id="login"><h2>アプリに接続</h2><p class="note">初回だけ接続キー、または有効なアクセストークンを入力してください。APIキー自体は端末へ保存しません。</p><label for="credential">接続キー</label><input id="credential" type="password" autocomplete="off"><label class="checkline" for="remember"><input id="remember" type="checkbox" checked>このブラウザのログインを30日間維持する</label><p class="note">共有端末ではチェックを外してください。短期アクセストークンは元の期限まで有効です。ログアウトでこのブラウザのセッションを失効できます。</p><div class="actions"><button id="connect">接続する</button></div></section>
@@ -123,11 +139,76 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <section class="card"><h2>1. ポケモンと個体値</h2><p class="guide-hint">👇 Step 1: ここをタップしてポケモン名・個体値を入力</p><label for="preset">登録プリセット（任意）</label><select id="preset"></select><p class="note" id="presetHint"></p><label for="allSpecies">全ポケモンから選ぶ</label><select id="allSpecies"></select><label for="species">ポケモン名・英語ID（直接入力）</label><input id="species" list="speciesList" value="quagsire" autocomplete="off"><datalist id="speciesList"></datalist>
 <div class="actions" role="group" aria-label="登録区分を一括変更"><button id="bulkNormal" class="secondary">すべて通常に変更</button><button id="bulkShadow" class="secondary">すべてシャドウに変更</button><button id="bulkPurified" class="secondary">すべてリトレーンに変更</button><button id="bulkStatusUndo" class="secondary" hidden>区分変更を元に戻す</button></div><p class="note" id="bulkStatusNote">対象：フォーム、または取り込み済みの全種類。区分だけを修正し、個体値・CPは変えません。リトレーン済みの個体値・CPを入力してください。変更後に再計算します。</p>
 <label for="ivs">攻撃,防御,HP（1行1体・最大4,096通り）</label><textarea id="ivs" spellcheck="false" placeholder="0,11,12&#10;3,13,8&#10;2,15,13"></textarea><div class="actions"><button id="transferMissing" class="secondary" type="button" hidden>この個体を不足分析へ引き継ぐ</button><div id="reachableEvolutionLinks" class="actions reach-highlight" hidden></div></div></section>
-</div></main><script>
+</div></main><aside id="calcDock" class="calc-dock" role="status" aria-live="polite" hidden><div class="calc-dock-head"><div class="calc-dock-title"><span class="calc-dock-spin" aria-hidden="true"></span><span id="calcDockTitle">計算中</span></div><div class="calc-dock-actions"><button id="calcDockJump" type="button" class="secondary" hidden>結果へ</button><button id="calcDockCancel" type="button" class="secondary" hidden>中止</button><button id="calcDockClose" type="button" class="secondary" hidden>閉じる</button></div></div><div id="calcDockBar" class="calc-dock-bar indeterminate"><div id="calcDockFill" class="calc-dock-fill"></div></div><div id="calcDockMeta" class="calc-dock-meta"></div><div id="calcDockMsg" class="calc-dock-msg"></div></aside><script>
 'use strict';
 const el=id=>document.getElementById(id);let calculating=false,stopRequested=false,stopPromise=null,stopError=null;
 let importedSingle=null;let credential='',catalog={},cpms=[],presets=[],active=false,runRef=null,lastResult=null,importedJobs=null,batchState=null,metaPending=null,metaWorking=false;let metaState=null,selectedMetaId=null,metaExportWorking=false;let moveCatalog={},readerImportPending=false,readerImportInFlight=false,readerInputText=null,activeSelectionContext=null;
 function message(s,error=false){const x=el('message');x.hidden=false;x.textContent=s;x.className='status'+(error?' error':'');}
+let appDockState={running:false,startedAt:0,progress:null,serverEta:null,serverAt:0,timer:null};
+function fmtDockDur(sec){const s=Math.max(0,Math.round(sec));const m=Math.floor(s/60),r=s%60;return m>0?(m+'分'+String(r).padStart(2,'0')+'秒'):(r+'秒');}
+function renderAppDockMeta(){
+ const metaEl=el('calcDockMeta');if(!metaEl||!appDockState.running)return;
+ const elapsed=(Date.now()-appDockState.startedAt)/1000;
+ const parts=[];
+ if(appDockState.progress!=null)parts.push(Math.round(appDockState.progress)+'%');
+ parts.push('経過 '+fmtDockDur(elapsed));
+ let eta=null;
+ if(appDockState.serverEta!=null){
+  const drift=(Date.now()-appDockState.serverAt)/1000;
+  eta=Math.max(1,Math.round(appDockState.serverEta-drift));
+ }else if(appDockState.progress!=null&&appDockState.progress>=5&&appDockState.progress<100&&elapsed>=1.5){
+  eta=Math.max(1,Math.round(elapsed*(100-appDockState.progress)/appDockState.progress));
+ }
+ parts.push(eta!=null?'残り 約'+fmtDockDur(eta):'残り時間計算中…');
+ metaEl.textContent=parts.join(' ・ ');
+}
+function appDockStart(title,msg,canCancel=true){
+ const d=el('calcDock');if(!d)return;
+ if(appDockState.timer&&typeof clearInterval==='function')clearInterval(appDockState.timer);
+ appDockState={running:true,startedAt:Date.now(),progress:null,serverEta:null,serverAt:0,timer:null};
+ d.hidden=false;d.className='calc-dock';
+ if(el('calcDockTitle'))el('calcDockTitle').textContent=title||'計算中';
+ if(el('calcDockMsg'))el('calcDockMsg').textContent=msg||'計算を準備しています…';
+ if(el('calcDockBar'))el('calcDockBar').className='calc-dock-bar indeterminate';
+ if(el('calcDockFill')?.style)el('calcDockFill').style.width='38%';
+ if(el('calcDockCancel')){el('calcDockCancel').hidden=!canCancel;el('calcDockCancel').disabled=false;}
+ if(el('calcDockJump'))el('calcDockJump').hidden=true;
+ if(el('calcDockClose'))el('calcDockClose').hidden=true;
+ renderAppDockMeta();
+ if(typeof setInterval==='function')appDockState.timer=setInterval(renderAppDockMeta,1000);
+}
+function appDockUpdate({progress=null,etaSeconds=null,message:msg=null}={}){
+ const d=el('calcDock');if(!d||!appDockState.running)return;
+ if(typeof progress==='number'&&Number.isFinite(progress)){
+  appDockState.progress=Math.max(0,Math.min(100,progress));
+  if(el('calcDockBar'))el('calcDockBar').className='calc-dock-bar';
+  if(el('calcDockFill')?.style)el('calcDockFill').style.width=appDockState.progress+'%';
+ }
+ if(typeof etaSeconds==='number'&&Number.isFinite(etaSeconds)&&etaSeconds>0){
+  appDockState.serverEta=etaSeconds;appDockState.serverAt=Date.now();
+ }
+ if(msg!=null&&el('calcDockMsg'))el('calcDockMsg').textContent=msg;
+ renderAppDockMeta();
+}
+function appDockFinish(ok,title,msg,hasResults=false){
+ const d=el('calcDock');
+ if(appDockState.timer&&typeof clearInterval==='function'){clearInterval(appDockState.timer);appDockState.timer=null;}
+ const elapsed=appDockState.startedAt?((Date.now()-appDockState.startedAt)/1000):0;
+ appDockState.running=false;
+ if(!d)return;
+ d.hidden=false;d.className='calc-dock '+(ok?'done':'error');
+ if(el('calcDockTitle'))el('calcDockTitle').textContent=title||(ok?'計算完了':'計算を終了しました');
+ if(el('calcDockMsg'))el('calcDockMsg').textContent=msg||'';
+ if(el('calcDockBar'))el('calcDockBar').className='calc-dock-bar';
+ if(el('calcDockFill')?.style)el('calcDockFill').style.width=ok?'100%':'0%';
+ if(el('calcDockMeta'))el('calcDockMeta').textContent=elapsed>=0.1?('所要時間 '+fmtDockDur(elapsed)):'';
+ if(el('calcDockCancel'))el('calcDockCancel').hidden=true;
+ if(el('calcDockJump'))el('calcDockJump').hidden=!hasResults;
+ if(el('calcDockClose'))el('calcDockClose').hidden=false;
+}
+if(el('calcDockClose'))el('calcDockClose').onclick=()=>{const d=el('calcDock');if(d)d.hidden=true;};
+if(el('calcDockJump'))el('calcDockJump').onclick=()=>{el('results')?.scrollIntoView?.({block:'start'});};
+if(el('calcDockCancel'))el('calcDockCancel').onclick=()=>{el('calcDockCancel').disabled=true;el('cancelRun')?.onclick?.();};
 const SELECTION_MODE_STORAGE='pvpoke-app-selection-modes-v1';
 function readSelectionModes(){
  try{const raw=localStorage.getItem(SELECTION_MODE_STORAGE);if(!raw||raw.length>200000)return Object.create(null);
@@ -1567,7 +1648,25 @@ async function honorStop(){
 async function finish(result){
  while(result.state==='running'){
   await honorStop();
-  message('全対面を計算中です。'+(batchState?' '+(batchState.index+1)+' / '+batchState.jobs.length+'構成':''));
+  const batchSuffix=batchState?' '+(batchState.index+1)+' / '+batchState.jobs.length+'構成':'';
+  message('全対面を計算中です。'+batchSuffix);
+  const totalJobs=batchState?.jobs?.length||1;
+  const doneJobs=batchState?batchState.index:0;
+  const subFrac=typeof result.progress==='number'&&Number.isFinite(result.progress)?Math.max(0,Math.min(0.99,result.progress/100)):0;
+  let pct=null;
+  if(totalJobs>1||subFrac>0)pct=Math.min(99,Math.round(((doneJobs+subFrac)/totalJobs)*100));
+  let etaSec=null;
+  if(totalJobs===1&&typeof result.eta_seconds==='number'&&result.eta_seconds>0){
+   etaSec=result.eta_seconds;
+  }else if(totalJobs>1&&(doneJobs+subFrac)>0.05&&appDockState.startedAt){
+   const elapsedSec=(Date.now()-appDockState.startedAt)/1000;
+   if(elapsedSec>=1.5)etaSec=Math.max(1,Math.round(elapsedSec*(totalJobs-(doneJobs+subFrac))/(doneJobs+subFrac)));
+  }else if(typeof result.eta_seconds==='number'&&result.eta_seconds>0){
+   etaSec=result.eta_seconds;
+  }
+  const jobLabel=batchState?.jobs?.[batchState.index]?batchState.jobs[batchState.index].name+'（'+(batchState.index+1)+' / '+totalJobs+'構成）':'全対面を計算中';
+  const detailMsg=result.message?jobLabel+'：'+result.message:jobLabel;
+  appDockUpdate({progress:pct,etaSeconds:etaSec,message:detailMsg});
   result=await api('result',{run_ref:runRef,wait_seconds:2});
  }
  await honorStop();
@@ -1937,10 +2036,16 @@ function renderBatchResults(){
 }
 
 async function executeBatch(){
+ if(!appDockState.running){
+  appDockStart('個体値厳選を計算中',batchState.jobs.length+'構成の計算を開始します…',true);
+ }
  for(;batchState.index<batchState.jobs.length;){
   await honorStop();
   const job=batchState.jobs[batchState.index];
-  message(job.name+'｜'+moveLabel(job.candidate)+'（'+(batchState.index+1)+' / '+batchState.jobs.length+'構成）');
+  const stepMsg=job.name+'｜'+moveLabel(job.candidate)+'（'+(batchState.index+1)+' / '+batchState.jobs.length+'構成）';
+  message(stepMsg);
+  const donePct=batchState.jobs.length>1?Math.round((batchState.index/batchState.jobs.length)*100):null;
+  appDockUpdate({progress:donePct,message:stepMsg});
   let result;
   if(batchState.run_ref){runRef=batchState.run_ref;result=await api('result',{run_ref:runRef,wait_seconds:2});}
   else{
@@ -1968,7 +2073,9 @@ async function executeBatch(){
   batchState.run_ref=null;delete batchState.start_request_id;runRef=null;sessionStorage.removeItem('pvpoke-app-run');cacheBatch();
   renderBatchResults();
  }
- message(batchState.jobs.length+'構成すべての計算と推薦が完了しました。');
+ const doneMsg=batchState.jobs.length+'構成すべての計算と推薦が完了しました。';
+ message(doneMsg);
+ appDockFinish(true,'計算完了',doneMsg,true);
  el('results').scrollIntoView?.({block:'start'});el('results').focus?.({preventScroll:true});
  if(readerAutomation)returnReaderAutomation(batchState.results);
  sessionStorage.removeItem('pvpoke-app-batch');batchState=null;runRef=null;el('resume').hidden=true;
@@ -2006,19 +2113,24 @@ function handleCalculationError(e){
   batchState=null;runRef=null;
   sessionStorage.removeItem('pvpoke-app-run');sessionStorage.removeItem('pvpoke-app-batch');
   el('resume').hidden=true;
-  message('計算を中止しました。完了済みの結果は表示したままです。');
+  const msg='計算を中止しました。完了済みの結果は表示したままです。';
+  message(msg);
+  appDockFinish(false,'計算を中止しました',msg,false);
   return;
  }
  if(batchState&&!batchState.results.length&&!batchState.run_ref&&!batchState.start_request_id){
   batchState=null;sessionStorage.removeItem('pvpoke-app-batch');
  }
- message((stopError||e).message+'\n完了済みの結果は表示を保持しています。後続の対象は未実行です。',true);
+ const errMsg=(stopError||e).message;
+ message(errMsg+'\n完了済みの結果は表示を保持しています。後続の対象は未実行です。',true);
+ appDockFinish(false,'計算エラー',errMsg,false);
  el('resume').hidden=!(runRef||batchState);
 }
 el('cancelRun').onclick=async()=>{
  if(!active||!calculating||stopRequested)return;
  stopRequested=true;el('cancelRun').disabled=true;
  message('中止を要求しました。処理終了を確認中です。');
+ appDockUpdate({message:'中止を要求しました。処理終了を確認中です…'});
  if(runRef){
   try{await stopActiveRun();}catch(e){
    message('サーバー側の停止を確認できませんでした: '+e.message,true);
@@ -2061,6 +2173,7 @@ async function startSelection(){
  if(!chosenMeta()){message('メタプリセットを選択してください。',true);return;}
  calculating=true;stopRequested=false;stopPromise=null;stopError=null;
  setBusy(true);el('results').hidden=true;
+ appDockStart('個体値厳選を計算中','計算条件を準備しています…',true);
  try{
   const current=currentCandidate();
   const keep=importedSingle?.candidate.species===current.species&&importedSingle.ivs.trim()===el('ivs').value.trim();
@@ -2100,9 +2213,10 @@ el('run').onclick=startSelection;
 el('resume').onclick=async()=>{
  if(active||!(runRef||batchState))return;
  calculating=true;stopRequested=false;stopPromise=null;stopError=null;setBusy(true);
+ appDockStart('個体値厳選を再開中','前回の計算状態を確認しています…',true);
  try{
   if(batchState){await executeBatch();}
-  else{const result=await finish(await api('result',{run_ref:runRef,wait_seconds:2}));renderSelectionResults([result]);runRef=null;sessionStorage.removeItem('pvpoke-app-run');el('resume').hidden=true;message('計算と結果の確認が完了しました。');}
+  else{const result=await finish(await api('result',{run_ref:runRef,wait_seconds:2}));renderSelectionResults([result]);runRef=null;sessionStorage.removeItem('pvpoke-app-run');el('resume').hidden=true;const msg='計算と結果の確認が完了しました。';message(msg);appDockFinish(true,'計算完了',msg,true);}
  }catch(e){handleCalculationError(e);}finally{calculating=false;setBusy(false);}
 };
 el('disconnect').onclick=async()=>{try{await api('logout');}catch(e){message('ログアウトできませんでした。再試行してください。',true);return;}credential='';catalog={};metaState=null;selectedMetaId=null;clearMetaExport();nameEntries=[];opponentLabels.clear();displayedResults=[];nicknameBindings=[];presets=[];lastResult=null;setImportedJobs(null);currentLevelOverride=null;batchState=null;el('savedSelectionPanel').replaceChildren();el('savedSelectionPanel').hidden=true;el('results').replaceChildren();el('workspace').hidden=true;el('selectionSettingsOpen').hidden=true;el('selectionSettings').hidden=true;el('login').hidden=false;resetMetaUpload();message('接続を解除しました。このブラウザのログイン情報も削除しました。');};

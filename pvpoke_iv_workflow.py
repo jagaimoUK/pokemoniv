@@ -265,10 +265,40 @@ class IVWorkflow:
                         "message": current.get("message"),
                         "exit_code": current.get("exit_code")}
             if current.get("state") != "done":
+                started_at = ticket.get("started_at")
+                elapsed_seconds = (
+                    round(max(0.0, time.time() - float(started_at)), 1)
+                    if isinstance(started_at, (int, float)) else None
+                )
+                progress = None
+                eta_seconds = None
+                log_lines = list(current.get("logs") or ())
+                msg_text = current.get("message")
+                if isinstance(msg_text, str) and msg_text:
+                    log_lines.append(msg_text)
+                batch_cur = batch_tot = None
+                done_in_batch = 0
+                for line in log_lines:
+                    if not isinstance(line, str):
+                        continue
+                    m = re.search(r"Batch\s+(\d+)\s*/\s*(\d+)", line)
+                    if m:
+                        batch_cur, batch_tot = int(m.group(1)), int(m.group(2))
+                        done_in_batch = 0
+                    elif batch_tot and (" OK" in line or "を再利用" in line):
+                        done_in_batch = min(6, done_in_batch + 1)
+                if batch_tot and batch_tot > 0 and batch_cur is not None:
+                    frac = ((batch_cur - 1) + (done_in_batch / 6.0)) / batch_tot
+                    progress = min(98, max(2, int(round(frac * 96))))
+                    if elapsed_seconds is not None and elapsed_seconds >= 1.0 and 0.02 <= frac < 0.99:
+                        eta_seconds = max(1, int(round(elapsed_seconds * (1.0 - frac) / frac)))
                 return {"run_ref": run_ref, "state": "running",
                         "message": current.get("message"),
                         "candidate_count": len(ticket["iv_rows"]),
-                        "batch_mode": ticket["batch_mode"]}
+                        "batch_mode": ticket["batch_mode"],
+                        "elapsed_seconds": elapsed_seconds,
+                        "progress": progress,
+                        "eta_seconds": eta_seconds}
             if ticket["completed_result"] is not None:
                 return deepcopy(ticket["completed_result"])
             analysis_started = time.monotonic()
