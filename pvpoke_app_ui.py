@@ -1174,7 +1174,7 @@ function renderMegaSuperMaxComparison(row,parent,result){
  const capCost=cmp.costComparison?.cap;
  if(cmp.cap&&capCost){
   const fmtDiff=v=>v===0?'±0':(v>0?'+'+v:String(v));
-  const capTbl=node('table','',wrap,'mega-cmp-table');
+  const capTbl=node('table','',wrap,'mega-cost-table');
   const ch=node('tr','',node('thead','',capTbl));
   node('th','GL目標PL '+cmp.cap.level+' 到達コスト（PL'+capCost.refStart+'→）',ch);
   node('th','実強化PL',ch);
