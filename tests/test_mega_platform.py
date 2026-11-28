@@ -1801,6 +1801,78 @@ console.log(JSON.stringify(cmp));
                 web.STATUS.clear()
                 web.STATUS.update(prev_web[4])
 
+    def test_iv_search_and_battle_with_high_energy_charged3_mega(self):
+        import json
+        from pvpoke_battle_service import BattleService
+        from pvpoke_direct_backend import DirectMatrixClient
+        from pvpoke_iv_search import IVSearch
+
+        fixtures = Path(__file__).resolve().parent / 'fixtures'
+        gm_data = json.loads((fixtures / 'strategy_gamemaster.json').read_text(encoding='utf-8'))
+        rows = json.loads((fixtures / 'strategy_rows.json').read_text(encoding='utf-8'))
+        opp_row = rows[0]
+
+        gm_data['moves'].extend([
+            {'moveId': 'MEGA_QUICK_1', 'name': 'Mega Quick 1', 'type': 'normal', 'power': 45,
+             'energy': 35, 'energyGain': 0, 'cooldown': 500, 'turns': 1},
+            {'moveId': 'MEGA_QUICK_2', 'name': 'Mega Quick 2', 'type': 'normal', 'power': 55,
+             'energy': 40, 'energyGain': 0, 'cooldown': 500, 'turns': 1},
+            {'moveId': 'MEGA_FINISHER_PLUS', 'name': 'Mega Finisher+', 'type': 'dragon', 'power': 120,
+             'energy': 65, 'energyGain': 0, 'cooldown': 500, 'turns': 1, 'isMegaMove': True},
+        ])
+        mega_ivs = {'attack': 0, 'defense': 14, 'hp': 15}
+        mega_lvl, _ = max_level_and_cp(self.altaria_mega_stats, mega_ivs, cp_cap=1500, max_level=50.0, cpms=self.cpms)
+        gm_data['pokemon'].append({
+            'speciesId': 'altaria_mega',
+            'speciesName': 'Altaria (Mega)',
+            'dex': 334,
+            'types': ['dragon', 'fairy'],
+            'baseStats': self.altaria_mega_stats,
+            'fastMoves': ['DRAGON_BREATH'],
+            'chargedMoves': ['MEGA_QUICK_1', 'MEGA_QUICK_2'],
+            'extraChargedMoves': ['MEGA_FINISHER_PLUS'],
+            'tags': ['mega'],
+        })
+        master = self.root / 'gamemaster.json'
+        master.write_text(json.dumps(gm_data), encoding='utf-8')
+        client = DirectMatrixClient(gamemaster=master, log_dir=self.root)
+        self.addCleanup(client.close)
+        service = BattleService(client, store=self.store)
+
+        spec = {
+            'schema': 'battle-spec-v1',
+            'mode': 'standard',
+            'rules': {'league': 'great', 'cp_cap': 1500},
+            'combatants': [
+                {
+                    'species_id': 'altaria_mega',
+                    'ivs': mega_ivs,
+                    'level': mega_lvl,
+                    'mega_level': 4,
+                    'moves': {'fast': 'DRAGON_BREATH', 'charged': ['MEGA_QUICK_1', 'MEGA_QUICK_2', 'MEGA_FINISHER_PLUS']},
+                    'initial': {'hp': 'full', 'energy': 70, 'shields': 0, 'stages': [0, 0]},
+                },
+                {
+                    'species_id': opp_row['species'],
+                    'ivs': {'attack': opp_row['atk'], 'defense': opp_row['def'], 'hp': opp_row['hp']},
+                    'level': opp_row['level'],
+                    'moves': {'fast': opp_row['fast'], 'charged': [opp_row['charged1'], opp_row['charged2']]},
+                    'initial': {'hp': 'full', 'energy': 0, 'shields': 0, 'stages': [0, 0]},
+                },
+            ],
+        }
+        res = service.simulate(spec)
+        self.assertEqual(res['status'], 'complete', res.get('error'))
+
+        search = IVSearch(service)
+        # Flip spec so altaria_mega is the varying Pokémon whose static boundaries are profiled (charged_3).
+        preview = search.opponent_boundaries({
+            **spec,
+            'combatants': [spec['combatants'][1], spec['combatants'][0]],
+        }, iv_floors=(14, 14, 15))
+        self.assertIn('charged_3', preview['boundary_ivs'])
+        self.assertEqual(len(preview['representatives'][0]['static_profile']), 9)
+
 
 if __name__ == '__main__':
     unittest.main()

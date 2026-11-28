@@ -100,6 +100,12 @@ function profileMatchup(candidate, opponent) {
     damage(candidate, opponent, candidate.chargedMoves[1]),
     damage(opponent, candidate, opponent.chargedMoves[0]),
     damage(opponent, candidate, opponent.chargedMoves[1])];
+  if (candidate.chargedMoves[2]) {
+    profile.push(damage(candidate, opponent, candidate.chargedMoves[2]));
+  }
+  if (opponent.chargedMoves[2]) {
+    profile.push(damage(opponent, candidate, opponent.chargedMoves[2]));
+  }
   if (!profile.slice(2).every(value => Number.isSafeInteger(value) && value > 0)) {
     throw Error("Invalid PvPoke damage profile");
   }
