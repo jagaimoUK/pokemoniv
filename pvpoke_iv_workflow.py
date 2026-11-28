@@ -22,6 +22,7 @@ from pvpoke_selection_digest import build_selection_digest
 from pvpoke_decision_digest import decision_digest, decision_digest_v2
 from pvpoke_app_selection import recommendations_from_zip, validate_policy
 from pvpoke_form_rules import battle_entry_species, battle_entry_notice
+from pvpoke_mega import is_mega_form
 
 MODES = ("default", "rank1", "attack", "defense")
 IV_LINE = re.compile(r"^(\d{1,2}),(\d{1,2}),(\d{1,2})$")
@@ -335,10 +336,283 @@ class IVWorkflow:
                 output["complete"] = app_selection["complete"]
                 output["total_ratings_checked"] = app_selection["total_ratings_checked"]
                 output["reports"] = {}
+                if ticket.get("diff_context") is not None:
+                    output["pool_diff"] = build_pool_diff(app_selection, ticket["diff_context"])
             if ticket.get("rules") is not None:
                 output["rules"] = ticket["rules"]
             ticket["completed_result"] = output
             return deepcopy(output)
+
+    def run_with_selection_pool(
+        self,
+        candidate: dict,
+        ivs: str,
+        batch_mode: str = "simple",
+        focus_opponents: list[str] | None = None,
+        highlight_limit: int = 20,
+        review_limit: int = 8,
+        focus_limit: int = 20,
+        wait_seconds: int = 12,
+        expected_meta_sha256: str | None = None,
+        selection_policy: dict | None = None,
+        meta_preset_id: str | None = None,
+        force_recalculate: bool = False,
+        request_id: str | None = None,
+        rules: dict | None = None,
+        selection_pool: dict | None = None,
+    ) -> dict:
+        """Evaluate newly read IVs together with saved selection_pool candidates (TV-03)."""
+        own, _, incoming_rows = _canonical(candidate, ivs, batch_mode)
+        owned_species_id = candidate.get("owned_species_id")
+        if owned_species_id is not None:
+            if not isinstance(owned_species_id, str) or not owned_species_id.strip():
+                raise ValueError("owned_species_id must be a non-empty string when specified")
+            owned_species_id = owned_species_id.strip().lower()
+        target_species = battle_entry_species(own["species"])
+        resolved_rules = None
+        if rules is not None:
+            from pvpoke_mega import resolve_battle_rules
+            resolved_rules = resolve_battle_rules(rules)
+
+        pool_source = "override"
+        pool_payload = selection_pool
+        if pool_payload is None:
+            pool_source = "selection_pool"
+            if hasattr(self.backend, "selection_pool"):
+                try:
+                    pool_payload = self.backend.selection_pool([target_species])
+                except Exception:
+                    pool_payload = {"snapshots": {}}
+                    pool_source = "unavailable"
+            else:
+                pool_payload = {"snapshots": {}}
+                pool_source = "unavailable"
+        if not isinstance(pool_payload, dict):
+            raise ValueError("selection_pool must be a dict")
+        snapshots = pool_payload.get("snapshots") if isinstance(pool_payload.get("snapshots"), dict) else {}
+        snapshot = snapshots.get(target_species) if isinstance(snapshots.get(target_species), dict) else {}
+
+        saved_pool_ivs = []
+        for raw_iv in snapshot.get("ivs") or ():
+            if isinstance(raw_iv, str) and raw_iv.strip():
+                normalized_iv = raw_iv.strip().replace(",", "/")
+                if normalized_iv not in saved_pool_ivs:
+                    saved_pool_ivs.append(normalized_iv)
+
+        incoming_ivs_slash = ["/".join(map(str, row)) for row in incoming_rows]
+        combined_ivs_slash = list(dict.fromkeys([*incoming_ivs_slash, *saved_pool_ivs]))
+        if len(combined_ivs_slash) > MAX_CANDIDATES:
+            raise ValueError(
+                f"Combined incoming + saved selection_pool IVs ({len(combined_ivs_slash)}) "
+                f"exceed MAX_CANDIDATES ({MAX_CANDIDATES})"
+            )
+        combined_ivs_str = "\n".join(iv.replace("/", ",") for iv in combined_ivs_slash)
+
+        diff_context = {
+            "target_species_id": target_species,
+            "owned_species_id": owned_species_id,
+            "incoming_ivs": incoming_ivs_slash,
+            "saved_pool_ivs": saved_pool_ivs,
+            "saved_revision": snapshot.get("revision"),
+            "saved_links": list(snapshot.get("links") or ()),
+            "needs_reevaluation": bool(
+                snapshot.get("needs_reevaluation")
+                or (isinstance(snapshot.get("freshness"), dict) and snapshot["freshness"].get("needs_reevaluation"))
+            ),
+            "freshness": snapshot.get("freshness"),
+            "pool_source": pool_source,
+            "rules": resolved_rules,
+        }
+
+        result = self.run(
+            own,
+            combined_ivs_str,
+            batch_mode=batch_mode,
+            focus_opponents=focus_opponents,
+            highlight_limit=highlight_limit,
+            review_limit=review_limit,
+            focus_limit=focus_limit,
+            wait_seconds=wait_seconds,
+            expected_meta_sha256=expected_meta_sha256,
+            report_format="app",
+            selection_policy=selection_policy,
+            meta_preset_id=meta_preset_id,
+            force_recalculate=force_recalculate,
+            request_id=request_id,
+            rules=rules,
+        )
+
+        with self._lock:
+            if self._ticket is not None and self._ticket.get("run_ref") == result.get("run_ref"):
+                self._ticket["diff_context"] = deepcopy(diff_context)
+                if result.get("state") == "done" and result.get("selection") is not None:
+                    pool_diff = build_pool_diff(result["selection"], diff_context)
+                    result["pool_diff"] = pool_diff
+                    if self._ticket.get("completed_result") is not None:
+                        self._ticket["completed_result"]["pool_diff"] = deepcopy(pool_diff)
+        return result
+
+
+def build_pool_diff(app_selection: dict, diff_context: dict) -> dict:
+    """Summarize TV-03 differential outcomes for incoming IVs vs saved selection_pool."""
+    incoming_ivs = list(diff_context.get("incoming_ivs") or ())
+    saved_pool_ivs = list(diff_context.get("saved_pool_ivs") or ())
+    incoming_set = set(incoming_ivs)
+    saved_set = set(saved_pool_ivs)
+
+    recommendations = app_selection.get("recommendations") or ()
+    covered_candidates = app_selection.get("covered_candidates") or ()
+    dominated_by = app_selection.get("dominated_by") or {}
+    review_candidates = app_selection.get("review_candidates") or ()
+    additional_candidates = app_selection.get("additional_candidates") or ()
+
+    rec_by_iv = {row["ivs"]: row for row in recommendations if isinstance(row, dict) and row.get("ivs")}
+    covered_by_map = {
+        row["ivs"]: row.get("covered_by")
+        for row in covered_candidates
+        if isinstance(row, dict) and row.get("ivs")
+    }
+    equivalent_rep: dict[str, str] = {}
+    for group in (*recommendations, *covered_candidates, *review_candidates, *additional_candidates):
+        if not isinstance(group, dict):
+            continue
+        rep_iv = group.get("ivs")
+        for eq in group.get("equivalent_candidates") or ():
+            eq_iv = eq.get("ivs") if isinstance(eq, dict) else None
+            if eq_iv and rep_iv:
+                equivalent_rep[eq_iv] = rep_iv
+
+    review_ivs = {row.get("ivs") for row in review_candidates if isinstance(row, dict)}
+    additional_ivs = {row.get("ivs") for row in additional_candidates if isinstance(row, dict)}
+
+    incoming_assessments = []
+    unique_win_incoming = []
+    recommended_incoming = []
+    equivalent_incoming = []
+    dominated_incoming = []
+    review_incoming = []
+
+    for iv in incoming_ivs:
+        if iv in rec_by_iv:
+            rec = rec_by_iv[iv]
+            unique_evidences = [
+                ev for ev in rec.get("evidence") or ()
+                if isinstance(ev, dict) and ev.get("kind") in ("unique_gt500", "unique_eq500")
+            ]
+            is_unique = bool(unique_evidences)
+            classification = "unique_win" if is_unique else "recommended"
+            eq_saved = [
+                eq["ivs"] for eq in rec.get("equivalent_candidates") or ()
+                if isinstance(eq, dict) and eq.get("ivs") in saved_set
+            ]
+            item = {
+                "ivs": iv,
+                "classification": classification,
+                "is_unique_win": is_unique,
+                "grade": rec.get("grade"),
+                "role": rec.get("role"),
+                "reason": rec.get("reason"),
+                "unique_evidence_count": len(unique_evidences),
+                "equivalent_to_saved_ivs": eq_saved,
+                "already_in_saved_pool": iv in saved_set,
+            }
+            if is_unique:
+                unique_win_incoming.append(iv)
+            else:
+                recommended_incoming.append(iv)
+        elif iv in equivalent_rep:
+            rep_iv = equivalent_rep[iv]
+            item = {
+                "ivs": iv,
+                "classification": "equivalent_alternative",
+                "equivalent_to": rep_iv,
+                "is_equivalent_to_saved": rep_iv in saved_set,
+                "already_in_saved_pool": iv in saved_set,
+            }
+            equivalent_incoming.append(iv)
+        elif iv in dominated_by:
+            dom = list(dominated_by[iv] or ())
+            item = {
+                "ivs": iv,
+                "classification": "dominated",
+                "dominated_by": dom,
+                "dominated_by_saved": any(d in saved_set for d in dom),
+                "already_in_saved_pool": iv in saved_set,
+            }
+            dominated_incoming.append(iv)
+        elif iv in covered_by_map:
+            cov = covered_by_map[iv]
+            item = {
+                "ivs": iv,
+                "classification": "covered",
+                "covered_by": cov,
+                "covered_by_saved": cov in saved_set,
+                "already_in_saved_pool": iv in saved_set,
+            }
+            dominated_incoming.append(iv)
+        elif iv in review_ivs:
+            item = {
+                "ivs": iv,
+                "classification": "review",
+                "already_in_saved_pool": iv in saved_set,
+            }
+            review_incoming.append(iv)
+        elif iv in additional_ivs:
+            item = {
+                "ivs": iv,
+                "classification": "additional",
+                "already_in_saved_pool": iv in saved_set,
+            }
+            review_incoming.append(iv)
+        else:
+            item = {
+                "ivs": iv,
+                "classification": "unclassified",
+                "already_in_saved_pool": iv in saved_set,
+            }
+        incoming_assessments.append(item)
+
+    newly_dominated_saved = []
+    retained_saved = []
+    for s_iv in saved_pool_ivs:
+        doms = dominated_by.get(s_iv) or ()
+        if any(d in incoming_set for d in doms) or covered_by_map.get(s_iv) in incoming_set:
+            newly_dominated_saved.append(s_iv)
+        elif s_iv in rec_by_iv or equivalent_rep.get(s_iv) in rec_by_iv:
+            retained_saved.append(s_iv)
+
+    target_species = diff_context.get("target_species_id") or ""
+    snapshot_update_recommended = bool(
+        unique_win_incoming
+        or recommended_incoming
+        or [iv for iv in equivalent_incoming if iv not in saved_set]
+        or newly_dominated_saved
+        or diff_context.get("needs_reevaluation")
+    )
+
+    return {
+        "version": "tv03-pool-diff-v1",
+        "target_species_id": target_species,
+        "owned_species_id": diff_context.get("owned_species_id"),
+        "is_mega_form": is_mega_form(target_species),
+        "rules": diff_context.get("rules"),
+        "pool_source": diff_context.get("pool_source", "selection_pool"),
+        "saved_revision": diff_context.get("saved_revision"),
+        "saved_pool_ivs": saved_pool_ivs,
+        "saved_links": list(diff_context.get("saved_links") or ()),
+        "needs_reevaluation": bool(diff_context.get("needs_reevaluation")),
+        "freshness": diff_context.get("freshness"),
+        "incoming_ivs": incoming_ivs,
+        "incoming_assessments": incoming_assessments,
+        "unique_win_incoming_ivs": unique_win_incoming,
+        "recommended_incoming_ivs": recommended_incoming,
+        "equivalent_incoming_ivs": equivalent_incoming,
+        "dominated_incoming_ivs": dominated_incoming,
+        "review_incoming_ivs": review_incoming,
+        "newly_dominated_saved_ivs": newly_dominated_saved,
+        "retained_saved_ivs": retained_saved,
+        "snapshot_update_recommended": snapshot_update_recommended,
+    }
 
 
 
