@@ -106,5 +106,24 @@ function makeDomStub(){
  assert.equal(input.value,'サニーゴ');
  assert.equal(input.dataset.species,'corsola');
  assert.equal(imeCtx.readPartyCard(card).species,'corsola');
- console.log('Japanese/English species and move names, CSV validation, forms, defaults, and IME suggestion tap passed');
+
+ // Shared movesets via pvpoke-app-movesets-v1 take precedence over catalog defaults.
+ const storeMap=new Map();
+ const sharedCtx={
+  catalog:cat,partyMoveNames:moveNames,
+  localStorage:{getItem:k=>storeMap.get(k)||null,setItem:(k,v)=>storeMap.set(k,v)},
+  module:{exports:{}}
+ };
+ vm.createContext(sharedCtx);
+ vm.runInContext(fs.readFileSync('pvpoke_party_input.js','utf8'),sharedCtx);
+ const s=sharedCtx.module.exports;
+ s.saveSharedMoveset({species:'corsola_mega',fast:'A',charged1:'B',charged2:'D',mega_level:4});
+ const defMega=s.partyDefaultMoves(cat.corsola_mega,'corsola_mega');
+ assert.equal(defMega.source,'shared');
+ assert.equal(defMega.moves.charged1,'B');
+ assert.equal(defMega.moves.charged2,'D');
+ assert.equal(defMega.mega_level,4);
+ const savedObj=JSON.parse(storeMap.get('pvpoke-app-movesets-v1'));
+ assert.equal(savedObj.corsola_mega[0].enabled,true);
+ console.log('Japanese/English species and move names, CSV validation, forms, defaults, IME tap, and shared movesets passed');
 })().catch(err=>{console.error(err);process.exit(1);});

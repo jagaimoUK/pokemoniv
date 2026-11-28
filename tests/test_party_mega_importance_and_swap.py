@@ -210,14 +210,136 @@ class PartyMegaImportanceAndSwapTests(unittest.TestCase):
                 self.assertEqual(len(imp_res["mega_importance"]["items"]), 1)
                 self.assertEqual(imp_res["mega_importance"]["items"][0]["unique_mega_win_count"], 2)
 
+    def test_mega_importance_shared_movesets_and_form_overrides(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            store = PartyBuilder(work)
+            catalog = {
+                "azumarill": {"fastMoves": ["BUBBLE"], "chargedMoves": ["ICE_BEAM", "PLAY_ROUGH"], "default_moves": {"fast": "BUBBLE", "charged1": "ICE_BEAM", "charged2": "PLAY_ROUGH"}},
+                "clodsire": {"fastMoves": ["POISON_STING"], "chargedMoves": ["STONE_EDGE", "EARTHQUAKE"], "default_moves": {"fast": "POISON_STING", "charged1": "STONE_EDGE", "charged2": "EARTHQUAKE"}},
+                "skarmory": {"fastMoves": ["STEEL_WING"], "chargedMoves": ["SKY_ATTACK", "BRAVE_BIRD"], "default_moves": {"fast": "STEEL_WING", "charged1": "SKY_ATTACK", "charged2": "BRAVE_BIRD"}},
+                "annihilape": {"fastMoves": ["COUNTER"], "chargedMoves": ["NIGHT_SLASH", "SHADOW_BALL"], "default_moves": {"fast": "COUNTER", "charged1": "NIGHT_SLASH", "charged2": "SHADOW_BALL"}},
+                "lanturn": {"fastMoves": ["SPARK"], "chargedMoves": ["SURF", "THUNDERBOLT"], "default_moves": {"fast": "SPARK", "charged1": "SURF", "charged2": "THUNDERBOLT"}},
+                "sableye": {"fastMoves": ["SHADOW_CLAW", "FEINT_ATTACK"], "chargedMoves": ["FOUL_PLAY", "RETURN", "POWER_GEM"], "default_moves": {"fast": "SHADOW_CLAW", "charged1": "FOUL_PLAY", "charged2": "RETURN"}},
+                "sableye_shadow": {"fastMoves": ["SHADOW_CLAW"], "chargedMoves": ["FOUL_PLAY", "POWER_GEM"], "default_moves": {"fast": "SHADOW_CLAW", "charged1": "FOUL_PLAY", "charged2": "POWER_GEM"}},
+                "sableye_mega": {"fastMoves": ["SHADOW_CLAW", "FEINT_ATTACK"], "chargedMoves": ["FOUL_PLAY", "DAZZLING_GLEAM", "POWER_GEM"], "default_moves": {"fast": "SHADOW_CLAW", "charged1": "FOUL_PLAY", "charged2": "DAZZLING_GLEAM"}, "tags": ["mega"]},
+            }
+            species = {
+                sid: {
+                    "speciesId": sid,
+                    "dex": 302 if sid.startswith("sableye") else idx + 1,
+                    "baseStats": {"atk": 150, "def": 150, "hp": 150},
+                    "defaultIVs": {"cp1500": [40, 0, 15, 15]},
+                    "fastMoves": info["fastMoves"],
+                    "chargedMoves": info["chargedMoves"],
+                    **({"tags": info["tags"]} if "tags" in info else {}),
+                }
+                for idx, (sid, info) in enumerate(catalog.items())
+            }
+            cpms = [0.5] * 100
+            meta_csv = work / "meta.csv"
+            meta_csv.write_text("clodsire,POISON_STING,STONE_EDGE,EARTHQUAKE\n", encoding="utf-8")
+
+            class FakeEngine:
+                CP_CAP = 1500
+                MAX_LEVEL = 50
+                HEADER = ["species", "fast", "charged1", "charged2", "atk", "def", "hp"]
+                DATA = work
+
+                @staticmethod
+                def optimize(rows, *_args):
+                    return [{
+                        "species": r["species"], "fast": r["fast"],
+                        "charged1": r["charged1"], "charged2": r["charged2"],
+                        "atk": int(r["atk"]), "def": int(r["def"]), "hp": int(r["hp"]),
+                        "cp": 1498, "level": 40.0,
+                        **({"mega_level": r["mega_level"]} if "mega_level" in r else {}),
+                    } for r in rows]
+
+            class FakeClient:
+                def __init__(self, **_kwargs):
+                    pass
+
+                def simulate(self, own, opp, shield):
+                    table = [[None] + [q["id"] for q in opp]]
+                    for p in own:
+                        rating = 650 if (p["species"] == "sableye_mega" and p["charged2"] == "POWER_GEM") else 490
+                        table.append([p["id"]] + [rating for _ in opp])
+                    return table
+
+                def close(self):
+                    pass
+
+            members = [
+                {"species": sid, "fast": catalog[sid]["default_moves"]["fast"],
+                 "charged1": catalog[sid]["default_moves"]["charged1"], "charged2": catalog[sid]["default_moves"]["charged2"],
+                 "atk": 0, "def": 15, "hp": 15}
+                for sid in ("azumarill", "clodsire", "skarmory", "annihilape", "lanturn", "sableye")
+            ]
+
+            with patch("pvpoke_party_backend.presets.snapshot", return_value=(meta_csv, {"id": "legacy", "name": "test", "sha256": "abc"})), \
+                 patch("pvpoke_party_backend.calculation_version", return_value="v-test"), \
+                 patch("pvpoke_party_backend.DirectMatrixClient", FakeClient):
+                # 1. Shared moveset for sableye_mega overrides template/catalog defaults.
+                shared_res = store.mega_importance(
+                    {
+                        "members": members,
+                        "meta_preset_id": "legacy",
+                        "ruleset": "great_mega",
+                        "mega_rules": {"cup_id": "great_mega"},
+                        "species_movesets": {
+                            "sableye_mega": {"fast": "FEINT_ATTACK", "charged1": "FOUL_PLAY", "charged2": "POWER_GEM", "mega_level": 4}
+                        },
+                    },
+                    catalog=catalog, species=species, cpms=cpms, engine=FakeEngine, work=work,
+                )
+                item = shared_res["mega_importance"]["items"][0]
+                mega_id = item["forms"]["mega"]["id"]
+                self.assertEqual(shared_res["labels"][mega_id]["moves"], ["FEINT_ATTACK", "FOUL_PLAY", "POWER_GEM"])
+                self.assertEqual(shared_res["labels"][mega_id]["mega_level"], 4)
+                self.assertEqual(item["move_sources"]["normal"], "party_slot")
+                self.assertEqual(item["move_sources"]["mega"], "shared_moveset")
+                self.assertEqual(item["unique_mega_win_count"], 1)
+
+                # 2. Explicit form_overrides takes highest priority even over shared_movesets and party_slot.
+                ovr_res = store.mega_importance(
+                    {
+                        "members": members,
+                        "meta_preset_id": "legacy",
+                        "ruleset": "great_mega",
+                        "mega_rules": {"cup_id": "great_mega"},
+                        "species_movesets": {
+                            "sableye_mega": {"fast": "FEINT_ATTACK", "charged1": "FOUL_PLAY", "charged2": "POWER_GEM"}
+                        },
+                        "form_overrides": {
+                            "5": {
+                                "mega": {"fast": "SHADOW_CLAW", "charged1": "DAZZLING_GLEAM", "charged2": "FOUL_PLAY", "mega_level": 2},
+                                "normal": {"fast": "FEINT_ATTACK", "charged1": "FOUL_PLAY", "charged2": "POWER_GEM"},
+                            }
+                        },
+                    },
+                    catalog=catalog, species=species, cpms=cpms, engine=FakeEngine, work=work,
+                )
+                ovr_item = ovr_res["mega_importance"]["items"][0]
+                ovr_mega = ovr_item["forms"]["mega"]["id"]
+                ovr_norm = ovr_item["forms"]["normal"]["id"]
+                self.assertEqual(ovr_res["labels"][ovr_mega]["moves"], ["SHADOW_CLAW", "DAZZLING_GLEAM", "FOUL_PLAY"])
+                self.assertEqual(ovr_res["labels"][ovr_mega]["mega_level"], 2)
+                self.assertEqual(ovr_res["labels"][ovr_norm]["moves"], ["FEINT_ATTACK", "FOUL_PLAY", "POWER_GEM"])
+                self.assertEqual(ovr_item["move_sources"]["mega"], "override")
+                self.assertEqual(ovr_item["move_sources"]["normal"], "override")
+                self.assertEqual(ovr_item["unique_mega_win_count"], 0)
+
     def test_ui_contains_mega_importance_and_manual_swap_controls(self):
         for token in (
             "megaImportanceSection",
             "manualSwapSection",
+            "manualSwapMovesWrap",
             "runMegaImportance",
             "runManualSwap",
             "party/compare-swap",
             "party/mega-importance",
+            "mega-moves-editor",
         ):
             self.assertIn(token, pvpoke_party_ui.HTML)
 

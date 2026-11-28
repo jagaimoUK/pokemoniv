@@ -96,6 +96,7 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <p class="note">全構成が下限未満でも最高平均の構成は表示します。自動比較OFFでは、右上の「設定」で計算対象にした構成をすべて使います。計算対象の登録がない場合は、今回の入力で指定した技を使います。個体ごとのコピー名には採用技の略号を付けます。</p>
 <div class="row" id="inputMoves"><div><label for="fast">通常技</label><select id="fast"></select></div><div><label for="charged1">ゲージ技1</label><select id="charged1"></select></div><div><label for="charged2">ゲージ技2</label><select id="charged2"></select></div></div>
 <div class="row" id="megaMoveSettings" hidden><div><label for="megaLevel">メガレベル（1〜4）</label><select id="megaLevel"><option value="1">Lv1（基本）</option><option value="2">Lv2（高）</option><option value="3" selected>Lv3（MAX・既定）</option><option value="4">Lv4（スーパーMAX・PL+2仮説保留）</option></select></div><div id="charged3Wrap" hidden><label for="charged3">追加ゲージ技（3つ目）</label><select id="charged3"></select></div><div id="superMaxHypothesisWrap" hidden><label for="superMaxHypothesis">スーパーMAX PL+2試算（未確定参考）</label><select id="superMaxHypothesis"><option value="none" selected>仮説補正なし（上限PL50・既定）</option><option value="hypothesis_1_pl52">参考：仮説1（通常+2＝PL52上限）</option><option value="hypothesis_2_pl53">参考：仮説2（相棒+1＋+2＝PL53上限）</option></select></div></div>
+<div class="actions"><button id="saveDefaultMoveset" type="button" class="secondary">この技をデフォルト登録（パーティと共有）</button></div><p id="saveDefaultMovesetNote" class="note" aria-live="polite"></p>
 <p id="movePlanSummary" class="note" aria-live="polite"></p>
 </details>
 <details><summary>自動推薦の基準を調整</summary><label for="lead">勝ち方向で採用するRating差（既定20）</label><input id="lead" type="number" min="1" max="1000" step="1" value="20"><p class="note">500の境界を越える役割は差にかかわらず確認します。負けたままのRating差は自動推薦にしません。</p></details>
@@ -410,14 +411,17 @@ function renderReachableEvolutionLinks(sid,container=el('reachableEvolutionLinks
  }
 }
 function moves(row={},sid=el('species').value){
- fillMoveFields(sid,row,['fast','charged1','charged2'].map(el));
  const p=catalog[sid]||{};
+ const hasExplicit=Boolean(row&&row.fast&&row.charged1&&row.charged2);
+ const shared=!hasExplicit?((typeof enabledMovesets==='function'?enabledMovesets(sid)[0]:null)||p.default_moves||null):null;
+ const effectiveRow=shared?{...shared,...row}:(row||{});
+ fillMoveFields(sid,effectiveRow,['fast','charged1','charged2'].map(el));
  const isMega=/_(mega|primal)(?:_[xy])?$/.test(sid)||(p.tags||[]).includes('mega');
  const megaBox=el('megaMoveSettings'),megaSel=el('megaLevel'),c3Wrap=el('charged3Wrap'),c3Sel=el('charged3');
  const smWrap=el('superMaxHypothesisWrap'),smSel=el('superMaxHypothesis');
  if(megaBox&&megaSel){
   megaBox.hidden=!isMega;
-  if(isMega)megaSel.value=String(row.mega_level??((p.tags||[]).includes('supermega')?4:3));
+  if(isMega)megaSel.value=String(effectiveRow.mega_level??((p.tags||[]).includes('supermega')?4:3));
  }
  if(smWrap&&smSel){
   smWrap.hidden=!(isMega&&megaSel?.value==='4');
@@ -426,7 +430,7 @@ function moves(row={},sid=el('species').value){
  if(c3Wrap&&c3Sel){
   const extra=isMega&&Array.isArray(p.extraChargedMoves)?p.extraChargedMoves:[];
   c3Wrap.hidden=!extra.length;
-  option(c3Sel,['',...extra],extra.includes(row.charged3)?row.charged3:'',v=>v||'なし');
+  option(c3Sel,['',...extra],extra.includes(effectiveRow.charged3)?effectiveRow.charged3:'',v=>v||'なし');
   if(!extra.length)c3Sel.value='';
  }
  if(typeof renderReachableEvolutionLinks==='function')renderReachableEvolutionLinks(sid);
@@ -1646,6 +1650,18 @@ function renderSpeciesMovesets(sid,panel,notice=''){
  return add;
 }
 el('autoMoves').onchange=refreshQueuePreview;
+if(el('saveDefaultMoveset'))el('saveDefaultMoveset').onclick=()=>{
+ const note=el('saveDefaultMovesetNote');
+ const cand=currentCandidate();
+ if(!validMoveset(cand)){if(note)note.textContent='通常技と、異なるゲージ技2個を選んでください。';return;}
+ const sid=cand.species,entry={species:sid,fast:cand.fast,charged1:cand.charged1,charged2:cand.charged2,enabled:true};
+ if(cand.mega_level!=null)entry.mega_level=cand.mega_level;
+ if(cand.charged3)entry.charged3=cand.charged3;
+ const rest=registeredMovesets(sid).filter(c=>movesetKey(c)!==movesetKey(entry));
+ if(saveSpeciesMovesets(sid,[entry,...rest],note)){
+  if(note)note.textContent=(catalog[sid]?.name_ja||catalog[sid]?.name||sid)+'の技構成をデフォルト登録し、パーティ機能と共有しました。';
+ }
+};
 function allMoveProfiles(sid){
  const p=catalog[sid],fast=[...new Set(p?.fastMoves||[])].sort(),charged=[...new Set(p?.chargedMoves||[])].sort(),profiles=[];
  for(const f of fast)for(let i=0;i<charged.length;i++)for(let j=i+1;j<charged.length;j++)profiles.push({species:sid,fast:f,charged1:charged[i],charged2:charged[j]});return profiles;
