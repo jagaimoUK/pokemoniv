@@ -243,6 +243,41 @@ class LowScoreSearchTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             search_low_scores({"exclude_favorites": "false"})
 
+    def test_tv04_mega_gl_or_and_unverified_protection(self):
+        gm = {
+            "entei": {"dex": 244, "name": "Entei"},
+            "entei_mega": {"dex": 244, "name": "Entei (Mega)", "tags": ["mega"]},
+            "entei_shadow": {"dex": 244, "name": "Entei (Shadow)", "tags": ["shadow"]},
+        }
+        # 1. Mega GL unverified (mega_scores=None): non-shadow Mega-capable Entei is protected,
+        # while Shadow Entei (cannot Mega Evolve) is NOT protected by mega_gl_preserved.
+        unverified = search_low_scores({"mode": "practical"}, gm)
+        self.assertEqual(unverified["mega_gl_ranking_status"], "unverified")
+        preserved_names = [x["name"] for x in unverified["mega_gl_preserved"]]
+        self.assertIn("エンテイ", preserved_names)
+        self.assertNotIn("エンテイ (シャドウ)", preserved_names)
+        self.assertTrue(any(
+            x["name"] == "エンテイ" and x["reason"] == "ranking_unverified" and not x["verified"]
+            for x in unverified["mega_gl_preserved"]
+        ))
+
+        # 2. Mega GL >= 70: protected via meets_threshold_or.
+        mega_pass = search_low_scores({"mode": "practical"}, gm, mega_scores={244: {"overall": 78.5}})
+        self.assertEqual(mega_pass["mega_gl_ranking_status"], "verified")
+        self.assertTrue(any(
+            x["name"] == "エンテイ" and x["reason"] == "meets_threshold_or" and x["verified"]
+            for x in mega_pass["mega_gl_preserved"]
+        ))
+
+        # 3. Mega GL < 70 AND Normal GL < 70: not protected by mega_gl_preserved.
+        mega_fail = search_low_scores({"mode": "practical"}, gm, mega_scores={244: {"overall": 62.0}})
+        self.assertNotIn("エンテイ", [x["name"] for x in mega_fail["mega_gl_preserved"]])
+
+        # 4. all_species_mode=True: zero 70-point exclusions.
+        all_sp = search_low_scores({"all_species_mode": True}, gm)
+        self.assertTrue(all_sp["all_species_mode"])
+        self.assertEqual(all_sp["selected_count"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2300,6 +2300,56 @@ console.log('APP_UI_SUPERMAX_RULES_OK');
         proc = subprocess.run(['node', '-e', js_script], capture_output=True, text=True, check=True, timeout=10)
         self.assertIn('APP_UI_SUPERMAX_RULES_OK', proc.stdout)
 
+    def test_app_ui_low_score_all_species_and_mega_gl_summary(self):
+        import re
+        import subprocess
+        from pvpoke_app_ui import HTML as APP_HTML
+
+        self.assertIn('id="lowAllSpecies"', APP_HTML)
+        script_body = re.search(r"<script>\s*(.*)\s*</script>", APP_HTML, re.S).group(1)
+        m_load = re.search(r"async function loadLowScores\(\)\{.*?\n\}", script_body, re.S)
+        self.assertIsNotNone(m_load)
+
+        js_script = """
+const assert = require('node:assert/strict');
+const elements = {
+  lowSearchRun: { disabled: false, textContent: '' },
+  lowMode: { value: 'practical' },
+  lowThreshold: { value: '70' },
+  lowExcludeFavorites: { checked: false },
+  lowAllSpecies: { checked: true },
+  lowScoreSummary: { textContent: '' },
+  lowExclusionSummary: { textContent: '' },
+  lowEvolutionProtected: { hidden: true },
+  lowEvolutionNames: { textContent: '' },
+  lowManual: { hidden: true },
+  lowManualNames: { textContent: '' },
+  lowUnrankedReview: { hidden: true },
+  lowUnrankedNames: { textContent: '' },
+};
+const el = id => elements[id];
+let sentPayload = null;
+async function api(path, payload) {
+  sentPayload = { path, payload };
+  return {
+    source_date: '2026-10-15', selected_count: 0, searchable_count: 0, queries: [],
+    unranked_review_count: 0, all_species_mode: true, mega_gl_ranking_status: 'unverified',
+    exclusion_reasons: { specialist_preserved: 0, mega_gl_preserved: 3 },
+  };
+}
+""" + m_load.group(0) + """
+(async () => {
+  await loadLowScores();
+  assert.equal(sentPayload.path, 'low-score');
+  assert.equal(sentPayload.payload.all_species_mode, true);
+  assert.ok(elements.lowScoreSummary.textContent.includes('全種モード：70点除外なし'));
+  assert.ok(elements.lowExclusionSummary.textContent.includes('メガGL 70点OR・未取得保護 3件（メガGL未取得）'));
+  console.log('APP_UI_LOW_SCORE_TV04_OK');
+})();
+"""
+        proc = subprocess.run(['node', '-e', js_script], capture_output=True, text=True, check=True, timeout=10)
+        self.assertIn('APP_UI_LOW_SCORE_TV04_OK', proc.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()

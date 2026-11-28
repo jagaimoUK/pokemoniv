@@ -52,6 +52,7 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <div class="low-score-tools"><div><label for="lowMode">判定基準</label><select id="lowMode"><option value="practical">推奨：総合＋実戦5役割すべて70未満</option><option value="overall">総合スコアだけ70未満</option><option value="battle">総合＋先発・終盤・交代すべて70未満</option><option value="strict">全7項目すべて70未満</option></select></div>
 <div><label for="lowThreshold">スコア未満</label><input id="lowThreshold" type="number" value="70" min="1" max="100" step="0.1"></div></div>
 <label class="checkline" for="lowExcludeFavorites"><input id="lowExcludeFavorites" type="checkbox">診断用：お気に入り除外（任意）</label>
+<label class="checkline" for="lowAllSpecies"><input id="lowAllSpecies" type="checkbox">全種モード（70点除外なし）</label>
 <div class="actions"><button id="lowSearchRun">判定理由を確認</button></div>
 <p class="note">Pokémon GOの「Show Evolutionary Line」はOFF推奨。ランキング未掲載の個体は低スコアと断定できません。進化先が低スコアでも、元の個体が未評価なら別の要確認候補です。</p>
 <p id="lowScoreSummary" class="note" aria-live="polite">データの判定内容を確認できます。</p>
@@ -222,11 +223,12 @@ let lowScoreResults=null;
 async function loadLowScores(){
  const button=el('lowSearchRun');button.disabled=true;button.textContent='確認中…';
  try{
-  const result=await api('low-score',{mode:el('lowMode').value,threshold:Number(el('lowThreshold').value),exclude_favorites:el('lowExcludeFavorites').checked});
+  const allSpecies=el('lowAllSpecies')?.checked===true;
+  const result=await api('low-score',{mode:el('lowMode').value,threshold:Number(el('lowThreshold').value),exclude_favorites:el('lowExcludeFavorites').checked,all_species_mode:allSpecies});
   lowScoreResults=result;
-  el('lowScoreSummary').textContent='保存データ '+result.source_date+' / 評価済みの対象 '+result.selected_count+'件 / 検索可能 '+result.searchable_count+'件（内部検索式 '+result.queries.length+'個） / 未掲載・要確認 '+(result.unranked_review_count||0)+'種類。';
+  el('lowScoreSummary').textContent=(result.all_species_mode?'【全種モード：70点除外なし】 ':'')+'保存データ '+result.source_date+' / 評価済みの対象 '+result.selected_count+'件 / 検索可能 '+result.searchable_count+'件（内部検索式 '+result.queries.length+'個） / 未掲載・要確認 '+(result.unranked_review_count||0)+'種類。';
   const why=result.exclusion_reasons||{};
-  el('lowExclusionSummary').textContent='対象から保護・除外した理由：他の実戦役割で70点以上 '+(why.specialist_preserved||0)+'件 / 進化先が高スコア・未評価 '+(why.evolution_protected||0)+'件 / 姿・英語名の検索が不確実 '+(why.form_or_name_unsearchable||0)+'件 / 未掲載で低評価を確認できない '+(why.unranked_not_verified||0)+'種類 / 未掲載で進化先に高評価あり '+(why.unranked_strong_evolution||0)+'種類 / 未掲載で姿・名前を区別できない '+(why.unranked_uncertain_form_or_name||0)+'種類。未掲載候補は低スコア確定ではありません。';
+  el('lowExclusionSummary').textContent='対象から保護・除外した理由：他の実戦役割で70点以上 '+(why.specialist_preserved||0)+'件 / メガGL 70点OR・未取得保護 '+(why.mega_gl_preserved||0)+'件（'+((result.mega_gl_ranking_status==='verified')?'メガGL取得済':'メガGL未取得')+'） / 進化先が高スコア・未評価 '+(why.evolution_protected||0)+'件 / 姿・英語名の検索が不確実 '+(why.form_or_name_unsearchable||0)+'件 / 未掲載で低評価を確認できない '+(why.unranked_not_verified||0)+'種類 / 未掲載で進化先に高評価あり '+(why.unranked_strong_evolution||0)+'種類 / 未掲載で姿・名前を区別できない '+(why.unranked_uncertain_form_or_name||0)+'種類。未掲載候補は低スコア確定ではありません。';
   el('lowEvolutionProtected').hidden=!result.evolution_protected_count;
   el('lowEvolutionNames').textContent=(result.evolution_protected||[]).map(x=>x.name+' → '+x.evolves_to.join('、')+'：'+x.reason).join('\n');
   el('lowManual').hidden=!result.manual_review_count;
@@ -238,6 +240,7 @@ async function loadLowScores(){
 }
 el('lowSearchRun').onclick=()=>loadLowScores();
 el('lowExcludeFavorites').onchange=()=>loadLowScores();
+if(el('lowAllSpecies'))el('lowAllSpecies').onchange=()=>loadLowScores();
 function option(select,values,selected,label=v=>v){select.replaceChildren();for(const v of values){const o=document.createElement('option');o.value=v;o.textContent=label(v);select.append(o);}if(values.includes(selected))select.value=selected;}
 function fillMoveFields(sid,row,[fast,charged1,charged2],label){
  const p=catalog[sid]||{},charges=p.chargedMoves||[];
