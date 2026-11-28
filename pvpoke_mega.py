@@ -12,6 +12,11 @@ _MEGA_SUFFIX_RE = re.compile(r'(?:_|-)(?:mega(?:_[xy])?|primal)$')
 
 # Confirmed in vendor/pvpoke/src/js/battle/DamageCalculator.js (DamageMultiplier.MEGA_BONUS).
 MEGA_MOVE_BONUSES = (1.0, 1.1000000238418579, 1.2000000476837158, 1.2999999523162842)
+SUPER_MAX_HYPOTHESIS_MODES: dict[str, float] = {
+    'none': 50.0,
+    'hypothesis_1_pl52': 52.0,
+    'hypothesis_2_pl53': 53.0,
+}
 LEAGUE_CP_CAPS = {'great': 1500, 'ultra': 2500, 'master': 10000}
 MEGA_DOWNSCALING_CUPS = frozenset({
     'great_mega', 'ultra_mega', 'mega_edition', 'mega_color', 'mega_catch', 'mega_halloween',
@@ -146,10 +151,22 @@ def resolve_battle_rules(rules: Mapping[str, Any] | None) -> dict[str, Any]:
     else:
         cp_cap = None
 
-    raw_max_level = rules.get('max_level', 50.0)
+    has_super_max_mode = 'super_max_mode' in rules and rules['super_max_mode'] is not None
+    if has_super_max_mode:
+        super_max_mode = rules['super_max_mode']
+        if not isinstance(super_max_mode, str) or super_max_mode not in SUPER_MAX_HYPOTHESIS_MODES:
+            raise ValueError(f'Invalid super_max_mode in rules: {super_max_mode}')
+        mode_cap = SUPER_MAX_HYPOTHESIS_MODES[super_max_mode]
+    else:
+        super_max_mode = None
+        mode_cap = 50.0
+
+    raw_max_level = rules.get('max_level', mode_cap)
     if isinstance(raw_max_level, bool) or not isinstance(raw_max_level, (int, float)) or not 1 <= raw_max_level <= 100:
         raise ValueError(f'Invalid max_level in rules: {raw_max_level}')
     max_level = float(raw_max_level)
+    if has_super_max_mode and max_level > mode_cap:
+        raise ValueError(f'max_level {max_level} exceeds super_max_mode cap {mode_cap}')
 
     if 'allow_cp_downscaling' in rules and rules['allow_cp_downscaling'] is not None:
         if type(rules['allow_cp_downscaling']) is not bool:
@@ -166,7 +183,7 @@ def resolve_battle_rules(rules: Mapping[str, Any] | None) -> dict[str, Any]:
         allow_downscale = None
         explicit_downscale = False
 
-    return {
+    resolved = {
         'league': league,
         'cup_id': cup_id,
         'cp_cap': cp_cap,
@@ -174,6 +191,9 @@ def resolve_battle_rules(rules: Mapping[str, Any] | None) -> dict[str, Any]:
         'allow_cp_downscaling': allow_downscale,
         'rule_explicit': cp_cap is not None and explicit_downscale,
     }
+    if has_super_max_mode:
+        resolved['super_max_mode'] = super_max_mode
+    return resolved
 
 
 def resolve_party_mega_rules(rules: str | Mapping[str, Any] | None = None) -> dict[str, Any]:

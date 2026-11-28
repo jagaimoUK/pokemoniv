@@ -5,6 +5,7 @@ paths are supplied through that trusted client, never through a battle spec.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
 import json
 import math
@@ -17,7 +18,14 @@ from pathlib import Path
 from pvpoke_batch_v2 import CP_CAP, MAX_LEVEL, optimize
 from pvpoke_calculation_version import content_hash
 from pvpoke_direct_backend import DirectMatrixClient, DirectMatrixError
-from pvpoke_mega import MEGA_DOWNSCALING_CUPS, UNSCALED_CUPS, is_mega_form
+from pvpoke_mega import (
+    MEGA_DOWNSCALING_CUPS,
+    SUPER_MAX_HYPOTHESIS_MODES,
+    UNSCALED_CUPS,
+    compute_cp,
+    is_mega_form,
+    max_level_and_cp,
+)
 
 if TYPE_CHECKING:
     from pvpoke_battle_store import BattleStore
@@ -231,7 +239,7 @@ class BattleService:
         self.versions = {'engine': self.engine_version, 'game_data': self.data_version}
         self.calculation_version = _json_hash([self.engine_version, self.data_version])
 
-    def _combatant(self, value, *, cp_cap=CP_CAP):
+    def _combatant(self, value, *, cp_cap=CP_CAP, max_level=MAX_LEVEL, super_max_mode='none'):
         _object(value, 'combatant', ('species_id', 'ivs', 'level', 'moves', 'initial'), ('mega_level',))
         species = _identifier(value['species_id'], 'species ID')
         ivs = _object(value['ivs'], 'IVs', ('attack', 'defense', 'hp'))
@@ -255,8 +263,6 @@ class BattleService:
         pokemon = self.species.get(species)
         if pokemon is None:
             raise ValueError('Unknown species or form')
-        if species.startswith('minior') or level > MAX_LEVEL or len(charged) not in (2, 3):
-            raise UnsupportedBattle('This runner requires a supported form, level 50 or lower, and 2 or 3 charged moves')
         tags = pokemon.get('tags') or ()
         is_mega = is_mega_form(species) or ('mega' in tags)
         raw_mega_level = value.get('mega_level')
@@ -270,14 +276,25 @@ class BattleService:
             mega_level = None
         if len(charged) == 3 and not is_mega:
             raise ValueError('A third charged move requires a Mega or Primal form')
+        super_max_enabled = (
+            is_mega and mega_level == 4
+            and super_max_mode in ('hypothesis_1_pl52', 'hypothesis_2_pl53')
+        )
+        effective_max_level = float(max_level) if super_max_enabled else float(MAX_LEVEL)
+        if species.startswith('minior') or level > effective_max_level or len(charged) not in (2, 3):
+            raise UnsupportedBattle('This runner requires a supported form, level 50 or lower, and 2 or 3 charged moves')
         row = dict(species=species, fast=fast, charged1=charged[0], charged2=charged[1],
                    atk=attack, hp=stamina, level_override=level, **{'def': defense})
         if len(charged) == 3:
             row['charged3'] = charged[2]
         if mega_level is not None:
             row['mega_level'] = mega_level
+        opt_rules = (
+            {'cp_cap': cp_cap, 'max_level': effective_max_level, 'super_max_mode': super_max_mode}
+            if super_max_enabled else None
+        )
         try:
-            prepared, = optimize([row], self.species, self.cpms, 'battle', cp_cap=cp_cap)
+            prepared, = optimize([row], self.species, self.cpms, 'battle', cp_cap=cp_cap, rules=opt_rules)
         except ValueError:
             raise ValueError('Moves or level do not match the species, form or CP cap') from None
         # Pokemon.initialize applies a fixed HP rule to Shedinja after CPM scaling.
@@ -304,23 +321,40 @@ class BattleService:
                 ('calculation_version', 'policies', 'actions', 'shield_decisions'))
         if request['schema'] != SPEC_SCHEMA:
             raise UnsupportedBattle('Unknown battle spec version')
-        rules = _object(request['rules'], 'rules', ('league', 'cp_cap'), ('max_level', 'cup_id', 'allow_cp_downscaling'))
+        rules = _object(request['rules'], 'rules', ('league', 'cp_cap'),
+                        ('max_level', 'cup_id', 'allow_cp_downscaling', 'super_max_mode'))
         league = _identifier(rules['league'], 'league')
         cap = _integer(rules['cp_cap'], 'CP cap', 10, 10000)
-        level_cap = _integer(rules.get('max_level', MAX_LEVEL), 'max level', 1, 100)
+        has_super_max = 'super_max_mode' in rules and rules['super_max_mode'] is not None
+        if has_super_max:
+            super_max_mode = rules['super_max_mode']
+            if type(super_max_mode) is not str or super_max_mode not in SUPER_MAX_HYPOTHESIS_MODES:
+                raise ValueError('Invalid super_max_mode in rules')
+            expected_level_cap = int(SUPER_MAX_HYPOTHESIS_MODES[super_max_mode])
+        else:
+            super_max_mode = None
+            expected_level_cap = MAX_LEVEL
+        level_cap = _integer(rules.get('max_level', expected_level_cap), 'max level', 1, 100)
         cup = _identifier(rules.get('cup_id', 'all'), 'cup ID')
         has_downscale_flag = 'allow_cp_downscaling' in rules
         allow_downscaling = _boolean(rules['allow_cp_downscaling'], 'allow_cp_downscaling') if has_downscale_flag else None
 
         supported_cups_great = {'all', *MEGA_DOWNSCALING_CUPS, *UNSCALED_CUPS} - {'ultra_mega'}
         supported_cups_ultra = {'ultra_mega', 'mega_edition', *UNSCALED_CUPS}
-        if level_cap != MAX_LEVEL or not (
+        supported_cups_master = {'all', 'master', 'mega_edition', *UNSCALED_CUPS}
+        valid_level_cap = (
+            level_cap in (MAX_LEVEL, expected_level_cap)
+            if super_max_mode in ('hypothesis_1_pl52', 'hypothesis_2_pl53')
+            else level_cap == MAX_LEVEL
+        )
+        if not valid_level_cap or not (
             (league == 'great' and cap == CP_CAP and cup in supported_cups_great)
             or (league == 'ultra' and cap == 2500 and cup in supported_cups_ultra)
+            or (league == 'master' and cap == 10000 and cup in supported_cups_master)
         ):
             raise UnsupportedBattle('Unsupported league, CP cap, level cap, or cup ID')
-        if cup == 'all' and allow_downscaling is True:
-            raise UnsupportedBattle('Open Great League does not support Mega CP downscaling')
+        if cup in ('all', 'master') and allow_downscaling is True:
+            raise UnsupportedBattle('Standard unscaled league does not support Mega CP downscaling')
         if cup in UNSCALED_CUPS and allow_downscaling is True:
             raise UnsupportedBattle('Unscaled cup does not support Mega CP downscaling')
         if cup in MEGA_DOWNSCALING_CUPS and allow_downscaling is None:
@@ -346,11 +380,20 @@ class BattleService:
         bait = [_boolean(value, 'bait') for value in _items(policies.get('bait', [True] * 2), 'bait', 2, 2)]
         if mode == 'sandbox' or actions or decisions or shield != ['standard'] * 2:
             raise UnsupportedBattle('Sandbox actions and manual shield decisions are not executable in this version')
-        combatants, rows = zip(*(self._combatant(value, cp_cap=cap)
-                                 for value in _items(request['combatants'], 'combatants', 2, 2)))
+        combatants, rows = zip(*(
+            self._combatant(
+                value,
+                cp_cap=cap,
+                max_level=level_cap,
+                super_max_mode=super_max_mode or 'none',
+            )
+            for value in _items(request['combatants'], 'combatants', 2, 2)
+        ))
         normalized_rules = {'league': league, 'cp_cap': cap, 'max_level': level_cap, 'cup_id': cup}
         if allow_downscaling is not None:
             normalized_rules['allow_cp_downscaling'] = allow_downscaling
+        if has_super_max:
+            normalized_rules['super_max_mode'] = super_max_mode
         spec = {
             'schema': SPEC_SCHEMA, 'mode': mode, 'calculation_version': self.calculation_version,
             'rules': normalized_rules,
@@ -456,3 +499,105 @@ class BattleService:
     @staticmethod
     def _error(status, message):
         return {'schema': RESULT_SCHEMA, 'status': status, 'error': {'message': message}}
+
+    def compare_super_max_hypotheses(self, request: dict | str | bytes) -> dict:
+        """Compare baseline (<=50) vs Super MAX PL+2 Hypothesis 1 (<=52) and Hypothesis 2 (<=53).
+
+        Marked explicitly as unconfirmed reference-only simulations; never asserts confirmed live rules.
+        """
+        try:
+            base_spec, _ = self._prepare(request)
+        except UnsupportedBattle as exc:
+            return self._error('unsupported', str(exc))
+        except (json.JSONDecodeError, UnicodeError, RecursionError):
+            return self._error('invalid', 'Malformed battle JSON')
+        except ValueError as exc:
+            return self._error('invalid', str(exc))
+
+        c0 = base_spec['combatants'][0]
+        species_id = c0['species_id']
+        pokemon = self.species.get(species_id) or {}
+        tags = pokemon.get('tags') or ()
+        is_mega = is_mega_form(species_id) or ('mega' in tags)
+        if not is_mega:
+            return self._error('unsupported', 'Super MAX PL+2 comparison requires a Mega or Primal form')
+        if c0.get('mega_level') != 4:
+            return self._error('unsupported', 'Super MAX PL+2 comparison requires mega_level=4')
+
+        base_rules = base_spec['rules']
+        cp_cap = base_rules['cp_cap']
+        allow_downscaling = base_rules.get('allow_cp_downscaling') is True
+        base_level = float(c0['level'])
+        ivs = c0['ivs']
+        stats = pokemon['baseStats']
+
+        def _resolve_target(mode_key: str, plus_pl: float, max_cap: float) -> tuple[float, int, bool]:
+            if mode_key == 'none':
+                cp_val = compute_cp(stats, ivs, base_level, self.cpms)
+                return base_level, cp_val, False
+            theoretical_level = min(max_cap, base_level + plus_pl)
+            theoretical_cp = compute_cp(stats, ivs, theoretical_level, self.cpms)
+            if theoretical_cp <= cp_cap:
+                return theoretical_level, theoretical_cp, False
+            fitted = max_level_and_cp(stats, ivs, cp_cap=cp_cap, max_level=max_cap, cpms=self.cpms)
+            if fitted is None:
+                raise UnsupportedBattle('No eligible level fits CP cap under Super MAX hypothesis')
+            return fitted[0], fitted[1], allow_downscaling
+
+        scenarios = (
+            ('baseline', 'none', 0.0, 50.0, '通常MAX基準（PL+2補正なし・上限PL50）'),
+            ('hypothesis_1_pl52', 'hypothesis_1_pl52', 2.0, 52.0, 'スーパーMAX 仮説1（通常+2＝上限PL52・未確定参考）'),
+            ('hypothesis_2_pl53', 'hypothesis_2_pl53', 3.0, 53.0, 'スーパーMAX 仮説2（相棒ブースト+PL+2＝上限PL53・未確定参考）'),
+        )
+        results = {}
+        try:
+            for key, mode_name, plus_pl, max_cap, label in scenarios:
+                lvl, cp_val, downscaled = _resolve_target(mode_name, plus_pl, max_cap)
+                spec_req = deepcopy(base_spec)
+                spec_req.pop('calculation_version', None)
+                spec_req['combatants'][0]['level'] = lvl
+                spec_req['combatants'][0]['initial']['hp'] = 'full'
+                spec_rules = dict(base_rules)
+                spec_rules['super_max_mode'] = mode_name
+                spec_rules['max_level'] = int(max_cap)
+                spec_req['rules'] = spec_rules
+                sim_res = self.simulate(spec_req)
+                if sim_res.get('status') not in ('complete', 'partial'):
+                    return sim_res
+                results[key] = {
+                    'label': label,
+                    'super_max_mode': mode_name,
+                    'level': lvl,
+                    'cp': cp_val,
+                    'downscaled': downscaled,
+                    'status': sim_res['status'],
+                    'outcome': sim_res.get('outcome'),
+                    'rating': sim_res.get('rating'),
+                    'battle_key': sim_res.get('battle_key'),
+                    'result': sim_res,
+                }
+        except UnsupportedBattle as exc:
+            return self._error('unsupported', str(exc))
+
+        base_rating = results['baseline'].get('rating')
+        for item in results.values():
+            r = item.get('rating')
+            item['rating_delta_vs_baseline'] = (
+                (r - base_rating) if (isinstance(r, int) and isinstance(base_rating, int)) else None
+            )
+
+        return {
+            'schema': 'super-max-comparison-v1',
+            'status': 'complete' if all(v['status'] == 'complete' for v in results.values()) else 'partial',
+            'comparison_mode': 'unconfirmed_reference_only',
+            'super_max_pl_hypothesis_status': 'unconfirmed_deferred',
+            'disclaimer': (
+                '※スーパーMAX（PL+2）の補正仕様は未確定のため、仮説1（上限PL52）と'
+                '仮説2（上限PL53）の対戦比較は未確定参考値であり、ゲーム内確定仕様ではありません。'
+            ),
+            'versions': dict(self.versions),
+            'baseline': results['baseline'],
+            'hypothesis_1_pl52': results['hypothesis_1_pl52'],
+            'hypothesis_2_pl53': results['hypothesis_2_pl53'],
+        }
+

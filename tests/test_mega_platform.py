@@ -2043,6 +2043,263 @@ console.log(JSON.stringify(texts));
             else:
                 os.environ['PVP_ENGINE'] = prev[5]
 
+    def test_battle_service_super_max_pl_hypotheses_and_cache_separation(self):
+        import json
+        from pvpoke_battle_service import BattleService
+        from pvpoke_direct_backend import DirectMatrixClient
+
+        fixtures = Path(__file__).resolve().parent / 'fixtures'
+        gm_data = json.loads((fixtures / 'strategy_gamemaster.json').read_text(encoding='utf-8'))
+        rows = json.loads((fixtures / 'strategy_rows.json').read_text(encoding='utf-8'))
+        opp_row = rows[0]
+
+        gm_data['moves'].append({
+            'moveId': 'MEGA_BLAST_PLUS',
+            'name': 'Mega Blast+',
+            'type': 'dragon',
+            'power': 80,
+            'energy': 35,
+            'energyGain': 0,
+            'cooldown': 500,
+            'turns': 1,
+            'isMegaMove': True,
+        })
+        sableye_mega_stats = {'atk': 141, 'def': 136, 'hp': 137}
+        gm_data['pokemon'].extend([
+            {
+                'speciesId': 'altaria_mega',
+                'speciesName': 'Altaria (Mega)',
+                'dex': 334,
+                'types': ['dragon', 'fairy'],
+                'baseStats': self.altaria_mega_stats,
+                'fastMoves': ['DRAGON_BREATH'],
+                'chargedMoves': ['DRAGON_PULSE', 'MOONBLAST'],
+                'extraChargedMoves': ['MEGA_BLAST_PLUS'],
+                'tags': ['mega'],
+            },
+            {
+                'speciesId': 'sableye_mega',
+                'speciesName': 'Sableye (Mega)',
+                'dex': 302,
+                'types': ['dark', 'ghost'],
+                'baseStats': sableye_mega_stats,
+                'fastMoves': ['SHADOW_CLAW'],
+                'chargedMoves': ['FOUL_PLAY', 'POWER_GEM'],
+                'tags': ['mega'],
+            },
+        ])
+        master = self.root / 'gamemaster.json'
+        master.write_text(json.dumps(gm_data), encoding='utf-8')
+        client = DirectMatrixClient(gamemaster=master, log_dir=self.root)
+        self.addCleanup(client.close)
+        service = BattleService(client, store=self.store)
+
+        # 1. Master League (cp_cap=10000): PL50 baseline vs PL52 Hyp1 vs PL53 Hyp2.
+        # Proves Pokemon.js's ML megaLevel==4->52 override does NOT overwrite PL50 or PL53.
+        ml_spec = {
+            'schema': 'battle-spec-v1',
+            'mode': 'standard',
+            'rules': {'league': 'master', 'cp_cap': 10000, 'cup_id': 'master'},
+            'combatants': [
+                {
+                    'species_id': 'altaria_mega',
+                    'ivs': {'attack': 15, 'defense': 15, 'hp': 15},
+                    'level': 50,
+                    'mega_level': 4,
+                    'moves': {'fast': 'DRAGON_BREATH', 'charged': ['DRAGON_PULSE', 'MOONBLAST', 'MEGA_BLAST_PLUS']},
+                    'initial': {'hp': 'full', 'energy': 0, 'shields': 1, 'stages': [0, 0]},
+                },
+                {
+                    'species_id': 'altaria_mega',
+                    'ivs': {'attack': 15, 'defense': 15, 'hp': 15},
+                    'level': 50,
+                    'mega_level': 3,
+                    'moves': {'fast': 'DRAGON_BREATH', 'charged': ['DRAGON_PULSE', 'MOONBLAST']},
+                    'initial': {'hp': 'full', 'energy': 0, 'shields': 1, 'stages': [0, 0]},
+                },
+            ],
+        }
+        ml_cmp = service.compare_super_max_hypotheses(ml_spec)
+        self.assertEqual(ml_cmp['status'], 'complete', ml_cmp.get('error'))
+        self.assertEqual(ml_cmp['comparison_mode'], 'unconfirmed_reference_only')
+        self.assertEqual(ml_cmp['super_max_pl_hypothesis_status'], 'unconfirmed_deferred')
+        self.assertIn('ゲーム内確定仕様ではありません', ml_cmp['disclaimer'])
+        self.assertEqual(ml_cmp['baseline']['level'], 50.0)
+        self.assertEqual(ml_cmp['hypothesis_1_pl52']['level'], 52.0)
+        self.assertEqual(ml_cmp['hypothesis_2_pl53']['level'], 53.0)
+        self.assertLess(ml_cmp['baseline']['cp'], ml_cmp['hypothesis_1_pl52']['cp'])
+        self.assertLess(ml_cmp['hypothesis_1_pl52']['cp'], ml_cmp['hypothesis_2_pl53']['cp'])
+        self.assertEqual(len({
+            ml_cmp['baseline']['battle_key'],
+            ml_cmp['hypothesis_1_pl52']['battle_key'],
+            ml_cmp['hypothesis_2_pl53']['battle_key'],
+        }), 3)
+        self.assertGreater(ml_cmp['hypothesis_2_pl53']['rating'], ml_cmp['baseline']['rating'])
+
+        # 2. Great League (cp_cap=1500) where Mega maxes <= 1500 at PL50 (Sableye Mega 1/0/0):
+        # Baseline=50 (CP 1417), Hyp1=52 (CP 1453), Hyp2=53 (CP 1470).
+        gl_low_cp_spec = {
+            'schema': 'battle-spec-v1',
+            'mode': 'standard',
+            'rules': {'league': 'great', 'cp_cap': 1500, 'cup_id': 'great_mega'},
+            'combatants': [
+                {
+                    'species_id': 'sableye_mega',
+                    'ivs': {'attack': 1, 'defense': 0, 'hp': 0},
+                    'level': 50,
+                    'mega_level': 4,
+                    'moves': {'fast': 'SHADOW_CLAW', 'charged': ['FOUL_PLAY', 'POWER_GEM']},
+                    'initial': {'hp': 'full', 'energy': 0, 'shields': 1, 'stages': [0, 0]},
+                },
+                {
+                    'species_id': opp_row['species'],
+                    'ivs': {'attack': opp_row['atk'], 'defense': opp_row['def'], 'hp': opp_row['hp']},
+                    'level': opp_row['level'],
+                    'moves': {'fast': opp_row['fast'], 'charged': [opp_row['charged1'], opp_row['charged2']]},
+                    'initial': {'hp': 'full', 'energy': 0, 'shields': 1, 'stages': [0, 0]},
+                },
+            ],
+        }
+        gl_cmp = service.compare_super_max_hypotheses(gl_low_cp_spec)
+        self.assertEqual(gl_cmp['status'], 'complete', gl_cmp.get('error'))
+        self.assertEqual(
+            (gl_cmp['baseline']['level'], gl_cmp['hypothesis_1_pl52']['level'], gl_cmp['hypothesis_2_pl53']['level']),
+            (50.0, 52.0, 53.0),
+        )
+        self.assertLessEqual(gl_cmp['hypothesis_2_pl53']['cp'], 1500)
+        self.assertGreaterEqual(gl_cmp['hypothesis_2_pl53']['rating'], gl_cmp['baseline']['rating'])
+
+        # 3. Fail-closed guards: max_level=52 without super_max_mode, or mega_level=3, or non-Mega PL52.
+        no_mode_52 = {
+            **ml_spec,
+            'rules': {'league': 'master', 'cp_cap': 10000, 'max_level': 52},
+            'combatants': [{**ml_spec['combatants'][0], 'level': 52}, ml_spec['combatants'][1]],
+        }
+        self.assertEqual(service.simulate(no_mode_52)['status'], 'unsupported')
+
+        ml3_cmp = service.compare_super_max_hypotheses({
+            **ml_spec,
+            'combatants': [{**ml_spec['combatants'][0], 'mega_level': 3}, ml_spec['combatants'][1]],
+        })
+        self.assertEqual(ml3_cmp['status'], 'unsupported')
+
+        non_mega_52 = {
+            'schema': 'battle-spec-v1',
+            'mode': 'standard',
+            'rules': {'league': 'master', 'cp_cap': 10000, 'max_level': 52, 'super_max_mode': 'hypothesis_1_pl52'},
+            'combatants': [
+                {**ml_spec['combatants'][1], 'species_id': opp_row['species'], 'level': 52,
+                 'moves': {'fast': opp_row['fast'], 'charged': [opp_row['charged1'], opp_row['charged2']]}},
+                ml_spec['combatants'][1],
+            ],
+        }
+        del non_mega_52['combatants'][0]['mega_level']
+        self.assertEqual(service.simulate(non_mega_52)['status'], 'unsupported')
+
+    def test_batch_optimize_and_matchup_cache_super_max_hypotheses(self):
+        import json
+        import pvpoke_batch_v2 as engine
+        from pvpoke_mega import resolve_battle_rules
+
+        fixtures = Path(__file__).resolve().parent / 'fixtures'
+        gm_data = json.loads((fixtures / 'strategy_gamemaster.json').read_text(encoding='utf-8'))
+        gm_data['pokemon'].append({
+            'speciesId': 'sableye_mega',
+            'speciesName': 'Sableye (Mega)',
+            'dex': 302,
+            'types': ['dark', 'ghost'],
+            'baseStats': {'atk': 141, 'def': 136, 'hp': 137},
+            'fastMoves': ['SHADOW_CLAW'],
+            'chargedMoves': ['FOUL_PLAY', 'POWER_GEM'],
+            'tags': ['mega'],
+            'levelCap': 50,
+        })
+        species_map = {p['speciesId']: p for p in gm_data['pokemon']}
+        rows = [{
+            'species': 'sableye_mega', 'fast': 'SHADOW_CLAW', 'charged1': 'FOUL_PLAY', 'charged2': 'POWER_GEM',
+            'atk': 1, 'def': 0, 'hp': 0, 'mega_level': 4,
+        }]
+
+        # resolve_battle_rules preserves legacy dict when super_max_mode omitted
+        legacy = resolve_battle_rules({'league': 'great', 'cp_cap': 1500, 'cup_id': 'great_mega'})
+        self.assertNotIn('super_max_mode', legacy)
+
+        # optimize allows PL52 and PL53 when super_max_mode is explicitly set
+        p50 = engine.optimize(rows, species_map, self.cpms, 'c.csv', rules={'league': 'great', 'cp_cap': 1500})
+        p52 = engine.optimize(rows, species_map, self.cpms, 'c.csv', rules={'league': 'great', 'cp_cap': 1500, 'super_max_mode': 'hypothesis_1_pl52'})
+        p53 = engine.optimize(rows, species_map, self.cpms, 'c.csv', rules={'league': 'great', 'cp_cap': 1500, 'super_max_mode': 'hypothesis_2_pl53'})
+        self.assertEqual((p50[0]['level'], p52[0]['level'], p53[0]['level']), (50.0, 52.0, 53.0))
+
+        with self.assertRaises(ValueError):
+            engine.optimize(rows, species_map, self.cpms, 'c.csv', rules={'league': 'great', 'cp_cap': 1500, 'max_level': 52})
+
+        ns0 = cache_namespace(gamemaster_hash='g', pokemonjs_hash='p', cp_cap=1500, max_level=50)
+        ns1 = cache_namespace(gamemaster_hash='g', pokemonjs_hash='p', cp_cap=1500, max_level=52, super_max_mode='hypothesis_1_pl52')
+        ns2 = cache_namespace(gamemaster_hash='g', pokemonjs_hash='p', cp_cap=1500, max_level=53, super_max_mode='hypothesis_2_pl53')
+        self.assertEqual(len({ns0, ns1, ns2}), 3)
+
+    def test_app_ui_super_max_hypothesis_selector_and_rules(self):
+        import json
+        import re
+        import subprocess
+        from pvpoke_app_ui import HTML as APP_HTML
+
+        self.assertIn('id="superMaxHypothesisWrap"', APP_HTML)
+        self.assertIn('id="superMaxHypothesis"', APP_HTML)
+        script_body = re.search(r"<script>\s*(.*)\s*</script>", APP_HTML, re.S).group(1)
+        m_opts = re.search(r"function option\(select,values,selected,label=v=>v\)\{.*?\n\}", script_body, re.S)
+        m_fill = re.search(r"function fillMoveFields\(sid,row,\[fast,charged1,charged2\],label\)\{.*?\n\}", script_body, re.S)
+        m_moves = re.search(r"function moves\(row=\{\},sid=el\('species'\)\.value\)\{.*?\n\}", script_body, re.S)
+        m_rules = re.search(r"function currentBattleRules\(\)\{.*?\n\}", script_body, re.S)
+        self.assertTrue(all((m_opts, m_fill, m_moves, m_rules)))
+
+        js_script = """
+const assert = require('node:assert/strict');
+const elements = {};
+function makeEl(id, hidden = false) {
+  return {
+    id, hidden, value: '', options: [],
+    replaceChildren() { this.options = []; this.value = ''; },
+    append(o) { this.options.push(o); if (!this.value) this.value = o.value; },
+  };
+}
+['species','fast','charged1','charged2','megaMoveSettings','megaLevel','charged3Wrap','charged3','superMaxHypothesisWrap','superMaxHypothesis','battleRuleset'].forEach(id => {
+  elements[id] = makeEl(id, id === 'megaMoveSettings' || id === 'charged3Wrap' || id === 'superMaxHypothesisWrap');
+});
+elements.megaLevel.options = [{value:'1'},{value:'2'},{value:'3'},{value:'4'}];
+elements.megaLevel.value = '3';
+elements.superMaxHypothesis.value = 'none';
+elements.battleRuleset.value = 'great_mega';
+const el = id => elements[id];
+const document = { createElement: () => ({ value: '', textContent: '' }) };
+let catalog = {
+  sableye_mega: { fastMoves: ['SHADOW_CLAW'], chargedMoves: ['FOUL_PLAY', 'POWER_GEM'], tags: ['mega'] },
+};
+""" + "\n".join(m.group(0) for m in (m_opts, m_fill, m_moves, m_rules)) + """
+elements.species.value = 'sableye_mega';
+moves({ mega_level: 3 });
+assert.equal(elements.superMaxHypothesisWrap.hidden, true);
+assert.equal('super_max_mode' in currentBattleRules(), false);
+
+moves({ mega_level: 4 });
+assert.equal(elements.superMaxHypothesisWrap.hidden, false);
+assert.equal('super_max_mode' in currentBattleRules(), false);
+
+elements.superMaxHypothesis.value = 'hypothesis_1_pl52';
+assert.deepEqual(currentBattleRules(), {
+  league: 'great', cp_cap: 1500, max_level: 52, cup_id: 'great_mega', allow_cp_downscaling: true,
+  super_max_mode: 'hypothesis_1_pl52'
+});
+elements.superMaxHypothesis.value = 'hypothesis_2_pl53';
+assert.deepEqual(currentBattleRules(), {
+  league: 'great', cp_cap: 1500, max_level: 53, cup_id: 'great_mega', allow_cp_downscaling: true,
+  super_max_mode: 'hypothesis_2_pl53'
+});
+console.log('APP_UI_SUPERMAX_RULES_OK');
+"""
+        proc = subprocess.run(['node', '-e', js_script], capture_output=True, text=True, check=True, timeout=10)
+        self.assertIn('APP_UI_SUPERMAX_RULES_OK', proc.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()
