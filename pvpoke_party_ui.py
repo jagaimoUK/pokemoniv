@@ -187,7 +187,7 @@ function renderCalcDockMeta(){
  $('calcDockMeta').textContent=parts.join(' ・ ');
 }
 function dockStart(title,msg,canCancel=false){
- if(calcDockState.timer)clearInterval(calcDockState.timer);
+ if(calcDockState.timer&&typeof clearInterval==='function')clearInterval(calcDockState.timer);
  calcDockState={running:true,startedAt:Date.now(),progress:null,serverEta:null,serverAt:0,canCancel,timer:null};
  const d=$('calcDock');d.hidden=false;d.className='calc-dock';
  $('calcDockTitle').textContent=title||'計算中';
@@ -195,7 +195,7 @@ function dockStart(title,msg,canCancel=false){
  $('calcDockBar').className='calc-dock-bar indeterminate';$('calcDockFill').style.width='38%';
  $('calcDockCancel').hidden=!canCancel;$('calcDockCancel').disabled=false;$('calcDockClose').hidden=true;
  renderCalcDockMeta();
- calcDockState.timer=setInterval(renderCalcDockMeta,1000);
+ if(typeof setInterval==='function')calcDockState.timer=setInterval(renderCalcDockMeta,1000);
 }
 function dockUpdate({progress=null,etaSeconds=null,message=null}={}){
  if(!calcDockState.running)return;
@@ -210,7 +210,7 @@ function dockUpdate({progress=null,etaSeconds=null,message=null}={}){
  renderCalcDockMeta();
 }
 function dockFinish(ok,title,msg){
- if(calcDockState.timer){clearInterval(calcDockState.timer);calcDockState.timer=null;}
+ if(calcDockState.timer&&typeof clearInterval==='function'){clearInterval(calcDockState.timer);calcDockState.timer=null;}
  const elapsed=calcDockState.startedAt?((Date.now()-calcDockState.startedAt)/1000):0;
  calcDockState.running=false;
  const d=$('calcDock');d.hidden=false;d.className='calc-dock '+(ok?'done':'error');
