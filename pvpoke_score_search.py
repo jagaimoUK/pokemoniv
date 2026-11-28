@@ -225,40 +225,55 @@ def search_low_scores(params=None, species_catalog=None, mega_scores=None):
     if all_species_mode:
         selected = []
     else:
-        raw_selected = [x for x in all_rows if all(x[k] < threshold for k in roles)]
-        if isinstance(mega_map, dict):
-            from pvpoke_mega import evaluate_gl_mega_score_70_or
+        from pvpoke_mega import evaluate_gl_mega_score_70_or, is_mega_form, is_shadow_form, mega_forms_for_base
 
-            selected = []
-            for entry in raw_selected:
+        mega_dexes = set()
+        if isinstance(species_catalog, dict):
+            for sid, sdata in species_catalog.items():
+                if not isinstance(sdata, dict):
+                    continue
+                dex_val = sdata.get("dex")
+                if isinstance(dex_val, bool) or not isinstance(dex_val, int):
+                    continue
+                if is_shadow_form(sid) or is_mega_form(sid):
+                    continue
+                if mega_forms_for_base(sid, species_catalog, species_catalog):
+                    mega_dexes.add(dex_val)
+
+        raw_selected = [x for x in all_rows if all(x[k] < threshold for k in roles)]
+        selected = []
+        for entry in raw_selected:
+            is_shadow_entry = "(シャドウ)" in entry["name"]
+            has_mega = (not is_shadow_entry) and (entry["dex"] in mega_dexes)
+            mega_overall = None
+            if isinstance(mega_map, dict):
                 mega_entry = mega_map.get(entry["dex"])
                 if mega_entry is None:
                     mega_entry = mega_map.get(entry["name"])
                 if isinstance(mega_entry, dict):
-                    mega_overall = mega_entry.get("overall")
+                    raw_val = mega_entry.get("overall")
+                    if isinstance(raw_val, (int, float)) and not isinstance(raw_val, bool):
+                        mega_overall = float(raw_val)
                 elif isinstance(mega_entry, (int, float)) and not isinstance(mega_entry, bool):
                     mega_overall = float(mega_entry)
-                else:
-                    mega_overall = None
-                if mega_overall is not None:
-                    verdict = evaluate_gl_mega_score_70_or(
-                        normal_gl_overall=entry["overall"],
-                        mega_gl_overall=mega_overall,
-                        threshold=threshold,
-                        has_mega_form=True,
-                    )
-                    if verdict["keep"]:
-                        mega_gl_preserved.append({
-                            "name": entry["name"],
-                            "dex": entry["dex"],
-                            "normal_gl_overall": entry["overall"],
-                            "mega_gl_overall": mega_overall,
-                            "reason": verdict["reason"],
-                        })
-                        continue
-                selected.append(entry)
-        else:
-            selected = raw_selected
+            if has_mega or mega_overall is not None:
+                verdict = evaluate_gl_mega_score_70_or(
+                    normal_gl_overall=entry["overall"],
+                    mega_gl_overall=mega_overall,
+                    threshold=threshold,
+                    has_mega_form=True,
+                )
+                if verdict["keep"]:
+                    mega_gl_preserved.append({
+                        "name": entry["name"],
+                        "dex": entry["dex"],
+                        "normal_gl_overall": entry["overall"],
+                        "mega_gl_overall": mega_overall,
+                        "verified": verdict["verified"],
+                        "reason": verdict["reason"],
+                    })
+                    continue
+            selected.append(entry)
     selected.sort(key=lambda r: (r["overall"], r["name"]))
     forms_by_dex = {}
     for r in all_rows:
@@ -483,6 +498,7 @@ def search_low_scores(params=None, species_catalog=None, mega_scores=None):
         "mega_gl_ranking_status": "verified" if isinstance(mega_map, dict) else "unverified",
         "mega_gl_preserved_count": len(mega_gl_preserved),
         "mega_gl_preserved": mega_gl_preserved,
+        "all_species_mode": all_species_mode,
         "quick_query": one_query,
         "quick_species_count": len(safe_dex),
         "quick_covered_rows": quick_covered_rows,
