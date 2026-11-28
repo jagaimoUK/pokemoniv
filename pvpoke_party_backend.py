@@ -823,33 +823,74 @@ class PartyBuilder:
         return matrix, stats
 
     @staticmethod
-    def _default_member_row(sid, catalog, *, template=None):
+    def _default_member_row(sid, catalog, *, template=None, shared_moves=None, override_moves=None, return_source=False):
         entry = catalog.get(sid)
         if entry is None:
             raise ValueError("未登録ポケモン " + str(sid))
         fast_pool = list(entry.get("fastMoves") or ())
         charged_pool = list(entry.get("chargedMoves") or ())
+        extra_pool = list(entry.get("extraChargedMoves") or ())
+        from pvpoke_mega import is_mega_form
+
+        def _valid_moveset(src):
+            if not isinstance(src, dict):
+                return None
+            f = src.get("fast")
+            c1 = src.get("charged1")
+            c2 = src.get("charged2")
+            if f in fast_pool and c1 in charged_pool and c2 in charged_pool and c1 != c2:
+                return f, c1, c2
+            return None
+
+        dm = entry.get("default_moves")
         defaults = list(entry.get("defaultMoves") or ())
-        fast = defaults[0] if len(defaults) > 0 and defaults[0] in fast_pool else (fast_pool[0] if fast_pool else "")
-        c1 = defaults[1] if len(defaults) > 1 and defaults[1] in charged_pool else (charged_pool[0] if charged_pool else "")
-        c2 = defaults[2] if len(defaults) > 2 and defaults[2] in charged_pool and defaults[2] != c1 else ""
-        if not c2:
-            c2 = next((m for m in charged_pool if m != c1), c1)
+        if isinstance(dm, dict) and dm.get("fast") in fast_pool and dm.get("charged1") in charged_pool and dm.get("charged2") in charged_pool and dm.get("charged1") != dm.get("charged2"):
+            fast, c1, c2 = dm["fast"], dm["charged1"], dm["charged2"]
+            move_source = "catalog_default"
+        elif len(defaults) >= 3 and defaults[0] in fast_pool and defaults[1] in charged_pool and defaults[2] in charged_pool and defaults[1] != defaults[2]:
+            fast, c1, c2 = defaults[0], defaults[1], defaults[2]
+            move_source = "catalog_default"
+        else:
+            fast = defaults[0] if len(defaults) > 0 and defaults[0] in fast_pool else (fast_pool[0] if fast_pool else "")
+            c1 = defaults[1] if len(defaults) > 1 and defaults[1] in charged_pool else (charged_pool[0] if charged_pool else "")
+            c2 = defaults[2] if len(defaults) > 2 and defaults[2] in charged_pool and defaults[2] != c1 else ""
+            if not c2:
+                c2 = next((m for m in charged_pool if m != c1), c1)
+            move_source = "fallback"
+
+        tpl_moves = _valid_moveset(template)
+        if tpl_moves is not None:
+            fast, c1, c2 = tpl_moves
+            move_source = "template"
+
+        shared_triple = _valid_moveset(shared_moves)
+        if shared_triple is not None:
+            fast, c1, c2 = shared_triple
+            move_source = "shared_moveset"
+
+        override_triple = _valid_moveset(override_moves)
+        if override_triple is not None:
+            fast, c1, c2 = override_triple
+            move_source = "override"
+
         row = {"species": sid, "fast": fast, "charged1": c1, "charged2": c2}
         if isinstance(template, dict):
-            if template.get("fast") in fast_pool:
-                row["fast"] = template["fast"]
-            t_c1 = template.get("charged1")
-            t_c2 = template.get("charged2")
-            if t_c1 in charged_pool and t_c2 in charged_pool and t_c1 != t_c2:
-                row["charged1"], row["charged2"] = t_c1, t_c2
             for k in ("atk", "def", "hp"):
                 if type(template.get(k)) is int and 0 <= template[k] <= 15:
                     row[k] = template[k]
-            from pvpoke_mega import is_mega_form
-            if is_mega_form(sid) and type(template.get("mega_level")) is int and 1 <= template["mega_level"] <= 4:
-                row["mega_level"] = template["mega_level"]
-        return row
+        for meta_src in (template, shared_moves, override_moves):
+            if not isinstance(meta_src, dict):
+                continue
+            if is_mega_form(sid):
+                ml = meta_src.get("mega_level")
+                if type(ml) is int and 1 <= ml <= 4:
+                    row["mega_level"] = ml
+                c3 = meta_src.get("charged3")
+                if isinstance(c3, str) and c3 in extra_pool and c3 not in (c1, c2):
+                    row["charged3"] = c3
+                elif c3 == "" and meta_src is override_moves:
+                    row.pop("charged3", None)
+        return (row, move_source) if return_source else row
 
     @staticmethod
     def _labels_for(items):
@@ -988,9 +1029,20 @@ class PartyBuilder:
         if len({p["id"] for p in members}) != 6:
             raise ValueError("同じポケモン・技・個体値の重複があります")
 
+        species_movesets = args.get("species_movesets")
+        if species_movesets is not None and not isinstance(species_movesets, dict):
+            raise ValueError("species_movesets must be an object")
+        species_movesets = species_movesets or {}
+
+        form_overrides = args.get("form_overrides")
+        if form_overrides is not None and not isinstance(form_overrides, dict):
+            raise ValueError("form_overrides must be an object")
+        form_overrides = form_overrides or {}
+
         from pvpoke_mega import base_species_id, is_mega_form, is_shadow_form, mega_forms_for_base
         all_species_ids = set(catalog.keys())
         variants_by_slot = {}
+        move_sources_by_slot = {}
         variant_nodes = []
 
         slots = [target_slot] if target_slot is not None else list(range(len(members)))
@@ -998,6 +1050,9 @@ class PartyBuilder:
             member = members[slot]
             sid = member["species"]
             raw_template = own_raw[slot] if isinstance(own_raw[slot], dict) else {}
+            slot_overrides = form_overrides.get(str(slot))
+            if not isinstance(slot_overrides, dict):
+                slot_overrides = {}
             if is_mega_form(sid):
                 base_sid = base_species_id(sid)
                 mega_sids = [sid]
@@ -1019,17 +1074,36 @@ class PartyBuilder:
             normal_sid = base_sid if base_sid in catalog else None
 
             slot_map = {"active_kind": active_kind}
+            slot_sources = {}
             for kind, vsid in (("normal", normal_sid), ("shadow", shadow_sid), ("mega", mega_sid)):
                 if not vsid:
                     continue
-                if vsid == sid:
+                override_src = slot_overrides.get(kind)
+                if isinstance(override_src, dict):
+                    row, src = self._default_member_row(
+                        vsid, catalog,
+                        template=raw_template,
+                        shared_moves=species_movesets.get(vsid),
+                        override_moves=override_src,
+                        return_source=True,
+                    )
+                    p_obj = self._normalize([row], catalog, species, cpms, engine, f"{slot + 1}枠目の{kind}形態")[0]
+                elif vsid == sid:
                     p_obj = member
+                    src = "party_slot"
                 else:
-                    row = self._default_member_row(vsid, catalog, template=raw_template)
+                    row, src = self._default_member_row(
+                        vsid, catalog,
+                        template=raw_template,
+                        shared_moves=species_movesets.get(vsid),
+                        return_source=True,
+                    )
                     p_obj = self._normalize([row], catalog, species, cpms, engine, f"{slot + 1}枠目の{kind}形態")[0]
                 slot_map[kind] = p_obj["id"]
+                slot_sources[kind] = src
                 variant_nodes.append(p_obj)
             variants_by_slot[slot] = slot_map
+            move_sources_by_slot[slot] = slot_sources
 
         meta, weights, preset = self._load_meta_and_weights(args, catalog, species, cpms, engine, work)
         opponents = [p["id"] for p in meta]
@@ -1060,6 +1134,12 @@ class PartyBuilder:
         importance = core.evaluate_mega_importance(
             [p["id"] for p in members], variants_by_slot, opponents, matrix, weights,
             mega_policy=mega_policy)
+        for item in importance.get("items") or ():
+            slot_sources = move_sources_by_slot.get(item.get("slot"), {})
+            item["move_sources"] = dict(slot_sources)
+            for kind, form_entry in (item.get("forms") or {}).items():
+                if isinstance(form_entry, dict) and kind in slot_sources:
+                    form_entry["move_source"] = slot_sources[kind]
 
         return {
             "kind": "mega_importance",

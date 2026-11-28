@@ -61,6 +61,14 @@ dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100
 .diff-gain{box-shadow:inset 0 0 0 2px #96debf}
 .diff-loss{box-shadow:inset 0 0 0 2px #f29bc5}
 .diff-tag{display:inline-block;font-size:12px;font-weight:700;padding:1px 6px;border-radius:6px;margin-top:4px;background:rgba(0,0,0,.35)}
+.mega-moves-editor{margin-top:10px;border:1px solid #4c6a5f;border-radius:12px;padding:8px 10px;background:#1d3031}
+.mega-moves-editor summary{cursor:pointer;font-weight:700;color:#96debf}
+.mega-form-move-box{margin-top:10px;padding:10px;border:1px solid #4c6a5f;border-radius:10px;background:#243938}
+.mega-form-move-box h4{margin:0 0 8px;font-size:14px}
+.move-source-badge{display:inline-block;font-size:11px;font-weight:700;padding:1px 6px;border-radius:6px;margin-left:4px;background:#355650;color:#c9eee0}
+.move-source-badge.shared{background:#2d5d4e;color:#96debf}
+.move-source-badge.override{background:#5d4d2d;color:#f5d58c}
+#manualSwapMovesWrap{margin:8px 0;padding:10px;border:1px solid #4c6a5f;border-radius:12px;background:#1d3031}
 @media(max-width:550px){main{padding:12px 10px 110px}section{padding:12px}.mon{padding:8px}.fields{grid-template-columns:1fr}}
 </style></head><body><main><nav><a href="/app">← 個体値厳選</a><a href="/flashcards">フラッシュカード</a></nav>
 <h1>見せ合い6体・選出3体</h1><p>重要メタへの穴、15ペアの補完、20組の3体、相手6体への選出を分析するにぇ。Battle Ratingは実戦勝率ではありません。</p>
@@ -96,7 +104,7 @@ dialog.party-comparison{position:fixed;inset:0;margin:0;width:100%;max-width:100
 <p>自動補完は最大10回の1体交換を繰り返し探索し、最大3案と相性表を表示します。改善が止まっても全対面への完全対応は保証しません。候補欄が空ならメタから最大24種の仮候補を利用（所持・技・IVの確認が必要）。追加探索はシールド2-2の静的比較です。</p></section></div>
 <div id="weakness" hidden>
 <section id="megaImportanceSection"><h2>メガシンカの重要性指数（通常 / シャドウ / メガ比較）</h2><p>パーティ内のメガ候補について、通常・シャドウとの単体差（固有の勝ち筋）と、パーティ全体の補完率・深刻度への貢献を0〜100の指数で表します。</p><div class="tools"><button id="runMegaImportance" type="button">メガ重要性を比較する</button></div><div id="megaImportanceResult">「メガ重要性を比較する」を押すと比較結果を表示します。</div></section>
-<section id="manualSwapSection"><h2>1体交換して相性比較（全シールド対応）</h2><p>入れ替えたい1枠を選び、同種族の別形態（例：ヤミラミ ↔ メガヤミラミ）や任意のポケモンと交換したときの補完率・相性表をシールド別に比較します。</p><div class="fields"><label for="manualSwapSlot">入れ替える枠<select id="manualSwapSlot"></select></label><label for="manualSwapSearch">交換先のポケモン（IDまたは名前）<input id="manualSwapSearch" list="speciesList" placeholder="例：sableye_mega / ヤミラミ"></label></div><div id="manualSwapQuickForms" class="tools" style="margin:8px 0"></div><div class="tools"><button id="runManualSwap" type="button">この1体交換を相性比較で調べる</button></div><div id="manualSwapResult"></div></section>
+<section id="manualSwapSection"><h2>1体交換して相性比較（全シールド対応）</h2><p>入れ替えたい1枠を選び、同種族の別形態（例：ヤミラミ ↔ メガヤミラミ）や任意のポケモンと交換したときの補完率・相性表をシールド別に比較します。</p><div class="fields"><label for="manualSwapSlot">入れ替える枠<select id="manualSwapSlot"></select></label><label for="manualSwapSearch">交換先のポケモン（IDまたは名前）<input id="manualSwapSearch" list="speciesList" placeholder="例：sableye_mega / ヤミラミ"></label></div><div id="manualSwapQuickForms" class="tools" style="margin:8px 0"></div><div id="manualSwapMovesWrap" hidden></div><div class="tools"><button id="runManualSwap" type="button">この1体交換を相性比較で調べる</button></div><div id="manualSwapResult"></div></section>
 <section><h2>弱点・補完</h2><div id="swapAdvice"></div><div id="weakResult">分析後に表示します。</div></section></div>
 <div id="selection" hidden><section><h2>相手6体</h2><p>名前から選ぶと推奨技が入ります。技をタップして変更できます。</p><textarea id="enemy" placeholder="clodsire,POISON_STING,STONE_EDGE,EARTHQUAKE"></textarea><button id="select">相手6体への選出を比較</button>
 <p>双方ともチーム全体のシールドは2枚。静的な近似であり、実際の3対3勝率ではありません。</p><div id="selectionResult"></div></section></div>
@@ -675,11 +683,16 @@ $('load').onclick=async()=>{try{
  inputRevision++;$('partyState').textContent='保存中のパーティ: '+p.name+'（revision '+revision+'）';
  status('読み込みました。自分・相手・詳細戦略を復元しました')
 }catch(e){status(e.message)}};
-$('workspace').addEventListener('input',()=>{
- inputRevision++;
- const root=$('strategyResult');if(root.dataset.calculated&&!root.querySelector('[data-stale]')){const msg=node('p','入力が変更されています。以下は以前の条件の結果です。再計算してください。');msg.dataset.stale='true';root.prepend(msg)}
- refreshManualSwapControls();
-});
+ let megaFormOverrides={},manualSwapEditedRow=null;
+ $('load').addEventListener('click',()=>{megaFormOverrides={};manualSwapEditedRow=null;});
+ $('workspace').addEventListener('input',e=>{
+  if(e.target&&e.target.closest&&e.target.closest('#megaImportanceSection,#manualSwapSection'))return;
+  inputRevision++;
+  megaFormOverrides={};
+  manualSwapEditedRow=null;
+  const root=$('strategyResult');if(root.dataset.calculated&&!root.querySelector('[data-stale]')){const msg=node('p','入力が変更されています。以下は以前の条件の結果です。再計算してください。');msg.dataset.stale='true';root.prepend(msg)}
+  refreshManualSwapControls();
+ });
 function baseSpeciesForSwap(sid){
  return String(sid||'').replace(/_shadow-shadow$/,'_shadow').replace(/_shadow$/,'').replace(/_(?:mega|primal)(?:_[xy])?$/,'');
 }
@@ -694,6 +707,135 @@ function quickFormsForSpecies(sid){
   seen.add(c);out.push(c);
  }
  return out;
+}
+function collectSharedMovesets(members){
+ const out={};
+ if(typeof sharedDefaultMoveset!=='function')return out;
+ const ids=new Set();
+ for(const m of members||[]){
+  if(!m||!m.species)continue;
+  ids.add(m.species);
+  for(const f of quickFormsForSpecies(m.species))ids.add(f);
+ }
+ for(const sid of ids){
+  const found=sharedDefaultMoveset(sid,catalog[sid]);
+  if(found)out[sid]=found;
+ }
+ return out;
+}
+function moveSourceLabel(src){
+ return {party_slot:'パーティ設定',shared_moveset:'厳選共有技',override:'分析用変更',template:'同種族引継',catalog_default:'推奨技',fallback:'仮技'}[src]||'';
+}
+function createMoveEditorRow(sid,initialRow,options={}){
+ const entry=catalog[sid]||{};
+ const fasts=entry.fastMoves||[];
+ const chargeds=entry.chargedMoves||[];
+ const extras=partyExtraChargedMoves(entry);
+ const isMega=isPartyMegaSpecies(sid,entry);
+ const box=node('div',null,'mega-form-move-box');
+ const heading=node('h4',options.title||partyDisplay(sid));
+ if(options.source){
+  const badge=node('span',moveSourceLabel(options.source),'move-source-badge'+(options.source==='shared_moveset'?' shared':options.source==='override'?' override':''));
+  if(badge.textContent)heading.append(badge);
+ }
+ box.append(heading);
+ const fields=node('div',null,'fields');
+ const selects={};
+ for(const [k,label,pool] of [['fast','通常技',fasts],['charged1','ゲージ技1',chargeds],['charged2','ゲージ技2',chargeds]]){
+  const lbl=node('label',label),sel=node('select');
+  sel.setAttribute('aria-label',(options.ariaPrefix||partyDisplay(sid))+' '+label);
+  for(const m of pool)sel.append(new Option(partyMoveLabel(m),m));
+  if(initialRow[k]&&pool.includes(initialRow[k]))sel.value=initialRow[k];
+  selects[k]=sel;lbl.append(sel);fields.append(lbl);
+ }
+ function syncChoice(){
+  const one=selects.charged1,two=selects.charged2;
+  for(const s of [one,two])for(const o of s.options)o.disabled=o.value===(s===one?two.value:one.value);
+  if(one.value===two.value){
+   const alt=chargeds.find(m=>m!==one.value);
+   if(alt)two.value=alt;
+   syncChoice();
+  }
+  if(selects.charged3){
+   for(const o of selects.charged3.options)o.disabled=!!o.value&&(o.value===one.value||o.value===two.value);
+   if(selects.charged3.value&&(selects.charged3.value===one.value||selects.charged3.value===two.value))selects.charged3.value='';
+  }
+ }
+ selects.charged1.onchange=()=>{syncChoice();options.onChange?.(readValues());};
+ selects.charged2.onchange=()=>{syncChoice();options.onChange?.(readValues());};
+ selects.fast.onchange=()=>{options.onChange?.(readValues());};
+ if(isMega){
+  const mlLbl=node('label','メガレベル'),mlSel=node('select');
+  mlSel.setAttribute('aria-label',(options.ariaPrefix||partyDisplay(sid))+' メガレベル');
+  for(const [v,t] of [['1','1（基礎）'],['2','2（高レベル）'],['3','3（MAX）'],['4','4（スーパーMAX）']])mlSel.append(new Option(t,v));
+  const defMl=Array.isArray(entry.tags)&&entry.tags.includes('supermega')?'4':'3';
+  mlSel.value=initialRow.mega_level!=null&&['1','2','3','4'].includes(String(initialRow.mega_level))?String(initialRow.mega_level):defMl;
+  mlSel.onchange=()=>{options.onChange?.(readValues());};
+  selects.mega_level=mlSel;mlLbl.append(mlSel);fields.append(mlLbl);
+  if(extras.length){
+   const c3Lbl=node('label','追加ゲージ技（3つ目）'),c3Sel=node('select');
+   c3Sel.setAttribute('aria-label',(options.ariaPrefix||partyDisplay(sid))+' 追加ゲージ技（3つ目）');
+   c3Sel.append(new Option('なし',''));
+   for(const m of extras)c3Sel.append(new Option(partyMoveLabel(m),m));
+   c3Sel.value=initialRow.charged3&&extras.includes(initialRow.charged3)?initialRow.charged3:'';
+   c3Sel.onchange=()=>{syncChoice();options.onChange?.(readValues());};
+   selects.charged3=c3Sel;c3Lbl.append(c3Sel);fields.append(c3Lbl);
+  }
+ }
+ syncChoice();
+ box.append(fields);
+ function readValues(){
+  const out={species:sid,fast:selects.fast.value,charged1:selects.charged1.value,charged2:selects.charged2.value};
+  if(isMega&&selects.mega_level)out.mega_level=Number(selects.mega_level.value);
+  if(isMega&&selects.charged3)out.charged3=selects.charged3.value;
+  return out;
+ }
+ const tools=node('div',null,'tools');
+ tools.style.marginTop='8px';
+ if(options.applyLabel&&options.onApply){
+  const applyBtn=node('button',options.applyLabel);applyBtn.type='button';
+  applyBtn.onclick=()=>options.onApply(readValues());
+  tools.append(applyBtn);
+ }
+ if(typeof saveSharedMoveset==='function'){
+  const shareBtn=node('button','厳選設定と共有（保存）');shareBtn.type='button';
+  shareBtn.onclick=()=>{
+   try{
+    const vals=readValues();
+    saveSharedMoveset(vals);
+    options.onShare?.(vals);
+    status(partyDisplay(sid)+'の技構成を厳選アプリと共有保存しました（次回からデフォルトで使用します）。');
+   }catch(err){status(err.message);}
+  };
+  tools.append(shareBtn);
+ }
+ if(tools.children.length)box.append(tools);
+ return {box,readValues};
+}
+function renderManualSwapMoveEditor(){
+ const wrap=$('manualSwapMovesWrap');
+ if(!wrap)return;
+ let members=[];try{members=getMon();}catch(_){members=[];}
+ const slot=Number($('manualSwapSlot')?.value||0);
+ let sid='';
+ try{sid=resolveSpeciesFromInput($('manualSwapSearch')?.value||'');}catch(_){sid='';}
+ if(!sid||!catalog[sid]){
+  wrap.hidden=true;wrap.replaceChildren();
+  manualSwapEditedRow=null;
+  return;
+ }
+ if(!manualSwapEditedRow||manualSwapEditedRow.slot!==slot||manualSwapEditedRow.row.species!==sid){
+  manualSwapEditedRow={slot,row:buildReplacementRow(sid,members[slot])};
+ }
+ wrap.hidden=false;
+ wrap.replaceChildren();
+ const editor=createMoveEditorRow(sid,manualSwapEditedRow.row,{
+  title:'交換先の技を確認・変更: '+partyDisplay(sid),
+  ariaPrefix:'交換先',
+  onChange:vals=>{manualSwapEditedRow={slot,row:{...manualSwapEditedRow.row,...vals}};},
+  onShare:vals=>{manualSwapEditedRow={slot,row:{...manualSwapEditedRow.row,...vals}};},
+ });
+ wrap.append(editor.box);
 }
 function refreshManualSwapControls(){
  const sel=$('manualSwapSlot'),quick=$('manualSwapQuickForms');
@@ -712,17 +854,20 @@ function refreshManualSwapControls(){
  const forms=quickFormsForSpecies(curSid);
  if(!forms.length){
   if(curSid)quick.append(node('small','同種族の別形態候補はありません（下の入力欄から任意のポケモンを選べます）。'));
-  return;
+ }else{
+  quick.append(node('small','同種族の別形態: '));
+  for(const fsid of forms){
+   const btn=node('button',partyDisplay(fsid)+'と比較');
+   btn.type='button';
+   btn.onclick=()=>{$('manualSwapSearch').value=fsid;manualSwapEditedRow=null;renderManualSwapMoveEditor();runManualSwapComparison(idx,fsid);};
+   quick.append(btn);
+  }
  }
- quick.append(node('small','同種族の別形態: '));
- for(const fsid of forms){
-  const btn=node('button',partyDisplay(fsid)+'と比較');
-  btn.type='button';
-  btn.onclick=()=>{$('manualSwapSearch').value=fsid;runManualSwapComparison(idx,fsid);};
-  quick.append(btn);
- }
+ renderManualSwapMoveEditor();
 }
 $('manualSwapSlot')?.addEventListener('change',refreshManualSwapControls);
+$('manualSwapSearch')?.addEventListener('input',renderManualSwapMoveEditor);
+$('manualSwapSearch')?.addEventListener('change',renderManualSwapMoveEditor);
 document.querySelectorAll('.tabs button').forEach(b=>b.addEventListener('click',()=>{if(b.dataset.tab==='weakness')refreshManualSwapControls();}));
 function resolveSpeciesFromInput(raw){
  if(typeof resolvePartyName==='function'){
@@ -742,20 +887,32 @@ function buildReplacementRow(sid,template){
  const entry=catalog[sid]||{};
  const fasts=entry.fastMoves||[];
  const chargeds=entry.chargedMoves||[];
- const defs=entry.defaultMoves||[];
- const fast=defs[0]&&fasts.includes(defs[0])?defs[0]:(fasts[0]||'');
- const c1=defs[1]&&chargeds.includes(defs[1])?defs[1]:(chargeds[0]||'');
- const c2=(defs[2]&&chargeds.includes(defs[2])&&defs[2]!==c1)?defs[2]:(chargeds.find(m=>m!==c1)||c1);
- const row={species:sid,fast,charged1:c1,charged2:c2};
- if(template&&baseSpeciesForSwap(template.species)===baseSpeciesForSwap(sid)){
-  if(fasts.includes(template.fast))row.fast=template.fast;
+ const extras=partyExtraChargedMoves(entry);
+ const shared=typeof sharedDefaultMoveset==='function'?sharedDefaultMoveset(sid,entry):null;
+ const dm=entry.default_moves&&typeof entry.default_moves==='object'?entry.default_moves:null;
+ const defs=Array.isArray(entry.defaultMoves)?entry.defaultMoves:[];
+ let fast=dm&&fasts.includes(dm.fast)?dm.fast:(defs[0]&&fasts.includes(defs[0])?defs[0]:(fasts[0]||''));
+ let c1=dm&&chargeds.includes(dm.charged1)?dm.charged1:(defs[1]&&chargeds.includes(defs[1])?defs[1]:(chargeds[0]||''));
+ let c2=(dm&&chargeds.includes(dm.charged2)&&dm.charged2!==c1)?dm.charged2:((defs[2]&&chargeds.includes(defs[2])&&defs[2]!==c1)?defs[2]:(chargeds.find(m=>m!==c1)||c1));
+ const sameFamily=Boolean(template&&baseSpeciesForSwap(template.species)===baseSpeciesForSwap(sid));
+ if(sameFamily){
+  if(fasts.includes(template.fast))fast=template.fast;
   if(chargeds.includes(template.charged1)&&chargeds.includes(template.charged2)&&template.charged1!==template.charged2){
-   row.charged1=template.charged1;row.charged2=template.charged2;
+   c1=template.charged1;c2=template.charged2;
   }
-  if([template.atk,template.def,template.hp].every(v=>Number.isInteger(v)&&v>=0&&v<=15)){
-   row.atk=template.atk;row.def=template.def;row.hp=template.hp;
-  }
-  if(isPartyMegaSpecies(sid,entry)&&Number.isInteger(template.mega_level))row.mega_level=template.mega_level;
+ }
+ if(shared){
+  fast=shared.fast;c1=shared.charged1;c2=shared.charged2;
+ }
+ const row={species:sid,fast,charged1:c1,charged2:c2};
+ if(sameFamily&&[template.atk,template.def,template.hp].every(v=>Number.isInteger(v)&&v>=0&&v<=15)){
+  row.atk=template.atk;row.def=template.def;row.hp=template.hp;
+ }
+ if(isPartyMegaSpecies(sid,entry)){
+  if(shared?.mega_level!=null)row.mega_level=shared.mega_level;
+  else if(sameFamily&&Number.isInteger(template.mega_level))row.mega_level=template.mega_level;
+  if(shared?.charged3&&extras.includes(shared.charged3))row.charged3=shared.charged3;
+  else if(sameFamily&&template.charged3&&extras.includes(template.charged3))row.charged3=template.charged3;
  }
  return row;
 }
@@ -880,7 +1037,8 @@ async function runManualSwapComparison(explicitSlot=null,explicitSid=null){
   const slot=explicitSlot!=null?explicitSlot:Number($('manualSwapSlot')?.value||0);
   const sid=explicitSid||resolveSpeciesFromInput($('manualSwapSearch')?.value||'');
   if(!sid)throw Error('交換先のポケモンを指定してください');
-  const replacement=buildReplacementRow(sid,members[slot]);
+  const useEdited=manualSwapEditedRow&&manualSwapEditedRow.slot===slot&&manualSwapEditedRow.row?.species===sid;
+  const replacement=useEdited?{...manualSwapEditedRow.row}:buildReplacementRow(sid,members[slot]);
   $('runManualSwap').disabled=true;
   status('1体交換（全シールド）を比較しています...');
   const payload={
@@ -903,6 +1061,26 @@ async function runManualSwapComparison(explicitSlot=null,explicitSid=null){
  }catch(e){status(e.message);}finally{if($('runManualSwap'))$('runManualSwap').disabled=false;}
 }
 $('runManualSwap')?.addEventListener('click',()=>runManualSwapComparison());
+function formatFormMovesSummary(lbl){
+ if(!lbl||!Array.isArray(lbl.moves))return '';
+ const parts=[lbl.moves.map(m=>partyMoveLabel(m)).join(' / ')];
+ const extras=[];
+ if(lbl.mega_level!=null)extras.push('メガLv'+lbl.mega_level);
+ if(lbl.charged3)extras.push('3つ目:'+partyMoveLabel(lbl.charged3));
+ return extras.length?parts[0]+'（'+extras.join('・')+'）':parts[0];
+}
+function syncSlotCardMovesIfSameSpecies(slot,vals){
+ const cards=$('members')?.children;
+ const card=cards?.[slot];
+ if(!card)return;
+ const current=readPartyCard(card,slot);
+ if(current.species!==vals.species)return;
+ const all=getMon();
+ all[slot]={...all[slot],fast:vals.fast,charged1:vals.charged1,charged2:vals.charged2,
+  ...(vals.mega_level!=null?{mega_level:vals.mega_level}:{}),
+  ...(vals.charged3!==undefined?{charged3:vals.charged3}:{})};
+ renderMon(all);refreshManualSwapControls();inputRevision++;
+}
 function renderMegaImportance(res){
  const root=$('megaImportanceResult');root.replaceChildren();
  const imp=res.mega_importance,labels=res.labels||{};
@@ -928,13 +1106,21 @@ function renderMegaImportance(res){
   }
   const tbl=node('table',null,'mini-table');
   const thead=node('thead'),hr=node('tr');
-  ['形態','単体カバー率','メタ勝ち数(2-2)'].forEach(t=>hr.append(node('th',t)));
+  ['形態','使用技','単体カバー率','メタ勝ち数(2-2)'].forEach(t=>hr.append(node('th',t)));
   thead.append(hr);tbl.append(thead);
   const tbody=node('tbody');
   for(const [kind,label] of [['normal','通常'],['shadow','シャドウ'],['mega','メガ']]){
    const f=item.forms?.[kind];if(!f)continue;
+   const lbl=labels[f.id]||{};
+   const src=f.move_source||item.move_sources?.[kind];
    const tr=node('tr');
-   tr.append(node('td',label+(item.active_kind===kind?'（現在）':'')),node('td',fmt(f.solo.coverage)),node('td',f.solo.wins+' / '+f.solo.evaluated));
+   const moveTd=node('td',formatFormMovesSummary(lbl));
+   const srcLabel=moveSourceLabel(src);
+   if(srcLabel){
+    const sbadge=node('span',srcLabel,'move-source-badge'+(src==='shared_moveset'?' shared':src==='override'?' override':''));
+    moveTd.append(sbadge);
+   }
+   tr.append(node('td',label+(item.active_kind===kind?'（現在）':'')),moveTd,node('td',fmt(f.solo.coverage)),node('td',f.solo.wins+' / '+f.solo.evaluated));
    tbody.append(tr);
   }
   tbl.append(tbody);card.append(tbl);
@@ -944,10 +1130,47 @@ function renderMegaImportance(res){
   }else{
    addLine(card,'通常・シャドウでは勝てずメガで初めて勝てる相手: 0件');
   }
+
+  const editorDetails=node('details',null,'mega-moves-editor');
+  editorDetails.append(node('summary','技を確認・変更（メガ・通常・シャドウ）'));
+  const slotKey=String(item.slot);
+  for(const [kind,label] of [['mega','メガ形態'],['normal','通常形態'],['shadow','シャドウ形態']]){
+   const f=item.forms?.[kind];if(!f)continue;
+   const lbl=labels[f.id]||{};
+   const vsid=lbl.species;
+   if(!vsid||!catalog[vsid])continue;
+   const [fast='',charged1='',charged2='']=lbl.moves||[];
+   const initRow={fast,charged1,charged2,...(lbl.mega_level!=null?{mega_level:lbl.mega_level}:{}),...(lbl.charged3?{charged3:lbl.charged3}:{})};
+   const src=f.move_source||item.move_sources?.[kind];
+   const editor=createMoveEditorRow(vsid,initRow,{
+    title:label+': '+partyDisplay(vsid),
+    ariaPrefix:label+'('+partyDisplay(vsid)+')',
+    source:src,
+    applyLabel:'この技で再分析',
+    onApply:vals=>{
+     megaFormOverrides[slotKey]={...(megaFormOverrides[slotKey]||{}),[kind]:{
+      fast:vals.fast,charged1:vals.charged1,charged2:vals.charged2,
+      ...(vals.mega_level!=null?{mega_level:vals.mega_level}:{}),
+      ...(vals.charged3!==undefined?{charged3:vals.charged3}:{}),
+     }};
+     executeMegaImportance();
+    },
+    onShare:vals=>{
+     syncSlotCardMovesIfSameSpecies(item.slot,vals);
+    },
+   });
+   editorDetails.append(editor.box);
+  }
+  if(megaFormOverrides[slotKey]){
+   const resetBtn=node('button','この枠の分析用技変更をリセット');resetBtn.type='button';resetBtn.style.marginTop='8px';
+   resetBtn.onclick=()=>{delete megaFormOverrides[slotKey];executeMegaImportance();};
+   editorDetails.append(resetBtn);
+  }
+  card.append(editorDetails);
   root.append(card);
  }
 }
-$('runMegaImportance')?.addEventListener('click',async()=>{
+async function executeMegaImportance(){
  try{
   const members=getMon();validatePartyAnalysisMembers(members);
   $('runMegaImportance').disabled=true;
@@ -957,13 +1180,16 @@ $('runMegaImportance')?.addEventListener('click',async()=>{
    meta_preset_id:$('meta').value,
    meta_sha256:metaItems.find(x=>x.id===$('meta').value)?.sha256,
    group_weights:getWeights(),
+   species_movesets:collectSharedMovesets(members),
+   ...(Object.keys(megaFormOverrides).length?{form_overrides:megaFormOverrides}:{}),
    ...partyRulePayload(),
   };
   const res=await api('party/mega-importance',payload);
   renderMegaImportance(res);
   status('メガシンカの重要性指数を計算しました。');
  }catch(e){status(e.message);}finally{if($('runMegaImportance'))$('runMegaImportance').disabled=false;}
-});
+}
+$('runMegaImportance')?.addEventListener('click',()=>executeMegaImportance());
 setup().then(()=>refreshManualSwapControls()).catch(()=>{status('ログインが必要です。接続キーを入力してください。')});
 /*STRATEGY_UI*/
 </script></body></html>'''

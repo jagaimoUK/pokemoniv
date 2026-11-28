@@ -54,7 +54,12 @@ const assert = require('node:assert/strict');
     assert.equal(await page.locator('#megaImportanceSection').isVisible(), true, 'Mega importance section must be visible');
     assert.equal(await page.locator('#manualSwapSection').isVisible(), true, 'Manual swap section must be visible');
 
-    // 3. Test Mega Importance calculation
+    // 3. Seed shared moveset in pvpoke-app-movesets-v1 and test Mega Importance calculation
+    await page.evaluate(() => {
+      localStorage.setItem('pvpoke-app-movesets-v1', JSON.stringify({
+        quagsire_mega: [{species: 'quagsire_mega', fast: 'WATER_GUN', charged1: 'MUD_BOMB', charged2: 'SLUDGE_BOMB', mega_level: 3, enabled: true}]
+      }));
+    });
     console.log('Testing #runMegaImportance...');
     await page.click('#runMegaImportance');
     await page.waitForFunction(() => {
@@ -62,17 +67,28 @@ const assert = require('node:assert/strict');
       return el && !el.textContent.includes('「メガ重要性を比較する」を押すと');
     });
     const importanceText = await page.textContent('#megaImportanceResult');
-    console.log('Mega importance result:', importanceText.slice(0, 100));
-    assert.ok(importanceText.length > 0, 'Mega importance result should have text');
+    console.log('Mega importance result:', importanceText.slice(0, 140));
+    assert.ok(importanceText.includes('使用技'), 'Mega importance table should have move column');
+    assert.ok(importanceText.includes('厳選共有技'), 'Mega importance should apply and display shared moveset');
 
-    // 4. Test quick form buttons for swap
+    // Open move editor inside Mega Importance card and verify move controls + re-analysis
+    await page.locator('#megaImportanceResult details.mega-moves-editor summary').first().click();
+    const firstReanalyzeBtn = page.locator('#megaImportanceResult .mega-form-move-box button', {hasText: 'この技で再分析'}).first();
+    assert.equal(await firstReanalyzeBtn.isVisible(), true, 'Re-analyze button should be visible inside move editor');
+    const firstFastSel = page.locator('#megaImportanceResult .mega-form-move-box select').first();
+    await firstFastSel.selectOption('MUD_SHOT');
+    await firstReanalyzeBtn.click();
+    await page.waitForFunction(() => document.getElementById('megaImportanceResult')?.textContent.includes('分析用変更'));
+
+    // 4. Test quick form buttons and swap move editor
     const quickButtons = await page.locator('#manualSwapQuickForms button').count();
     console.log('Quick swap form buttons found:', quickButtons);
 
     // 5. Test Manual Swap comparison
     console.log('Testing #runManualSwap...');
-    // Type a replacement species into #manualSwapSearch
+    // Type a replacement species into #manualSwapSearch and verify move editor appears
     await page.fill('#manualSwapSearch', 'quagsire_mega');
+    await page.waitForSelector('#manualSwapMovesWrap:not([hidden])');
     await page.click('#runManualSwap');
 
     // Wait for the comparison dialog
