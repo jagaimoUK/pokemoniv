@@ -3,10 +3,10 @@ import hashlib
 import tempfile
 from pathlib import Path
 
-COMMIT = '6477226670913974993c1f7c936331d55cd7d893'
+COMMIT = '797820327642f49deb8e9706492090ccac680bc7'
 FILES = {
-    'gamemaster.json': ('data/gamemaster.json', '8fe95164126c6c108a0b02a68998ed68a46f597226466870e767be472f1c76e4'),
-    'Pokemon.js': ('js/pokemon/Pokemon.js', '10893308f8e8b408d396d19e541d7482c9657dd9c07fd6c8c9bf8f783669c47d'),
+    'gamemaster.json': ('data/gamemaster.json', 'd8e690f82c24d4037e3bb15ff664b63ff7a11005e8255e40c903e1b01712009b'),
+    'Pokemon.js': ('js/pokemon/Pokemon.js', 'a3646035edfe30e8136e8121ed3981aec2bcf094dca582354234b79eca34321e'),
 }
 SEED = Path(__file__).with_name('data') / 'pvpoke_runtime'
 
