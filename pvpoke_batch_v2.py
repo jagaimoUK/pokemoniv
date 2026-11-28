@@ -180,6 +180,9 @@ def optimize(rows, species, cpms, fname, cp_cap=CP_CAP, rules=None):
     effective_cp_cap = resolved_rules['cp_cap'] if (resolved_rules and resolved_rules['cp_cap'] is not None) else cp_cap
     allow_downscale = bool(resolved_rules and resolved_rules['allow_cp_downscaling'] is True)
     rule_max_level = resolved_rules['max_level'] if resolved_rules is not None else MAX_LEVEL
+    super_max_mode = (resolved_rules.get('super_max_mode') if resolved_rules else None) or 'none'
+    if rule_max_level > MAX_LEVEL and super_max_mode not in ('hypothesis_1_pl52', 'hypothesis_2_pl53'):
+        raise ValueError(f'{fname}: PL{rule_max_level:g}にはスーパーMAX仮説モードの明示指定が必要です')
 
     def _compute_cp(stats, row, cpm):
         return max(10, math.floor(
@@ -212,7 +215,12 @@ def optimize(rows, species, cpms, fname, cp_cap=CP_CAP, rules=None):
             if type(row['mega_level']) is not int or not 1 <= row['mega_level'] <= 4:
                 raise ValueError(f'{fname} {idx}行目: 無効なmega_level: {row["mega_level"]}')
         stats = p['baseStats']
-        maxlevel = min(MAX_LEVEL, rule_max_level, float(p.get('levelCap', MAX_LEVEL)))
+        effective_mega_lvl = row.get('mega_level') if row.get('mega_level') is not None else (4 if (is_mega and 'supermega' in tags) else None)
+        if is_mega and effective_mega_lvl == 4 and super_max_mode in ('hypothesis_1_pl52', 'hypothesis_2_pl53'):
+            hyp_cap = 52.0 if super_max_mode == 'hypothesis_1_pl52' else 53.0
+            maxlevel = min(hyp_cap, rule_max_level)
+        else:
+            maxlevel = min(MAX_LEVEL, rule_max_level, float(p.get('levelCap', MAX_LEVEL)))
         floorlevel = max(1.0, float(p.get('levelFloor', 1.0)))
         possibilities = []
         # Exact half-level increments per PvPoke CPM table, no approximation.
@@ -629,11 +637,14 @@ def run(refresh=False, shield_set='all', rules=None):
                               if (resolved_rules and resolved_rules.get('allow_cp_downscaling') is True)
                               else '')
             cup_id = (resolved_rules.get('cup_id') or '') if resolved_rules else ''
+            super_max_mode = (resolved_rules.get('super_max_mode') or '') if resolved_rules else ''
+            if super_max_mode == 'none':
+                super_max_mode = ''
             ns = matchup_cache.cache_namespace(
                 gamemaster_hash=gamemaster_hash, pokemonjs_hash=pokemonjs_hash,
                 cp_cap=effective_cp_cap, max_level=effective_max_level, engine_hash=engine_version,
                 epoch=os.environ.get('PVP_CACHE_EPOCH', ''),
-                downscaling_mode=downscale_mode, cup_id=cup_id)
+                downscaling_mode=downscale_mode, super_max_mode=super_max_mode, cup_id=cup_id)
             cache_dir = pvpoke_archive.archive_dir(DATA.parent)
             cache = matchup_cache.MatchupCache(cache_dir / 'matchups.sqlite3', ns)
             print(f'Matchup cache enabled: {cache.path}', flush=True)

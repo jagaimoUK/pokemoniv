@@ -177,6 +177,13 @@ function createPokemon(row, index, battle) {
       throw Error("mega_level requires mega tag: " + row.species);
     }
     poke.setMegaLevel(megaLevel);
+    if (poke.level !== Number(row.level)) {
+      poke.setLevel(Number(row.level), false);
+      poke.initialize(false);
+      if (poke.cp !== Number(row.cp)) {
+        throw Error("CP mismatch: " + row.species + " " + poke.cp + " != " + row.cp);
+      }
+    }
   }
   if (row.charged3 !== undefined && row.charged3 !== null && row.charged3 !== "") {
     if (!poke.hasThirdChargedMove()) {

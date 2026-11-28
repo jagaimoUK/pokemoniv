@@ -94,7 +94,7 @@ main{max-width:820px;margin:auto;padding:28px 16px 64px}h1{font-size:30px;margin
 <label for="moveThreshold">残す平均Ratingの下限（500付近の目安）</label><input id="moveThreshold" type="number" min="0" max="1000" value="450" step="1">
 <p class="note">全構成が下限未満でも最高平均の構成は表示します。自動比較OFFでは、右上の「設定」で計算対象にした構成をすべて使います。計算対象の登録がない場合は、今回の入力で指定した技を使います。個体ごとのコピー名には採用技の略号を付けます。</p>
 <div class="row" id="inputMoves"><div><label for="fast">通常技</label><select id="fast"></select></div><div><label for="charged1">ゲージ技1</label><select id="charged1"></select></div><div><label for="charged2">ゲージ技2</label><select id="charged2"></select></div></div>
-<div class="row" id="megaMoveSettings" hidden><div><label for="megaLevel">メガレベル（1〜4）</label><select id="megaLevel"><option value="1">Lv1（基本）</option><option value="2">Lv2（高）</option><option value="3" selected>Lv3（MAX・既定）</option><option value="4">Lv4（スーパーMAX・PL+2仮説保留）</option></select></div><div id="charged3Wrap" hidden><label for="charged3">追加ゲージ技（3つ目）</label><select id="charged3"></select></div></div>
+<div class="row" id="megaMoveSettings" hidden><div><label for="megaLevel">メガレベル（1〜4）</label><select id="megaLevel"><option value="1">Lv1（基本）</option><option value="2">Lv2（高）</option><option value="3" selected>Lv3（MAX・既定）</option><option value="4">Lv4（スーパーMAX・PL+2仮説保留）</option></select></div><div id="charged3Wrap" hidden><label for="charged3">追加ゲージ技（3つ目）</label><select id="charged3"></select></div><div id="superMaxHypothesisWrap" hidden><label for="superMaxHypothesis">スーパーMAX PL+2試算（未確定参考）</label><select id="superMaxHypothesis"><option value="none" selected>仮説補正なし（上限PL50・既定）</option><option value="hypothesis_1_pl52">参考：仮説1（通常+2＝PL52上限）</option><option value="hypothesis_2_pl53">参考：仮説2（相棒+1＋+2＝PL53上限）</option></select></div></div>
 <p id="movePlanSummary" class="note" aria-live="polite"></p>
 </details>
 <details><summary>自動推薦の基準を調整</summary><label for="lead">勝ち方向で採用するRating差（既定20）</label><input id="lead" type="number" min="1" max="1000" step="1" value="20"><p class="note">500の境界を越える役割は差にかかわらず確認します。負けたままのRating差は自動推薦にしません。</p></details>
@@ -411,9 +411,14 @@ function moves(row={},sid=el('species').value){
  const p=catalog[sid]||{};
  const isMega=/_(mega|primal)(?:_[xy])?$/.test(sid)||(p.tags||[]).includes('mega');
  const megaBox=el('megaMoveSettings'),megaSel=el('megaLevel'),c3Wrap=el('charged3Wrap'),c3Sel=el('charged3');
+ const smWrap=el('superMaxHypothesisWrap'),smSel=el('superMaxHypothesis');
  if(megaBox&&megaSel){
   megaBox.hidden=!isMega;
   if(isMega)megaSel.value=String(row.mega_level??((p.tags||[]).includes('supermega')?4:3));
+ }
+ if(smWrap&&smSel){
+  smWrap.hidden=!(isMega&&megaSel?.value==='4');
+  if(!isMega||megaSel?.value!=='4')smSel.value='none';
  }
  if(c3Wrap&&c3Sel){
   const extra=isMega&&Array.isArray(p.extraChargedMoves)?p.extraChargedMoves:[];
@@ -1000,7 +1005,9 @@ function render(result,append=false){
  node('p','検索式ではXXLの実際の身長を比較できないため、通常の検索式からXXLを除外します。XXLは手動で比較し、最大の個体を残してください。サイズがフォルムそのものを表す場合は例外です。',panel,'note');
  if(selection.input_notices)selection.input_notices.forEach(n=>node('p',n,panel,'note'));
  if(selection.minior_experimental)node('p','メテノの戦術比較（試験版）：流星で即撃ち／コアまで温存／状況判断を同じ条件で比較。表示Ratingは各対面で最良の戦術を選んだ上限値です。実機のCP・レベル調整が未検証のため、この結果だけで個体を博士に送らないでください。',panel,'note');
- if(result.mega_condition?.super_max_pl_hypothesis_status==='unconfirmed_deferred')node('p','スーパー MAX PL+2 仮説保留（公式仕様・実機検証が未確定のため、仮説値では計算していません）',panel,'note');
+ if(result.rules?.super_max_mode==='hypothesis_1_pl52')node('p','※未確定参考計算（仮説1：スーパーMAX PL+2＝上限PL52で試算中。ゲーム内確定仕様ではありません）',panel,'note');
+ else if(result.rules?.super_max_mode==='hypothesis_2_pl53')node('p','※未確定参考計算（仮説2：相棒ブースト＋PL+2＝上限PL53で試算中。ゲーム内確定仕様ではありません）',panel,'note');
+ else if(result.mega_condition?.super_max_pl_hypothesis_status==='unconfirmed_deferred')node('p','スーパー MAX PL+2 仮説保留（公式仕様・実機検証が未確定のため、仮説値では計算していません）',panel,'note');
  node('p',(result.moveset_comparison?'技ごとの推薦を統合しています。同じ個体値は1回だけ表示し、その個体の採用技を名前に略します。':'')+'Sは総合本命、Aはその本命にない実戦上の役割を補う個体です。1構成では通常最大4体に絞ります。S/Aは入力候補内の暫定評価で、実際の勝敗を保証するものではありません。',panel,'note');
  if(selection.policy?.version&&selection.policy.version!=='box-first-v3'){
   node('p','保存済みの結果は以前の推薦基準です。最新のS本命・少数厳選を使うには、同じ入力を再計算してください。',panel,'note');
@@ -1020,8 +1027,12 @@ function render(result,append=false){
 }
 function currentBattleRules(){
  const val=el('battleRuleset')?.value||'cp1500-lv50';
- if(val==='great_mega')return {league:'great',cp_cap:1500,max_level:50,cup_id:'great_mega',allow_cp_downscaling:true};
- return {league:'great',cp_cap:1500,max_level:50,cup_id:'all',allow_cp_downscaling:false};
+ const base=val==='great_mega'?{league:'great',cp_cap:1500,max_level:50,cup_id:'great_mega',allow_cp_downscaling:true}:{league:'great',cp_cap:1500,max_level:50,cup_id:'all',allow_cp_downscaling:false};
+ const megaBox=el('megaMoveSettings'),megaSel=el('megaLevel'),smSel=el('superMaxHypothesis');
+ if(megaBox&&!megaBox.hidden&&megaSel?.value==='4'&&(smSel?.value==='hypothesis_1_pl52'||smSel?.value==='hypothesis_2_pl53')){
+  return {...base,max_level:smSel.value==='hypothesis_1_pl52'?52:53,super_max_mode:smSel.value};
+ }
+ return base;
 }
 function computeMegaDownscaleStatus(row,result){
  const sid=result?.candidate?.species;
@@ -1947,6 +1958,7 @@ async function connect(auto=false){credential=auto?'':el('credential').value.tri
 el('connect').onclick=()=>connect(false);
 el('preset').onchange=()=>{bulkStatusUndo=null;el('bulkStatusUndo').hidden=true;setPreset();};el('species').onchange=()=>{inputPokemonStatus=null;bulkStatusUndo=null;el('bulkStatusUndo').hidden=true;resolveTypedSpecies();el('allSpecies').value=el('species').value;el('preset').value='';moves();};
 el('allSpecies').onchange=()=>{inputPokemonStatus=null;bulkStatusUndo=null;el('bulkStatusUndo').hidden=true;el('species').value=el('allSpecies').value;el('preset').value='';moves();};
+if(el('megaLevel'))el('megaLevel').onchange=()=>{const smWrap=el('superMaxHypothesisWrap'),smSel=el('superMaxHypothesis');const show=el('megaLevel').value==='4'&&!el('megaMoveSettings')?.hidden;if(smWrap)smWrap.hidden=!show;if(!show&&smSel)smSel.value='none';};
 el('singleForm').onclick=()=>{if(!active){inputPokemonStatus=null;bulkStatusUndo=null;el('bulkStatusUndo').hidden=true;setImportedJobs(null);message('単一種のフォームに切り替えました。貼り付けた元の入力は上の欄に残っています。');}};
 async function importInput(){
  if(active)return false;
